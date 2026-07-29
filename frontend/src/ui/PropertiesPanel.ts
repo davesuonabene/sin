@@ -50,6 +50,9 @@ export function renderProperties(node: LGraphNode, container: HTMLElement, onClo
         const val = (e.target as HTMLInputElement).value;
         node.properties.node_name = val;
         node.title = val;
+        if (typeof (node as any).computeSize === 'function') {
+            node.size = (node as any).computeSize();
+        }
         titleDisplay.innerText = val;
         node.setDirtyCanvas(true, true);
         

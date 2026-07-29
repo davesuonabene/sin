@@ -19,7 +19,7 @@ export class SampleNode extends BaseNode {
             original_bpm: 120
         };
         
-        this.addInput("", "audio");
+        this.addOutput("Audio", "audio");
     }
 }
 

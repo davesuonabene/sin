@@ -1,72 +1,101 @@
+export interface PopupNodeItem {
+    type: "sample" | "sequence" | "track" | string;
+    label: string;
+    category: "NODES" | "GROUPS" | "PRESETS" | "MODULATORS" | "ADDONS";
+    badge: string;
+    badgeColor: string;
+    isCallable?: boolean;
+}
+
 export class NodePopupMenu {
     private menuElement: HTMLDivElement;
+    private searchInput: HTMLInputElement;
+    private gridContainer: HTMLDivElement;
+    private tabsContainer: HTMLDivElement;
     private onSelectCallback: ((nodeType: "sample" | "sequence" | "track") => void) | null = null;
     private isVisible: boolean = false;
     private openTime: number = 0;
+    private activeTab: "NODES" | "GROUPS" | "PRESETS" | "MODULATORS" | "ADDONS" = "NODES";
+
+    private items: PopupNodeItem[] = [
+        // NODES
+        { type: "sample", label: "Sample Node", category: "NODES", badge: "SMPL", badgeColor: "#10b981", isCallable: true },
+        { type: "sequence", label: "Sequence Node", category: "NODES", badge: "SEQ", badgeColor: "#ec4899", isCallable: true },
+        { type: "track", label: "Track Node", category: "NODES", badge: "TRACK", badgeColor: "#3b82f6", isCallable: true },
+        
+        // GROUPS
+        { type: "group", label: "Group Container", category: "GROUPS", badge: "GRP", badgeColor: "#8b5cf6", isCallable: false },
+        
+        // PRESETS
+        { type: "preset_drum", label: "4x4 Drum Kit", category: "PRESETS", badge: "PSET", badgeColor: "#f59e0b", isCallable: false },
+        { type: "preset_synth", label: "Synth Lead", category: "PRESETS", badge: "PSET", badgeColor: "#84cc16", isCallable: false },
+
+        // MODULATORS
+        { type: "mod_lfo", label: "LFO Generator", category: "MODULATORS", badge: "MOD", badgeColor: "#06b6d4", isCallable: false },
+        { type: "mod_env", label: "ADSR Envelope", category: "MODULATORS", badge: "MOD", badgeColor: "#06b6d4", isCallable: false },
+
+        // ADDONS
+        { type: "addon_analyzer", label: "Spectrum Analyzer", category: "ADDONS", badge: "ADD", badgeColor: "#14b8a6", isCallable: false }
+    ];
 
     constructor() {
         this.menuElement = document.createElement('div');
-        this.menuElement.className = 'node-popup-menu';
-        this.menuElement.style.position = 'fixed';
-        this.menuElement.style.zIndex = '10000';
+        this.menuElement.className = 'td-node-popup-container';
         this.menuElement.style.display = 'none';
-        this.menuElement.style.backgroundColor = '#1e293b';
-        this.menuElement.style.border = '1px solid #334155';
-        this.menuElement.style.borderRadius = '8px';
-        this.menuElement.style.padding = '6px';
-        this.menuElement.style.boxShadow = '0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3)';
-        this.menuElement.style.minWidth = '140px';
-        this.menuElement.style.backdropFilter = 'blur(8px)';
-        this.menuElement.style.userSelect = 'none';
 
-        const options: { type: "sample" | "sequence" | "track"; label: string; icon: string; color: string }[] = [
-            { type: "sample", label: "Sample Node", icon: "🎵", color: "#10b981" },
-            { type: "sequence", label: "Sequence Node", icon: "🔄", color: "#ec4899" },
-            { type: "track", label: "Track Node", icon: "📁", color: "#3b82f6" },
+        // Header
+        const header = document.createElement('div');
+        header.className = 'td-node-popup-header';
+
+        this.searchInput = document.createElement('input');
+        this.searchInput.className = 'td-node-popup-search';
+        this.searchInput.placeholder = 'Search OP...';
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'td-node-popup-close';
+        closeBtn.innerText = '✕';
+        closeBtn.onclick = () => this.hide();
+
+        header.appendChild(this.searchInput);
+        header.appendChild(closeBtn);
+
+        // Tabs
+        this.tabsContainer = document.createElement('div');
+        this.tabsContainer.className = 'td-node-popup-tabs';
+
+        const categories: Array<"NODES" | "GROUPS" | "PRESETS" | "MODULATORS" | "ADDONS"> = [
+            "NODES", "GROUPS", "PRESETS", "MODULATORS", "ADDONS"
         ];
 
-        options.forEach(opt => {
-            const item = document.createElement('div');
-            item.style.display = 'flex';
-            item.style.alignItems = 'center';
-            item.style.gap = '8px';
-            item.style.padding = '8px 12px';
-            item.style.borderRadius = '6px';
-            item.style.cursor = 'pointer';
-            item.style.color = '#f8fafc';
-            item.style.fontSize = '13px';
-            item.style.fontWeight = '500';
-            item.style.transition = 'background 0.15s ease, transform 0.1s ease';
-
-            item.innerHTML = `
-                <span style="font-size: 14px;">${opt.icon}</span>
-                <span>${opt.label}</span>
-            `;
-
-            item.onmouseover = () => {
-                item.style.backgroundColor = '#334155';
+        categories.forEach(cat => {
+            const tab = document.createElement('div');
+            tab.className = `td-node-popup-tab ${cat === this.activeTab ? 'active' : ''}`;
+            tab.setAttribute('data-category', cat);
+            tab.innerText = cat;
+            tab.onclick = () => {
+                this.activeTab = cat;
+                this.updateTabsStyle();
+                this.renderGrid();
             };
-            item.onmouseout = () => {
-                item.style.backgroundColor = 'transparent';
-            };
-
-            const selectHandler = (e: Event) => {
-                e.stopPropagation();
-                e.preventDefault();
-                if (this.onSelectCallback) {
-                    this.onSelectCallback(opt.type);
-                }
-                this.hide();
-            };
-
-            item.onpointerdown = selectHandler;
-            item.onclick = selectHandler;
-
-            this.menuElement.appendChild(item);
+            this.tabsContainer.appendChild(tab);
         });
+
+        // Grid
+        this.gridContainer = document.createElement('div');
+        this.gridContainer.className = 'td-node-popup-grid';
+
+        this.menuElement.appendChild(header);
+        this.menuElement.appendChild(this.tabsContainer);
+        this.menuElement.appendChild(this.gridContainer);
 
         document.body.appendChild(this.menuElement);
 
+        // Search Filter Event
+        this.searchInput.addEventListener('input', () => {
+            this.renderGrid();
+        });
+
+        // Dismissal Handlers
         const outsideDismissHandler = (e: Event) => {
             if (this.isVisible && Date.now() - this.openTime > 200 && !this.menuElement.contains(e.target as Node)) {
                 this.hide();
@@ -83,10 +112,76 @@ export class NodePopupMenu {
         });
     }
 
+    private updateTabsStyle() {
+        const tabs = this.tabsContainer.querySelectorAll('.td-node-popup-tab');
+        tabs.forEach(tab => {
+            const cat = tab.getAttribute('data-category');
+            if (cat === this.activeTab) {
+                tab.classList.add('active');
+            } else {
+                tab.classList.remove('active');
+            }
+        });
+    }
+
+    private renderGrid() {
+        this.gridContainer.innerHTML = '';
+        const query = this.searchInput.value.toLowerCase().trim();
+
+        // If query is present, search across all categories; otherwise filter by active tab
+        const filtered = this.items.filter(item => {
+            const matchesQuery = item.label.toLowerCase().includes(query) || item.type.toLowerCase().includes(query);
+            if (query.length > 0) return matchesQuery;
+            return item.category === this.activeTab;
+        });
+
+        if (filtered.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'td-node-popup-empty';
+            empty.innerText = query ? `No matching OPs for "${query}"` : `No items in ${this.activeTab}`;
+            this.gridContainer.appendChild(empty);
+            return;
+        }
+
+        filtered.forEach(item => {
+            const el = document.createElement('div');
+            el.className = 'td-node-popup-item';
+            if (!item.isCallable) {
+                el.style.opacity = '0.5';
+            }
+
+            el.innerHTML = `
+                <span class="item-badge" style="background-color: ${item.badgeColor}">${item.badge}</span>
+                <span class="item-label">${item.label}</span>
+            `;
+
+            const selectHandler = (e: Event) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (item.isCallable && (item.type === "sample" || item.type === "sequence" || item.type === "track")) {
+                    if (this.onSelectCallback) {
+                        this.onSelectCallback(item.type);
+                    }
+                    this.hide();
+                }
+            };
+
+            el.onpointerdown = selectHandler;
+            el.onclick = selectHandler;
+
+            this.gridContainer.appendChild(el);
+        });
+    }
+
     show(x: number, y: number, onSelect: (nodeType: "sample" | "sequence" | "track") => void) {
         this.openTime = Date.now();
         this.onSelectCallback = onSelect;
-        this.menuElement.style.display = 'block';
+        this.activeTab = "NODES";
+        this.searchInput.value = '';
+        this.updateTabsStyle();
+        this.renderGrid();
+
+        this.menuElement.style.display = 'flex';
 
         // Constrain popup menu within viewport
         const rect = this.menuElement.getBoundingClientRect();
@@ -106,6 +201,8 @@ export class NodePopupMenu {
         this.menuElement.style.left = `${Math.max(10, posX)}px`;
         this.menuElement.style.top = `${Math.max(10, posY)}px`;
         this.isVisible = true;
+
+        setTimeout(() => this.searchInput.focus(), 50);
     }
 
     hide() {
@@ -114,3 +211,4 @@ export class NodePopupMenu {
         this.onSelectCallback = null;
     }
 }
+

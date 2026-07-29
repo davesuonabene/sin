@@ -19,7 +19,7 @@ export class SequenceNode extends BaseNode {
             step_length: 0.25
         };
         
-        this.addInput("Sample", "audio");
+        this.addInput("Input", "audio", { multiple: true } as any);
         this.addOutput("Audio", "audio");
     }
 }

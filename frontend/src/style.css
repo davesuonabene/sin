@@ -34,3 +34,415 @@ body, html, #app {
 canvas {
   background-color: #ffffff;
 }
+
+/* TouchDesigner-inspired Parameter Window Styles */
+.td-param-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+  background-color: #18181b;
+  color: #e4e4e7;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  user-select: none;
+  overflow: hidden;
+}
+
+.td-param-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 8px;
+  background-color: #27272a;
+  border-bottom: 1px solid #3f3f46;
+  flex-shrink: 0;
+}
+
+.td-param-header .header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.td-param-header .node-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  background-color: #3f3f46;
+  color: #a1a1aa;
+  padding: 1px 4px;
+  border-radius: 2px;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.td-param-header .node-title {
+  font-weight: 600;
+  font-size: 11px;
+  color: #f4f4f5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.td-param-header .close-btn {
+  background: transparent;
+  border: none;
+  color: #a1a1aa;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  padding: 0;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.td-param-header .close-btn:hover {
+  background-color: #3f3f46;
+  color: #ffffff;
+}
+
+/* Tabs Bar */
+.td-param-tabs {
+  display: flex;
+  background-color: #202023;
+  border-bottom: 1px solid #3f3f46;
+  height: 24px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.td-param-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.td-param-tab {
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #71717a;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.td-param-tab:hover {
+  color: #d4d4d8;
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+.td-param-tab.active {
+  color: #38bdf8;
+  border-bottom-color: #38bdf8;
+  background-color: rgba(56, 189, 248, 0.08);
+}
+
+/* Tab Body */
+.td-param-body {
+  flex: 1;
+  padding: 6px 8px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.td-param-group {
+  margin-bottom: 8px;
+}
+
+.td-param-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+  min-height: 22px;
+}
+
+.td-param-label {
+  width: 80px;
+  min-width: 80px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #a1a1aa;
+  text-align: right;
+  padding-right: 8px;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.td-param-control {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.td-param-input, .td-param-select {
+  width: 100%;
+  height: 21px;
+  background-color: #09090b;
+  border: 1px solid #3f3f46;
+  border-radius: 2px;
+  color: #f4f4f5;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 1px 5px;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.td-param-input:focus, .td-param-select:focus {
+  border-color: #38bdf8;
+}
+
+.td-param-select option {
+  background-color: #18181b;
+  color: #f4f4f5;
+}
+
+/* Grid Sequencer TouchDesigner Style */
+.td-seq-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  width: 100%;
+}
+
+.td-seq-btn {
+  height: 26px;
+  background-color: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 2px;
+  color: #71717a;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  padding: 0;
+}
+
+.td-seq-btn:hover {
+  border-color: #52525b;
+  color: #a1a1aa;
+}
+
+.td-seq-btn.active {
+  background-color: #ec4899;
+  border-color: #f472b6;
+  color: #ffffff;
+  box-shadow: 0 0 6px rgba(236, 72, 153, 0.4);
+}
+
+/* Audio Player */
+.td-audio-preview {
+  width: 100%;
+  height: 28px;
+  border-radius: 2px;
+  outline: none;
+}
+
+/* Info Table */
+.td-info-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.td-info-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid #27272a;
+}
+
+.td-info-table tr td:first-child {
+  color: #a1a1aa;
+  width: 80px;
+  text-align: right;
+  font-weight: 500;
+}
+
+.td-info-table tr td:last-child {
+  color: #e4e4e7;
+  font-family: monospace;
+}
+
+/* TouchDesigner OP Create Dialog Panel Styles */
+.td-node-popup-container {
+  position: fixed;
+  z-index: 10000;
+  width: 320px;
+  background-color: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 4px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.4);
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  color: #e4e4e7;
+  user-select: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.td-node-popup-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background-color: #27272a;
+  border-bottom: 1px solid #3f3f46;
+}
+
+.td-node-popup-search {
+  flex: 1;
+  height: 22px;
+  background-color: #09090b;
+  border: 1px solid #3f3f46;
+  border-radius: 2px;
+  color: #f4f4f5;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 0 6px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.td-node-popup-search:focus {
+  border-color: #38bdf8;
+}
+
+.td-node-popup-close {
+  background: transparent;
+  border: none;
+  color: #a1a1aa;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  padding: 0;
+}
+
+.td-node-popup-close:hover {
+  background-color: #3f3f46;
+  color: #ffffff;
+}
+
+.td-node-popup-tabs {
+  display: flex;
+  background-color: #202023;
+  border-bottom: 1px solid #3f3f46;
+  height: 24px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+
+.td-node-popup-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.td-node-popup-tab {
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #71717a;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.td-node-popup-tab:hover {
+  color: #d4d4d8;
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+.td-node-popup-tab.active {
+  color: #38bdf8;
+  border-bottom-color: #38bdf8;
+  background-color: rgba(56, 189, 248, 0.08);
+}
+
+.td-node-popup-grid {
+  padding: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.td-node-popup-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  background-color: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.td-node-popup-item:hover {
+  background-color: #3f3f46;
+  border-color: #38bdf8;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.2);
+}
+
+.td-node-popup-item .item-badge {
+  font-size: 8.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  padding: 1px 3px;
+  border-radius: 2px;
+  color: #ffffff;
+  flex-shrink: 0;
+}
+
+.td-node-popup-item .item-label {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: #f4f4f5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.td-node-popup-empty {
+  grid-column: span 2;
+  padding: 16px 8px;
+  text-align: center;
+  color: #71717a;
+  font-size: 10.5px;
+  font-style: italic;
+}
+
+

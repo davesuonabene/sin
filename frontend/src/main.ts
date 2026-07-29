@@ -126,13 +126,10 @@ function updateGraphNodeCollapsing() {
         if (data.parentId === null) {
             lgraphNode.flags.collapsed = false;
         } else {
-            const parentId = data.parentId;
-            const isParentWindowOpen = (activeParamNodeId === parentId);
-            const isParentChildParamOpen = isChildParamShown(parentId);
             const isSelfWindowOpen = (activeParamNodeId === nodeId);
             const isSelfChildParamOpen = isChildParamShown(nodeId);
 
-            if (isParentWindowOpen || isParentChildParamOpen || isSelfWindowOpen || isSelfChildParamOpen) {
+            if (isSelfWindowOpen || isSelfChildParamOpen) {
                 lgraphNode.flags.collapsed = false;
             } else {
                 lgraphNode.flags.collapsed = true;
@@ -179,11 +176,16 @@ function openParamWindow(node: any) {
     });
 
     if (panel) {
+        const width = 340;
+        const height = 440;
+        const rightX = Math.max(20, window.innerWidth - width - 40);
+        const topY = 40;
+
         dv.addFloatingGroup(panel as any, {
-            x: Math.min(window.innerWidth - 340, Math.max(50, node.pos[0] + 260)),
-            y: Math.max(50, node.pos[1] - 50),
-            width: 320,
-            height: 380
+            x: rightX,
+            y: topY,
+            width: width,
+            height: height
         });
     }
 }
@@ -262,6 +264,9 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
         childNode.properties.step_length = 0.25;
     }
     childNode.title = defaultName;
+    if (typeof (childNode as any).computeSize === 'function') {
+        childNode.size = (childNode as any).computeSize();
+    }
 
     // Visual themes
     if (nodeType === "sample") {
@@ -286,15 +291,15 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
 
     graph.add(childNode);
 
-    // Position node neatly relative to parent
+    // Position node neatly relative to parent (above parent so signal flows down into parent input)
     const childCount = parentData.children.length + 1;
     const spacing = 260;
     const startX = parentNode.pos[0] - ((childCount - 1) * spacing) / 2;
     
-    childNode.pos = [startX + (childCount - 1) * spacing, parentNode.pos[1] + 120];
+    childNode.pos = [startX + (childCount - 1) * spacing, parentNode.pos[1] - 120];
 
-    // Connect link in LiteGraph
-    parentNode.connect(0, childNode, 0);
+    // Connect link in LiteGraph: Child output (0) -> Parent input (0)
+    childNode.connect(0, parentNode, 0);
 
     // Update parent's children record
     parentData.children.push(childNode.id);
@@ -314,11 +319,11 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
         children: []
     });
 
-    // Re-align all siblings under parent for horizontal symmetry
+    // Re-align all siblings above parent for horizontal symmetry
     parentData.children.forEach((cid, i) => {
         const sibling = graph.getNodeById(cid);
         if (sibling) {
-            sibling.pos = [startX + i * spacing, parentNode.pos[1] + 120];
+            sibling.pos = [startX + i * spacing, parentNode.pos[1] - 120];
         }
     });
 
@@ -403,6 +408,9 @@ function addRootNode(nodeType: "sample" | "track" | "sequence" = "track", pos?: 
     rootNode.properties.node_name = defaultName;
     rootNode.properties.mix_mode = "sum";
     rootNode.title = defaultName;
+    if (typeof (rootNode as any).computeSize === 'function') {
+        rootNode.size = (rootNode as any).computeSize();
+    }
     
     if (nodeType === "sample") {
         rootNode.color = "#10b981";
@@ -478,9 +486,18 @@ const dockview = new DockviewComponent(appElement, {
                     // Suppress drawing connection dots / anchors
                     (graphCanvas as any).drawSlot = function() {};
 
-                    // Clean white canvas background
+                    // Clean white canvas background without grid fade
                     graphCanvas.clear_background = true;
                     (graphCanvas as any).clear_background_color = "#ffffff";
+                    (graphCanvas as any).background_image = null;
+                    (graphCanvas as any).zoom_modify_alpha = false;
+                    (graphCanvas as any).onRenderBackground = function(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) {
+                        ctx.save();
+                        ctx.fillStyle = "#ffffff";
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        ctx.restore();
+                        return true;
+                    };
                     if (graphCanvas.bgcanvas) {
                         graphCanvas.bgcanvas.style.backgroundColor = "#ffffff";
                     }
@@ -640,15 +657,13 @@ function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
         const stepLength = data?.step_length || nodeObj?.properties?.step_length || (nodeType === "sequence" ? 0.25 : undefined);
 
         const childrenIds: number[] = data?.children ? [...data.children] : [];
-        if (nodeObj && nodeObj.outputs) {
-            for (const output of nodeObj.outputs) {
-                if (output.links) {
-                    for (const linkId of output.links) {
-                        const link = (graph as any).links ? (graph as any).links[linkId] : null;
-                        if (link && link.target_id != null) {
-                            if (!childrenIds.includes(link.target_id)) {
-                                childrenIds.push(link.target_id);
-                            }
+        if (nodeObj && nodeObj.inputs) {
+            for (const input of nodeObj.inputs) {
+                if (input.link != null) {
+                    const link = (graph as any).links ? (graph as any).links[input.link] : null;
+                    if (link && link.origin_id != null) {
+                        if (!childrenIds.includes(link.origin_id)) {
+                            childrenIds.push(link.origin_id);
                         }
                     }
                 }

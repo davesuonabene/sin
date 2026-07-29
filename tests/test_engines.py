@@ -24,7 +24,7 @@ class TestNodeEngines(unittest.TestCase):
         sample_model = AudioNodeModel(
             node_name="KickSample",
             node_type="sample",
-            filepath="four_on_the_floor_test_Master Track.wav"
+            filepath="assets/KULTURE_LIQDNB1_DRUM_LOOP_25_171.wav"
         )
         seq_model = AudioNodeModel(
             node_name="SeqPattern",
@@ -41,7 +41,7 @@ class TestNodeEngines(unittest.TestCase):
         sample_model = AudioNodeModel(
             node_name="TrackSample",
             node_type="sample",
-            filepath="four_on_the_floor_test_Master Track.wav"
+            filepath="assets/KULTURE_LIQDNB1_DRUM_LOOP_25_171.wav"
         )
         track_model = AudioNodeModel(
             node_name="MainTrack",
@@ -57,7 +57,7 @@ class TestNodeEngines(unittest.TestCase):
         sample_model = AudioNodeModel(
             node_name="SingleSampleNode",
             node_type="sample",
-            filepath="four_on_the_floor_test_Master Track.wav",
+            filepath="assets/KULTURE_LIQDNB1_DRUM_LOOP_25_171.wav",
             filename="test_render_out"
         )
         res = render_graph(sample_model)

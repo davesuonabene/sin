@@ -18,12 +18,8 @@ export class TrackNode extends BaseNode {
             bpm: 120
         };
         
-        this.addInput("", "audio");
-        this.addOutput("", "audio");
-    }
-
-    computeSize(): [number, number] {
-        return [200, 44];
+        this.addInput("Input", "audio", { multiple: true } as any);
+        this.addOutput("Audio", "audio");
     }
 }
 

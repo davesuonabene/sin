@@ -5,43 +5,34 @@ export class PropertiesWindow {
     container: HTMLElement;
     node: LGraphNode;
     onClose: () => void;
+    activeTab: string;
 
     constructor(container: HTMLElement, node: LGraphNode, onClose: () => void) {
         this.container = container;
         this.node = node;
         this.onClose = onClose;
+        this.activeTab = this.getDefaultTab();
     }
 
-    async render() {
-        if (this.node.type === "Audio/Track") {
-            this.renderTrackForm();
-        } else if (this.node.type === "Audio/Sample") {
-            await this.renderSampleForm();
-        } else if (this.node.type === "Audio/Sequence") {
-            this.renderSequenceForm();
-        } else {
-            this.container.innerHTML = `
-                <div style="padding:15px; color:red; background-color: #fef08a; height: 100%;">
-                    <div style="margin-bottom:10px;">Unknown node type: ${this.node.type}</div>
-                    <button id="err-close" style="padding:5px 10px; cursor:pointer;">Close</button>
-                </div>
-            `;
-            this.container.querySelector('#err-close')?.addEventListener('click', this.onClose);
-        }
+    private getDefaultTab(): string {
+        if (this.node.type === "Audio/Track") return "TRACK";
+        if (this.node.type === "Audio/Sample") return "SAMPLE";
+        if (this.node.type === "Audio/Sequence") return "SEQUENCE";
+        return "PARAMS";
     }
 
-    private getHeaderHTML(title: string): string {
-        return `
-            <button id="close-btn" style="position: absolute; top: 12px; left: 12px; width: 28px; height: 28px; border-radius: 50%; background: #1f0d01; color: #e0f2fe; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; z-index: 10;">X</button>
-            <h3 style="margin-top: 0; display: flex; justify-content: center; align-items: center; border-bottom: 1px solid #bae6fd; padding-bottom: 10px; padding-top: 4px;">
-                <span id="title-display" style="font-size: 16px;">${title}</span>
-            </h3>
-        `;
+    private getTabList(): string[] {
+        if (this.node.type === "Audio/Track") return ["TRACK", "COMMON"];
+        if (this.node.type === "Audio/Sample") return ["SAMPLE", "AUDIO", "COMMON"];
+        if (this.node.type === "Audio/Sequence") return ["SEQUENCE", "TIMING", "COMMON"];
+        return ["PARAMS", "COMMON"];
     }
 
-    private bindCloseEvent() {
-        const closeBtn = this.container.querySelector('#close-btn') as HTMLButtonElement;
-        if (closeBtn) closeBtn.addEventListener('click', this.onClose);
+    private getNodeBadge(): string {
+        if (this.node.type === "Audio/Track") return "TRACK";
+        if (this.node.type === "Audio/Sample") return "SMPL";
+        if (this.node.type === "Audio/Sequence") return "SEQ";
+        return "NODE";
     }
 
     private updateTrackNode(prop: string, val: any) {
@@ -53,53 +44,157 @@ export class PropertiesWindow {
         }
     }
 
-    renderTrackForm() {
+    async render() {
+        const tabs = this.getTabList();
+        if (!tabs.includes(this.activeTab)) {
+            this.activeTab = tabs[0];
+        }
+
+        const titleText = this.node.properties.node_name || this.node.title || 'Node';
+
         this.container.innerHTML = `
-            <div style="padding: 15px; font-family: sans-serif; color: #333; background: #e0f2fe; height: 100%; box-sizing: border-box; position: relative;">
-                ${this.getHeaderHTML(this.node.properties.node_name || 'Track Properties')}
-                
-                <div style="margin-bottom: 15px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 4px;">Track Name</label>
-                    <input type="text" id="prop-name" value="${this.node.properties.node_name || ''}" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;" />
+            <div class="td-param-container">
+                <!-- Header -->
+                <div class="td-param-header">
+                    <div class="header-left">
+                        <span class="node-badge">${this.getNodeBadge()}</span>
+                        <span class="node-title" id="td-title-display">${titleText}</span>
+                    </div>
+                    <button class="close-btn" id="td-close-btn" title="Close Panel">✕</button>
                 </div>
 
-                <div style="margin-bottom: 15px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 4px;">Mix Mode</label>
-                    <select id="prop-mix" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
-                        <option value="sum" ${this.node.properties.mix_mode === 'sum' ? 'selected' : ''}>Sum (Layered)</option>
-                        <option value="chained" ${this.node.properties.mix_mode === 'chained' ? 'selected' : ''}>Chained (Sequential)</option>
-                    </select>
+                <!-- Tabs Navigation -->
+                <div class="td-param-tabs" id="td-tabs-bar">
+                    ${tabs.map(tab => `
+                        <div class="td-param-tab ${tab === this.activeTab ? 'active' : ''}" data-tab="${tab}">
+                            ${tab}
+                        </div>
+                    `).join('')}
                 </div>
 
-                <div style="margin-bottom: 15px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 4px;">Engine BPM</label>
-                    <input type="number" id="prop-bpm" value="${this.node.properties.bpm || 120}" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;" />
+                <!-- Tab Content Body -->
+                <div class="td-param-body" id="td-tab-content">
+                    <!-- Dynamic Tab Content Rendered Here -->
                 </div>
             </div>
         `;
-        
-        this.bindCloseEvent();
 
-        const titleDisplay = this.container.querySelector('#title-display') as HTMLSpanElement;
-        const nameInput = this.container.querySelector('#prop-name') as HTMLInputElement;
+        // Bind Header & Tab Events
+        this.container.querySelector('#td-close-btn')?.addEventListener('click', this.onClose);
+
+        const tabBtns = this.container.querySelectorAll('.td-param-tab');
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const tab = (e.currentTarget as HTMLElement).getAttribute('data-tab');
+                if (tab && tab !== this.activeTab) {
+                    this.activeTab = tab;
+                    await this.renderTabContent();
+                    // Update active tab styles
+                    tabBtns.forEach(t => t.classList.remove('active'));
+                    (e.currentTarget as HTMLElement).classList.add('active');
+                }
+            });
+        });
+
+        await this.renderTabContent();
+    }
+
+    private async renderTabContent() {
+        const contentContainer = this.container.querySelector('#td-tab-content') as HTMLElement;
+        if (!contentContainer) return;
+
+        if (this.activeTab === "COMMON") {
+            this.renderCommonTab(contentContainer);
+            return;
+        }
+
+        if (this.node.type === "Audio/Track") {
+            this.renderTrackTab(contentContainer);
+        } else if (this.node.type === "Audio/Sample") {
+            if (this.activeTab === "SAMPLE") {
+                await this.renderSampleTab(contentContainer);
+            } else if (this.activeTab === "AUDIO") {
+                this.renderAudioTab(contentContainer);
+            }
+        } else if (this.node.type === "Audio/Sequence") {
+            if (this.activeTab === "SEQUENCE") {
+                this.renderSequenceTab(contentContainer);
+            } else if (this.activeTab === "TIMING") {
+                this.renderSequenceTimingTab(contentContainer);
+            }
+        } else {
+            this.renderGenericTab(contentContainer);
+        }
+    }
+
+    private renderCommonTab(container: HTMLElement) {
+        const pos = this.node.pos ? `X: ${Math.round(this.node.pos[0])}, Y: ${Math.round(this.node.pos[1])}` : 'N/A';
+        const inputsCount = this.node.inputs ? this.node.inputs.length : 0;
+        const outputsCount = this.node.outputs ? this.node.outputs.length : 0;
+
+        container.innerHTML = `
+            <table class="td-info-table">
+                <tr><td>ID</td><td>#${this.node.id}</td></tr>
+                <tr><td>Type</td><td>${this.node.type}</td></tr>
+                <tr><td>Position</td><td>${pos}</td></tr>
+                <tr><td>Inputs</td><td>${inputsCount} slot(s)</td></tr>
+                <tr><td>Outputs</td><td>${outputsCount} slot(s)</td></tr>
+            </table>
+        `;
+    }
+
+    private renderTrackTab(container: HTMLElement) {
+        container.innerHTML = `
+            <div class="td-param-group">
+                <div class="td-param-row">
+                    <div class="td-param-label">Name</div>
+                    <div class="td-param-control">
+                        <input type="text" class="td-param-input" id="prop-name" value="${this.node.properties.node_name || ''}" />
+                    </div>
+                </div>
+
+                <div class="td-param-row">
+                    <div class="td-param-label">Mix Mode</div>
+                    <div class="td-param-control">
+                        <select class="td-param-select" id="prop-mix">
+                            <option value="sum" ${this.node.properties.mix_mode === 'sum' ? 'selected' : ''}>Sum (Layered)</option>
+                            <option value="chained" ${this.node.properties.mix_mode === 'chained' ? 'selected' : ''}>Chained (Seq)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="td-param-row">
+                    <div class="td-param-label">Engine BPM</div>
+                    <div class="td-param-control">
+                        <input type="number" class="td-param-input" id="prop-bpm" value="${this.node.properties.bpm || 120}" />
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
+        const nameInput = container.querySelector('#prop-name') as HTMLInputElement;
         
         nameInput.addEventListener('change', (e) => {
             const val = (e.target as HTMLInputElement).value;
             this.node.properties.node_name = val;
             this.node.title = val;
-            titleDisplay.innerText = val;
+            if (typeof this.node.computeSize === 'function') {
+                this.node.size = this.node.computeSize();
+            }
+            if (titleDisplay) titleDisplay.innerText = val;
             this.node.setDirtyCanvas(true, true);
             this.updateTrackNode('name', val);
         });
 
-        const mixSelect = this.container.querySelector('#prop-mix') as HTMLSelectElement;
+        const mixSelect = container.querySelector('#prop-mix') as HTMLSelectElement;
         mixSelect.addEventListener('change', (e) => {
             const val = (e.target as HTMLSelectElement).value;
             this.node.properties.mix_mode = val;
             this.updateTrackNode('mix_mode', val);
         });
 
-        const bpmInput = this.container.querySelector('#prop-bpm') as HTMLInputElement;
+        const bpmInput = container.querySelector('#prop-bpm') as HTMLInputElement;
         if (bpmInput) {
             bpmInput.addEventListener('change', (e) => {
                 const val = parseFloat((e.target as HTMLInputElement).value);
@@ -109,81 +204,77 @@ export class PropertiesWindow {
         }
     }
 
-    async renderSampleForm() {
-        // Show loading state initially
-        this.container.innerHTML = `
-            <div style="padding: 15px; font-family: sans-serif; color: #333; background: #e0f2fe; height: 100%; box-sizing: border-box; position: relative;">
-                ${this.getHeaderHTML(this.node.properties.node_name || 'Sample Properties')}
-                
-                <div style="margin-bottom: 15px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 4px;">Load Sample</label>
-                    <select id="prop-file" disabled style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
-                        <option>Loading samples...</option>
-                    </select>
+    private async renderSampleTab(container: HTMLElement) {
+        container.innerHTML = `
+            <div class="td-param-group">
+                <div class="td-param-row">
+                    <div class="td-param-label">Asset</div>
+                    <div class="td-param-control">
+                        <select class="td-param-select" id="prop-file" disabled>
+                            <option>Loading assets...</option>
+                        </select>
+                    </div>
                 </div>
 
-                <div style="margin-bottom: 15px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 4px;">Start Beat</label>
-                    <input type="number" id="prop-start" value="${this.node.properties.start_beat || 0}" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;" />
+                <div class="td-param-row">
+                    <div class="td-param-label">Start Beat</div>
+                    <div class="td-param-control">
+                        <input type="number" class="td-param-input" id="prop-start" value="${this.node.properties.start_beat || 0}" />
+                    </div>
                 </div>
 
-                <div style="margin-bottom: 15px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 4px;">Detected BPM</label>
-                    <input type="number" id="prop-original-bpm" value="${this.node.properties.original_bpm || 120}" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;" />
-                </div>
-
-                <div style="margin-top: 25px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 8px;">Preview</label>
-                    <audio id="audio-preview" controls src="${this.node.properties.filepath ? '/assets/' + this.node.properties.filepath : ''}" style="width: 100%;"></audio>
+                <div class="td-param-row">
+                    <div class="td-param-label">Original BPM</div>
+                    <div class="td-param-control">
+                        <input type="number" class="td-param-input" id="prop-original-bpm" value="${this.node.properties.original_bpm || 120}" />
+                    </div>
                 </div>
             </div>
         `;
 
-        this.bindCloseEvent();
-
-        const fileSelect = this.container.querySelector('#prop-file') as HTMLSelectElement;
+        const fileSelect = container.querySelector('#prop-file') as HTMLSelectElement;
         
-        // Fetch library dynamically
-        const files = await fetchLibrary();
-        
-        // Populate dropdown
-        fileSelect.disabled = false;
-        fileSelect.innerHTML = `<option value="" disabled ${!this.node.properties.filepath ? 'selected' : ''}>Select an asset...</option>`;
-        
-        for (const file of files) {
-            const isSelected = this.node.properties.filepath === file;
-            fileSelect.innerHTML += `<option value="${file}" ${isSelected ? 'selected' : ''}>${file}</option>`;
+        try {
+            const files = await fetchLibrary();
+            fileSelect.disabled = false;
+            fileSelect.innerHTML = `<option value="" disabled ${!this.node.properties.filepath ? 'selected' : ''}>Select asset...</option>`;
+            
+            for (const file of files) {
+                const isSelected = this.node.properties.filepath === file;
+                fileSelect.innerHTML += `<option value="${file}" ${isSelected ? 'selected' : ''}>${file}</option>`;
+            }
+        } catch (err) {
+            fileSelect.innerHTML = `<option>Error loading assets</option>`;
         }
 
-        const audioPreview = this.container.querySelector('#audio-preview') as HTMLAudioElement;
+        const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
 
         fileSelect.addEventListener('change', (e) => {
             const val = (e.target as HTMLSelectElement).value;
             this.node.properties.filepath = val;
             
-            // Derive name from filename for simplicity
             const newName = val.split('.')[0];
             this.node.properties.node_name = newName;
             this.node.title = newName;
+            if (typeof this.node.computeSize === 'function') {
+                this.node.size = this.node.computeSize();
+            }
             
             this.node.setDirtyCanvas(true, true);
             this.updateTrackNode('filepath', val);
             this.updateTrackNode('name', newName);
 
-            // Update title and audio src
-            const titleDisplay = this.container.querySelector('#title-display') as HTMLSpanElement;
-            titleDisplay.innerText = newName;
-            audioPreview.src = '/assets/' + val;
+            if (titleDisplay) titleDisplay.innerText = newName;
         });
 
-        const startInput = this.container.querySelector('#prop-start') as HTMLInputElement;
+        const startInput = container.querySelector('#prop-start') as HTMLInputElement;
         startInput.addEventListener('change', (e) => {
             const val = parseFloat((e.target as HTMLInputElement).value);
             this.node.properties.start_beat = val;
             this.updateTrackNode('start_beat', val);
         });
 
-        const originalBpmInput = this.container.querySelector('#prop-original-bpm') as HTMLInputElement;
+        const originalBpmInput = container.querySelector('#prop-original-bpm') as HTMLInputElement;
         if (originalBpmInput) {
             originalBpmInput.addEventListener('change', (e) => {
                 const val = parseFloat((e.target as HTMLInputElement).value);
@@ -193,78 +284,48 @@ export class PropertiesWindow {
         }
     }
 
-    renderSequenceForm() {
+    private renderAudioTab(container: HTMLElement) {
+        const filePath = this.node.properties.filepath ? '/assets/' + this.node.properties.filepath : '';
+        container.innerHTML = `
+            <div class="td-param-group">
+                <div class="td-param-row" style="margin-bottom: 8px;">
+                    <div class="td-param-label">File</div>
+                    <div class="td-param-control" style="font-family: monospace; font-size: 10px; color: #38bdf8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        ${this.node.properties.filepath || 'No file selected'}
+                    </div>
+                </div>
+                <audio controls src="${filePath}" class="td-audio-preview"></audio>
+            </div>
+        `;
+    }
+
+    private renderSequenceTab(container: HTMLElement) {
         if (!this.node.properties.sequence) {
             this.node.properties.sequence = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
         }
-        if (this.node.properties.step_length === undefined) {
-            this.node.properties.step_length = 0.25;
-        }
 
-        this.container.innerHTML = `
-            <div style="padding: 15px; font-family: sans-serif; color: #333; background: #e0f2fe; height: 100%; box-sizing: border-box; position: relative; overflow-y: auto;">
-                ${this.getHeaderHTML(this.node.properties.node_name || 'Sequence Properties')}
-                
-                <div style="margin-bottom: 15px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 4px;">Sequence Name</label>
-                    <input type="text" id="prop-name" value="${this.node.properties.node_name || ''}" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;" />
-                </div>
-
-                <div style="margin-bottom: 15px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 4px;">Step Length (beats)</label>
-                    <input type="number" id="prop-step-length" step="0.0625" value="${this.node.properties.step_length || 0.25}" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;" />
-                </div>
-
-                <div style="margin-top: 15px;">
-                    <label style="display: block; font-size: 12px; color: #666; margin-bottom: 8px; font-weight: bold;">Step Sequencer (16 Steps)</label>
-                    <div id="sequence-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;"></div>
-                </div>
+        container.innerHTML = `
+            <div class="td-param-group">
+                <div class="td-seq-grid" id="sequence-grid"></div>
             </div>
         `;
 
-        this.bindCloseEvent();
-
-        const titleDisplay = this.container.querySelector('#title-display') as HTMLSpanElement;
-        const nameInput = this.container.querySelector('#prop-name') as HTMLInputElement;
-        nameInput.addEventListener('change', (e) => {
-            const val = (e.target as HTMLInputElement).value;
-            this.node.properties.node_name = val;
-            this.node.title = val;
-            if (titleDisplay) titleDisplay.innerText = val;
-            this.node.setDirtyCanvas(true, true);
-            this.updateTrackNode('name', val);
-        });
-
-        const stepLengthInput = this.container.querySelector('#prop-step-length') as HTMLInputElement;
-        stepLengthInput.addEventListener('change', (e) => {
-            const val = parseFloat((e.target as HTMLInputElement).value);
-            this.node.properties.step_length = val;
-            this.updateTrackNode('step_length', val);
-        });
-
-        const gridContainer = this.container.querySelector('#sequence-grid') as HTMLElement;
+        const gridContainer = container.querySelector('#sequence-grid') as HTMLElement;
         const seq: number[] = this.node.properties.sequence;
-
-        const activeColor = "#ec4899"; // Bright pink / primary accent
-        const inactiveColor = "#94a3b8"; // Muted surface color
 
         seq.forEach((_, i) => {
             const stepBtn = document.createElement('button');
             stepBtn.type = 'button';
             stepBtn.innerText = `${i + 1}`;
-            stepBtn.style.height = '42px';
-            stepBtn.style.border = 'none';
-            stepBtn.style.borderRadius = '6px';
-            stepBtn.style.fontWeight = 'bold';
-            stepBtn.style.fontSize = '14px';
-            stepBtn.style.cursor = 'pointer';
-            stepBtn.style.transition = 'all 0.15s ease';
+            stepBtn.className = 'td-seq-btn';
 
             const updateStyle = () => {
                 const isActive = this.node.properties.sequence[i] === 1;
-                stepBtn.style.backgroundColor = isActive ? activeColor : inactiveColor;
-                stepBtn.style.color = isActive ? '#ffffff' : '#f8fafc';
-                stepBtn.style.boxShadow = isActive ? '0 2px 4px rgba(236, 72, 153, 0.4)' : 'none';
+                if (isActive) {
+                    stepBtn.classList.add('active');
+                } else {
+                    stepBtn.classList.remove('active');
+                }
             };
 
             updateStyle();
@@ -280,5 +341,77 @@ export class PropertiesWindow {
             gridContainer.appendChild(stepBtn);
         });
     }
+
+    private renderSequenceTimingTab(container: HTMLElement) {
+        if (this.node.properties.step_length === undefined) {
+            this.node.properties.step_length = 0.25;
+        }
+
+        container.innerHTML = `
+            <div class="td-param-group">
+                <div class="td-param-row">
+                    <div class="td-param-label">Name</div>
+                    <div class="td-param-control">
+                        <input type="text" class="td-param-input" id="prop-name" value="${this.node.properties.node_name || ''}" />
+                    </div>
+                </div>
+
+                <div class="td-param-row">
+                    <div class="td-param-label">Step Length</div>
+                    <div class="td-param-control">
+                        <input type="number" class="td-param-input" id="prop-step-length" step="0.0625" value="${this.node.properties.step_length || 0.25}" />
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
+        const nameInput = container.querySelector('#prop-name') as HTMLInputElement;
+        nameInput.addEventListener('change', (e) => {
+            const val = (e.target as HTMLInputElement).value;
+            this.node.properties.node_name = val;
+            this.node.title = val;
+            if (typeof this.node.computeSize === 'function') {
+                this.node.size = this.node.computeSize();
+            }
+            if (titleDisplay) titleDisplay.innerText = val;
+            this.node.setDirtyCanvas(true, true);
+            this.updateTrackNode('name', val);
+        });
+
+        const stepLengthInput = container.querySelector('#prop-step-length') as HTMLInputElement;
+        stepLengthInput.addEventListener('change', (e) => {
+            const val = parseFloat((e.target as HTMLInputElement).value);
+            this.node.properties.step_length = val;
+            this.updateTrackNode('step_length', val);
+        });
+    }
+
+    private renderGenericTab(container: HTMLElement) {
+        container.innerHTML = `
+            <div class="td-param-group">
+                <div class="td-param-row">
+                    <div class="td-param-label">Name</div>
+                    <div class="td-param-control">
+                        <input type="text" class="td-param-input" id="prop-name" value="${this.node.properties.node_name || this.node.title || ''}" />
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
+        const nameInput = container.querySelector('#prop-name') as HTMLInputElement;
+        nameInput.addEventListener('change', (e) => {
+            const val = (e.target as HTMLInputElement).value;
+            this.node.properties.node_name = val;
+            this.node.title = val;
+            if (typeof this.node.computeSize === 'function') {
+                this.node.size = this.node.computeSize();
+            }
+            if (titleDisplay) titleDisplay.innerText = val;
+            this.node.setDirtyCanvas(true, true);
+        });
+    }
 }
+
 

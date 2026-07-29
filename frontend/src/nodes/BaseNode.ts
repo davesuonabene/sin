@@ -1,6 +1,29 @@
 import { LiteGraph, LGraphNode } from 'litegraph.js';
 import { CanvasButton } from '../ui/CanvasButton';
 
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+function truncateText(text: string, maxWidth: number, font: string = "bold 14px Arial"): string {
+    if (!text) return "";
+    if (typeof document === 'undefined') return text;
+    if (!measureCtx) {
+        const c = document.createElement('canvas');
+        measureCtx = c.getContext('2d');
+    }
+    if (measureCtx) {
+        measureCtx.font = font;
+        if (measureCtx.measureText(text).width <= maxWidth) {
+            return text;
+        }
+        let truncated = text;
+        while (truncated.length > 0 && measureCtx.measureText(truncated + '...').width > maxWidth) {
+            truncated = truncated.slice(0, -1);
+        }
+        return truncated + '...';
+    }
+    return text;
+}
+
 export abstract class BaseNode extends LGraphNode {
     buttons: CanvasButton[] = [];
     renderBtn: CanvasButton;
@@ -73,7 +96,29 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     computeSize(): [number, number] {
-        return [200, 44];
+        const fullName = this.properties?.node_name || this.title || "AudioNode";
+        if (typeof document !== 'undefined' && !measureCtx) {
+            const c = document.createElement('canvas');
+            measureCtx = c.getContext('2d');
+        }
+        let textWidth = 80;
+        if (measureCtx) {
+            measureCtx.font = "bold 14px Arial";
+            textWidth = measureCtx.measureText(fullName).width;
+        }
+        // Reserved width for buttons (-76, -50, -24) + margins (~110px total)
+        const desiredWidth = Math.ceil(textWidth + 110);
+        // Min width 200px, max width 360px
+        const finalWidth = Math.max(200, Math.min(360, desiredWidth));
+        return [finalWidth, 44];
+    }
+
+    getTitle(): string {
+        const fullName = this.properties?.node_name || this.title || "AudioNode";
+        const nodeWidth = this.size ? this.size[0] : 200;
+        // Available header width for text (reserving ~85px for buttons on right)
+        const availWidth = Math.max(40, nodeWidth - 85);
+        return truncateText(fullName, availWidth, "bold 14px Arial");
     }
 
     onDrawForeground(ctx: CanvasRenderingContext2D, _canvas: any) {
