@@ -1,0 +1,12 @@
+{
+  "name": "beat-generator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automated Beat Generator Application",
+  "scripts": {
+    "start": "python run.py",
+    "dev": "python run.py",
+    "serve": "python cli.py serve",
+    "build:frontend": "npm --prefix frontend run build"
+  }
+}

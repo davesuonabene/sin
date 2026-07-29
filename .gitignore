@@ -1,0 +1,55 @@
+# Python / Virtual Environment
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+env/
+
+# Database & SQLite
+*.db
+*.sqlite
+*.sqlite3
+beat_generator.db
+
+# Generated Audio Outputs
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# Frontend & Web Build Outputs
+static/
+frontend/node_modules/
+frontend/dist/
+.vite/
+
+# IDE & OS Files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs & Temp
+*.log
+tmp/

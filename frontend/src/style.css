@@ -1,0 +1,36 @@
+@import 'dockview-core/dist/styles/dockview.css';
+
+body, html, #app {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: #ffffff;
+  color: #333333;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  background-color: #ffffff;
+}
+
+/* Ensure canvas & Dockview container background is clean white */
+.dockview-theme-light {
+  background-color: #ffffff;
+}
+
+.dockview-theme-light .dv-groupview {
+  background-color: #ffffff;
+  border: none !important;
+}
+
+.dockview-theme-light .dv-tabs-and-actions-container {
+  display: none !important;
+}
+
+canvas {
+  background-color: #ffffff;
+}
