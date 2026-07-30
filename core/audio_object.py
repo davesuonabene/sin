@@ -448,3 +448,116 @@ class SamplePoolObject(AudioObject):
             data_to_render = stretch_audio(audio_array, original_bpm, system.bpm)
             
         return (data_to_render * self.volume).astype(np.float32)
+
+class ArrangementObject(AudioObject):
+    """
+    Arrangement node that takes one or more child audio objects (loops) with a predefined length
+    and repeats them to fill a user defined time length (`total_bars`).
+    Each iteration evaluates `probability` (0.0 - 1.0) to see if it should play or be bypassed (silenced).
+    If multiple children are provided, one is picked at random for each active iteration.
+    """
+    def __init__(
+        self,
+        name: str = "ArrangementObject",
+        total_bars: float = 4.0,
+        probability: float = 1.0,
+        seed: Optional[float] = None,
+        volume: float = 1.0,
+        pan: float = 0.0,
+        original_bpm: Optional[float] = None,
+        data: Optional[Any] = None
+    ) -> None:
+        super().__init__(
+            name=name,
+            volume=volume,
+            pan=pan,
+            original_bpm=original_bpm,
+            data=data
+        )
+        self.total_bars = float(total_bars)
+        self.probability = float(probability)
+        self.seed = seed if seed is not None else random.random()
+
+    def get_child_loop_samples(self, child: AudioObject, audio: np.ndarray, system: System) -> int:
+        if hasattr(child, "sequence") and hasattr(child, "step_length"):
+            beats = len(getattr(child, "sequence")) * getattr(child, "step_length")
+            if beats > 0:
+                return system.beat_to_samples(beats)
+        elif getattr(child, "total_bars", 0) > 0:
+            return system.beat_to_samples(getattr(child, "total_bars") * 4.0)
+        elif getattr(child, "length_in_beats", 0) > 0:
+            return system.beat_to_samples(getattr(child, "length_in_beats"))
+
+        if len(audio) > 0:
+            samples_per_beat = system.beat_to_samples(1.0)
+            if samples_per_beat > 0:
+                beats = len(audio) / float(samples_per_beat)
+                nearest_beat = round(beats)
+                if abs(beats - nearest_beat) < 0.15 and nearest_beat > 0:
+                    return system.beat_to_samples(float(nearest_beat))
+            return len(audio)
+
+        return system.beat_to_samples(4.0)
+
+    def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        if system is None:
+            raise ValueError("System instance must be provided to render.")
+            
+        if not self.children or self.total_bars <= 0:
+            return np.zeros(0, dtype=np.float32)
+
+        import hashlib
+        import random
+        
+        # Pre-render or identify dynamic children
+        cached_audios = []
+        for _, child in self.children:
+            if getattr(child, "is_dynamic", False):
+                cached_audios.append(None)
+            else:
+                audio = child.render(system, **kwargs)
+                cached_audios.append(audio)
+                
+        total_samples_to_fill = system.beat_to_samples(self.total_bars * 4.0)
+        master_buffer = np.zeros(total_samples_to_fill, dtype=np.float32)
+        
+        # Use a reproducible random generator based on the seed
+        seed_hash = int(hashlib.md5(str(self.seed).encode()).hexdigest(), 16)
+        rng = random.Random(seed_hash)
+        
+        current_sample = 0
+        
+        while current_sample < total_samples_to_fill:
+            child_idx = rng.randint(0, len(self.children) - 1)
+            audio = cached_audios[child_idx]
+            _, child = self.children[child_idx]
+            
+            if audio is None:
+                audio = child.render(system, **kwargs)
+                
+            if len(audio) == 0:
+                # To prevent infinite loop if child returns 0-length array
+                break
+
+            loop_samples = self.get_child_loop_samples(child, audio, system)
+            if loop_samples <= 0:
+                break
+                
+            # Check probability
+            if rng.random() < self.probability:
+                end_sample = current_sample + len(audio)
+                
+                # Copy audio into master buffer
+                if end_sample <= total_samples_to_fill:
+                    master_buffer[current_sample:end_sample] += audio
+                else:
+                    # Clip it if it exceeds total_samples_to_fill
+                    remaining_samples = total_samples_to_fill - current_sample
+                    if remaining_samples > 0:
+                        master_buffer[current_sample:total_samples_to_fill] += audio[:remaining_samples]
+            
+            # Move the time cursor forward by the beat-quantized loop length
+            current_sample += loop_samples
+                
+        return (master_buffer * self.volume).astype(np.float32)
+

@@ -67,6 +67,8 @@ class AudioNodeModel(BaseModel):
     playbackMode: Optional[str] = None
     seed: Optional[float] = None
     refresh_mode: Literal["parent_render", "self_render", "manual"] = "manual"
+    total_bars: Optional[float] = None
+    probability: Optional[float] = None
     children: List['AudioNodeModel'] = []
 
 class PoolResolveRequest(BaseModel):
@@ -110,6 +112,16 @@ def build_audio_object(node_data: AudioNodeModel) -> AudioObject:
             seed=node_data.seed,
             refresh_mode=node_data.refresh_mode,
             original_bpm=node_data.original_bpm
+        )
+    elif node_data.node_type == "arrangement":
+        from core.audio_object import ArrangementObject
+        t_bars = node_data.total_bars if node_data.total_bars is not None else 4.0
+        prob = node_data.probability if node_data.probability is not None else 1.0
+        obj = ArrangementObject(
+            name=node_data.node_name,
+            total_bars=t_bars,
+            probability=prob,
+            seed=node_data.seed
         )
     elif node_data.node_type == "sample" or (audio_data is not None and node_data.node_type != "track"):
         obj = SampleObject(

@@ -12,7 +12,7 @@ export class NodePopupMenu {
     private searchInput: HTMLInputElement;
     private gridContainer: HTMLDivElement;
     private tabsContainer: HTMLDivElement;
-    private onSelectCallback: ((nodeType: "sample" | "sample_pool" | "sequence" | "track") => void) | null = null;
+    private onSelectCallback: ((nodeType: "sample" | "sample_pool" | "sequence" | "track" | "arrangement") => void) | null = null;
     private isVisible: boolean = false;
     private openTime: number = 0;
     private activeTab: "NODES" | "GROUPS" | "PRESETS" | "MODULATORS" | "ADDONS" = "NODES";
@@ -23,6 +23,7 @@ export class NodePopupMenu {
         { type: "sample_pool", label: "Sample Pool Node", category: "NODES", badge: "POOL", badgeColor: "#8b5cf6", isCallable: true },
         { type: "sequence", label: "Sequence Node", category: "NODES", badge: "SEQ", badgeColor: "#ec4899", isCallable: true },
         { type: "track", label: "Track Node", category: "NODES", badge: "TRACK", badgeColor: "#3b82f6", isCallable: true },
+        { type: "arrangement", label: "Arrangement Node", category: "NODES", badge: "ARR", badgeColor: "#f59e0b", isCallable: true },
         
         // GROUPS
         { type: "group", label: "Group Container", category: "GROUPS", badge: "GRP", badgeColor: "#8b5cf6", isCallable: false },
@@ -159,7 +160,7 @@ export class NodePopupMenu {
             const selectHandler = (e: Event) => {
                 e.stopPropagation();
                 e.preventDefault();
-                if (item.isCallable && (item.type === "sample" || item.type === "sample_pool" || item.type === "sequence" || item.type === "track")) {
+                if (item.isCallable && (item.type === "sample" || item.type === "sample_pool" || item.type === "sequence" || item.type === "track" || item.type === "arrangement")) {
                     if (this.onSelectCallback) {
                         this.onSelectCallback(item.type as any);
                     }
@@ -174,7 +175,7 @@ export class NodePopupMenu {
         });
     }
 
-    show(x: number, y: number, onSelect: (nodeType: "sample" | "sample_pool" | "sequence" | "track") => void) {
+    show(x: number, y: number, onSelect: (nodeType: "sample" | "sample_pool" | "sequence" | "track" | "arrangement") => void) {
         this.openTime = Date.now();
         this.onSelectCallback = onSelect;
         this.activeTab = "NODES";

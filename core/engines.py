@@ -77,12 +77,24 @@ class SequenceRenderer(NodeRenderer):
         return seq_obj.render(system=system)
 
 
+class ArrangementRenderer(NodeRenderer):
+    """
+    Rendering engine specific to Arrangement nodes.
+    Repeats child loops to reach user defined bars, applying probability.
+    """
+
+    def render(self, node_data: Any, system: System) -> np.ndarray:
+        arr_obj = build_node_object(node_data)
+        return arr_obj.render(system=system)
+
+
 # Registry mapping node_type -> Renderer class
 RENDERER_REGISTRY: Dict[str, Type[NodeRenderer]] = {
     "track": TrackRenderer,
     "sample": SampleRenderer,
     "sequence": SequenceRenderer,
-    "sample_pool": SamplePoolRenderer
+    "sample_pool": SamplePoolRenderer,
+    "arrangement": ArrangementRenderer
 }
 
 
@@ -96,7 +108,7 @@ def get_renderer_for_node(node_type: str) -> NodeRenderer:
 
 def build_node_object(node_data: Any) -> AudioObject:
     """
-    Recursively builds AudioObject, SampleObject, or SequenceObject hierarchy from Pydantic model.
+    Recursively builds AudioObject, SampleObject, SequenceObject, or ArrangementObject hierarchy from Pydantic model.
     """
     actual_path = getattr(node_data, "filepath", None)
     if actual_path:
@@ -128,6 +140,22 @@ def build_node_object(node_data: Any) -> AudioObject:
             name=node_name,
             filters=filters,
             playback_mode=playback_mode,
+            seed=seed,
+            original_bpm=original_bpm
+        )
+    elif node_type == "arrangement":
+        from core.audio_object import ArrangementObject
+        t_bars = getattr(node_data, "total_bars", None)
+        if t_bars is None:
+            t_bars = 4.0
+        prob = getattr(node_data, "probability", None)
+        if prob is None:
+            prob = 1.0
+        seed = getattr(node_data, "seed", None)
+        obj = ArrangementObject(
+            name=node_name,
+            total_bars=t_bars,
+            probability=prob,
             seed=seed,
             original_bpm=original_bpm
         )

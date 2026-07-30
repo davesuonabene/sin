@@ -18,6 +18,7 @@ export class PropertiesWindow {
         if (this.node.type === "Audio/Track") return "TRACK";
         if (this.node.type === "Audio/Sequence") return "SEQUENCE";
         if (this.node.type === "Audio/SamplePool") return "POOL";
+        if (this.node.type === "Audio/Arrangement") return "ARRANGEMENT";
         return "PARAMS";
     }
 
@@ -25,6 +26,7 @@ export class PropertiesWindow {
         if (this.node.type === "Audio/Sample") return ["SAMPLE", "AUDIO", "COMMON"];
         if (this.node.type === "Audio/Sequence") return ["SEQUENCE", "TIMING", "COMMON"];
         if (this.node.type === "Audio/SamplePool") return ["POOL", "COMMON"];
+        if (this.node.type === "Audio/Arrangement") return ["ARRANGEMENT", "COMMON"];
         return ["PARAMS", "COMMON"];
     }
 
@@ -32,6 +34,7 @@ export class PropertiesWindow {
         if (this.node.type === "Audio/Sample") return "SMPL";
         if (this.node.type === "Audio/Sequence") return "SEQ";
         if (this.node.type === "Audio/SamplePool") return "POOL";
+        if (this.node.type === "Audio/Arrangement") return "ARR";
         return "NODE";
     }
 
@@ -125,6 +128,10 @@ export class PropertiesWindow {
         } else if (this.node.type === "Audio/SamplePool") {
             if (this.activeTab === "POOL") {
                 this.renderPoolTab(contentContainer);
+            }
+        } else if (this.node.type === "Audio/Arrangement") {
+            if (this.activeTab === "ARRANGEMENT") {
+                this.renderArrangementTab(contentContainer);
             }
         } else {
             this.renderGenericTab(contentContainer);
@@ -599,6 +606,71 @@ export class PropertiesWindow {
         } catch (e) {
             selectedEl.innerText = "Error resolving";
         }
+    }
+
+    private renderArrangementTab(container: HTMLElement) {
+        if (this.node.properties.total_bars === undefined) {
+            this.node.properties.total_bars = 4.0;
+            this.node.properties.probability = 1.0;
+        }
+
+        container.innerHTML = `
+            <div class="td-param-group">
+                <div class="td-param-row">
+                    <div class="td-param-label">Name</div>
+                    <div class="td-param-control">
+                        <input type="text" class="td-param-input" id="prop-name" value="${this.node.properties.node_name || ''}" />
+                    </div>
+                </div>
+
+                <div class="td-param-row">
+                    <div class="td-param-label">Total Bars</div>
+                    <div class="td-param-control">
+                        <input type="number" class="td-param-input" id="prop-total-bars" value="${this.node.properties.total_bars}" step="0.25" />
+                    </div>
+                </div>
+
+                <div class="td-param-row">
+                    <div class="td-param-label">Probability</div>
+                    <div class="td-param-control">
+                        <input type="number" class="td-param-input" id="prop-prob" value="${this.node.properties.probability}" min="0" max="1" step="0.05" />
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
+        const nameInput = container.querySelector('#prop-name') as HTMLInputElement;
+        nameInput.addEventListener('change', (e) => {
+            const val = (e.target as HTMLInputElement).value;
+            this.node.properties.node_name = val;
+            this.node.title = val;
+            if (typeof this.node.computeSize === 'function') {
+                this.node.size = this.node.computeSize();
+            }
+            if (titleDisplay) titleDisplay.innerText = val;
+            this.node.setDirtyCanvas(true, true);
+            this.updateTrackNode('name', val);
+        });
+
+        const totalBarsInput = container.querySelector('#prop-total-bars') as HTMLInputElement;
+        const onTotalBarsChange = (e: Event) => {
+            const val = parseFloat((e.target as HTMLInputElement).value) || 4.0;
+            this.node.properties.total_bars = val;
+            this.updateTrackNode('total_bars', val);
+        };
+        totalBarsInput.addEventListener('change', onTotalBarsChange);
+        totalBarsInput.addEventListener('input', onTotalBarsChange);
+
+        const probInput = container.querySelector('#prop-prob') as HTMLInputElement;
+        const onProbChange = (e: Event) => {
+            const val = parseFloat((e.target as HTMLInputElement).value);
+            const clamped = isNaN(val) ? 1.0 : Math.max(0, Math.min(1, val));
+            this.node.properties.probability = clamped;
+            this.updateTrackNode('probability', clamped);
+        };
+        probInput.addEventListener('change', onProbChange);
+        probInput.addEventListener('input', onProbChange);
     }
 }
 

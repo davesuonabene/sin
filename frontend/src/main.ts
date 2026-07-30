@@ -5,6 +5,7 @@ import './nodes/TrackNode';
 import './nodes/SampleNode';
 import './nodes/SequenceNode';
 import './nodes/SamplePoolNode';
+import './nodes/ArrangementNode';
 import { PropertiesWindow } from './ui/PropertiesWindow';
 import { NodePopupMenu } from './ui/NodePopupMenu';
 import { LibraryPanel } from './ui/LibraryPanel';
@@ -197,7 +198,7 @@ LiteGraph.NODE_TITLE_COLOR = "#ffffff";
 
 export interface TrackNodeData {
     id: number;
-    type: "track" | "sample" | "sequence" | "sample_pool";
+    type: "track" | "sample" | "sequence" | "sample_pool" | "arrangement";
     name: string;
     filepath: string;
     original_bpm: number;
@@ -206,6 +207,8 @@ export interface TrackNodeData {
     mix_mode: string;
     sequence?: number[];
     step_length?: number;
+    total_bars?: number;
+    probability?: number;
     filters?: any;
     playbackMode?: string;
     seed?: number;
@@ -282,7 +285,7 @@ function updateGraphNodeCollapsing() {
 
 function openParamWindow(node: any) {
     if (!node || node.id == null) return;
-    if (node.type !== "Audio/Track" && node.type !== "Audio/Sample" && node.type !== "Audio/Sequence" && node.type !== "Audio/SamplePool") return;
+    if (node.type !== "Audio/Track" && node.type !== "Audio/Sample" && node.type !== "Audio/Sequence" && node.type !== "Audio/SamplePool" && node.type !== "Audio/Arrangement") return;
 
     const dv = (window as any).dockview;
 
@@ -379,7 +382,7 @@ window.addEventListener('add-library-node', (e: any) => {
     }
 });
 
-function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence" | "sample_pool" = "sample") {
+function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence" | "sample_pool" | "arrangement" = "sample") {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
 
@@ -400,6 +403,9 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
     } else if (nodeType === "sample_pool") {
         typeStr = "Audio/SamplePool";
         defaultName = "Sample Pool";
+    } else if (nodeType === "arrangement") {
+        typeStr = "Audio/Arrangement";
+        defaultName = "Arrangement";
     }
 
     const childNode = LiteGraph.createNode(typeStr);
@@ -412,6 +418,9 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
     if (nodeType === "sequence") {
         childNode.properties.sequence = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
         childNode.properties.step_length = 0.25;
+    } else if (nodeType === "arrangement") {
+        childNode.properties.total_bars = 4.0;
+        childNode.properties.probability = 1.0;
     }
     childNode.title = defaultName;
     if (typeof (childNode as any).computeSize === 'function') {
@@ -437,6 +446,10 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
         childNode.color = "#8b5cf6";
         childNode.bgcolor = "#8b5cf6";
         childNode.boxcolor = "#7c3aed";
+    } else if (nodeType === "arrangement") {
+        childNode.color = "#f59e0b";
+        childNode.bgcolor = "#f59e0b";
+        childNode.boxcolor = "#d97706";
     } else {
         childNode.color = "#3b82f6";
         childNode.bgcolor = "#3b82f6";
@@ -480,6 +493,8 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
         mix_mode: "sum",
         sequence: nodeType === "sequence" ? [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] : undefined,
         step_length: nodeType === "sequence" ? 0.25 : undefined,
+        total_bars: nodeType === "arrangement" ? 4.0 : undefined,
+        probability: nodeType === "arrangement" ? 1.0 : undefined,
         parentId: parentId,
         children: []
     });
@@ -554,7 +569,7 @@ function handleNodeRemoved(nodeId: number) {
     updateGraphNodeCollapsing();
 }
 
-function addRootNode(nodeType: "sample" | "track" | "sequence" | "sample_pool" = "track", pos?: [number, number], filepath?: string, customName?: string) {
+function addRootNode(nodeType: "sample" | "track" | "sequence" | "sample_pool" | "arrangement" = "track", pos?: [number, number], filepath?: string, customName?: string) {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
 
@@ -569,6 +584,9 @@ function addRootNode(nodeType: "sample" | "track" | "sequence" | "sample_pool" =
     } else if (nodeType === "sample_pool") {
         typeStr = "Audio/SamplePool";
         defaultName = "Sample Pool";
+    } else if (nodeType === "arrangement") {
+        typeStr = "Audio/Arrangement";
+        defaultName = "Arrangement";
     }
 
     const rootNode = LiteGraph.createNode(typeStr);
@@ -576,6 +594,13 @@ function addRootNode(nodeType: "sample" | "track" | "sequence" | "sample_pool" =
     rootNode.properties.node_name = customName || defaultName;
     rootNode.properties.filepath = filepath || "";
     rootNode.properties.mix_mode = "sum";
+    if (nodeType === "sequence") {
+        rootNode.properties.sequence = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+        rootNode.properties.step_length = 0.25;
+    } else if (nodeType === "arrangement") {
+        rootNode.properties.total_bars = 4.0;
+        rootNode.properties.probability = 1.0;
+    }
     rootNode.title = customName || defaultName;
     if (typeof (rootNode as any).computeSize === 'function') {
         rootNode.size = (rootNode as any).computeSize();
@@ -593,6 +618,10 @@ function addRootNode(nodeType: "sample" | "track" | "sequence" | "sample_pool" =
         rootNode.color = "#8b5cf6";
         rootNode.bgcolor = "#8b5cf6";
         rootNode.boxcolor = "#7c3aed";
+    } else if (nodeType === "arrangement") {
+        rootNode.color = "#f59e0b";
+        rootNode.bgcolor = "#f59e0b";
+        rootNode.boxcolor = "#d97706";
     } else {
         rootNode.color = "#4f46e5";
         rootNode.bgcolor = "#4f46e5";
@@ -612,6 +641,8 @@ function addRootNode(nodeType: "sample" | "track" | "sequence" | "sample_pool" =
         mix_mode: "sum",
         sequence: nodeType === "sequence" ? [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] : undefined,
         step_length: nodeType === "sequence" ? 0.25 : undefined,
+        total_bars: nodeType === "arrangement" ? 4.0 : undefined,
+        probability: nodeType === "arrangement" ? 1.0 : undefined,
         parentId: null,
         children: []
     });
@@ -871,6 +902,8 @@ function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
         const nodeType = data?.type || nodeObj?.properties?.node_type || (nodeObj?.type === "Audio/Sample" ? "sample" : nodeObj?.type === "Audio/Sequence" ? "sequence" : nodeObj?.type === "Audio/SamplePool" ? "sample_pool" : "track");
         const sequence = data?.sequence || nodeObj?.properties?.sequence || (nodeType === "sequence" ? [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] : undefined);
         const stepLength = data?.step_length || nodeObj?.properties?.step_length || (nodeType === "sequence" ? 0.25 : undefined);
+        const total_bars = data?.total_bars ?? nodeObj?.properties?.total_bars ?? (nodeType === "arrangement" ? 4.0 : undefined);
+        const probability = data?.probability ?? nodeObj?.properties?.probability ?? (nodeType === "arrangement" ? 1.0 : undefined);
 
         const filters = data?.filters || nodeObj?.properties?.filters;
         const playbackMode = data?.playbackMode || nodeObj?.properties?.playbackMode;
@@ -928,6 +961,8 @@ function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
             mix_mode: mix_mode,
             sequence: sequence,
             step_length: stepLength,
+            total_bars: total_bars,
+            probability: probability,
             filters: filters,
             playbackMode: playbackMode,
             seed: seed,
