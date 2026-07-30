@@ -1,6 +1,13 @@
-let cachedLibrary: string[] | null = null;
+export interface LibraryFile {
+    id?: number;
+    absolute_path: string;
+    name: string;
+    tags?: any[];
+}
 
-export async function fetchLibrary(): Promise<string[]> {
+let cachedLibrary: LibraryFile[] | null = null;
+
+export async function fetchLibrary(): Promise<LibraryFile[]> {
     if (cachedLibrary !== null) {
         return cachedLibrary;
     }
@@ -13,7 +20,7 @@ export async function fetchLibrary(): Promise<string[]> {
         
         const data = await response.json();
         cachedLibrary = data.files || [];
-        return cachedLibrary as string[];
+        return cachedLibrary as LibraryFile[];
     } catch (err) {
         console.error("Error fetching library:", err);
         return [];

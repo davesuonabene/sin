@@ -18,7 +18,7 @@ export class TrackNode extends BaseNode {
             bpm: 120
         };
         
-        this.addInput("Input", "audio", { multiple: true } as any);
+        this.addInput("Input", "audio");
         this.addOutput("Audio", "audio");
     }
 }

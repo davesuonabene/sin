@@ -160,6 +160,43 @@ export abstract class BaseNode extends LGraphNode {
         return false;
     }
 
+    onConnectionsChange(type: number, slotIndex: number, isConnected: boolean, link_info: any, ioSlot: any) {
+        if (type === LiteGraph.INPUT && this.inputs && this.inputs.length > 0) {
+            this.ensureEmptyInput();
+        }
+    }
+
+    ensureEmptyInput() {
+        if (!this.inputs) return;
+        
+        // Remove extra empty inputs from the end
+        for (let i = this.inputs.length - 1; i >= 1; i--) {
+            if (!this.inputs[i].link && !this.inputs[i-1].link) {
+                this.removeInput(i);
+            } else {
+                break;
+            }
+        }
+
+        // Ensure at least one empty input at the end
+        const lastInput = this.inputs[this.inputs.length - 1];
+        if (lastInput && lastInput.link != null) {
+            this.addInput("Input", "audio");
+        }
+    }
+
+    getConnectionPos(is_input: boolean, slot_number: number | string, out?: any): any {
+        out = out || new Float32Array(2);
+        if (is_input) {
+            out[0] = this.pos[0];
+            out[1] = this.pos[1] + this.size[1] * 0.5;
+        } else {
+            out[0] = this.pos[0] + this.size[0];
+            out[1] = this.pos[1] + this.size[1] * 0.5;
+        }
+        return out;
+    }
+
     onRemoved() {
         // Automatically notify application when node is deleted
         window.dispatchEvent(new CustomEvent('node-removed', { detail: { nodeId: this.id } }));

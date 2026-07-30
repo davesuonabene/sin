@@ -3,3 +3,4 @@ uvicorn
 librosa
 soundfile
 typer
+sqlalchemy

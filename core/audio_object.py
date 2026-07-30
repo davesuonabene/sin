@@ -38,6 +38,7 @@ class AudioObject(BaseObject):
         self.mix_mode = mix_mode
         self.filepath = str(filepath) if filepath is not None else None
         self._original_bpm = float(original_bpm) if original_bpm is not None else None
+        self.is_dynamic = False
 
         # Children stored as list of (start_beat: float, child_object: AudioObject) tuples
         self.children: List[Tuple[float, AudioObject]] = []
@@ -245,34 +246,203 @@ class SequenceObject(AudioObject):
 
         # Render the first child (the sample)
         _, first_child = self.children[0]
-        child_audio = first_child.render(system, **kwargs)
+        is_dynamic = getattr(first_child, "is_dynamic", False)
 
-        if len(child_audio) == 0 or len(self.sequence) == 0:
+        cached_child_audio = None
+        if not is_dynamic:
+            cached_child_audio = first_child.render(system, **kwargs)
+            if len(cached_child_audio) == 0 or len(self.sequence) == 0:
+                return np.zeros(0, dtype=np.float32)
+
+        if len(self.sequence) == 0:
             return np.zeros(0, dtype=np.float32)
 
         # Calculate total pattern duration in beats & samples
         pattern_duration_beats = len(self.sequence) * self.step_length
         pattern_samples = system.beat_to_samples(pattern_duration_beats)
 
-        # Determine maximum required array length in samples (sequence duration + tail of final sample trigger)
+        rendered_steps = []
         max_end_sample = pattern_samples
+
         for step_idx, step_val in enumerate(self.sequence):
             if step_val == 1:
                 start_beat = step_idx * self.step_length
                 start_sample = system.beat_to_samples(start_beat)
-                end_sample = start_sample + len(child_audio)
+
+                audio = first_child.render(system, **kwargs) if is_dynamic else cached_child_audio
+                rendered_steps.append((start_sample, audio))
+
+                end_sample = start_sample + len(audio)
                 if end_sample > max_end_sample:
                     max_end_sample = end_sample
 
         master_buffer = np.zeros(max_end_sample, dtype=np.float32)
 
-        # Mix child audio at active steps
-        for step_idx, step_val in enumerate(self.sequence):
-            if step_val == 1:
-                start_beat = step_idx * self.step_length
-                start_sample = system.beat_to_samples(start_beat)
-                end_sample = start_sample + len(child_audio)
-                master_buffer[start_sample:end_sample] += child_audio
+        for start_sample, audio in rendered_steps:
+            end_sample = start_sample + len(audio)
+            master_buffer[start_sample:end_sample] += audio
 
         return (master_buffer * self.volume).astype(np.float32)
 
+
+import sqlite3
+import random
+import os
+
+class SamplePoolObject(AudioObject):
+    def __init__(
+        self,
+        name: str = "SamplePoolObject",
+        filters: Optional[dict] = None,
+        playback_mode: str = "Random",
+        seed: Optional[float] = None,
+        volume: float = 1.0,
+        pan: float = 0.0,
+        original_bpm: Optional[float] = None,
+        data: Optional[Any] = None
+    ) -> None:
+        super().__init__(
+            name=name,
+            volume=volume,
+            pan=pan,
+            original_bpm=original_bpm,
+            data=data
+        )
+        self.filters = filters or {}
+        self.playback_mode = playback_mode or "Random"
+        self.seed = seed if seed is not None else random.random()
+        self.is_dynamic = False
+        self.current_pool = []
+        self.last_played_index = -1
+        self.updatePool()
+        
+        # Pre-load audio data for the statically evaluated render
+        sample_path = self.getNextSample()
+        if sample_path:
+            if not os.path.exists(sample_path):
+                alt_path = os.path.join("assets", sample_path)
+                if os.path.exists(alt_path):
+                    sample_path = alt_path
+            try:
+                from core.dsp import load_sample
+                self.audio_data, _ = load_sample(sample_path)
+                self.filepath = sample_path
+            except Exception as e:
+                import logging
+                logging.getLogger("beat_generator").warning(f"Failed to load pool sample: {e}")
+        
+    def updatePool(self):
+        self.current_pool = []
+        db_path = "gaia.db"
+        if not os.path.exists(db_path):
+            db_path = os.path.join("gaia", "gaia.db")
+        if not os.path.exists(db_path):
+            return
+            
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            query = "SELECT i.id, i.absolute_path, i.type FROM items i"
+            joins = []
+            conditions = []
+            params = []
+            
+            tags = self.filters.get("tags")
+            if tags:
+                if isinstance(tags, str):
+                    tags = [t.strip() for t in tags.split(",") if t.strip()]
+                if tags:
+                    joins.append("JOIN item_tags it ON i.id = it.item_id JOIN tags t ON it.tag_id = t.id")
+                    tag_placeholders = ",".join(["?"] * len(tags))
+                    conditions.append(f"t.name IN ({tag_placeholders})")
+                    params.extend(tags)
+                    
+            item_type = self.filters.get("type")
+            if item_type:
+                conditions.append("i.type = ?")
+                params.append(item_type)
+                
+            bpm_min = self.filters.get("bpm_min")
+            bpm_max = self.filters.get("bpm_max")
+            
+            if bpm_min is not None or bpm_max is not None:
+                joins.append("LEFT JOIN loop_sample_items lsi ON i.id = lsi.id")
+                if bpm_min is not None:
+                    conditions.append("lsi.bpm >= ?")
+                    params.append(bpm_min)
+                if bpm_max is not None:
+                    conditions.append("lsi.bpm <= ?")
+                    params.append(bpm_max)
+            
+            if joins:
+                query += " " + " ".join(joins)
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+                
+            query += " GROUP BY i.id"
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            for row in rows:
+                self.current_pool.append({
+                    "id": row["id"],
+                    "absolute_path": row["absolute_path"],
+                    "type": row["type"]
+                })
+                
+            conn.close()
+        except Exception as e:
+            import logging
+            logging.getLogger("beat_generator.core").error(f"Failed to update SamplePool: {e}")
+            
+    def getNextSample(self) -> Optional[str]:
+        if not self.current_pool:
+            return None
+            
+        pool_size = len(self.current_pool)
+        if pool_size == 1:
+            self.last_played_index = 0
+            return self.current_pool[0]["absolute_path"]
+            
+        import hashlib
+        seed_hash = int(hashlib.md5(str(self.seed).encode()).hexdigest(), 16)
+        next_idx = seed_hash % pool_size
+                
+        self.last_played_index = next_idx
+        return self.current_pool[next_idx]["absolute_path"]
+        
+    def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        filepath = self.getNextSample()
+        if not filepath:
+            return np.zeros(0, dtype=np.float32)
+            
+        sr = system.sample_rate if system is not None else 44100
+        
+        if not os.path.exists(filepath):
+            alt_path = os.path.join("assets", filepath)
+            if os.path.exists(alt_path):
+                filepath = alt_path
+        
+        try:
+            audio_array, _ = load_sample(filepath, target_sr=sr)
+        except Exception as e:
+            import logging
+            logging.getLogger("beat_generator.core").error(f"Failed to load sample {filepath}: {e}")
+            return np.zeros(0, dtype=np.float32)
+        
+        original_bpm = self._original_bpm
+        if original_bpm is None:
+            bpm = BPMAnalyzer.from_filename(filepath)
+            if bpm is None and len(audio_array) > 0:
+                bpm = BPMAnalyzer.from_duration(float(len(audio_array)) / sr)
+            if bpm is not None:
+                original_bpm = bpm
+                
+        data_to_render = audio_array
+        if system is not None and original_bpm is not None and original_bpm != system.bpm:
+            data_to_render = stretch_audio(audio_array, original_bpm, system.bpm)
+            
+        return (data_to_render * self.volume).astype(np.float32)

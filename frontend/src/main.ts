@@ -4,8 +4,10 @@ import { LGraph, LGraphCanvas, LiteGraph } from 'litegraph.js';
 import './nodes/TrackNode';
 import './nodes/SampleNode';
 import './nodes/SequenceNode';
+import './nodes/SamplePoolNode';
 import { PropertiesWindow } from './ui/PropertiesWindow';
 import { NodePopupMenu } from './ui/NodePopupMenu';
+import { LibraryPanel } from './ui/LibraryPanel';
 
 const appElement = document.getElementById('app');
 if (!appElement) throw new Error('Could not find #app element');
@@ -36,11 +38,117 @@ masterPlayer.controls = true;
 masterPlayer.style.display = 'none';
 masterPlayer.style.height = '36px';
 
+const tempFilesSelect = document.createElement('select');
+tempFilesSelect.id = 'temp-files-select';
+tempFilesSelect.style.padding = '6px';
+tempFilesSelect.style.borderRadius = '4px';
+tempFilesSelect.style.border = '1px solid #ccc';
+tempFilesSelect.style.background = '#fff';
+tempFilesSelect.addEventListener('change', (e) => {
+    const val = (e.target as HTMLSelectElement).value;
+    if (val) {
+        masterPlayer.src = `${val}?t=${Date.now()}`;
+        masterPlayer.play().catch(e => console.error("Play failed", e));
+    }
+});
+
+const exportBtn = document.createElement('button');
+exportBtn.id = 'export-btn';
+exportBtn.textContent = "Download";
+exportBtn.style.marginLeft = '10px';
+exportBtn.style.padding = '6px 10px';
+exportBtn.style.background = '#10b981';
+exportBtn.style.color = '#fff';
+exportBtn.style.border = 'none';
+exportBtn.style.cursor = 'pointer';
+exportBtn.style.borderRadius = '4px';
+exportBtn.style.fontSize = '12px';
+
+exportBtn.addEventListener('click', async () => {
+    const selectedOption = tempFilesSelect.options[tempFilesSelect.selectedIndex];
+    if (!selectedOption) return;
+
+    const filename = selectedOption.textContent;
+    if (!filename) return;
+
+    try {
+        const res = await fetch('/api/renders/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename })
+        });
+        const data = await res.json();
+        if (data.status === 'success' && data.file_url) {
+            // Trigger actual download in browser
+            const a = document.createElement('a');
+            a.href = data.file_url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            // Refresh temp list
+            await updateTempRendersList();
+        } else {
+            alert("Export failed: " + (data.detail || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Export failed");
+    }
+});
+
+toolbar.appendChild(tempFilesSelect);
 toolbar.appendChild(masterPlayer);
+toolbar.appendChild(exportBtn);
 appElement.appendChild(toolbar);
+
+async function updateTempRendersList(selectFilename?: string) {
+    try {
+        const res = await fetch('/api/renders/temp');
+        const data = await res.json();
+
+        tempFilesSelect.innerHTML = ''; // clear options
+
+        if (data.files && data.files.length > 0) {
+            toolbar.style.display = 'flex';
+            data.files.forEach((f: any) => {
+                const opt = document.createElement('option');
+                opt.value = f.url;
+                opt.textContent = f.filename;
+                tempFilesSelect.appendChild(opt);
+            });
+
+            if (selectFilename) {
+                for (let i = 0; i < tempFilesSelect.options.length; i++) {
+                    if (tempFilesSelect.options[i].textContent === selectFilename) {
+                        tempFilesSelect.selectedIndex = i;
+                        break;
+                    }
+                }
+            }
+
+            // Update player src to currently selected
+            const selectedOpt = tempFilesSelect.options[tempFilesSelect.selectedIndex];
+            if (selectedOpt) {
+                masterPlayer.src = `${selectedOpt.value}?t=${Date.now()}`;
+                masterPlayer.style.display = 'block';
+            }
+        } else {
+            // No files left
+            toolbar.style.display = 'none';
+            masterPlayer.pause();
+            masterPlayer.src = '';
+        }
+    } catch (err) {
+        console.error("Failed to update temp renders list", err);
+    }
+}
+
+// Initial fetch
+updateTempRendersList();
 // ------------------
 
-// Configure LiteGraph globally
 LiteGraph.NODE_TITLE_HEIGHT = 44;
 LiteGraph.NODE_TITLE_TEXT_Y = 27;
 LiteGraph.NODE_SLOT_HEIGHT = 0;
@@ -53,6 +161,32 @@ LiteGraph.NODE_TEXT_SIZE = 13;
 LiteGraph.NODE_SUBTEXT_SIZE = 0;
 LiteGraph.NODE_DEFAULT_SHAPE = "box" as any;
 
+// Monkey-patch LGraphNode.prototype.connect to redirect connections to free slots
+// Because LiteGraph's findSlotByType ignores preferFreeSlot for inputs, drops always hit slot 0.
+const originalConnect = LiteGraph.LGraphNode.prototype.connect;
+LiteGraph.LGraphNode.prototype.connect = function(slot: any, target_node: any, target_slot: any) {
+    let t_node = target_node;
+    if (t_node && t_node.constructor === Number) {
+        t_node = this.graph.getNodeById(t_node);
+    }
+    if (t_node && t_node.inputs && target_slot !== undefined && target_slot !== -1) {
+        let targetSlotIndex = typeof target_slot === "string" ? t_node.findInputSlot(target_slot) : target_slot;
+        if (targetSlotIndex !== -1 && t_node.inputs[targetSlotIndex]) {
+            if (t_node.inputs[targetSlotIndex].link != null) {
+                // The intended slot is occupied. Try to find a free one of the same type.
+                const type = t_node.inputs[targetSlotIndex].type;
+                for (let i = 0; i < t_node.inputs.length; i++) {
+                    if (t_node.inputs[i].type === type && t_node.inputs[i].link == null) {
+                        target_slot = i;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return originalConnect.call(this, slot, target_node, target_slot);
+};
+
 // Direct linear connections (Single straight line A -> B without turns)
 LiteGraph.LINEAR_LINK = 1;
 LiteGraph.LINK_COLOR = "#94a3b8"; // Light slate
@@ -63,7 +197,7 @@ LiteGraph.NODE_TITLE_COLOR = "#ffffff";
 
 export interface TrackNodeData {
     id: number;
-    type: "track" | "sample" | "sequence";
+    type: "track" | "sample" | "sequence" | "sample_pool";
     name: string;
     filepath: string;
     original_bpm: number;
@@ -72,6 +206,9 @@ export interface TrackNodeData {
     mix_mode: string;
     sequence?: number[];
     step_length?: number;
+    filters?: any;
+    playbackMode?: string;
+    seed?: number;
     parentId: number | null;
     children: number[];
 }
@@ -144,7 +281,7 @@ function updateGraphNodeCollapsing() {
 
 function openParamWindow(node: any) {
     if (!node || node.id == null) return;
-    if (node.type !== "Audio/Track" && node.type !== "Audio/Sample" && node.type !== "Audio/Sequence") return;
+    if (node.type !== "Audio/Track" && node.type !== "Audio/Sample" && node.type !== "Audio/Sequence" && node.type !== "Audio/SamplePool") return;
 
     const dv = (window as any).dockview;
 
@@ -170,8 +307,8 @@ function openParamWindow(node: any) {
         id: panelId,
         component: 'properties-panel',
         title: `Node Properties`,
-        params: { 
-            nodeId: node.id 
+        params: {
+            nodeId: node.id
         }
     });
 
@@ -218,6 +355,7 @@ window.addEventListener('render-node', (e: any) => {
     }
 });
 
+
 window.addEventListener('delete-node', (e: any) => {
     const nodeId = e.detail?.nodeId;
     if (nodeId != null) {
@@ -232,10 +370,18 @@ window.addEventListener('node-removed', (e: any) => {
     }
 });
 
-function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence" = "sample") {
+window.addEventListener('add-library-node', (e: any) => {
+    const filepath = e.detail?.filepath;
+    const name = e.detail?.name;
+    if (filepath) {
+        addRootNode("sample", undefined, filepath, name);
+    }
+});
+
+function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence" | "sample_pool" = "sample") {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
-    
+
     const parentNode = graph.getNodeById(parentId);
     if (!parentNode) return;
 
@@ -250,6 +396,9 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
     } else if (nodeType === "sequence") {
         typeStr = "Audio/Sequence";
         defaultName = "Sequence";
+    } else if (nodeType === "sample_pool") {
+        typeStr = "Audio/SamplePool";
+        defaultName = "Sample Pool";
     }
 
     const childNode = LiteGraph.createNode(typeStr);
@@ -283,6 +432,10 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
         childNode.color = "#ec4899";
         childNode.bgcolor = "#ec4899";
         childNode.boxcolor = "#db2777";
+    } else if (nodeType === "sample_pool") {
+        childNode.color = "#8b5cf6";
+        childNode.bgcolor = "#8b5cf6";
+        childNode.boxcolor = "#7c3aed";
     } else {
         childNode.color = "#3b82f6";
         childNode.bgcolor = "#3b82f6";
@@ -295,11 +448,22 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
     const childCount = parentData.children.length + 1;
     const spacing = 260;
     const startX = parentNode.pos[0] - ((childCount - 1) * spacing) / 2;
-    
+
     childNode.pos = [startX + (childCount - 1) * spacing, parentNode.pos[1] - 120];
 
-    // Connect link in LiteGraph: Child output (0) -> Parent input (0)
-    childNode.connect(0, parentNode, 0);
+    // Find first free input slot on parent
+    let targetSlot = 0;
+    if (parentNode.inputs) {
+        for (let i = 0; i < parentNode.inputs.length; i++) {
+            if (parentNode.inputs[i].link == null) {
+                targetSlot = i;
+                break;
+            }
+        }
+    }
+    
+    // Connect link in LiteGraph: Child output (0) -> Parent free input
+    childNode.connect(0, parentNode, targetSlot);
 
     // Update parent's children record
     parentData.children.push(childNode.id);
@@ -333,7 +497,7 @@ function addChildNode(parentId: number, nodeType: "sample" | "track" | "sequence
 function deleteNode(nodeId: number) {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
-    
+
     const lgraphNode = graph.getNodeById(nodeId);
     if (lgraphNode) {
         graph.remove(lgraphNode); // Triggers onRemoved lifecycle hook & 'node-removed' event
@@ -345,7 +509,7 @@ function deleteNode(nodeId: number) {
 function handleNodeRemoved(nodeId: number) {
     const graph = (window as any).editorGraph as LGraph;
     const nodeData = trackNodes.get(nodeId);
-    
+
     if (nodeData) {
         // Unlink from parent data structure
         if (nodeData.parentId != null) {
@@ -354,7 +518,7 @@ function handleNodeRemoved(nodeId: number) {
                 parentData.children = parentData.children.filter(id => id !== nodeId);
             }
         }
-        
+
         // Recursively remove children
         const childrenToDelete = [...nodeData.children];
         for (const childId of childrenToDelete) {
@@ -367,10 +531,10 @@ function handleNodeRemoved(nodeId: number) {
                 }
             }
         }
-        
+
         trackNodes.delete(nodeId);
     }
-    
+
     // Close associated properties panel if open
     const dv = (window as any).dockview;
     if (dv) {
@@ -378,7 +542,7 @@ function handleNodeRemoved(nodeId: number) {
         const panel = dv.getGroupPanel(panelId);
         if (panel) panel.api.close();
     }
-    
+
     if ((window as any)._currentlySelectedNode?.id === nodeId) {
         (window as any)._currentlySelectedNode = null;
     }
@@ -389,10 +553,10 @@ function handleNodeRemoved(nodeId: number) {
     updateGraphNodeCollapsing();
 }
 
-function addRootNode(nodeType: "sample" | "track" | "sequence" = "track", pos?: [number, number]) {
+function addRootNode(nodeType: "sample" | "track" | "sequence" | "sample_pool" = "track", pos?: [number, number], filepath?: string, customName?: string) {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
-    
+
     let typeStr = "Audio/Track";
     let defaultName = "Master Track";
     if (nodeType === "sample") {
@@ -401,17 +565,21 @@ function addRootNode(nodeType: "sample" | "track" | "sequence" = "track", pos?: 
     } else if (nodeType === "sequence") {
         typeStr = "Audio/Sequence";
         defaultName = "Sequence";
+    } else if (nodeType === "sample_pool") {
+        typeStr = "Audio/SamplePool";
+        defaultName = "Sample Pool";
     }
 
     const rootNode = LiteGraph.createNode(typeStr);
     rootNode.pos = pos ? [pos[0], pos[1]] : [350 + Math.random() * 40, 100 + Math.random() * 40];
-    rootNode.properties.node_name = defaultName;
+    rootNode.properties.node_name = customName || defaultName;
+    rootNode.properties.filepath = filepath || "";
     rootNode.properties.mix_mode = "sum";
-    rootNode.title = defaultName;
+    rootNode.title = customName || defaultName;
     if (typeof (rootNode as any).computeSize === 'function') {
         rootNode.size = (rootNode as any).computeSize();
     }
-    
+
     if (nodeType === "sample") {
         rootNode.color = "#10b981";
         rootNode.bgcolor = "#10b981";
@@ -420,6 +588,10 @@ function addRootNode(nodeType: "sample" | "track" | "sequence" = "track", pos?: 
         rootNode.color = "#ec4899";
         rootNode.bgcolor = "#ec4899";
         rootNode.boxcolor = "#db2777";
+    } else if (nodeType === "sample_pool") {
+        rootNode.color = "#8b5cf6";
+        rootNode.bgcolor = "#8b5cf6";
+        rootNode.boxcolor = "#7c3aed";
     } else {
         rootNode.color = "#4f46e5";
         rootNode.bgcolor = "#4f46e5";
@@ -427,12 +599,12 @@ function addRootNode(nodeType: "sample" | "track" | "sequence" = "track", pos?: 
     }
 
     graph.add(rootNode);
-    
+
     trackNodes.set(rootNode.id, {
         id: rootNode.id,
         type: nodeType,
-        name: defaultName,
-        filepath: "",
+        name: customName || defaultName,
+        filepath: filepath || "",
         original_bpm: 120,
         start_beat: 0,
         bpm: 120,
@@ -468,10 +640,10 @@ const dockview = new DockviewComponent(appElement, {
                 requestAnimationFrame(() => {
                     const graph = new LGraph();
                     (window as any).editorGraph = graph;
-                    
+
                     const graphCanvas = new LGraphCanvas(canvas, graph);
                     (window as any).editorCanvas = graphCanvas;
-                    
+
                     graphCanvas.ds.scale = 1.0;
 
                     // Direct 1-to-1 linear straight connections (Point A to Point B)
@@ -484,19 +656,23 @@ const dockview = new DockviewComponent(appElement, {
                     graphCanvas.connections_width = 2;
 
                     // Suppress drawing connection dots / anchors
-                    (graphCanvas as any).drawSlot = function() {};
+                    (graphCanvas as any).drawSlot = function () { };
 
                     // Clean white canvas background without grid fade
                     graphCanvas.clear_background = true;
                     (graphCanvas as any).clear_background_color = "#ffffff";
                     (graphCanvas as any).background_image = null;
                     (graphCanvas as any).zoom_modify_alpha = false;
-                    (graphCanvas as any).onRenderBackground = function(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) {
+                    (graphCanvas as any).render_canvas_border = false; // Let LiteGraph draw it, we will color it
+
+                    // The library hardcodes the border color to #235. To color it white, we use the 
+                    // exposed onDrawForeground hook to draw a white border precisely over it.
+                    (graphCanvas as any).onDrawForeground = function (ctx: CanvasRenderingContext2D) {
                         ctx.save();
-                        ctx.fillStyle = "#ffffff";
-                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        ctx.strokeStyle = "#ffffff";
+                        ctx.lineWidth = 2; // slightly thicker to ensure it covers
+                        ctx.strokeRect(0, 0, canvas.width, canvas.height);
                         ctx.restore();
-                        return true;
                     };
                     if (graphCanvas.bgcanvas) {
                         graphCanvas.bgcanvas.style.backgroundColor = "#ffffff";
@@ -504,7 +680,7 @@ const dockview = new DockviewComponent(appElement, {
 
                     // Override LiteGraph search box to open Node Select popup on double-click
                     graphCanvas.allow_searchbox = true;
-                    graphCanvas.showSearchBox = function(e?: MouseEvent) {
+                    graphCanvas.showSearchBox = function (e?: MouseEvent) {
                         if (graphCanvas.node_over) return;
 
                         let canvasPos: [number, number] | undefined = undefined;
@@ -529,14 +705,37 @@ const dockview = new DockviewComponent(appElement, {
                         });
                     });
 
+                    canvas.addEventListener('dragover', (e: DragEvent) => {
+                        e.preventDefault(); // Allow drop
+                    });
+
+                    canvas.addEventListener('drop', (e: DragEvent) => {
+                        e.preventDefault();
+                        if (e.dataTransfer) {
+                            try {
+                                const dataStr = e.dataTransfer.getData('text/plain');
+                                if (!dataStr) return;
+                                const data = JSON.parse(dataStr);
+                                if (data && data.type === 'library-item') {
+                                    let canvasPos: [number, number] | undefined = undefined;
+                                    if (typeof graphCanvas.convertEventToCanvasOffset === 'function') {
+                                        const offset = graphCanvas.convertEventToCanvasOffset(e);
+                                        canvasPos = [offset[0], offset[1]];
+                                    }
+                                    addRootNode("sample", canvasPos, data.filepath, data.name);
+                                }
+                            } catch (err) { }
+                        }
+                    });
+
                     const resizeObserver = new ResizeObserver(() => {
                         const width = Math.floor(element.clientWidth);
                         const height = Math.floor(element.clientHeight);
                         if (width <= 0 || height <= 0) return;
-                        
+
                         canvas.style.width = width + "px";
                         canvas.style.height = height + "px";
-                        
+
                         graphCanvas.resize(width, height);
                         if (graphCanvas.bgcanvas) {
                             graphCanvas.bgcanvas.style.backgroundColor = "#ffffff";
@@ -544,13 +743,13 @@ const dockview = new DockviewComponent(appElement, {
                         graphCanvas.setDirty(true, true);
                     });
                     resizeObserver.observe(element);
-                    
+
                     graph.start();
 
                     // Add initial Master Track root node
                     addRootNode("track");
 
-                    graphCanvas.onNodeSelected = function(node: any) {
+                    graphCanvas.onNodeSelected = function (node: any) {
                         openParamWindow(node);
                     };
                 });
@@ -605,13 +804,17 @@ const dockview = new DockviewComponent(appElement, {
                 }
                 break;
             }
+            case 'library-panel': {
+                new LibraryPanel(element);
+                break;
+            }
         }
 
         return {
             element,
-            init: () => {},
-            update: () => {},
-            dispose: () => {}
+            init: () => { },
+            update: () => { },
+            dispose: () => { }
         };
     }
 });
@@ -639,6 +842,18 @@ const graphPanel = dockview.addPanel({
 });
 graphPanel.group.header.hidden = true;
 
+const libPanel = dockview.addPanel({
+    id: 'library_panel',
+    component: 'library-panel',
+    title: 'Library'
+});
+dockview.addFloatingGroup(libPanel, {
+    x: 10,
+    y: 50,
+    width: 250,
+    height: 400
+});
+
 function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
     function buildNodeModel(nodeId: number): any {
         const data = trackNodes.get(nodeId);
@@ -652,9 +867,13 @@ function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
         const bpm = data?.bpm || nodeObj?.properties?.bpm || 120;
         const mix_mode = data?.mix_mode || nodeObj?.properties?.mix_mode || "sum";
 
-        const nodeType = data?.type || nodeObj?.properties?.node_type || (nodeObj?.type === "Audio/Sample" ? "sample" : nodeObj?.type === "Audio/Sequence" ? "sequence" : "track");
+        const nodeType = data?.type || nodeObj?.properties?.node_type || (nodeObj?.type === "Audio/Sample" ? "sample" : nodeObj?.type === "Audio/Sequence" ? "sequence" : nodeObj?.type === "Audio/SamplePool" ? "sample_pool" : "track");
         const sequence = data?.sequence || nodeObj?.properties?.sequence || (nodeType === "sequence" ? [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] : undefined);
         const stepLength = data?.step_length || nodeObj?.properties?.step_length || (nodeType === "sequence" ? 0.25 : undefined);
+
+        const filters = data?.filters || nodeObj?.properties?.filters;
+        const playbackMode = data?.playbackMode || nodeObj?.properties?.playbackMode;
+        const seed = data?.seed || nodeObj?.properties?.seed;
 
         const childrenIds: number[] = data?.children ? [...data.children] : [];
         if (nodeObj && nodeObj.inputs) {
@@ -688,6 +907,9 @@ function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
             mix_mode: mix_mode,
             sequence: sequence,
             step_length: stepLength,
+            filters: filters,
+            playbackMode: playbackMode,
+            seed: seed,
             children: childModels
         };
     }
@@ -705,7 +927,7 @@ async function renderNode(nodeId: number) {
         return;
     }
 
-    payload.filename = `node_${nodeId}`;
+    payload.filename = `export_${nodeId}`;
 
     try {
         const res = await fetch('/api/render', {
@@ -714,12 +936,10 @@ async function renderNode(nodeId: number) {
             body: JSON.stringify(payload)
         });
         const data = await res.json();
-        
-        if (data.status === 'success' && data.file_url) {
-            masterPlayer.src = `${data.file_url}?t=${Date.now()}`;
-            masterPlayer.style.display = 'block';
-            toolbar.style.display = 'flex';
-            masterPlayer.play();
+
+        if (data.status === 'success' && data.filename) {
+            await updateTempRendersList(data.filename);
+            masterPlayer.play().catch(e => console.error(e));
         } else {
             console.error("Render failed:", data);
             alert("Render failed, check console.");

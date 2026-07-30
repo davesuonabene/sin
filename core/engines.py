@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any, Type
 import numpy as np
 
 from core.system import System
-from core.audio_object import AudioObject, SampleObject, SequenceObject
+from core.audio_object import AudioObject, SampleObject, SequenceObject, SamplePoolObject
 from core.dsp import load_sample, stretch_audio
 
 
@@ -55,6 +55,17 @@ class SampleRenderer(NodeRenderer):
         return audio_array.astype(np.float32)
 
 
+class SamplePoolRenderer(NodeRenderer):
+    """
+    Rendering engine specific to Sample Pool nodes.
+    Dynamically picks and renders samples based on pool state.
+    """
+
+    def render(self, node_data: Any, system: System) -> np.ndarray:
+        pool_obj = build_node_object(node_data)
+        return pool_obj.render(system=system)
+
+
 class SequenceRenderer(NodeRenderer):
     """
     Rendering engine specific to Sequence nodes (rhythmic pattern step sequencer).
@@ -70,7 +81,8 @@ class SequenceRenderer(NodeRenderer):
 RENDERER_REGISTRY: Dict[str, Type[NodeRenderer]] = {
     "track": TrackRenderer,
     "sample": SampleRenderer,
-    "sequence": SequenceRenderer
+    "sequence": SequenceRenderer,
+    "sample_pool": SamplePoolRenderer
 }
 
 
@@ -107,6 +119,17 @@ def build_node_object(node_data: Any) -> AudioObject:
             step_length=step_length,
             original_bpm=original_bpm,
             filepath=actual_path
+        )
+    elif node_type == "sample_pool":
+        filters = getattr(node_data, "filters", None) or {}
+        playback_mode = getattr(node_data, "playbackMode", "Random")
+        seed = getattr(node_data, "seed", 0.0)
+        obj = SamplePoolObject(
+            name=node_name,
+            filters=filters,
+            playback_mode=playback_mode,
+            seed=seed,
+            original_bpm=original_bpm
         )
     elif node_type == "sample":
         obj = SampleObject(

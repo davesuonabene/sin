@@ -16,22 +16,22 @@ export class PropertiesWindow {
 
     private getDefaultTab(): string {
         if (this.node.type === "Audio/Track") return "TRACK";
-        if (this.node.type === "Audio/Sample") return "SAMPLE";
         if (this.node.type === "Audio/Sequence") return "SEQUENCE";
+        if (this.node.type === "Audio/SamplePool") return "POOL";
         return "PARAMS";
     }
 
     private getTabList(): string[] {
-        if (this.node.type === "Audio/Track") return ["TRACK", "COMMON"];
         if (this.node.type === "Audio/Sample") return ["SAMPLE", "AUDIO", "COMMON"];
         if (this.node.type === "Audio/Sequence") return ["SEQUENCE", "TIMING", "COMMON"];
+        if (this.node.type === "Audio/SamplePool") return ["POOL", "COMMON"];
         return ["PARAMS", "COMMON"];
     }
 
     private getNodeBadge(): string {
-        if (this.node.type === "Audio/Track") return "TRACK";
         if (this.node.type === "Audio/Sample") return "SMPL";
         if (this.node.type === "Audio/Sequence") return "SEQ";
+        if (this.node.type === "Audio/SamplePool") return "POOL";
         return "NODE";
     }
 
@@ -121,6 +121,10 @@ export class PropertiesWindow {
                 this.renderSequenceTab(contentContainer);
             } else if (this.activeTab === "TIMING") {
                 this.renderSequenceTimingTab(contentContainer);
+            }
+        } else if (this.node.type === "Audio/SamplePool") {
+            if (this.activeTab === "POOL") {
+                this.renderPoolTab(contentContainer);
             }
         } else {
             this.renderGenericTab(contentContainer);
@@ -240,8 +244,8 @@ export class PropertiesWindow {
             fileSelect.innerHTML = `<option value="" disabled ${!this.node.properties.filepath ? 'selected' : ''}>Select asset...</option>`;
             
             for (const file of files) {
-                const isSelected = this.node.properties.filepath === file;
-                fileSelect.innerHTML += `<option value="${file}" ${isSelected ? 'selected' : ''}>${file}</option>`;
+                const isSelected = this.node.properties.filepath === file.absolute_path;
+                fileSelect.innerHTML += `<option value="${file.absolute_path}" ${isSelected ? 'selected' : ''}>${file.name}</option>`;
             }
         } catch (err) {
             fileSelect.innerHTML = `<option>Error loading assets</option>`;
@@ -411,6 +415,159 @@ export class PropertiesWindow {
             if (titleDisplay) titleDisplay.innerText = val;
             this.node.setDirtyCanvas(true, true);
         });
+    }
+
+    private renderPoolTab(container: HTMLElement) {
+        if (!this.node.properties.filters) {
+            this.node.properties.filters = { tags: "", bpm_min: null, bpm_max: null, type: "" };
+        }
+        
+        container.innerHTML = `
+            <div class="td-param-group">
+                <div class="td-param-row">
+                    <div class="td-param-label">Name</div>
+                    <div class="td-param-control">
+                        <input type="text" class="td-param-input" id="prop-name" value="${this.node.properties.node_name || ''}" />
+                    </div>
+                </div>
+
+                <div class="td-param-row">
+                    <div class="td-param-label">Mode</div>
+                    <div class="td-param-control">
+                        <select class="td-param-select" id="prop-mode">
+                            <option value="Random" ${this.node.properties.playbackMode === 'Random' ? 'selected' : ''}>Random</option>
+                            <option value="RoundRobin" ${this.node.properties.playbackMode === 'RoundRobin' ? 'selected' : ''}>RoundRobin</option>
+                            <option value="Weighted" ${this.node.properties.playbackMode === 'Weighted' ? 'selected' : ''}>Weighted</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="td-param-row">
+                    <div class="td-param-label">Tags</div>
+                    <div class="td-param-control">
+                        <input type="text" class="td-param-input" id="prop-tags" value="${this.node.properties.filters.tags || ''}" placeholder="kick, punch" />
+                    </div>
+                </div>
+
+                <div class="td-param-row">
+                    <div class="td-param-label">BPM Min</div>
+                    <div class="td-param-control">
+                        <input type="number" class="td-param-input" id="prop-bpm-min" value="${this.node.properties.filters.bpm_min || ''}" placeholder="Any" />
+                    </div>
+                </div>
+
+                <div class="td-param-row">
+                    <div class="td-param-label">BPM Max</div>
+                    <div class="td-param-control">
+                        <input type="number" class="td-param-input" id="prop-bpm-max" value="${this.node.properties.filters.bpm_max || ''}" placeholder="Any" />
+                    </div>
+                </div>
+
+                <div class="td-param-row" style="margin-top: 8px;">
+                    <div class="td-param-label">Selected Loop</div>
+                    <div class="td-param-control" id="prop-selected-sample" style="font-size: 11px; color: #38bdf8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-top: 4px;">
+                        Resolving...
+                    </div>
+                </div>
+
+                <div class="td-param-row" style="margin-top: 16px;">
+                    <button class="td-param-button" id="prop-retrigger" style="width: 100%; padding: 8px; background: #8b5cf6; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold;">
+                        🎲 Retrigger Sample
+                    </button>
+                </div>
+            </div>
+        `;
+
+        const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
+        const nameInput = container.querySelector('#prop-name') as HTMLInputElement;
+        
+        nameInput.addEventListener('change', (e) => {
+            const val = (e.target as HTMLInputElement).value;
+            this.node.properties.node_name = val;
+            this.node.title = val;
+            if (typeof this.node.computeSize === 'function') {
+                this.node.size = this.node.computeSize();
+            }
+            if (titleDisplay) titleDisplay.innerText = val;
+            this.node.setDirtyCanvas(true, true);
+            this.updateTrackNode('name', val);
+        });
+
+        const modeSelect = container.querySelector('#prop-mode') as HTMLSelectElement;
+        modeSelect.addEventListener('change', (e) => {
+            const val = (e.target as HTMLSelectElement).value;
+            this.node.properties.playbackMode = val;
+            this.updateTrackNode('playbackMode', val);
+            this.updateResolvedSample(container);
+        });
+
+        const tagsInput = container.querySelector('#prop-tags') as HTMLInputElement;
+        tagsInput.addEventListener('change', (e) => {
+            const val = (e.target as HTMLInputElement).value;
+            if (!this.node.properties.filters) this.node.properties.filters = {};
+            this.node.properties.filters.tags = val;
+            this.updateTrackNode('filters', this.node.properties.filters);
+            this.updateResolvedSample(container);
+        });
+
+        const bpmMinInput = container.querySelector('#prop-bpm-min') as HTMLInputElement;
+        bpmMinInput.addEventListener('change', (e) => {
+            const val = (e.target as HTMLInputElement).value;
+            if (!this.node.properties.filters) this.node.properties.filters = {};
+            this.node.properties.filters.bpm_min = val ? parseFloat(val) : null;
+            this.updateTrackNode('filters', this.node.properties.filters);
+            this.updateResolvedSample(container);
+        });
+
+        const bpmMaxInput = container.querySelector('#prop-bpm-max') as HTMLInputElement;
+        bpmMaxInput.addEventListener('change', (e) => {
+            const val = (e.target as HTMLInputElement).value;
+            if (!this.node.properties.filters) this.node.properties.filters = {};
+            this.node.properties.filters.bpm_max = val ? parseFloat(val) : null;
+            this.updateTrackNode('filters', this.node.properties.filters);
+            this.updateResolvedSample(container);
+        });
+
+        const retriggerBtn = container.querySelector('#prop-retrigger') as HTMLButtonElement;
+        retriggerBtn.addEventListener('click', () => {
+            this.node.properties.seed = Math.random();
+            this.updateTrackNode('seed', this.node.properties.seed);
+            if ((window as any).editorCanvas) {
+                (window as any).editorCanvas.setDirty(true, true);
+            }
+            this.updateResolvedSample(container);
+        });
+
+        this.updateResolvedSample(container);
+    }
+
+    private async updateResolvedSample(container: HTMLElement) {
+        const selectedEl = container.querySelector('#prop-selected-sample') as HTMLDivElement;
+        if (!selectedEl) return;
+        selectedEl.innerText = "Resolving...";
+        
+        try {
+            const res = await fetch('/api/pool/resolve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filters: this.node.properties.filters || {},
+                    seed: this.node.properties.seed || 0,
+                    playbackMode: this.node.properties.playbackMode || "Random"
+                })
+            });
+            const data = await res.json();
+            if (data.sample) {
+                const parts = data.sample.split(/[/\\]/);
+                selectedEl.innerText = parts[parts.length - 1];
+                selectedEl.title = data.sample;
+            } else {
+                selectedEl.innerText = "No match found";
+                selectedEl.title = "";
+            }
+        } catch (e) {
+            selectedEl.innerText = "Error resolving";
+        }
     }
 }
 
