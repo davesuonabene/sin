@@ -4,7 +4,7 @@ from fastapi import FastAPI, APIRouter
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Literal
 import soundfile as sf
 import numpy as np
 
@@ -66,6 +66,7 @@ class AudioNodeModel(BaseModel):
     filters: Optional[dict] = None
     playbackMode: Optional[str] = None
     seed: Optional[float] = None
+    refresh_mode: Literal["parent_render", "self_render", "manual"] = "manual"
     children: List['AudioNodeModel'] = []
 
 class PoolResolveRequest(BaseModel):
@@ -107,6 +108,7 @@ def build_audio_object(node_data: AudioNodeModel) -> AudioObject:
             filters=node_data.filters,
             playback_mode=node_data.playbackMode,
             seed=node_data.seed,
+            refresh_mode=node_data.refresh_mode,
             original_bpm=node_data.original_bpm
         )
     elif node_data.node_type == "sample" or (audio_data is not None and node_data.node_type != "track"):

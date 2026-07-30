@@ -296,6 +296,7 @@ class SamplePoolObject(AudioObject):
         filters: Optional[dict] = None,
         playback_mode: str = "Random",
         seed: Optional[float] = None,
+        refresh_mode: str = "manual",
         volume: float = 1.0,
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
@@ -311,6 +312,7 @@ class SamplePoolObject(AudioObject):
         self.filters = filters or {}
         self.playback_mode = playback_mode or "Random"
         self.seed = seed if seed is not None else random.random()
+        self.refresh_mode = refresh_mode
         self.is_dynamic = False
         self.current_pool = []
         self.last_played_index = -1

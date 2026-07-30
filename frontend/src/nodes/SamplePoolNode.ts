@@ -1,6 +1,8 @@
 import { LiteGraph } from 'litegraph.js';
 import { BaseNode } from './BaseNode';
 
+export type RefreshMode = "parent_render" | "self_render" | "manual";
+
 export class SamplePoolNode extends BaseNode {
     constructor() {
         super();
@@ -23,6 +25,7 @@ export class SamplePoolNode extends BaseNode {
             },
             playbackMode: "Random",
             seed: Math.random(),
+            refresh_mode: "manual",
             start_beat: 0
         };
         

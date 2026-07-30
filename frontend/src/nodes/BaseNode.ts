@@ -160,7 +160,7 @@ export abstract class BaseNode extends LGraphNode {
         return false;
     }
 
-    onConnectionsChange(type: number, slotIndex: number, isConnected: boolean, link_info: any, ioSlot: any) {
+    onConnectionsChange(type: number, _slotIndex: number, _isConnected: boolean, _link_info: any, _ioSlot: any) {
         if (type === LiteGraph.INPUT && this.inputs && this.inputs.length > 0) {
             this.ensureEmptyInput();
         }
@@ -185,7 +185,7 @@ export abstract class BaseNode extends LGraphNode {
         }
     }
 
-    getConnectionPos(is_input: boolean, slot_number: number | string, out?: any): any {
+    getConnectionPos(is_input: boolean, _slot_number: number | string, out?: any): any {
         out = out || new Float32Array(2);
         if (is_input) {
             out[0] = this.pos[0];

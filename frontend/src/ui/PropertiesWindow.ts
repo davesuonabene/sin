@@ -443,6 +443,20 @@ export class PropertiesWindow {
                 </div>
 
                 <div class="td-param-row">
+                    <div class="td-param-label">Refresh Mode</div>
+                    <div class="td-param-control" style="display: flex; gap: 8px; align-items: center;">
+                        <select class="td-param-select" id="prop-refresh-mode">
+                            <option value="parent_render" ${this.node.properties.refresh_mode === 'parent_render' ? 'selected' : ''}>Parent Render</option>
+                            <option value="self_render" ${this.node.properties.refresh_mode === 'self_render' ? 'selected' : ''}>Self Render</option>
+                            <option value="manual" ${this.node.properties.refresh_mode === 'manual' ? 'selected' : ''}>Manual</option>
+                        </select>
+                        <button class="td-param-button" id="prop-inline-refresh" style="padding: 4px 8px; background: #8b5cf6; border: none; color: white; border-radius: 4px; cursor: pointer; font-size: 11px;">
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <div class="td-param-row">
                     <div class="td-param-label">Tags</div>
                     <div class="td-param-control">
                         <input type="text" class="td-param-input" id="prop-tags" value="${this.node.properties.filters.tags || ''}" placeholder="kick, punch" />
@@ -498,6 +512,23 @@ export class PropertiesWindow {
             const val = (e.target as HTMLSelectElement).value;
             this.node.properties.playbackMode = val;
             this.updateTrackNode('playbackMode', val);
+            this.updateResolvedSample(container);
+        });
+
+        const refreshModeSelect = container.querySelector('#prop-refresh-mode') as HTMLSelectElement;
+        refreshModeSelect.addEventListener('change', (e) => {
+            const val = (e.target as HTMLSelectElement).value;
+            this.node.properties.refresh_mode = val;
+            this.updateTrackNode('refresh_mode', val);
+        });
+
+        const inlineRefreshBtn = container.querySelector('#prop-inline-refresh') as HTMLButtonElement;
+        inlineRefreshBtn.addEventListener('click', () => {
+            this.node.properties.seed = Math.random();
+            this.updateTrackNode('seed', this.node.properties.seed);
+            if ((window as any).editorCanvas) {
+                (window as any).editorCanvas.setDirty(true, true);
+            }
             this.updateResolvedSample(container);
         });
 

@@ -163,8 +163,8 @@ LiteGraph.NODE_DEFAULT_SHAPE = "box" as any;
 
 // Monkey-patch LGraphNode.prototype.connect to redirect connections to free slots
 // Because LiteGraph's findSlotByType ignores preferFreeSlot for inputs, drops always hit slot 0.
-const originalConnect = LiteGraph.LGraphNode.prototype.connect;
-LiteGraph.LGraphNode.prototype.connect = function(slot: any, target_node: any, target_slot: any) {
+const originalConnect = (LiteGraph as any).LGraphNode.prototype.connect;
+(LiteGraph as any).LGraphNode.prototype.connect = function(slot: any, target_node: any, target_slot: any) {
     let t_node = target_node;
     if (t_node && t_node.constructor === Number) {
         t_node = this.graph.getNodeById(t_node);
@@ -209,6 +209,7 @@ export interface TrackNodeData {
     filters?: any;
     playbackMode?: string;
     seed?: number;
+    refresh_mode?: string;
     parentId: number | null;
     children: number[];
 }
@@ -873,7 +874,27 @@ function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
 
         const filters = data?.filters || nodeObj?.properties?.filters;
         const playbackMode = data?.playbackMode || nodeObj?.properties?.playbackMode;
-        const seed = data?.seed || nodeObj?.properties?.seed;
+        const refresh_mode = data?.refresh_mode || nodeObj?.properties?.refresh_mode || "manual";
+        let seed = data?.seed || nodeObj?.properties?.seed;
+
+        if (nodeType === "sample_pool") {
+            const isSelfRender = (nodeId === rootNodeId);
+            const isParentRender = !isSelfRender;
+            
+            if ((refresh_mode === "self_render" && isSelfRender) || 
+                (refresh_mode === "parent_render" && isParentRender)) {
+                seed = Math.random();
+                if (nodeObj && nodeObj.properties) {
+                    nodeObj.properties.seed = seed;
+                    if ((window as any).editorCanvas) {
+                        (window as any).editorCanvas.setDirty(true, true);
+                    }
+                }
+                if (data) {
+                    data.seed = seed;
+                }
+            }
+        }
 
         const childrenIds: number[] = data?.children ? [...data.children] : [];
         if (nodeObj && nodeObj.inputs) {
@@ -910,6 +931,7 @@ function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
             filters: filters,
             playbackMode: playbackMode,
             seed: seed,
+            refresh_mode: refresh_mode,
             children: childModels
         };
     }
