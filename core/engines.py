@@ -43,14 +43,15 @@ class SampleRenderer(NodeRenderer):
             return np.zeros(0, dtype=np.float32)
 
         original_bpm = getattr(node_data, "original_bpm", 120.0) or 120.0
+        target_bpm = getattr(node_data, "target_bpm", None) or getattr(node_data, "bpm", None) or system.bpm
         sample_rate = system.sample_rate
 
         audio_array, _ = load_sample(filepath, target_sr=sample_rate)
         if len(audio_array) == 0:
             return np.zeros(0, dtype=np.float32)
 
-        if original_bpm != system.bpm:
-            audio_array = stretch_audio(audio_array, original_bpm, system.bpm)
+        if original_bpm != target_bpm:
+            audio_array = stretch_audio(audio_array, original_bpm, target_bpm)
 
         return audio_array.astype(np.float32)
 
@@ -121,6 +122,8 @@ def build_node_object(node_data: Any) -> AudioObject:
     node_type = getattr(node_data, "node_type", "track")
     node_name = getattr(node_data, "node_name", "AudioNode")
     original_bpm = getattr(node_data, "original_bpm", 120.0)
+    raw_chain = getattr(node_data, "chain", None) or []
+    chain_list = [c.dict() if hasattr(c, 'dict') else (c.model_dump() if hasattr(c, 'model_dump') else c) for c in raw_chain]
 
     if node_type == "sequence":
         sequence = getattr(node_data, "sequence", None) or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
@@ -130,7 +133,8 @@ def build_node_object(node_data: Any) -> AudioObject:
             sequence=sequence,
             step_length=step_length,
             original_bpm=original_bpm,
-            filepath=actual_path
+            filepath=actual_path,
+            chain=chain_list
         )
     elif node_type == "sample_pool":
         filters = getattr(node_data, "filters", None) or {}
@@ -141,7 +145,8 @@ def build_node_object(node_data: Any) -> AudioObject:
             filters=filters,
             playback_mode=playback_mode,
             seed=seed,
-            original_bpm=original_bpm
+            original_bpm=original_bpm,
+            chain=chain_list
         )
     elif node_type == "arrangement":
         from core.audio_object import ArrangementObject
@@ -157,20 +162,23 @@ def build_node_object(node_data: Any) -> AudioObject:
             total_bars=t_bars,
             probability=prob,
             seed=seed,
-            original_bpm=original_bpm
+            original_bpm=original_bpm,
+            chain=chain_list
         )
     elif node_type == "sample":
         obj = SampleObject(
             name=node_name,
             filepath=actual_path,
-            original_bpm=original_bpm
+            original_bpm=original_bpm,
+            chain=chain_list
         )
     else:
         obj = AudioObject(
             name=node_name,
             mix_mode=getattr(node_data, "mix_mode", "sum") or "sum",
             original_bpm=original_bpm,
-            filepath=actual_path
+            filepath=actual_path,
+            chain=chain_list
         )
 
     children = getattr(node_data, "children", [])

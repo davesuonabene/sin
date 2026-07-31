@@ -4,7 +4,7 @@ from fastapi import FastAPI, APIRouter
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict, Any
 import soundfile as sf
 import numpy as np
 
@@ -53,11 +53,21 @@ def health_check():
     }
 
 
+class FxModuleModel(BaseModel):
+    id: str
+    type: str
+    name: str
+    enabled: bool = True
+    fixed: bool = False
+    params: Dict[str, Any] = {}
+
 class AudioNodeModel(BaseModel):
     node_name: str
     node_type: str = "track"
     filepath: Optional[str] = None
     original_bpm: Optional[float] = None
+    target_bpm: Optional[float] = None
+    key: Optional[str] = None
     start_beat: float = 0.0
     bpm: float = 120.0
     filename: Optional[str] = None
@@ -69,6 +79,8 @@ class AudioNodeModel(BaseModel):
     refresh_mode: Literal["parent_render", "self_render", "manual"] = "manual"
     total_bars: Optional[float] = None
     probability: Optional[float] = None
+    chain: List[FxModuleModel] = []
+    modulators: Optional[List[Dict[str, Any]]] = None
     children: List['AudioNodeModel'] = []
 
 class PoolResolveRequest(BaseModel):
@@ -217,13 +229,15 @@ def resolve_pool(payload: PoolResolveRequest):
 def get_library():
     """
     Fetch library from Gaia API, or fallback to Gaia SQLite db if offline.
+    Includes extracted key and bpm metadata.
     """
     import urllib.request
     import json
     import sqlite3
-    
+    from gaia import text_analyzer
+
     files = []
-    
+
     # Try fetching from Gaia API first
     try:
         req = urllib.request.Request("http://127.0.0.1:8001/items/", headers={'Accept': 'application/json'})
@@ -231,18 +245,32 @@ def get_library():
             if response.status == 200:
                 data = json.loads(response.read().decode('utf-8'))
                 for f in data:
+                    abs_path = f.get("absolute_path") or ""
+                    key = f.get("key")
+                    bpm = f.get("bpm")
+                    if abs_path and (key is None or bpm is None):
+                        analysis = text_analyzer.analyze_path(abs_path)
+                        if key is None:
+                            key = analysis.get("key")
+                        if bpm is None and analysis.get("bpm"):
+                            try:
+                                bpm = float(analysis.get("bpm"))
+                            except (ValueError, TypeError):
+                                pass
                     files.append({
                         "id": f.get("id"),
-                        "absolute_path": f.get("absolute_path"),
-                        "name": os.path.basename(f.get("absolute_path")),
+                        "absolute_path": abs_path,
+                        "name": os.path.basename(abs_path),
                         "tags": f.get("tags", []),
-                        "type": f.get("type", "audio")
+                        "type": f.get("type", "audio"),
+                        "key": key,
+                        "bpm": bpm
                     })
                 logger.debug(f"[API /library] Fetched {len(files)} files from Gaia API.")
                 return {"files": files}
     except Exception as e:
         logger.warning(f"[API /library] Gaia API unreachable ({e}). Falling back to SQLite.")
-    
+
     # Fallback to direct SQLite read
     db_path = "gaia.db"
     if not os.path.exists(db_path):
@@ -252,16 +280,48 @@ def get_library():
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT id, absolute_path, type FROM items")
+            cursor.execute("""
+                SELECT i.id, i.absolute_path, i.type,
+                       COALESCE(s.key, m.key) as key,
+                       COALESCE(l.bpm, m.bpm) as bpm
+                FROM items i
+                LEFT JOIN sample_items s ON i.id = s.id
+                LEFT JOIN loop_sample_items l ON i.id = l.id
+                LEFT JOIN midi_items m ON i.id = m.id
+            """)
             rows = cursor.fetchall()
-            
+
             for row in rows:
+                item_id = row["id"]
+                cursor.execute("""
+                    SELECT t.id, t.name
+                    FROM tags t
+                    JOIN item_tags it ON t.id = it.tag_id
+                    WHERE it.item_id = ?
+                """, (item_id,))
+                tag_rows = cursor.fetchall()
+                tags = [{"id": tr["id"], "name": tr["name"]} for tr in tag_rows]
+
+                abs_path = row["absolute_path"] or ""
+                key = row["key"]
+                bpm = row["bpm"]
+                if abs_path and (key is None or bpm is None):
+                    analysis = text_analyzer.analyze_path(abs_path)
+                    if key is None:
+                        key = analysis.get("key")
+                    if bpm is None and analysis.get("bpm"):
+                        try:
+                            bpm = float(analysis.get("bpm"))
+                        except (ValueError, TypeError):
+                            pass
                 files.append({
-                    "id": row["id"],
-                    "absolute_path": row["absolute_path"],
-                    "name": os.path.basename(row["absolute_path"]),
-                    "tags": [],
-                    "type": row["type"]
+                    "id": item_id,
+                    "absolute_path": abs_path,
+                    "name": os.path.basename(abs_path),
+                    "tags": tags,
+                    "type": row["type"],
+                    "key": key,
+                    "bpm": bpm
                 })
             conn.close()
             logger.debug(f"[API /library] Fetched {len(files)} files from Gaia SQLite DB.")
@@ -269,8 +329,45 @@ def get_library():
             logger.error(f"[API /library] Failed to read Gaia DB: {e}")
     else:
         logger.warning(f"[API /library] Gaia DB not found at {db_path}.")
-        
+
     return {"files": files}
+
+class MidiParseRequest(BaseModel):
+    filepath: Optional[str] = None
+    file_id: Optional[int] = None
+
+@api_router.post("/midi/parse", tags=["System"])
+def parse_midi_endpoint(payload: MidiParseRequest):
+    from gaia import midi_parser
+    actual_path = payload.filepath
+
+    if not actual_path and payload.file_id:
+        import sqlite3
+        db_path = "gaia.db" if os.path.exists("gaia.db") else os.path.join("gaia", "gaia.db")
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT absolute_path FROM items WHERE id = ?", (payload.file_id,))
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                actual_path = row["absolute_path"]
+
+    if not actual_path:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Must provide filepath or file_id")
+
+    if not os.path.exists(actual_path):
+        alt_path = os.path.join("assets", actual_path)
+        if os.path.exists(alt_path):
+            actual_path = alt_path
+        else:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail=f"File not found: {actual_path}")
+
+    res = midi_parser.parse_midi_file(actual_path)
+    return res
 
 class TypeUpdateRequest(BaseModel):
     type: str

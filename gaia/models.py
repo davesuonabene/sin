@@ -39,6 +39,17 @@ class Item(Base):
     tags = relationship("Tag", secondary=item_tags, back_populates="items")
     collections = relationship("Collection", secondary=item_collections, back_populates="items")
 
+class MidiItem(Item):
+    __tablename__ = "midi_items"
+    id = Column(Integer, ForeignKey("items.id"), primary_key=True)
+    key = Column(String, nullable=True)
+    bpm = Column(Integer, nullable=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "midi",
+    }
+
+
 class AudioItem(Item):
     __tablename__ = "audio_items"
     id = Column(Integer, ForeignKey("items.id"), primary_key=True)

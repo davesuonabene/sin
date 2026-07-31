@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from typing import List
 import os
 
-from .. import crud, schemas, database, integrity, text_analyzer
+from .. import crud, schemas, database, integrity, text_analyzer, midi_parser
 
 router = APIRouter(
     prefix="/items",
@@ -75,7 +75,7 @@ def scan_directory(req: schemas.DirectoryScanRequest, db: Session = Depends(data
     if not os.path.isdir(dir_path):
         raise HTTPException(status_code=400, detail="Invalid directory path")
     
-    supported_extensions = {".wav", ".mp3", ".ogg", ".flac", ".aif", ".aiff"}
+    supported_extensions = {".wav", ".mp3", ".ogg", ".flac", ".aif", ".aiff", ".mid", ".midi"}
     imported_items = []
     
     for root, _, files in os.walk(dir_path):
@@ -92,7 +92,26 @@ def scan_directory(req: schemas.DirectoryScanRequest, db: Session = Depends(data
                     
                     analysis = text_analyzer.analyze_path(abs_path)
                     
-                    if analysis["type"] == "loop":
+                    if ext in {".mid", ".midi"}:
+                        midi_meta = midi_parser.parse_midi_file(abs_path)
+                        bpm_val = midi_meta.get("bpm")
+                        if bpm_val is None and analysis.get("bpm"):
+                            try:
+                                bpm_val = int(analysis.get("bpm"))
+                            except (ValueError, TypeError):
+                                bpm_val = None
+                        key_val = midi_meta.get("key") or analysis.get("key")
+                        
+                        new_item = schemas.MidiItemCreate(
+                            absolute_path=abs_path,
+                            file_hash=file_hash,
+                            size_bytes=size,
+                            mime_type="audio/midi",
+                            type="midi",
+                            bpm=bpm_val,
+                            key=key_val
+                        )
+                    elif analysis["type"] == "loop":
                         new_item = schemas.LoopSampleItemCreate(
                             absolute_path=abs_path,
                             file_hash=file_hash,
@@ -123,8 +142,9 @@ def scan_directory(req: schemas.DirectoryScanRequest, db: Session = Depends(data
                         
                     db_item = crud.create_item(db, new_item)
                     
-                    if analysis["category"] != "Other":
-                        tag = crud.get_or_create_tag(db, analysis["category"])
+                    category = "MIDI" if ext in {".mid", ".midi"} else analysis["category"]
+                    if category != "Other":
+                        tag = crud.get_or_create_tag(db, category)
                         crud.add_tag_to_item(db, item_id=db_item.id, tag_id=tag.id)
                         
                     imported_items.append(db_item)
@@ -160,4 +180,5 @@ def stream_item(item_id: int, db: Session = Depends(database.get_db)):
     if not os.path.exists(db_item.absolute_path):
         raise HTTPException(status_code=404, detail="File physically missing on disk")
     
-    return FileResponse(path=db_item.absolute_path, media_type=db_item.mime_type or "audio/wav")
+    mime = db_item.mime_type or ("audio/midi" if db_item.type == "midi" else "audio/wav")
+    return FileResponse(path=db_item.absolute_path, media_type=mime)

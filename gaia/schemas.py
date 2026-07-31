@@ -87,6 +87,15 @@ class OneShotSampleItemCreate(SampleItemCreate):
 class OneShotSampleItem(SampleItem):
     pass
 
+class MidiItemCreate(ItemCreate):
+    type: str = "midi"
+    key: Optional[str] = None
+    bpm: Optional[int] = None
+
+class MidiItem(Item):
+    key: Optional[str] = None
+    bpm: Optional[int] = None
+
 # Requests
 class DirectoryScanRequest(BaseModel):
     directory_path: str

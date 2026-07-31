@@ -2,6 +2,9 @@ export interface LibraryFile {
     id?: number;
     absolute_path: string;
     name: string;
+    type?: string;
+    key?: string;
+    bpm?: number;
     tags?: any[];
 }
 

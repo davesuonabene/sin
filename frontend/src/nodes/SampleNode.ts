@@ -16,7 +16,10 @@ export class SampleNode extends BaseNode {
             node_name: "New Sample",
             filepath: "",
             start_beat: 0,
-            original_bpm: 120
+            original_bpm: 120,
+            target_bpm: 120,
+            bpm: 120,
+            key: ""
         };
         
         this.addOutput("Audio", "audio");

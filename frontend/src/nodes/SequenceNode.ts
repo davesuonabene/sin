@@ -16,7 +16,8 @@ export class SequenceNode extends BaseNode {
             node_name: "Sequence",
             node_type: "sequence",
             sequence: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
-            step_length: 0.25
+            step_length: 0.25,
+            selected_step: 0
         };
         
         this.addInput("Input", "audio");

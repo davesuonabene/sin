@@ -27,6 +27,7 @@ class AudioObject(BaseObject):
         mix_mode: str = "sum",
         original_bpm: Optional[float] = None,
         filepath: Optional[Union[str, Path]] = None,
+        chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None
     ) -> None:
         super().__init__(name=name, data=data)
@@ -38,10 +39,20 @@ class AudioObject(BaseObject):
         self.mix_mode = mix_mode
         self.filepath = str(filepath) if filepath is not None else None
         self._original_bpm = float(original_bpm) if original_bpm is not None else None
+        self.chain: List[Dict[str, Any]] = chain if chain is not None else []
         self.is_dynamic = False
 
         # Children stored as list of (start_beat: float, child_object: AudioObject) tuples
         self.children: List[Tuple[float, AudioObject]] = []
+
+    def apply_chain(self, buffer: np.ndarray, system: Optional[System] = None) -> np.ndarray:
+        if len(buffer) == 0:
+            return buffer
+        sr = system.sample_rate if system is not None else 44100
+        if self.chain:
+            from core.fx import process_chain
+            buffer = process_chain(buffer, self.chain, sample_rate=sr)
+        return (buffer * self.volume).astype(np.float32)
 
         # Calculate original_bpm if not explicitly provided
         if self._original_bpm is None:
@@ -115,7 +126,7 @@ class AudioObject(BaseObject):
             if system is not None and self._original_bpm is not None and self._original_bpm != system.bpm:
                 data_to_render = stretch_audio(self.audio_data, self._original_bpm, system.bpm)
 
-            return (data_to_render * self.volume).astype(np.float32)
+            return self.apply_chain(data_to_render, system)
 
         if system is None:
             raise ValueError("System instance must be provided to render a composite AudioObject graph.")
@@ -167,7 +178,7 @@ class AudioObject(BaseObject):
                 master_buffer[start_sample:end_sample] += child_audio
 
         # Apply parent node volume scaling
-        return (master_buffer * self.volume).astype(np.float32)
+        return self.apply_chain(master_buffer, system)
 
 
 class SampleObject(AudioObject):
@@ -182,6 +193,7 @@ class SampleObject(AudioObject):
         volume: float = 1.0,
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
+        chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None
     ) -> None:
         super().__init__(
@@ -190,6 +202,7 @@ class SampleObject(AudioObject):
             volume=volume,
             pan=pan,
             original_bpm=original_bpm,
+            chain=chain,
             data=data
         )
 
@@ -207,7 +220,7 @@ class SampleObject(AudioObject):
         if system is not None and self._original_bpm is not None and self._original_bpm != system.bpm:
             data_to_render = stretch_audio(audio_array, self._original_bpm, system.bpm)
 
-        return (data_to_render * self.volume).astype(np.float32)
+        return self.apply_chain(data_to_render, system)
 
 
 class SequenceObject(AudioObject):
@@ -224,6 +237,7 @@ class SequenceObject(AudioObject):
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
         filepath: Optional[Union[str, Path]] = None,
+        chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None
     ) -> None:
         super().__init__(
@@ -232,6 +246,7 @@ class SequenceObject(AudioObject):
             volume=volume,
             pan=pan,
             original_bpm=original_bpm,
+            chain=chain,
             data=data
         )
         self.sequence: List[int] = sequence if sequence is not None else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
@@ -282,7 +297,7 @@ class SequenceObject(AudioObject):
             end_sample = start_sample + len(audio)
             master_buffer[start_sample:end_sample] += audio
 
-        return (master_buffer * self.volume).astype(np.float32)
+        return self.apply_chain(master_buffer, system)
 
 
 import sqlite3
@@ -300,6 +315,7 @@ class SamplePoolObject(AudioObject):
         volume: float = 1.0,
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
+        chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None
     ) -> None:
         super().__init__(
@@ -307,6 +323,7 @@ class SamplePoolObject(AudioObject):
             volume=volume,
             pan=pan,
             original_bpm=original_bpm,
+            chain=chain,
             data=data
         )
         self.filters = filters or {}
@@ -447,7 +464,7 @@ class SamplePoolObject(AudioObject):
         if system is not None and original_bpm is not None and original_bpm != system.bpm:
             data_to_render = stretch_audio(audio_array, original_bpm, system.bpm)
             
-        return (data_to_render * self.volume).astype(np.float32)
+        return self.apply_chain(data_to_render, system)
 
 class ArrangementObject(AudioObject):
     """
@@ -465,6 +482,7 @@ class ArrangementObject(AudioObject):
         volume: float = 1.0,
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
+        chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None
     ) -> None:
         super().__init__(
@@ -472,6 +490,7 @@ class ArrangementObject(AudioObject):
             volume=volume,
             pan=pan,
             original_bpm=original_bpm,
+            chain=chain,
             data=data
         )
         self.total_bars = float(total_bars)
@@ -559,5 +578,5 @@ class ArrangementObject(AudioObject):
             # Move the time cursor forward by the beat-quantized loop length
             current_sample += loop_samples
                 
-        return (master_buffer * self.volume).astype(np.float32)
+        return self.apply_chain(master_buffer, system)
 

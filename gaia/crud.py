@@ -14,6 +14,7 @@ def get_items(db: Session, skip: int = 0, limit: int = 100):
 def create_item(db: Session, item: schemas.ItemCreate):
     type_map = {
         "item": models.Item,
+        "midi": models.MidiItem,
         "audio": models.AudioItem,
         "track": models.TrackItem,
         "sample": models.SampleItem,
