@@ -9,6 +9,7 @@ import './nodes/ArrangementNode';
 import './nodes/ModulatorNode';
 import { PropertiesWindow } from './ui/PropertiesWindow';
 import { NodePopupMenu } from './ui/NodePopupMenu';
+import { NodeContextMenu } from './ui/NodeContextMenu';
 import { LibraryPanel } from './ui/LibraryPanel';
 
 const appElement = document.getElementById('app');
@@ -16,59 +17,169 @@ if (!appElement) throw new Error('Could not find #app element');
 
 appElement.className = 'dockview-theme-light';
 
-// Instantiate Node Type Popup Menu
+// Instantiate Node Type Popup Menu & Node Context Menu
 const popupMenu = new NodePopupMenu();
+const nodeContextMenu = new NodeContextMenu();
 
-// --- Toolbar UI (holds master player when audio is rendered) ---
-const toolbar = document.createElement('div');
-toolbar.style.position = 'absolute';
-toolbar.style.top = '10px';
-toolbar.style.left = '10px';
-toolbar.style.zIndex = '1000';
-toolbar.style.display = 'none'; // Hidden by default for a clean screen
-toolbar.style.gap = '10px';
-toolbar.style.alignItems = 'center';
-toolbar.style.background = 'rgba(255, 255, 255, 0.9)';
-toolbar.style.padding = '8px 12px';
-toolbar.style.borderRadius = '8px';
-toolbar.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
-toolbar.style.backdropFilter = 'blur(4px)';
+// --- Top Header Toolbar UI ---
+const topHeader = document.createElement('header');
+topHeader.className = 'top-header';
+topHeader.innerHTML = `
+    <div class="top-header-left">
+        <div class="app-brand">
+            <div class="app-logo-icon">⚡</div>
+            <span class="app-title">SIN</span>
+            <span class="app-subtitle">AUDIO GRAPH</span>
+        </div>
+        <div class="top-header-divider"></div>
+        <div class="header-tools">
+            <button id="add-node-btn" class="header-btn primary-tool-btn" title="Add New Node">
+                <span class="btn-icon">＋</span> Add Node
+            </button>
+            <button id="toggle-library-btn" class="header-btn secondary-tool-btn" title="Focus Library Panel">
+                <span class="btn-icon">📦</span> Library
+            </button>
+        </div>
+    </div>
+    <div class="top-header-center">
+        <div class="playback-toolbar">
+            <div class="render-select-wrapper">
+                <span class="select-label">OUTPUT:</span>
+                <select id="temp-files-select" class="header-select">
+                    <option value="" disabled selected>No renders available</option>
+                </select>
+            </div>
+            <div class="master-player-wrapper">
+                <audio id="master-player" controls style="display: none; height: 32px; min-width: 260px;"></audio>
+                <div id="player-idle-badge" class="player-idle-badge">
+                    <span class="status-dot"></span> Ready to render
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="top-header-right">
+        <div id="status-badge" class="status-indicator">
+            <span class="status-dot active"></span> Engine Ready
+        </div>
+        <button id="export-btn" class="header-btn export-btn" title="Download Audio Render">
+            <span class="btn-icon">⬇</span> Download
+        </button>
+    </div>
+`;
 
-const masterPlayer = document.createElement('audio');
-masterPlayer.id = 'master-player';
-masterPlayer.controls = true;
-masterPlayer.style.display = 'none';
-masterPlayer.style.height = '36px';
+const dockviewContainer = document.createElement('div');
+dockviewContainer.className = 'dockview-container';
 
-const tempFilesSelect = document.createElement('select');
-tempFilesSelect.id = 'temp-files-select';
-tempFilesSelect.style.padding = '6px';
-tempFilesSelect.style.borderRadius = '4px';
-tempFilesSelect.style.border = '1px solid #ccc';
-tempFilesSelect.style.background = '#fff';
+appElement.appendChild(topHeader);
+appElement.appendChild(dockviewContainer);
+
+// Strictly prevent floating panels from being dragged or positioned higher than y = 0 (under or past the header)
+const clampFloatingPanels = () => {
+    const selector = '.dv-floating-group, .dv-resize-container, .dv-overlay-node, [class*="dv-floating"], [class*="overlay"]';
+    const elements = dockviewContainer.querySelectorAll<HTMLElement>(selector);
+    elements.forEach(el => {
+        const topVal = parseFloat(el.style.top);
+        if (!isNaN(topVal) && topVal < 0) {
+            el.style.top = '0px';
+        }
+    });
+};
+
+const floatingObserver = new MutationObserver(() => {
+    clampFloatingPanels();
+});
+
+floatingObserver.observe(dockviewContainer, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['style']
+});
+
+window.addEventListener('pointermove', clampFloatingPanels, { passive: true });
+window.addEventListener('mousemove', clampFloatingPanels, { passive: true });
+
+const tempFilesSelect = topHeader.querySelector('#temp-files-select') as HTMLSelectElement;
+const masterPlayer = topHeader.querySelector('#master-player') as HTMLAudioElement;
+const playerIdleBadge = topHeader.querySelector('#player-idle-badge') as HTMLDivElement;
+const exportBtn = topHeader.querySelector('#export-btn') as HTMLButtonElement;
+const addNodeBtn = topHeader.querySelector('#add-node-btn') as HTMLButtonElement;
+const toggleLibraryBtn = topHeader.querySelector('#toggle-library-btn') as HTMLButtonElement;
+
+addNodeBtn.addEventListener('click', (e) => {
+    popupMenu.show(e.clientX, 56, (nodeType) => {
+        addRootNode(nodeType);
+    });
+});
+
+toggleLibraryBtn.addEventListener('click', () => {
+    const dv = (window as any).dockview;
+    if (dv) {
+        let p = dv.getGroupPanel('library_panel');
+        if (p) {
+            p.api.setActive();
+        } else {
+            const libPanel = dv.addPanel({
+                id: 'library_panel',
+                component: 'library-panel',
+                title: 'Library'
+            });
+            dv.addFloatingGroup(libPanel, {
+                x: 10,
+                y: 10,
+                width: 250,
+                height: 400
+            });
+        }
+    }
+});
+
 tempFilesSelect.addEventListener('change', (e) => {
     const val = (e.target as HTMLSelectElement).value;
     if (val) {
         masterPlayer.src = `${val}?t=${Date.now()}`;
+        masterPlayer.style.display = 'block';
+        if (playerIdleBadge) playerIdleBadge.style.display = 'none';
         masterPlayer.play().catch(e => console.error("Play failed", e));
     }
 });
 
-const exportBtn = document.createElement('button');
-exportBtn.id = 'export-btn';
-exportBtn.textContent = "Download";
-exportBtn.style.marginLeft = '10px';
-exportBtn.style.padding = '6px 10px';
-exportBtn.style.background = '#10b981';
-exportBtn.style.color = '#fff';
-exportBtn.style.border = 'none';
-exportBtn.style.cursor = 'pointer';
-exportBtn.style.borderRadius = '4px';
-exportBtn.style.fontSize = '12px';
+let activeRamPreviewNodeId: number | null = null;
+let activeRamPreviewPayload: any = null;
 
 exportBtn.addEventListener('click', async () => {
+    const selectedVal = tempFilesSelect.value;
+    if (selectedVal === 'RAM_PREVIEW' && activeRamPreviewNodeId != null) {
+        const keyName = `export_${activeRamPreviewNodeId}`;
+        try {
+            const res = await fetch(`/api/preview/export/${encodeURIComponent(keyName)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(activeRamPreviewPayload || {})
+            });
+            const data = await res.json();
+            if (data.status === 'success' && data.file_url) {
+                const downloadName = data.filename || `${keyName}.wav`;
+                const a = document.createElement('a');
+                a.href = data.file_url;
+                a.download = downloadName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                await updateTempRendersList();
+            } else {
+                alert("RAM Export failed: " + (data.detail || 'Unknown error'));
+            }
+        } catch (err) {
+            console.error(err);
+            alert("RAM Export failed");
+        }
+        return;
+    }
+
     const selectedOption = tempFilesSelect.options[tempFilesSelect.selectedIndex];
-    if (!selectedOption) return;
+    if (!selectedOption || !selectedOption.value) return;
 
     const filename = selectedOption.textContent;
     if (!filename) return;
@@ -81,7 +192,6 @@ exportBtn.addEventListener('click', async () => {
         });
         const data = await res.json();
         if (data.status === 'success' && data.file_url) {
-            // Trigger actual download in browser
             const a = document.createElement('a');
             a.href = data.file_url;
             a.download = filename;
@@ -89,7 +199,6 @@ exportBtn.addEventListener('click', async () => {
             a.click();
             document.body.removeChild(a);
 
-            // Refresh temp list
             await updateTempRendersList();
         } else {
             alert("Export failed: " + (data.detail || 'Unknown error'));
@@ -100,11 +209,6 @@ exportBtn.addEventListener('click', async () => {
     }
 });
 
-toolbar.appendChild(tempFilesSelect);
-toolbar.appendChild(masterPlayer);
-toolbar.appendChild(exportBtn);
-appElement.appendChild(toolbar);
-
 async function updateTempRendersList(selectFilename?: string) {
     try {
         const res = await fetch('/api/renders/temp');
@@ -113,7 +217,6 @@ async function updateTempRendersList(selectFilename?: string) {
         tempFilesSelect.innerHTML = ''; // clear options
 
         if (data.files && data.files.length > 0) {
-            toolbar.style.display = 'flex';
             data.files.forEach((f: any) => {
                 const opt = document.createElement('option');
                 opt.value = f.url;
@@ -135,12 +238,15 @@ async function updateTempRendersList(selectFilename?: string) {
             if (selectedOpt) {
                 masterPlayer.src = `${selectedOpt.value}?t=${Date.now()}`;
                 masterPlayer.style.display = 'block';
+                if (playerIdleBadge) playerIdleBadge.style.display = 'none';
             }
         } else {
             // No files left
-            toolbar.style.display = 'none';
+            tempFilesSelect.innerHTML = '<option value="" disabled selected>No renders available</option>';
             masterPlayer.pause();
             masterPlayer.src = '';
+            masterPlayer.style.display = 'none';
+            if (playerIdleBadge) playerIdleBadge.style.display = 'flex';
         }
     } catch (err) {
         console.error("Failed to update temp renders list", err);
@@ -271,36 +377,193 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
     return res;
 };
 
-// Monkey-patch LGraphCanvas.prototype.drawNode to suppress node box in collapsed dot mode
-const originalDrawNode = (LiteGraph as any).LGraphCanvas.prototype.drawNode;
+// Monkey-patch LGraphCanvas.prototype.drawNode to render square coloured icon nodes
+// NOTE: LiteGraph's rendering loop already does ctx.translate(node.pos[0], node.pos[1])
+// before calling drawNode, so all drawing here uses LOCAL coordinates (0,0) = node origin.
 (LiteGraph as any).LGraphCanvas.prototype.drawNode = function (node: any, ctx: CanvasRenderingContext2D) {
-    if (node && (node.flags?.hidden || (node as any).collapsedDotMode)) {
+    if (!node || node.flags?.hidden || (node as any).collapsedDotMode) {
         return;
     }
-    return originalDrawNode.call(this, node, ctx);
+
+    // Force fixed square dimensions
+    node.size = [64, 64];
+
+    const width = 64;
+    const height = 64;
+
+    // Resolve color & icon defaults per node type
+    let defaultColor = "#4f46e5";
+    let defaultIcon = "🎛️";
+    if (node.type === "Audio/Sample") {
+        defaultColor = "#10b981";
+        defaultIcon = "🎵";
+    } else if (node.type === "Audio/Sequence") {
+        defaultColor = "#ec4899";
+        defaultIcon = "🎹";
+    } else if (node.type === "Audio/SamplePool") {
+        defaultColor = "#8b5cf6";
+        defaultIcon = "📦";
+    } else if (node.type === "Audio/Arrangement") {
+        defaultColor = "#f59e0b";
+        defaultIcon = "🎼";
+    } else if (node.type === "Audio/Modulator") {
+        defaultColor = "#9333ea";
+        defaultIcon = "⚡";
+    }
+
+    const nodeColor = node.properties?.color || node.color || defaultColor;
+    const nodeIcon = node.properties?.icon || defaultIcon;
+
+    const isSelected = Boolean(this.selected_nodes && this.selected_nodes[node.id]) || Boolean(node.is_selected);
+    const isHovered = (this.node_over === node);
+
+    ctx.save();
+
+    // 1. Selection or Hover Outer Ring
+    if (isSelected) {
+        ctx.beginPath();
+        if ((ctx as any).roundRect) {
+            (ctx as any).roundRect(-3, -3, 70, 70, 16);
+        } else {
+            ctx.rect(-3, -3, 70, 70);
+        }
+        ctx.fillStyle = "rgba(56, 189, 248, 0.2)";
+        ctx.fill();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = "#38bdf8";
+        ctx.stroke();
+    } else if (isHovered) {
+        ctx.beginPath();
+        if ((ctx as any).roundRect) {
+            (ctx as any).roundRect(-2, -2, 68, 68, 14);
+        } else {
+            ctx.rect(-2, -2, 68, 68);
+        }
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+        ctx.stroke();
+    }
+
+    // 2. Main Coloured Icon Square
+    ctx.beginPath();
+    if ((ctx as any).roundRect) {
+        (ctx as any).roundRect(0, 0, width, height, 12);
+    } else {
+        ctx.rect(0, 0, width, height);
+    }
+    ctx.fillStyle = nodeColor;
+    ctx.fill();
+
+    // Subtle inner border highlight
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+    ctx.stroke();
+
+    // 3. Centered Icon
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "26px sans-serif";
+    ctx.fillText(nodeIcon, width / 2, height / 2 + 1);
+
+    // 4. Lateral Flow Slots (Left input, Right output)
+    if (node.inputs && node.inputs.length > 0) {
+        ctx.beginPath();
+        ctx.arc(0, height / 2, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(0, height / 2, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+    }
+
+    if (node.outputs && node.outputs.length > 0) {
+        ctx.beginPath();
+        ctx.arc(width, height / 2, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(width, height / 2, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+    }
+
+    // 5. Floating Name Badge (above node on hover/selection)
+    if (isSelected || isHovered) {
+        const nodeName = node.properties?.node_name || node.title || "Node";
+        ctx.font = "bold 12px Inter, system-ui, sans-serif";
+        const textWidth = ctx.measureText(nodeName).width;
+        const badgeWidth = textWidth + 16;
+        const badgeHeight = 22;
+        const badgeX = width / 2 - badgeWidth / 2;
+        const badgeY = -28;
+
+        ctx.beginPath();
+        if ((ctx as any).roundRect) {
+            (ctx as any).roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 6);
+        } else {
+            ctx.rect(badgeX, badgeY, badgeWidth, badgeHeight);
+        }
+        ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+        ctx.stroke();
+
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(nodeName, width / 2, badgeY + badgeHeight / 2 + 1);
+    }
+
+    ctx.restore();
+
+    // onDrawForeground — context is already at node origin, no extra translate needed
+    if (node.onDrawForeground) {
+        node.onDrawForeground(ctx, this);
+    }
 };
 
-// Monkey-patch LGraphCanvas.prototype.getNodeOnPos for collapsed dot hit testing
-const originalGetNodeOnPos = (LiteGraph as any).LGraphCanvas.prototype.getNodeOnPos;
+// Monkey-patch LGraphCanvas.prototype.getNodeOnPos for square node & action button hit testing
 (LiteGraph as any).LGraphCanvas.prototype.getNodeOnPos = function (x: number, y: number, nodes_list: any[], margin: number) {
     const targetList = nodes_list || (this.graph ? (this.graph as any)._nodes : null);
-    if (targetList) {
-        for (let i = targetList.length - 1; i >= 0; i--) {
-            const n = targetList[i];
-            if (!n || n.flags?.hidden) continue;
-            if ((n as any).collapsedDotMode) {
-                const modWidth = n.size ? n.size[0] : 180;
-                const dotX = n.pos[0] + modWidth * 0.5;
-                const dotY = n.pos[1] + 10;
-                const dist = Math.hypot(x - dotX, y - dotY);
-                if (dist <= 16) {
-                    return n;
-                }
+    if (!targetList) return null;
+
+    margin = margin || 0;
+
+    for (let i = targetList.length - 1; i >= 0; i--) {
+        const n = targetList[i];
+        if (!n || n.flags?.hidden) continue;
+
+        if ((n as any).collapsedDotMode) {
+            const dotX = n.pos[0] + 32;
+            const dotY = n.pos[1] + 10;
+            const dist = Math.hypot(x - dotX, y - dotY);
+            if (dist <= 16) {
+                return n;
             }
+            continue;
+        }
+
+        // Custom hit box calculation for square icon nodes:
+        const isHoveredOrSelected = Boolean(n.is_selected || this.selected_nodes?.[n.id] || this.node_over === n);
+        const extraRight = isHoveredOrSelected ? 28 : 0;
+        const extraTop = isHoveredOrSelected ? 32 : 0;
+
+        const left = n.pos[0] - margin - 20;
+        const right = n.pos[0] + 64 + margin + extraRight;
+        const top = n.pos[1] - margin - extraTop;
+        const bottom = n.pos[1] + 64 + margin;
+
+        if (x >= left && x <= right && y >= top && y <= bottom) {
+            return n;
         }
     }
-    const filteredList = nodes_list ? nodes_list.filter((n: any) => !(n && (n.flags?.hidden || (n as any).collapsedDotMode))) : undefined;
-    return originalGetNodeOnPos.call(this, x, y, filteredList, margin);
+
+    return null;
 };
 
 // Custom renderLink override:
@@ -347,18 +610,22 @@ LiteGraph.CONNECTING_LINK_COLOR = "#94a3b8";
 LiteGraph.EVENT_LINK_COLOR = "#94a3b8";
 LiteGraph.NODE_TEXT_COLOR = "#ffffff";
 LiteGraph.NODE_TITLE_COLOR = "#ffffff";
+LiteGraph.NODE_TITLE_HEIGHT = 0;
 
 export interface TrackNodeData {
     id: number;
     type: "track" | "sample" | "sequence" | "sample_pool" | "arrangement" | "modulator";
     name: string;
     filepath: string;
+    sample_type?: string;
     original_bpm: number;
     target_bpm?: number;
     key?: string;
     start_beat: number;
     bpm?: number;
     mix_mode: string;
+    crop_start?: number;
+    crop_end?: number;
     sequence?: number[];
     step_length?: number;
     total_bars?: number;
@@ -597,7 +864,7 @@ function openParamWindow(node: any) {
         const width = node.type === "Audio/Sequence" ? 540 : 380;
         const height = 440;
         const rightX = Math.max(20, window.innerWidth - width - 40);
-        const topY = 40;
+        const topY = 20;
 
         dv.addFloatingGroup(panel as any, {
             x: rightX,
@@ -607,6 +874,7 @@ function openParamWindow(node: any) {
         });
     }
 }
+(window as any).openParamWindow = openParamWindow;
 
 window.addEventListener('open-add-menu', (e: any) => {
     const parentId = e.detail?.parentId;
@@ -700,6 +968,13 @@ window.addEventListener('render-node', (e: any) => {
     const nodeId = e.detail?.nodeId;
     if (nodeId != null) {
         renderNode(nodeId);
+    }
+});
+
+window.addEventListener('preview-node', (e: any) => {
+    const nodeId = e.detail?.nodeId;
+    if (nodeId != null) {
+        previewNode(nodeId);
     }
 });
 
@@ -1048,7 +1323,7 @@ function addRootNode(
     return rootNode;
 }
 
-const dockview = new DockviewComponent(appElement, {
+const dockview = new DockviewComponent(dockviewContainer, {
     createComponent: (options: any) => {
         const element = document.createElement('div');
         element.style.width = '100%';
@@ -1200,6 +1475,28 @@ const dockview = new DockviewComponent(appElement, {
                     if (graphCanvas.bgcanvas) {
                         graphCanvas.bgcanvas.style.backgroundColor = "#ffffff";
                     }
+
+                    // Context Menu Override for Nodes & Canvas right-clicks
+                    graphCanvas.processContextMenu = function (node: any, e: MouseEvent) {
+                        if (node) {
+                            nodeContextMenu.show(e.clientX, e.clientY, node);
+                        } else {
+                            const offset = this.convertEventToCanvasOffset(e);
+                            popupMenu.show(e.clientX, e.clientY, (nodeType) => {
+                                addRootNode(nodeType, [offset[0], offset[1]]);
+                            });
+                        }
+                        return false;
+                    };
+
+                    canvas.addEventListener('contextmenu', (e: MouseEvent) => {
+                        e.preventDefault();
+                        const offset = graphCanvas.convertEventToCanvasOffset(e);
+                        const node = (graphCanvas as any).getNodeOnPos(offset[0], offset[1], (graph as any)._nodes, 0);
+                        if (node) {
+                            nodeContextMenu.show(e.clientX, e.clientY, node);
+                        }
+                    });
 
                     // Override LiteGraph search box to open Node Select popup on double-click
                     graphCanvas.allow_searchbox = true;
@@ -1427,9 +1724,9 @@ dockview.onDidRemovePanel((panel: any) => {
     }
 });
 
-dockview.layout(appElement.clientWidth, appElement.clientHeight);
+dockview.layout(dockviewContainer.clientWidth, dockviewContainer.clientHeight);
 window.addEventListener('resize', () => {
-    dockview.layout(appElement.clientWidth, appElement.clientHeight);
+    dockview.layout(dockviewContainer.clientWidth, dockviewContainer.clientHeight);
 });
 
 const graphPanel = dockview.addPanel({
@@ -1446,7 +1743,7 @@ const libPanel = dockview.addPanel({
 });
 dockview.addFloatingGroup(libPanel, {
     x: 10,
-    y: 50,
+    y: 10,
     width: 250,
     height: 400
 });
@@ -1532,9 +1829,14 @@ function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
             }
         }
 
+        const sample_type = data?.sample_type || nodeObj?.properties?.sample_type || "loop";
+        const crop_start = data?.crop_start ?? nodeObj?.properties?.crop_start ?? 0.0;
+        const crop_end = data?.crop_end ?? nodeObj?.properties?.crop_end ?? 1.0;
+
         return {
             node_name: name,
             node_type: nodeType,
+            sample_type: sample_type,
             filepath: filepath,
             original_bpm: original_bpm,
             target_bpm: target_bpm,
@@ -1542,6 +1844,8 @@ function serializeNodeSubtree(graph: LGraph, rootNodeId: number) {
             bpm: bpm,
             start_beat: start_beat,
             mix_mode: mix_mode,
+            crop_start: crop_start,
+            crop_end: crop_end,
             sequence: sequence,
             step_length: stepLength,
             total_bars: total_bars,
@@ -1589,5 +1893,56 @@ async function renderNode(nodeId: number) {
     } catch (err) {
         console.error("Error during render:", err);
         alert("Error during render, check console.");
+    }
+}
+
+async function previewNode(nodeId: number) {
+    const graph = (window as any).editorGraph as LGraph;
+    if (!graph) return;
+
+    const payload = serializeNodeSubtree(graph, nodeId);
+    if (!payload) {
+        alert("Could not serialize node for preview.");
+        return;
+    }
+
+    const keyName = `export_${nodeId}`;
+    payload.filename = keyName;
+
+    try {
+        const res = await fetch('/api/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        if (data.status === 'success' && data.audio_url) {
+            activeRamPreviewNodeId = nodeId;
+            activeRamPreviewPayload = payload;
+
+            if (playerIdleBadge) playerIdleBadge.style.display = 'none';
+            masterPlayer.style.display = 'block';
+            masterPlayer.src = `${data.audio_url}?t=${Date.now()}`;
+            masterPlayer.play().catch(e => console.error("Audio playback error:", e));
+
+            // Add/select RAM preview entry in toolbar dropdown
+            let ramOpt = Array.from(tempFilesSelect.options).find(o => o.value === 'RAM_PREVIEW');
+            if (!ramOpt) {
+                ramOpt = document.createElement('option');
+                ramOpt.value = 'RAM_PREVIEW';
+                ramOpt.textContent = `⚡ [RAM Preview] ${payload.node_name}`;
+                tempFilesSelect.insertBefore(ramOpt, tempFilesSelect.firstChild);
+            } else {
+                ramOpt.textContent = `⚡ [RAM Preview] ${payload.node_name}`;
+            }
+            tempFilesSelect.value = 'RAM_PREVIEW';
+        } else {
+            console.error("RAM preview failed:", data);
+            alert("RAM preview failed, check console.");
+        }
+    } catch (err) {
+        console.error("Error during RAM preview:", err);
+        alert("Error during RAM preview, check console.");
     }
 }

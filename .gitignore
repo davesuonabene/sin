@@ -42,6 +42,12 @@ frontend/node_modules/
 frontend/dist/
 .vite/
 
+# GAIA is served directly from this source directory, so keep its UI reviewable.
+!gaia/static/
+!gaia/static/index.html
+!gaia/static/app.js
+!gaia/static/styles.css
+
 # IDE & OS Files
 .vscode/
 .idea/
@@ -53,3 +59,7 @@ Thumbs.db
 # Logs & Temp
 *.log
 tmp/
+*.zip
+*.DS_Store
+*.jpg
+/assets

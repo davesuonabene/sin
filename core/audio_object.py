@@ -28,7 +28,10 @@ class AudioObject(BaseObject):
         original_bpm: Optional[float] = None,
         filepath: Optional[Union[str, Path]] = None,
         chain: Optional[List[Dict[str, Any]]] = None,
-        data: Optional[Any] = None
+        data: Optional[Any] = None,
+        crop_start: float = 0.0,
+        crop_end: float = 1.0,
+        sample_type: str = "loop"
     ) -> None:
         super().__init__(name=name, data=data)
         self.audio_data = audio_data if audio_data is not None else None
@@ -41,6 +44,9 @@ class AudioObject(BaseObject):
         self._original_bpm = float(original_bpm) if original_bpm is not None else None
         self.chain: List[Dict[str, Any]] = chain if chain is not None else []
         self.is_dynamic = False
+        self.crop_start: float = max(0.0, min(1.0, float(crop_start)))
+        self.crop_end: float = max(0.0, min(1.0, float(crop_end)))
+        self.sample_type: str = str(sample_type)
 
         # Children stored as list of (start_beat: float, child_object: AudioObject) tuples
         self.children: List[Tuple[float, AudioObject]] = []
@@ -123,7 +129,7 @@ class AudioObject(BaseObject):
                 self.detect_and_set_bpm(sample_rate=sr)
 
             data_to_render = self.audio_data
-            if system is not None and self._original_bpm is not None and self._original_bpm != system.bpm:
+            if self.sample_type not in ("one_shot", "oneshot") and system is not None and self._original_bpm is not None and self._original_bpm != system.bpm:
                 data_to_render = stretch_audio(self.audio_data, self._original_bpm, system.bpm)
 
             return self.apply_chain(data_to_render, system)
@@ -194,7 +200,10 @@ class SampleObject(AudioObject):
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
         chain: Optional[List[Dict[str, Any]]] = None,
-        data: Optional[Any] = None
+        data: Optional[Any] = None,
+        crop_start: float = 0.0,
+        crop_end: float = 1.0,
+        sample_type: str = "loop"
     ) -> None:
         super().__init__(
             name=name,
@@ -203,7 +212,10 @@ class SampleObject(AudioObject):
             pan=pan,
             original_bpm=original_bpm,
             chain=chain,
-            data=data
+            data=data,
+            crop_start=crop_start,
+            crop_end=crop_end,
+            sample_type=sample_type
         )
 
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
@@ -213,11 +225,27 @@ class SampleObject(AudioObject):
         sr = system.sample_rate if system is not None else 44100
         audio_array, _ = load_sample(self.filepath, target_sr=sr)
 
+        if len(audio_array) == 0:
+            return np.zeros(0, dtype=np.float32)
+
+        # Apply crop range
+        if self.crop_start > 0.0 or self.crop_end < 1.0:
+            total_samples = len(audio_array)
+            s_idx = int(max(0.0, min(1.0, self.crop_start)) * total_samples)
+            e_idx = int(max(0.0, min(1.0, self.crop_end)) * total_samples)
+            if s_idx < e_idx:
+                audio_array = audio_array[s_idx:e_idx]
+            else:
+                audio_array = np.zeros(0, dtype=np.float32)
+
+        if len(audio_array) == 0:
+            return np.zeros(0, dtype=np.float32)
+
         if self._original_bpm is None:
             self.detect_and_set_bpm(sample_rate=sr)
 
         data_to_render = audio_array
-        if system is not None and self._original_bpm is not None and self._original_bpm != system.bpm:
+        if self.sample_type not in ("one_shot", "oneshot") and system is not None and self._original_bpm is not None and self._original_bpm != system.bpm:
             data_to_render = stretch_audio(audio_array, self._original_bpm, system.bpm)
 
         return self.apply_chain(data_to_render, system)
@@ -238,7 +266,8 @@ class SequenceObject(AudioObject):
         original_bpm: Optional[float] = None,
         filepath: Optional[Union[str, Path]] = None,
         chain: Optional[List[Dict[str, Any]]] = None,
-        data: Optional[Any] = None
+        data: Optional[Any] = None,
+        sample_type: str = "loop"
     ) -> None:
         super().__init__(
             name=name,
@@ -247,7 +276,8 @@ class SequenceObject(AudioObject):
             pan=pan,
             original_bpm=original_bpm,
             chain=chain,
-            data=data
+            data=data,
+            sample_type=sample_type
         )
         self.sequence: List[int] = sequence if sequence is not None else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
         self.step_length: float = float(step_length)
@@ -316,7 +346,8 @@ class SamplePoolObject(AudioObject):
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
         chain: Optional[List[Dict[str, Any]]] = None,
-        data: Optional[Any] = None
+        data: Optional[Any] = None,
+        sample_type: str = "loop"
     ) -> None:
         super().__init__(
             name=name,
@@ -324,7 +355,8 @@ class SamplePoolObject(AudioObject):
             pan=pan,
             original_bpm=original_bpm,
             chain=chain,
-            data=data
+            data=data,
+            sample_type=sample_type
         )
         self.filters = filters or {}
         self.playback_mode = playback_mode or "Random"
@@ -483,7 +515,8 @@ class ArrangementObject(AudioObject):
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
         chain: Optional[List[Dict[str, Any]]] = None,
-        data: Optional[Any] = None
+        data: Optional[Any] = None,
+        sample_type: str = "loop"
     ) -> None:
         super().__init__(
             name=name,
@@ -491,7 +524,8 @@ class ArrangementObject(AudioObject):
             pan=pan,
             original_bpm=original_bpm,
             chain=chain,
-            data=data
+            data=data,
+            sample_type=sample_type
         )
         self.total_bars = float(total_bars)
         self.probability = float(probability)

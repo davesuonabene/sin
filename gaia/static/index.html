@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GAIA Library</title>
+    <link rel="stylesheet" href="/static/styles.css?v=14">
+</head>
+<body>
+    <div class="app-shell">
+        <nav class="sidebar" aria-label="GAIA navigation">
+            <div class="brand">
+                <strong>Gaia</strong><span>Archive</span>
+                <button id="toggle-sidebar" class="secondary panel-toggle sidebar-toggle" type="button" aria-label="Collapse sidebar" title="Collapse sidebar" aria-pressed="false">‹</button>
+            </div>
+            <p class="nav-label">Workspace</p>
+            <button class="nav-item active" type="button" data-view="library">Library</button>
+            <div id="vault-nav" class="vault-nav" aria-label="Vaults"></div>
+            <button class="nav-item" type="button" data-view="import">Import</button>
+        </nav>
+
+        <main class="main-content">
+            <section id="library-view" class="view">
+                <header class="page-header">
+                    <div>
+                        <p class="eyebrow">Gaia archive</p>
+                        <h1>Your library</h1>
+                        <p id="library-summary" class="summary" aria-live="polite">Loading assets…</p>
+                    </div>
+                    <div class="header-actions">
+                        <label class="search" for="search-input">
+                            <span aria-hidden="true">⌕</span>
+                            <input id="search-input" type="search" placeholder="Filter by title or path">
+                        </label>
+                        <button id="clear-filter" class="secondary hidden" type="button">Clear filter</button>
+                        <button id="refresh" class="secondary" type="button">Refresh</button>
+                    </div>
+                </header>
+
+                <div id="library-layout" class="library-layout">
+                    <aside class="type-browser" aria-label="Asset types">
+                        <div class="panel-heading">
+                            <span>Types</span>
+                            <span class="panel-heading-actions">
+                                <small>select to filter</small>
+                                <button id="toggle-tree" class="secondary panel-toggle" type="button" aria-label="Collapse types" title="Collapse types" aria-pressed="false">‹</button>
+                            </span>
+                        </div>
+                        <div id="type-tree" class="type-tree"></div>
+                    </aside>
+
+                    <section class="asset-panel" aria-label="Assets">
+                        <div class="list-header" aria-hidden="true">
+                            <span>Name</span>
+                            <span>Path</span>
+                            <span>Type</span>
+                            <span>BPM</span>
+                            <span>Key</span>
+                            <span>Size</span>
+                            <span></span>
+                        </div>
+                        <div id="asset-list" class="asset-list" role="list"></div>
+                    </section>
+                </div>
+            </section>
+
+            <section id="import-view" class="view hidden">
+                <header class="page-header">
+                    <div>
+                        <p class="eyebrow">Managed snapshots</p>
+                        <h1>Import a collection</h1>
+                    </div>
+                </header>
+
+                <form id="import-form" class="import-card">
+                    <h2>Folder or ZIP archive</h2>
+                    <p>GAIA copies a folder or extracts a ZIP into its managed asset store. Imported contents stay read-only.</p>
+                    <label for="vault-select">Vault</label>
+                    <select id="vault-select" required></select>
+                    <label for="source-path">Folder or ZIP path</label>
+                    <div class="source-input">
+                        <input id="source-path" type="text" required placeholder="C:\Music\My sample pack or C:\Downloads\pack.zip">
+                        <button id="browse-folder" class="secondary" type="button">Browse folder</button>
+                    </div>
+                    <p class="help">A collection becomes a multitrack only when its direct audio files have matching lengths and clearly distinct instrument names.</p>
+                    <button id="import-submit" class="primary" type="submit">Import snapshot</button>
+                    <p id="import-result" class="result hidden" role="status"></p>
+                </form>
+                <form id="vault-form" class="import-card vault-card">
+                    <h2>Create a vault</h2>
+                    <p>Vaults keep their assets, duplicate detection, and import history separate.</p>
+                    <label for="vault-name">Name</label>
+                    <input id="vault-name" type="text" required placeholder="e.g. Sample packs">
+                    <button class="secondary" type="submit">Create vault</button>
+                    <p id="vault-result" class="result hidden" role="status"></p>
+                </form>
+                <section class="import-card vault-log-card" aria-labelledby="vault-log-title">
+                    <h2 id="vault-log-title">Vault activity</h2>
+                    <p id="vault-log-description">Recent imports and file actions for the selected vault.</p>
+                    <div id="vault-import-log" class="vault-import-log">Select a vault to view activity.</div>
+                </section>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/app.js?v=14"></script>
+</body>
+</html>

@@ -5,7 +5,7 @@ export class SequenceNode extends BaseNode {
     constructor() {
         super();
         this.title = "Sequence";
-        this.size = [200, 44];
+        this.size = [64, 64];
         
         // Vibrant Pink / Magenta theme for Sequence loop generator
         this.color = "#ec4899";
@@ -17,7 +17,9 @@ export class SequenceNode extends BaseNode {
             node_type: "sequence",
             sequence: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
             step_length: 0.25,
-            selected_step: 0
+            selected_step: 0,
+            color: "#ec4899",
+            icon: "🎹"
         };
         
         this.addInput("Input", "audio");

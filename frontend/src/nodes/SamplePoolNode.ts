@@ -7,7 +7,7 @@ export class SamplePoolNode extends BaseNode {
     constructor() {
         super();
         this.title = "Sample Pool";
-        this.size = [200, 44];
+        this.size = [64, 64];
         
         // Distinct purple style for pool nodes
         this.color = "#8b5cf6";
@@ -26,7 +26,9 @@ export class SamplePoolNode extends BaseNode {
             playbackMode: "Random",
             seed: Math.random(),
             refresh_mode: "manual",
-            start_beat: 0
+            start_beat: 0,
+            color: "#8b5cf6",
+            icon: "📦"
         };
         
         this.addInput("Input", "audio");

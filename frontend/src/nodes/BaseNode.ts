@@ -1,29 +1,6 @@
 import { LiteGraph, LGraphNode } from 'litegraph.js';
 import { CanvasButton } from '../ui/CanvasButton';
 
-let measureCtx: CanvasRenderingContext2D | null = null;
-
-function truncateText(text: string, maxWidth: number, font: string = "bold 14px Arial"): string {
-    if (!text) return "";
-    if (typeof document === 'undefined') return text;
-    if (!measureCtx) {
-        const c = document.createElement('canvas');
-        measureCtx = c.getContext('2d');
-    }
-    if (measureCtx) {
-        measureCtx.font = font;
-        if (measureCtx.measureText(text).width <= maxWidth) {
-            return text;
-        }
-        let truncated = text;
-        while (truncated.length > 0 && measureCtx.measureText(truncated + '...').width > maxWidth) {
-            truncated = truncated.slice(0, -1);
-        }
-        return truncated + '...';
-    }
-    return text;
-}
-
 export function getDefaultFxChain() {
     return [
         { id: "pre_gain_" + Math.random().toString(36).substring(2, 8), type: "gain", name: "Pre Gain", enabled: true, fixed: true, params: { gain: 1.0 } },
@@ -39,7 +16,7 @@ export abstract class BaseNode extends LGraphNode {
 
     constructor() {
         super();
-        this.size = [200, 44];
+        this.size = [64, 64];
         this.shape = LiteGraph.BOX_SHAPE || 1;
         
         if (!this.properties) {
@@ -49,22 +26,23 @@ export abstract class BaseNode extends LGraphNode {
             this.properties.chain = getDefaultFxChain();
         }
 
+        // Action buttons positioned floating on the right side of the node
         this.renderBtn = new CanvasButton(
-            -74, 12, 20, 20, "▶", "#3b82f6", "#2563eb",
+            68, 4, 18, 18, "▶", "#3b82f6", "#2563eb",
             () => {
-                window.dispatchEvent(new CustomEvent('render-node', { detail: { nodeId: this.id } }));
+                window.dispatchEvent(new CustomEvent('preview-node', { detail: { nodeId: this.id } }));
             }
         );
 
         this.modulatorBtn = new CanvasButton(
-            -48, 12, 20, 20, "⚡", "#a855f7", "#9333ea",
+            68, 24, 18, 18, "⚡", "#a855f7", "#9333ea",
             () => {
                 window.dispatchEvent(new CustomEvent('add-modulator-node', { detail: { parentId: this.id } }));
             }
         );
 
         this.removeBtn = new CanvasButton(
-            -22, 12, 20, 20, "✕", "#ef4444", "#dc2626",
+            68, 44, 18, 18, "✕", "#ef4444", "#dc2626",
             () => {
                 if (this.graph) {
                     this.graph.remove(this);
@@ -84,40 +62,46 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     computeSize(): [number, number] {
-        const fullName = this.properties?.node_name || this.title || "AudioNode";
-        if (typeof document !== 'undefined' && !measureCtx) {
-            const c = document.createElement('canvas');
-            measureCtx = c.getContext('2d');
-        }
-        let textWidth = 80;
-        if (measureCtx) {
-            measureCtx.font = "bold 14px Arial";
-            textWidth = measureCtx.measureText(fullName).width;
-        }
-        // Reserved width for buttons (-74, -48, -22) + margins (~100px total)
-        const desiredWidth = Math.ceil(textWidth + 100);
-        // Min width 200px, max width 380px
-        const finalWidth = Math.max(200, Math.min(380, desiredWidth));
-        return [finalWidth, 44];
+        return [64, 64];
     }
 
     getTitle(): string {
-        const fullName = this.properties?.node_name || this.title || "AudioNode";
-        const nodeWidth = this.size ? this.size[0] : 200;
-        // Available header width for text (reserving ~80px for buttons on right)
-        const availWidth = Math.max(40, nodeWidth - 80);
-        return truncateText(fullName, availWidth, "bold 14px Arial");
+        return this.properties?.node_name || this.title || "AudioNode";
     }
 
-    onDrawForeground(ctx: CanvasRenderingContext2D, _canvas: any) {
+    isPointInside(x: number, y: number, margin: number = 0): boolean {
+        const width = 64;
+        const height = 64;
+        const isHoveredOrSelected = Boolean(this.is_selected || ((window as any).editorCanvas?.node_over === this));
+        const extraRight = isHoveredOrSelected ? 28 : 0;
+        const extraTop = isHoveredOrSelected ? 32 : 0;
+
+        return (
+            x >= this.pos[0] - margin - 20 &&
+            x <= this.pos[0] + width + margin + extraRight &&
+            y >= this.pos[1] - margin - extraTop &&
+            y <= this.pos[1] + height + margin
+        );
+    }
+
+    onDrawForeground(ctx: CanvasRenderingContext2D, canvas: any) {
         if (this.flags.collapsed || (this.flags as any).hidden) return;
-        for (const btn of this.buttons) {
-            btn.draw(ctx, this);
+        const isHovered = canvas && canvas.node_over === this;
+        const isSelected = Boolean(canvas && canvas.selected_nodes && canvas.selected_nodes[this.id]) || this.is_selected;
+        
+        if (isHovered || isSelected) {
+            for (const btn of this.buttons) {
+                btn.draw(ctx, this);
+            }
         }
     }
 
-    onMouseMove(_e: MouseEvent, local_pos: any, _canvas: any) {
+    onMouseMove(_e: MouseEvent, local_pos: any, canvas: any) {
         if (this.flags.collapsed || (this.flags as any).hidden) return;
+        const isHovered = canvas && canvas.node_over === this;
+        const isSelected = Boolean(canvas && canvas.selected_nodes && canvas.selected_nodes[this.id]) || this.is_selected;
+        if (!isHovered && !isSelected) return;
+
         if (!local_pos || local_pos.length < 2) return;
         const x = local_pos[0];
         const y = local_pos[1];
@@ -134,17 +118,33 @@ export abstract class BaseNode extends LGraphNode {
         }
     }
 
-    onMouseDown(_e: MouseEvent, local_pos: any, _canvas: any): boolean {
+    onMouseDown(_e: MouseEvent, local_pos: any, canvas: any): boolean {
         if (this.flags.collapsed || (this.flags as any).hidden) return false;
-        if (!local_pos || local_pos.length < 2) return false;
-        const x = local_pos[0];
-        const y = local_pos[1];
-        for (const btn of this.buttons) {
-            if (btn.checkHit(x, y, this)) {
-                btn.onClick(_e);
-                return true; // Stop event propagation in LiteGraph
+
+        const isHovered = canvas && canvas.node_over === this;
+        const isSelected = Boolean(canvas && canvas.selected_nodes && canvas.selected_nodes[this.id]) || this.is_selected;
+
+        if (local_pos && local_pos.length >= 2) {
+            const x = local_pos[0];
+            const y = local_pos[1];
+            if (isHovered || isSelected) {
+                for (const btn of this.buttons) {
+                    if (btn.checkHit(x, y, this)) {
+                        btn.onClick(_e);
+                        return true;
+                    }
+                }
             }
         }
+
+        // Trigger node selection & open properties window
+        if (canvas) {
+            canvas.selectNode(this);
+            if (typeof (window as any).openParamWindow === 'function') {
+                (window as any).openParamWindow(this);
+            }
+        }
+
         return false;
     }
 
@@ -182,17 +182,16 @@ export abstract class BaseNode extends LGraphNode {
 
     getConnectionPos(is_input: boolean, _slot_number: number | string, out?: any): any {
         out = out || new Float32Array(2);
-        const isCollapsed = Boolean(this.flags && this.flags.collapsed);
+        const width = 64;
+        const height = 64;
 
-        if (isCollapsed) {
-            const width = (this as any)._collapsed_width || LiteGraph.NODE_COLLAPSED_WIDTH || 80;
-            const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 44;
-            out[0] = is_input ? this.pos[0] : (this.pos[0] + width);
-            out[1] = this.pos[1] - titleHeight * 0.5;
+        if (is_input) {
+            // Lateral left connection
+            out[0] = this.pos[0];
+            out[1] = this.pos[1] + height * 0.5;
         } else {
-            const width = this.size ? this.size[0] : 200;
-            const height = this.size ? this.size[1] : 44;
-            out[0] = is_input ? this.pos[0] : (this.pos[0] + width);
+            // Lateral right connection
+            out[0] = this.pos[0] + width;
             out[1] = this.pos[1] + height * 0.5;
         }
         return out;

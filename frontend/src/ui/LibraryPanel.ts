@@ -42,7 +42,7 @@ export class LibraryPanel {
         };
 
         const refreshBtn = document.createElement('button');
-        refreshBtn.className = 'td-node-popup-close'; // Reuse style for simplicity
+        refreshBtn.className = 'td-node-popup-close';
         refreshBtn.innerText = '↻';
         refreshBtn.title = 'Refresh Library';
         refreshBtn.onclick = () => this.fetchLibrary();
@@ -107,8 +107,10 @@ export class LibraryPanel {
         }
     }
 
+
+
     private updateFilterUI() {
-        const defaultTypes = ['audio', 'track', 'sample', 'loop', 'one_shot', 'midi'];
+        const defaultTypes = ['audio', 'track', 'sample', 'loop', 'one_shot', 'midi', 'multitrack'];
         const fileTypes = new Set<string>(defaultTypes);
         const fileTags = new Set<string>();
 
@@ -169,12 +171,13 @@ export class LibraryPanel {
 
     private getEffectiveSelectedTypes(): Set<string> {
         const TYPE_HIERARCHY: Record<string, string[]> = {
-            'audio': ['audio', 'item', 'track', 'sample', 'loop', 'one_shot'],
+            'audio': ['audio', 'item', 'track', 'sample', 'loop', 'one_shot', 'multitrack'],
             'sample': ['sample', 'loop', 'one_shot'],
             'track': ['track'],
             'loop': ['loop'],
             'one_shot': ['one_shot'],
-            'midi': ['midi']
+            'midi': ['midi'],
+            'multitrack': ['multitrack']
         };
         const effective = new Set<string>();
         this.selectedTypes.forEach(t => {
@@ -236,10 +239,12 @@ export class LibraryPanel {
         }
 
         filtered.forEach(item => {
+            const itemWrapper = document.createElement('div');
+            itemWrapper.className = 'td-library-item-wrapper';
+
             const el = document.createElement('div');
-            el.className = 'td-node-popup-item'; // Reuse item style
+            el.className = 'td-node-popup-item';
             
-            // Use type if available, otherwise 'audio'
             let typeName = item.type ? item.type.toUpperCase() : 'AUDIO';
             let badgeColor = "#10b981"; // Sample green
             if (item.type === 'midi' || item.name.endsWith('.mid') || item.name.endsWith('.midi')) {
@@ -247,16 +252,36 @@ export class LibraryPanel {
                 badgeColor = '#8b5cf6'; // Midi purple
             } else if (item.type === 'loop') {
                 badgeColor = '#0284c7'; // Loop blue
+            } else if (item.type === 'multitrack') {
+                typeName = 'MULTITRACK';
+                badgeColor = '#f59e0b'; // Amber / gold
             }
 
             const metaParts: string[] = [];
+            if (item.type === 'multitrack' && Array.isArray(item.stems)) {
+                metaParts.push(`${item.stems.length} Stems`);
+            }
             if (item.bpm) metaParts.push(`${item.bpm} BPM`);
             if (item.key) metaParts.push(item.key);
+            
+            let lengthBadge = '';
+            if (item.type === 'multitrack' && item.is_valid_length === false) {
+                lengthBadge = `<span class="multitrack-length-tag warning" title="Stem length variance: ${item.length_variance}s">⚠️ Length mismatch</span>`;
+            } else if (item.type === 'multitrack' && item.is_valid_length === true) {
+                lengthBadge = `<span class="multitrack-length-tag valid" title="All stems equal length">✓ Equal length</span>`;
+            }
+
             const metaStr = metaParts.length > 0 ? `<span style="font-size: 11px; color: #64748b; margin-left: 6px; font-weight: normal;">(${metaParts.join(' • ')})</span>` : '';
+
+            let accordionToggle = '';
+            if (item.type === 'multitrack' && Array.isArray(item.stems) && item.stems.length > 0) {
+                accordionToggle = `<button class="multitrack-toggle-btn" title="Toggle Stem List">▼ Stems</button>`;
+            }
 
             el.innerHTML = `
                 <span class="item-badge" style="background-color: ${badgeColor}">${typeName}</span>
-                <span class="item-label" title="${item.absolute_path}">${item.name}${metaStr}</span>
+                <span class="item-label" title="${item.absolute_path}">${item.name}${metaStr} ${lengthBadge}</span>
+                ${accordionToggle}
             `;
 
             el.draggable = true;
@@ -269,12 +294,27 @@ export class LibraryPanel {
                         filepath: item.absolute_path,
                         name: item.name,
                         key: item.key || null,
-                        bpm: item.bpm || null
+                        bpm: item.bpm || null,
+                        stems: item.stems || [],
+                        is_valid_length: item.is_valid_length ?? true,
+                        length_variance: item.length_variance ?? 0.0
                     }));
                 }
             };
 
-            el.onclick = () => {
+            el.onclick = (e) => {
+                const target = e.target as HTMLElement;
+                if (target.classList.contains('multitrack-toggle-btn')) {
+                    e.stopPropagation();
+                    const stemContainer = itemWrapper.querySelector('.multitrack-stem-container') as HTMLElement;
+                    if (stemContainer) {
+                        const isHidden = stemContainer.style.display === 'none';
+                        stemContainer.style.display = isHidden ? 'block' : 'none';
+                        target.innerText = isHidden ? '▲ Stems' : '▼ Stems';
+                    }
+                    return;
+                }
+
                 if (!this.previewEnabled) return;
                 
                 if (this.currentAudio) {
@@ -285,14 +325,12 @@ export class LibraryPanel {
                     }
                 }
                 
-                // Toggle pause if clicking the same currently playing row
                 if (this.playingRow === el) {
                     this.playingRow = null;
                     return;
                 }
 
                 if (item.type === 'midi' || item.name.endsWith('.mid') || item.name.endsWith('.midi')) {
-                    // Highlight row for MIDI without audio playback
                     el.style.backgroundColor = 'rgba(139, 92, 246, 0.15)';
                     el.style.borderColor = '#8b5cf6';
                     this.playingRow = el;
@@ -309,8 +347,8 @@ export class LibraryPanel {
                 if (item.id) {
                     this.currentAudio = new Audio(`/api/library/stream/${item.id}`);
                     this.currentAudio.play().catch(e => console.error("Preview failed", e));
-                    el.style.backgroundColor = 'rgba(2, 132, 199, 0.12)';
-                    el.style.borderColor = '#0284c7';
+                    el.style.backgroundColor = item.type === 'multitrack' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(2, 132, 199, 0.12)';
+                    el.style.borderColor = item.type === 'multitrack' ? '#f59e0b' : '#0284c7';
                     this.playingRow = el;
                     
                     this.currentAudio.onended = () => {
@@ -321,7 +359,41 @@ export class LibraryPanel {
                 }
             };
 
-            this.listContainer.appendChild(el);
+            itemWrapper.appendChild(el);
+
+            if (item.type === 'multitrack' && Array.isArray(item.stems) && item.stems.length > 0) {
+                const stemContainer = document.createElement('div');
+                stemContainer.className = 'multitrack-stem-container';
+                stemContainer.style.display = 'none';
+
+                item.stems.forEach((stem: any, idx: number) => {
+                    const stemRow = document.createElement('div');
+                    stemRow.className = 'multitrack-stem-row';
+                    stemRow.innerHTML = `
+                        <span class="stem-badge">${stem.stem_type || 'STEM'}</span>
+                        <span class="stem-name" title="${stem.absolute_path}">${stem.filename}</span>
+                        <span class="stem-duration">${stem.duration_seconds ? stem.duration_seconds + 's' : ''}</span>
+                        <button class="stem-play-btn" title="Preview Stem">▶</button>
+                    `;
+
+                    const playBtn = stemRow.querySelector('.stem-play-btn') as HTMLButtonElement;
+                    playBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        if (this.currentAudio) {
+                            this.currentAudio.pause();
+                        }
+                        const stemStreamUrl = `/items/${item.id}/stems/${idx}/stream`;
+                        this.currentAudio = new Audio(stemStreamUrl);
+                        this.currentAudio.play().catch(err => console.error("Stem preview failed", err));
+                    };
+
+                    stemContainer.appendChild(stemRow);
+                });
+
+                itemWrapper.appendChild(stemContainer);
+            }
+
+            this.listContainer.appendChild(itemWrapper);
         });
     }
 }

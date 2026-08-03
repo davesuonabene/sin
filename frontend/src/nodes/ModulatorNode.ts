@@ -22,7 +22,7 @@ export function getDefaultModulatorChain() {
 export class ModulatorNode extends BaseNode {
     constructor() {
         super();
-        this.size = [200, 44];
+        this.size = [64, 64];
         this.shape = LiteGraph.BOX_SHAPE || 1;
 
         this.color = "#9333ea";
@@ -34,14 +34,16 @@ export class ModulatorNode extends BaseNode {
         }
         this.properties.node_type = "modulator";
         this.properties.node_name = this.properties.node_name || "Modulator";
+        this.properties.color = this.properties.color || "#9333ea";
+        this.properties.icon = this.properties.icon || "⚡";
         if (!this.properties.chain || !Array.isArray(this.properties.chain) || this.properties.chain.length === 0) {
             this.properties.chain = getDefaultModulatorChain();
         }
 
-        // Remove render button for modulator node so only remove button remains
+        // Remove render & modulator button for modulator node so only remove button remains
         this.buttons = [];
         this.removeBtn = new CanvasButton(
-            -24, 12, 20, 20, "✕", "#ef4444", "#dc2626",
+            68, 4, 18, 18, "✕", "#ef4444", "#dc2626",
             () => {
                 if (this.graph) {
                     this.graph.remove(this);
@@ -54,19 +56,7 @@ export class ModulatorNode extends BaseNode {
     }
 
     computeSize(): [number, number] {
-        const fullName = this.properties?.node_name || this.title || "Modulator";
-        let textWidth = 80;
-        if (typeof document !== 'undefined') {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                ctx.font = "bold 14px Arial";
-                textWidth = ctx.measureText(fullName).width;
-            }
-        }
-        const desiredWidth = Math.ceil(textWidth + 60);
-        const finalWidth = Math.max(180, Math.min(300, desiredWidth));
-        return [finalWidth, 44];
+        return [64, 64];
     }
 
     getTitle(): string {

@@ -5,7 +5,7 @@ export class TrackNode extends BaseNode {
     constructor() {
         super();
         this.title = "Track";
-        this.size = [200, 44];
+        this.size = [64, 64];
         
         // Indigo theme for container track
         this.color = "#4f46e5";
@@ -15,7 +15,9 @@ export class TrackNode extends BaseNode {
         this.properties = {
             node_name: "Master Track",
             mix_mode: "sum",
-            bpm: 120
+            bpm: 120,
+            color: "#4f46e5",
+            icon: "🎛️"
         };
         
         this.addInput("Input", "audio");

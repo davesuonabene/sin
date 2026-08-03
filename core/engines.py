@@ -42,6 +42,7 @@ class SampleRenderer(NodeRenderer):
         if not filepath:
             return np.zeros(0, dtype=np.float32)
 
+        sample_type = getattr(node_data, "sample_type", None) or getattr(node_data, "sample_mode", "loop")
         original_bpm = getattr(node_data, "original_bpm", 120.0) or 120.0
         target_bpm = getattr(node_data, "target_bpm", None) or getattr(node_data, "bpm", None) or system.bpm
         sample_rate = system.sample_rate
@@ -50,8 +51,23 @@ class SampleRenderer(NodeRenderer):
         if len(audio_array) == 0:
             return np.zeros(0, dtype=np.float32)
 
-        if original_bpm != target_bpm:
-            audio_array = stretch_audio(audio_array, original_bpm, target_bpm)
+        crop_start = getattr(node_data, "crop_start", 0.0) or 0.0
+        crop_end = getattr(node_data, "crop_end", 1.0) or 1.0
+        if crop_start > 0.0 or crop_end < 1.0:
+            total_samples = len(audio_array)
+            s_idx = int(max(0.0, min(1.0, crop_start)) * total_samples)
+            e_idx = int(max(0.0, min(1.0, crop_end)) * total_samples)
+            if s_idx < e_idx:
+                audio_array = audio_array[s_idx:e_idx]
+            else:
+                audio_array = np.zeros(0, dtype=np.float32)
+
+        if len(audio_array) == 0:
+            return np.zeros(0, dtype=np.float32)
+
+        if sample_type not in ("one_shot", "oneshot"):
+            if original_bpm != target_bpm:
+                audio_array = stretch_audio(audio_array, original_bpm, target_bpm)
 
         return audio_array.astype(np.float32)
 
@@ -121,9 +137,13 @@ def build_node_object(node_data: Any) -> AudioObject:
 
     node_type = getattr(node_data, "node_type", "track")
     node_name = getattr(node_data, "node_name", "AudioNode")
+    sample_type = getattr(node_data, "sample_type", None) or getattr(node_data, "sample_mode", "loop")
     original_bpm = getattr(node_data, "original_bpm", 120.0)
     raw_chain = getattr(node_data, "chain", None) or []
     chain_list = [c.dict() if hasattr(c, 'dict') else (c.model_dump() if hasattr(c, 'model_dump') else c) for c in raw_chain]
+
+    crop_start = getattr(node_data, "crop_start", 0.0) or 0.0
+    crop_end = getattr(node_data, "crop_end", 1.0) or 1.0
 
     if node_type == "sequence":
         sequence = getattr(node_data, "sequence", None) or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
@@ -134,7 +154,8 @@ def build_node_object(node_data: Any) -> AudioObject:
             step_length=step_length,
             original_bpm=original_bpm,
             filepath=actual_path,
-            chain=chain_list
+            chain=chain_list,
+            sample_type=sample_type
         )
     elif node_type == "sample_pool":
         filters = getattr(node_data, "filters", None) or {}
@@ -170,7 +191,10 @@ def build_node_object(node_data: Any) -> AudioObject:
             name=node_name,
             filepath=actual_path,
             original_bpm=original_bpm,
-            chain=chain_list
+            chain=chain_list,
+            crop_start=crop_start,
+            crop_end=crop_end,
+            sample_type=sample_type
         )
     else:
         obj = AudioObject(
@@ -178,7 +202,10 @@ def build_node_object(node_data: Any) -> AudioObject:
             mix_mode=getattr(node_data, "mix_mode", "sum") or "sum",
             original_bpm=original_bpm,
             filepath=actual_path,
-            chain=chain_list
+            chain=chain_list,
+            crop_start=crop_start,
+            crop_end=crop_end,
+            sample_type=sample_type
         )
 
     children = getattr(node_data, "children", [])

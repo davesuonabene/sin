@@ -5,7 +5,7 @@ export class ArrangementNode extends BaseNode {
     constructor() {
         super();
         this.title = "Arrangement";
-        this.size = [200, 44];
+        this.size = [64, 64];
         
         // Distinct amber/orange style for arrangement nodes
         this.color = "#f59e0b";
@@ -18,7 +18,9 @@ export class ArrangementNode extends BaseNode {
             total_bars: 4.0,
             probability: 1.0,
             seed: Math.random(),
-            start_beat: 0
+            start_beat: 0,
+            color: "#f59e0b",
+            icon: "🎼"
         };
         
         this.addInput("Input", "audio");
