@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GAIA Library</title>
-    <link rel="stylesheet" href="/static/styles.css?v=14">
+    <link rel="stylesheet" href="/static/styles.css?v=18">
 </head>
 <body>
     <div class="app-shell">
@@ -15,7 +15,6 @@
             </div>
             <p class="nav-label">Workspace</p>
             <button class="nav-item active" type="button" data-view="library">Library</button>
-            <div id="vault-nav" class="vault-nav" aria-label="Vaults"></div>
             <button class="nav-item" type="button" data-view="import">Import</button>
         </nav>
 
@@ -28,6 +27,11 @@
                         <p id="library-summary" class="summary" aria-live="polite">Loading assets…</p>
                     </div>
                     <div class="header-actions">
+                        <div id="dispatch-bar" class="dispatch-bar hidden">
+                            <span id="dispatch-count">0 selected</span>
+                            <select id="dispatch-target-select"></select>
+                            <button id="dispatch-submit-btn" class="primary" type="button">Dispatch to Vault</button>
+                        </div>
                         <label class="search" for="search-input">
                             <span aria-hidden="true">⌕</span>
                             <input id="search-input" type="search" placeholder="Filter by title or path">
@@ -38,26 +42,37 @@
                 </header>
 
                 <div id="library-layout" class="library-layout">
-                    <aside class="type-browser" aria-label="Asset types">
-                        <div class="panel-heading">
-                            <span>Types</span>
-                            <span class="panel-heading-actions">
-                                <small>select to filter</small>
-                                <button id="toggle-tree" class="secondary panel-toggle" type="button" aria-label="Collapse types" title="Collapse types" aria-pressed="false">‹</button>
-                            </span>
-                        </div>
-                        <div id="type-tree" class="type-tree"></div>
-                    </aside>
-
                     <section class="asset-panel" aria-label="Assets">
-                        <div class="list-header" aria-hidden="true">
-                            <span>Name</span>
-                            <span>Path</span>
-                            <span>Type</span>
-                            <span>BPM</span>
-                            <span>Key</span>
-                            <span>Size</span>
-                            <span></span>
+                        <div id="library-filters" class="filter-bar" aria-label="Library filters">
+                            <div class="filter-pair">
+                                <div class="filter-row">
+                                    <span class="filter-row-label">Vaults</span>
+                                    <div id="vault-chips" class="filter-chips" aria-label="Filter by vault"></div>
+                                </div>
+                                <div class="filter-row">
+                                    <span class="filter-row-label">Types</span>
+                                    <div id="type-chips" class="filter-chips" aria-label="Filter by type"></div>
+                                </div>
+                            </div>
+                            <div class="filter-row">
+                                <span class="filter-row-label">Tags</span>
+                                <div id="tag-chips" class="filter-chips" aria-label="Filter by tag"></div>
+                            </div>
+                            <div id="filter-status" class="filter-status" aria-live="polite"></div>
+                        </div>
+                        <div class="header-scroll-container">
+                            <button id="scroll-left-header" class="secondary header-scroll-btn" type="button" title="Scroll left parameters">‹</button>
+                            <div id="list-header" class="list-header">
+                                <span>Name<i class="column-resizer" aria-hidden="true"></i></span>
+                                <span>Path<i class="column-resizer" aria-hidden="true"></i></span>
+                                <span>Type<i class="column-resizer" aria-hidden="true"></i></span>
+                                <span>BPM<i class="column-resizer" aria-hidden="true"></i></span>
+                                <span>Key<i class="column-resizer" aria-hidden="true"></i></span>
+                                <span>Tags<i class="column-resizer" aria-hidden="true"></i></span>
+                                <span>Size<i class="column-resizer" aria-hidden="true"></i></span>
+                                <span aria-label="Actions">Action</span>
+                            </div>
+                            <button id="scroll-right-header" class="secondary header-scroll-btn" type="button" title="Scroll right parameters">›</button>
                         </div>
                         <div id="asset-list" class="asset-list" role="list"></div>
                     </section>
@@ -82,7 +97,7 @@
                         <input id="source-path" type="text" required placeholder="C:\Music\My sample pack or C:\Downloads\pack.zip">
                         <button id="browse-folder" class="secondary" type="button">Browse folder</button>
                     </div>
-                    <p class="help">A collection becomes a multitrack only when its direct audio files have matching lengths and clearly distinct instrument names.</p>
+                    <p class="help">GAIA infers titles, type, BPM, key, and tags from filenames, folders, MIDI metadata, and loop duration. A collection becomes a multitrack only when its direct audio files have matching lengths and distinct instrument names.</p>
                     <button id="import-submit" class="primary" type="submit">Import snapshot</button>
                     <p id="import-result" class="result hidden" role="status"></p>
                 </form>
@@ -103,6 +118,14 @@
         </main>
     </div>
 
-    <script src="/static/app.js?v=14"></script>
+    <div id="context-menu" class="context-menu hidden" role="menu">
+        <button id="analyze-entry" type="button" role="menuitem">Analyze metadata</button>
+        <button id="delete-entry-menu" type="button" role="menuitem" class="danger-menu-item">Delete selected</button>
+        <div class="context-divider"></div>
+        <div id="context-vault-options" class="context-vault-options"></div>
+        <button id="remove-vault-entry" type="button" role="menuitem" class="danger-menu-item hidden">Remove from Vault</button>
+    </div>
+
+    <script src="/static/app.js?v=17"></script>
 </body>
 </html>

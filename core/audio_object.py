@@ -1,10 +1,11 @@
 from __future__ import annotations
+import hashlib
 from pathlib import Path
 from typing import List, Tuple, Optional, Union, Any, TYPE_CHECKING
 import numpy as np
 from core.base_object import BaseObject
 from core.analyzers import BPMAnalyzer
-from core.dsp import stretch_audio, load_sample
+from core.dsp import stretch_audio, load_sample, process_sample_transform
 
 if TYPE_CHECKING:
     from core.system import System
@@ -31,7 +32,12 @@ class AudioObject(BaseObject):
         data: Optional[Any] = None,
         crop_start: float = 0.0,
         crop_end: float = 1.0,
-        sample_type: str = "loop"
+        sample_type: str = "loop",
+        total_bars: Optional[float] = None,
+        transpose: float = 0.0,
+        cents: float = 0.0,
+        stretch_mode: str = "time_stretch",
+        stretch_factor: float = 1.0
     ) -> None:
         super().__init__(name=name, data=data)
         self.audio_data = audio_data if audio_data is not None else None
@@ -47,6 +53,13 @@ class AudioObject(BaseObject):
         self.crop_start: float = max(0.0, min(1.0, float(crop_start)))
         self.crop_end: float = max(0.0, min(1.0, float(crop_end)))
         self.sample_type: str = str(sample_type)
+        self.total_bars: Optional[float] = (
+            max(0.0, float(total_bars)) if total_bars is not None else None
+        )
+        self.transpose: float = float(transpose or 0.0)
+        self.cents: float = float(cents or 0.0)
+        self.stretch_mode: str = str(stretch_mode or "time_stretch")
+        self.stretch_factor: float = float(stretch_factor or 1.0)
 
         # Children stored as list of (start_beat: float, child_object: AudioObject) tuples
         self.children: List[Tuple[float, AudioObject]] = []
@@ -124,13 +137,22 @@ class AudioObject(BaseObject):
         """
         # Leaf node case: Raw sample data exists and no children
         if self.audio_data is not None and len(self.children) == 0:
+            sr = system.sample_rate if system is not None else 44100
             if self._original_bpm is None:
-                sr = system.sample_rate if system is not None else 44100
                 self.detect_and_set_bpm(sample_rate=sr)
 
-            data_to_render = self.audio_data
-            if self.sample_type not in ("one_shot", "oneshot") and system is not None and self._original_bpm is not None and self._original_bpm != system.bpm:
-                data_to_render = stretch_audio(self.audio_data, self._original_bpm, system.bpm)
+            target_bpm = system.bpm if system is not None else 120.0
+            data_to_render = process_sample_transform(
+                audio_data=self.audio_data,
+                sr=sr,
+                original_bpm=self._original_bpm,
+                target_bpm=target_bpm,
+                transpose=self.transpose,
+                cents=self.cents,
+                stretch_mode=self.stretch_mode,
+                stretch_factor=self.stretch_factor,
+                sample_type=self.sample_type
+            )
 
             return self.apply_chain(data_to_render, system)
 
@@ -155,7 +177,13 @@ class AudioObject(BaseObject):
         if self.audio_data is not None:
             max_end_sample = max(max_end_sample, len(self.audio_data))
 
-        if max_end_sample == 0:
+        timeline_samples = (
+            system.beat_to_samples(self.total_bars * 4.0)
+            if self.total_bars is not None and self.total_bars > 0
+            else None
+        )
+
+        if max_end_sample == 0 and timeline_samples is None:
             return np.zeros(0, dtype=np.float32)
 
         # Instantiate parent master numpy array based on mix_mode
@@ -183,6 +211,16 @@ class AudioObject(BaseObject):
                 end_sample = start_sample + len(child_audio)
                 master_buffer[start_sample:end_sample] += child_audio
 
+        # A track with an explicit musical length is the timeline authority. Pad
+        # short children and clip long children so every consumer sees exactly
+        # the same duration.
+        if timeline_samples is not None:
+            fitted_buffer = np.zeros(timeline_samples, dtype=np.float32)
+            copy_samples = min(timeline_samples, len(master_buffer))
+            if copy_samples > 0:
+                fitted_buffer[:copy_samples] = master_buffer[:copy_samples]
+            master_buffer = fitted_buffer
+
         # Apply parent node volume scaling
         return self.apply_chain(master_buffer, system)
 
@@ -203,7 +241,11 @@ class SampleObject(AudioObject):
         data: Optional[Any] = None,
         crop_start: float = 0.0,
         crop_end: float = 1.0,
-        sample_type: str = "loop"
+        sample_type: str = "loop",
+        transpose: float = 0.0,
+        cents: float = 0.0,
+        stretch_mode: str = "time_stretch",
+        stretch_factor: float = 1.0
     ) -> None:
         super().__init__(
             name=name,
@@ -215,7 +257,11 @@ class SampleObject(AudioObject):
             data=data,
             crop_start=crop_start,
             crop_end=crop_end,
-            sample_type=sample_type
+            sample_type=sample_type,
+            transpose=transpose,
+            cents=cents,
+            stretch_mode=stretch_mode,
+            stretch_factor=stretch_factor
         )
 
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
@@ -223,7 +269,12 @@ class SampleObject(AudioObject):
             return np.zeros(0, dtype=np.float32)
 
         sr = system.sample_rate if system is not None else 44100
-        audio_array, _ = load_sample(self.filepath, target_sr=sr)
+        try:
+            audio_array, _ = load_sample(self.filepath, target_sr=sr)
+        except Exception as e:
+            import logging
+            logging.getLogger("beat_generator.core").warning(f"Failed to load sample '{self.filepath}': {e}")
+            return np.zeros(0, dtype=np.float32)
 
         if len(audio_array) == 0:
             return np.zeros(0, dtype=np.float32)
@@ -244,9 +295,23 @@ class SampleObject(AudioObject):
         if self._original_bpm is None:
             self.detect_and_set_bpm(sample_rate=sr)
 
-        data_to_render = audio_array
-        if self.sample_type not in ("one_shot", "oneshot") and system is not None and self._original_bpm is not None and self._original_bpm != system.bpm:
-            data_to_render = stretch_audio(audio_array, self._original_bpm, system.bpm)
+        target_bpm = system.bpm if system is not None else 120.0
+        try:
+            data_to_render = process_sample_transform(
+                audio_data=audio_array,
+                sr=sr,
+                original_bpm=self._original_bpm,
+                target_bpm=target_bpm,
+                transpose=self.transpose,
+                cents=self.cents,
+                stretch_mode=self.stretch_mode,
+                stretch_factor=self.stretch_factor,
+                sample_type=self.sample_type
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger("beat_generator.core").error(f"Error transforming sample '{self.filepath}': {e}")
+            return np.zeros(0, dtype=np.float32)
 
         return self.apply_chain(data_to_render, system)
 
@@ -260,7 +325,11 @@ class SequenceObject(AudioObject):
         self,
         name: str = "SequenceObject",
         sequence: Optional[List[int]] = None,
+        step_parameters: Optional[List[Dict[str, Any]]] = None,
         step_length: float = 0.25,
+        play_mode: str = "gate",
+        seed: Optional[Union[float, int]] = None,
+        seed_mode: str = "moving",
         volume: float = 1.0,
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
@@ -281,8 +350,60 @@ class SequenceObject(AudioObject):
         )
         self.sequence: List[int] = sequence if sequence is not None else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
         self.step_length: float = float(step_length)
+        self.step_parameters: List[Dict[str, Any]] = step_parameters or []
+        self.play_mode: str = str(play_mode).lower() if play_mode else "gate"
+        self.seed: Union[float, int] = seed if seed is not None else 42
+        self.seed_mode: str = str(seed_mode).lower() if seed_mode else "moving"
+        self.is_dynamic: bool = (self.seed_mode == "moving")
 
-    def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+    def _step_parameters(self, index: int) -> Dict[str, Any]:
+        """Return a sanitized step configuration, including legacy defaults."""
+        raw = self.step_parameters[index] if index < len(self.step_parameters) else {}
+        if hasattr(raw, "model_dump"):
+            raw = raw.model_dump()
+        elif not isinstance(raw, dict):
+            raw = {}
+
+        def _safe_float(val: Any, default: float) -> float:
+            if val is None:
+                return default
+            try:
+                f = float(val)
+                return f if np.isfinite(f) else default
+            except (ValueError, TypeError):
+                return default
+
+        def _safe_int(val: Any, default: int) -> int:
+            if val is None:
+                return default
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return default
+
+        raw_enabled = raw.get("subdivision_enabled")
+        raw_subs = raw.get("subdivisions")
+
+        subdivisions = max(1, min(16, _safe_int(raw_subs, 1)))
+
+        if subdivisions > 1:
+            enabled = True
+        elif raw_enabled is not None and bool(raw_enabled):
+            enabled = True
+            subdivisions = max(2, subdivisions)
+        else:
+            enabled = False
+            subdivisions = 1
+
+        return {
+            "offset": max(-1.0, min(1.0, _safe_float(raw.get("offset"), 0.0))),
+            "velocity": max(0.0, min(1.0, _safe_float(raw.get("velocity"), 1.0))),
+            "probability": max(0.0, min(100.0, _safe_float(raw.get("probability"), 100.0))),
+            "subdivision_enabled": subdivisions > 1,
+            "subdivisions": subdivisions,
+        }
+
+    def render(self, system: Optional[System] = None, iteration: int = 0, **kwargs: Any) -> np.ndarray:
         if system is None:
             raise ValueError("System instance must be provided to render a SequenceObject.")
 
@@ -309,21 +430,79 @@ class SequenceObject(AudioObject):
         rendered_steps = []
         max_end_sample = pattern_samples
 
+        if self.seed_mode == "moving":
+            seed_str = f"{self.seed}_{iteration}"
+        else:
+            seed_str = str(self.seed)
+        eff_seed = int(hashlib.md5(seed_str.encode()).hexdigest(), 16) & 0xFFFFFFFF
+        rng = np.random.default_rng(eff_seed)
         for step_idx, step_val in enumerate(self.sequence):
             if step_val == 1:
-                start_beat = step_idx * self.step_length
-                start_sample = system.beat_to_samples(start_beat)
+                params = self._step_parameters(step_idx)
+                if rng.random() * 100.0 >= params["probability"]:
+                    continue
 
-                audio = first_child.render(system, **kwargs) if is_dynamic else cached_child_audio
-                rendered_steps.append((start_sample, audio))
+                repeats = params["subdivisions"]
+                base_beat = (step_idx + params["offset"]) * self.step_length
+                # Quantize once at the parent step boundaries, then partition that
+                # exact integer sample range. Converting every fractional beat and
+                # slot independently can round them differently and drift triggers
+                # away from equal positions inside the step.
+                step_start_sample = system.beat_to_samples(base_beat)
+                step_end_sample = system.beat_to_samples(base_beat + self.step_length)
+                step_samples = max(repeats, step_end_sample - step_start_sample)
+                subdivision_boundaries = [
+                    step_start_sample + round(step_samples * idx / repeats)
+                    for idx in range(repeats + 1)
+                ]
+                for subdivision_idx in range(repeats):
+                    start_sample = subdivision_boundaries[subdivision_idx]
+                    slot_end_sample = subdivision_boundaries[subdivision_idx + 1]
+                    slot_samples = max(1, slot_end_sample - start_sample)
+                    audio = first_child.render(system, **kwargs) if is_dynamic else cached_child_audio
+                    audio = audio * params["velocity"]
 
-                end_sample = start_sample + len(audio)
+                    if start_sample < 0:
+                        skipped_samples = -start_sample
+                        audio = audio[skipped_samples:]
+                        start_sample = 0
+
+                    if self.play_mode == "gate":
+                        audio = audio[:slot_samples]
+
+                    if len(audio) == 0:
+                        continue
+
+                    rendered_steps.append((start_sample, audio))
+
+        # Monophonic voice cutting: a subsequent trigger truncates any playing sample tail
+        mono_rendered_steps = []
+        for i in range(len(rendered_steps)):
+            start_i, audio_i = rendered_steps[i]
+
+            next_start = None
+            for j in range(i + 1, len(rendered_steps)):
+                s_j, _ = rendered_steps[j]
+                if s_j > start_i:
+                    next_start = s_j
+                    break
+                elif s_j == start_i:
+                    next_start = start_i
+                    break
+
+            if next_start is not None:
+                max_len = max(0, next_start - start_i)
+                audio_i = audio_i[:max_len]
+
+            if len(audio_i) > 0:
+                mono_rendered_steps.append((start_i, audio_i))
+                end_sample = start_i + len(audio_i)
                 if end_sample > max_end_sample:
                     max_end_sample = end_sample
 
         master_buffer = np.zeros(max_end_sample, dtype=np.float32)
 
-        for start_sample, audio in rendered_steps:
+        for start_sample, audio in mono_rendered_steps:
             end_sample = start_sample + len(audio)
             master_buffer[start_sample:end_sample] += audio
 
@@ -334,11 +513,12 @@ import sqlite3
 import random
 import os
 
-class SamplePoolObject(AudioObject):
+class ItemPoolObject(AudioObject):
     def __init__(
         self,
-        name: str = "SamplePoolObject",
+        name: str = "ItemPoolObject",
         filters: Optional[dict] = None,
+        selected_items: Optional[List[Dict[str, Any]]] = None,
         playback_mode: str = "Random",
         seed: Optional[float] = None,
         refresh_mode: str = "manual",
@@ -359,6 +539,9 @@ class SamplePoolObject(AudioObject):
             sample_type=sample_type
         )
         self.filters = filters or {}
+        # Explicit items are selected in SIN's read-only GAIA browser.  Keep the
+        # snapshot so collection contents (whose IDs are synthetic) also work.
+        self.selected_items = selected_items or []
         self.playback_mode = playback_mode or "Random"
         self.seed = seed if seed is not None else random.random()
         self.refresh_mode = refresh_mode
@@ -383,11 +566,24 @@ class SamplePoolObject(AudioObject):
                 logging.getLogger("beat_generator").warning(f"Failed to load pool sample: {e}")
         
     def updatePool(self):
+        import json
+
         self.current_pool = []
+        excluded_titles = {
+            str(title).strip().casefold()
+            for title in self.filters.get("_excluded_titles", [])
+            if str(title).strip()
+        }
         db_path = "gaia.db"
         if not os.path.exists(db_path):
             db_path = os.path.join("gaia", "gaia.db")
         if not os.path.exists(db_path):
+            self.current_pool = [
+                {"id": item.get("id"), "absolute_path": item.get("absolute_path") or item.get("filepath"), "type": item.get("type", "asset")}
+                for item in self.selected_items
+                if (item.get("absolute_path") or item.get("filepath"))
+                and os.path.basename(item.get("absolute_path") or item.get("filepath")).casefold() not in excluded_titles
+            ]
             return
             
         try:
@@ -395,60 +591,141 @@ class SamplePoolObject(AudioObject):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            query = "SELECT i.id, i.absolute_path, i.type FROM items i"
-            joins = []
+            query = """
+                SELECT i.id, i.absolute_path, i.type, i.vault_id,
+                       COALESCE(l.bpm, m.bpm, mt.bpm) AS bpm,
+                       ci.manifest_json,
+                       GROUP_CONCAT(DISTINCT t.name) AS tag_names
+                FROM items i
+                LEFT JOIN loop_sample_items l ON i.id = l.id
+                LEFT JOIN midi_items m ON i.id = m.id
+                LEFT JOIN multitrack_items mt ON i.id = mt.id
+                LEFT JOIN collection_items ci ON i.id = ci.id
+                LEFT JOIN item_tags it ON i.id = it.item_id
+                LEFT JOIN tags t ON it.tag_id = t.id
+            """
             conditions = []
             params = []
             
-            tags = self.filters.get("tags")
-            if tags:
-                if isinstance(tags, str):
-                    tags = [t.strip() for t in tags.split(",") if t.strip()]
-                if tags:
-                    joins.append("JOIN item_tags it ON i.id = it.item_id JOIN tags t ON it.tag_id = t.id")
-                    tag_placeholders = ",".join(["?"] * len(tags))
-                    conditions.append(f"t.name IN ({tag_placeholders})")
-                    params.extend(tags)
+            tags = self.filters.get("tags") or []
+            if isinstance(tags, str):
+                tags = [tag.strip().casefold() for tag in tags.split(",") if tag.strip()]
+            else:
+                tags = [str(tag).strip().casefold() for tag in tags if str(tag).strip()]
                     
-            item_type = self.filters.get("type")
-            if item_type:
-                conditions.append("i.type = ?")
-                params.append(item_type)
+            item_types = self.filters.get("types", self.filters.get("type")) or []
+            if isinstance(item_types, str):
+                item_types = [item_types]
+            item_types = {str(item_type).strip().casefold() for item_type in item_types if str(item_type).strip()}
+
+            vault_ids = self.filters.get("vault_ids", self.filters.get("vault_id")) or []
+            if not isinstance(vault_ids, list):
+                vault_ids = [vault_ids]
+            if vault_ids:
+                placeholders = ",".join(["?"] * len(vault_ids))
+                conditions.append(f"i.vault_id IN ({placeholders})")
+                params.extend(vault_ids)
                 
             bpm_min = self.filters.get("bpm_min")
             bpm_max = self.filters.get("bpm_max")
             
-            if bpm_min is not None or bpm_max is not None:
-                joins.append("LEFT JOIN loop_sample_items lsi ON i.id = lsi.id")
-                if bpm_min is not None:
-                    conditions.append("lsi.bpm >= ?")
-                    params.append(bpm_min)
-                if bpm_max is not None:
-                    conditions.append("lsi.bpm <= ?")
-                    params.append(bpm_max)
-            
-            if joins:
-                query += " " + " ".join(joins)
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
                 
             query += " GROUP BY i.id"
             
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            
+            # A library-backed pool is explicitly scoped by vault. This keeps a new
+            # or cleared pool empty while still allowing selected_items below.
+            if vault_ids:
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+            else:
+                rows = []
+
+            def matches_tags(item_tags):
+                normalized_tags = {
+                    str(tag).strip().casefold()
+                    for tag in item_tags
+                    if str(tag).strip()
+                }
+                return all(any(
+                    item_tag == selected_tag
+                    or item_tag.startswith(selected_tag + "/")
+                    or item_tag.startswith(selected_tag + ":")
+                    for item_tag in normalized_tags
+                ) for selected_tag in tags)
+
+            def matches_item_filters(item_type, bpm, item_tags):
+                if item_types and str(item_type).strip().casefold() not in item_types:
+                    return False
+                if tags and not matches_tags(item_tags):
+                    return False
+                if bpm_min is not None and (bpm is None or bpm < bpm_min):
+                    return False
+                if bpm_max is not None and (bpm is None or bpm > bpm_max):
+                    return False
+                return True
+
             for row in rows:
-                self.current_pool.append({
-                    "id": row["id"],
-                    "absolute_path": row["absolute_path"],
-                    "type": row["type"]
-                })
+                parent_tags = (row["tag_names"] or "").split(",")
+                if row["type"] in {"collection", "sample_pack"}:
+                    try:
+                        contents = json.loads(row["manifest_json"] or "[]")
+                    except (TypeError, ValueError):
+                        contents = []
+                    collection_root = os.path.abspath(row["absolute_path"] or "")
+                    for content in contents:
+                        content_type = content.get("type")
+                        if content_type not in {"sample", "loop", "one_shot", "midi"}:
+                            continue
+                        content_bpm = content.get("bpm")
+                        content_tags = [*parent_tags, *(content.get("tags") or [])]
+                        if not matches_item_filters(content_type, content_bpm, content_tags):
+                            continue
+                        content_path = os.path.abspath(os.path.join(collection_root, content.get("relative_path") or ""))
+                        if not collection_root or os.path.commonpath([collection_root, content_path]) != collection_root:
+                            continue
+                        self.current_pool.append({
+                            "id": f"collection:{row['id']}:{content.get('index')}",
+                            "absolute_path": content_path,
+                            "type": content_type,
+                            "vault_id": row["vault_id"],
+                            "bpm": content_bpm,
+                        })
+                    continue
+
+                if matches_item_filters(row["type"], row["bpm"], parent_tags):
+                    self.current_pool.append({
+                        "id": row["id"],
+                        "absolute_path": row["absolute_path"],
+                        "type": row["type"],
+                        "vault_id": row["vault_id"],
+                        "bpm": row["bpm"],
+                    })
+
+            known_paths = {item.get("absolute_path") for item in self.current_pool}
+            for item in self.selected_items:
+                path = item.get("absolute_path") or item.get("filepath")
+                if path and path not in known_paths:
+                    self.current_pool.append({
+                        "id": item.get("id"),
+                        "absolute_path": path,
+                        "type": item.get("type", "asset"),
+                        "bpm": item.get("bpm") or item.get("original_bpm")
+                    })
+                    known_paths.add(path)
+
+            if excluded_titles:
+                self.current_pool = [
+                    item for item in self.current_pool
+                    if os.path.basename(item.get("absolute_path") or "").casefold() not in excluded_titles
+                ]
                 
             conn.close()
         except Exception as e:
             import logging
-            logging.getLogger("beat_generator.core").error(f"Failed to update SamplePool: {e}")
-            
+            logging.getLogger("beat_generator.core").error(f"Failed to update ItemPool: {e}")
+
     def getNextSample(self) -> Optional[str]:
         if not self.current_pool:
             return None
@@ -458,6 +735,11 @@ class SamplePoolObject(AudioObject):
             self.last_played_index = 0
             return self.current_pool[0]["absolute_path"]
             
+        if str(self.playback_mode).strip().casefold() == "sequential":
+            next_idx = int(self.seed or 0) % pool_size
+            self.last_played_index = next_idx
+            return self.current_pool[next_idx]["absolute_path"]
+
         import hashlib
         seed_hash = int(hashlib.md5(str(self.seed).encode()).hexdigest(), 16)
         next_idx = seed_hash % pool_size
@@ -484,19 +766,23 @@ class SamplePoolObject(AudioObject):
             logging.getLogger("beat_generator.core").error(f"Failed to load sample {filepath}: {e}")
             return np.zeros(0, dtype=np.float32)
         
-        original_bpm = self._original_bpm
-        if original_bpm is None:
-            bpm = BPMAnalyzer.from_filename(filepath)
-            if bpm is None and len(audio_array) > 0:
-                bpm = BPMAnalyzer.from_duration(float(len(audio_array)) / sr)
-            if bpm is not None:
-                original_bpm = bpm
+        chosen_item = self.current_pool[self.last_played_index] if 0 <= self.last_played_index < len(self.current_pool) else None
+        item_bpm = chosen_item.get("bpm") if chosen_item else None
+        if item_bpm is None:
+            item_bpm = BPMAnalyzer.from_filename(filepath)
+            if item_bpm is None and len(audio_array) > 0:
+                item_bpm = BPMAnalyzer.from_duration(float(len(audio_array)) / sr)
+        
+        original_bpm = item_bpm if item_bpm is not None else self._original_bpm
                 
         data_to_render = audio_array
         if system is not None and original_bpm is not None and original_bpm != system.bpm:
             data_to_render = stretch_audio(audio_array, original_bpm, system.bpm)
             
         return self.apply_chain(data_to_render, system)
+
+# Backward-compatible import for saved projects and external integrations.
+SamplePoolObject = ItemPoolObject
 
 class ArrangementObject(AudioObject):
     """
@@ -516,7 +802,14 @@ class ArrangementObject(AudioObject):
         original_bpm: Optional[float] = None,
         chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None,
-        sample_type: str = "loop"
+        sample_type: str = "loop",
+        section_points: Optional[List[float]] = None,
+        section_enabled: Optional[List[bool]] = None,
+        section_probability: Optional[List[float]] = None,
+        section_quant: Optional[List[str]] = None,
+        section_quant_anchor: Optional[List[str]] = None,
+        quant: Optional[Union[str, float]] = "none",
+        quant_anchor: str = "start"
     ) -> None:
         super().__init__(
             name=name,
@@ -530,16 +823,89 @@ class ArrangementObject(AudioObject):
         self.total_bars = float(total_bars)
         self.probability = float(probability)
         self.seed = seed if seed is not None else random.random()
+        self.section_points = sorted({
+            float(point) for point in (section_points or [])
+            if 0.0 < float(point) < self.total_bars
+        })
+        num_sections = len(self.section_points) + 1
+        raw_section_enabled = section_enabled or []
+        self.section_enabled = [
+            raw_section_enabled[index] is not False if index < len(raw_section_enabled) else True
+            for index in range(num_sections)
+        ]
+        self.section_probability = list(section_probability) if section_probability is not None else []
+        self.section_quant = list(section_quant) if section_quant is not None else []
+        self.section_quant_anchor = list(section_quant_anchor) if section_quant_anchor is not None else []
+        self.quant = "none" if quant is None else str(quant).lower()
+        self.quant_anchor = "end" if quant_anchor == "end" else "start"
+
+    def get_section_boundaries(self) -> List[float]:
+        """Return validated section boundaries including the timeline edges."""
+        points = [
+            point for point in self.section_points
+            if 0.0 < point < self.total_bars
+        ]
+        return [0.0, *sorted(set(points)), self.total_bars]
+
+    def get_section_probability(self, section_index: int) -> float:
+        if 0 <= section_index < len(self.section_probability):
+            val = self.section_probability[section_index]
+            if val is not None:
+                try:
+                    fval = float(val)
+                    if 0.0 <= fval <= 1.0:
+                        return fval
+                except (TypeError, ValueError):
+                    pass
+        return self.probability
+
+    def get_section_quant(self, section_index: int) -> str:
+        if 0 <= section_index < len(self.section_quant):
+            val = self.section_quant[section_index]
+            if val is not None and str(val).lower() not in ("", "global", "inherit"):
+                return str(val).lower()
+        return self.quant
+
+    def get_section_quant_anchor(self, section_index: int) -> str:
+        if 0 <= section_index < len(self.section_quant_anchor):
+            val = self.section_quant_anchor[section_index]
+            if val in ("start", "end"):
+                return str(val)
+        return self.quant_anchor
+
+    def get_section_quant_samples(self, section_index: int, child: AudioObject, audio: np.ndarray, system: System) -> Optional[int]:
+        s_quant = self.get_section_quant(section_index)
+        if s_quant in ("", "none", "off"):
+            return None
+        if s_quant == "auto":
+            return self.get_child_loop_samples(child, audio, system)
+        try:
+            quant_bars = float(s_quant)
+        except (TypeError, ValueError):
+            return None
+        if quant_bars <= 0:
+            return None
+        return system.beat_to_samples(quant_bars * 4.0)
+
+    def get_quant_samples(self, child: AudioObject, audio: np.ndarray, system: System) -> Optional[int]:
+        """Resolve the requested global quant interval. None means one event per section."""
+        return self.get_section_quant_samples(-1, child, audio, system)
 
     def get_child_loop_samples(self, child: AudioObject, audio: np.ndarray, system: System) -> int:
-        if hasattr(child, "sequence") and hasattr(child, "step_length"):
-            beats = len(getattr(child, "sequence")) * getattr(child, "step_length")
+        if hasattr(child, "sequence") and getattr(child, "sequence") is not None and hasattr(child, "step_length"):
+            seq = getattr(child, "sequence") or []
+            step_len = getattr(child, "step_length", 0.25) or 0.25
+            beats = len(seq) * step_len
             if beats > 0:
                 return system.beat_to_samples(beats)
-        elif getattr(child, "total_bars", 0) > 0:
-            return system.beat_to_samples(getattr(child, "total_bars") * 4.0)
-        elif getattr(child, "length_in_beats", 0) > 0:
-            return system.beat_to_samples(getattr(child, "length_in_beats"))
+
+        child_total_bars = getattr(child, "total_bars", None)
+        if child_total_bars is not None and child_total_bars > 0:
+            return system.beat_to_samples(child_total_bars * 4.0)
+
+        child_beats = getattr(child, "length_in_beats", None)
+        if child_beats is not None and child_beats > 0:
+            return system.beat_to_samples(child_beats)
 
         if len(audio) > 0:
             samples_per_beat = system.beat_to_samples(1.0)
@@ -556,8 +922,12 @@ class ArrangementObject(AudioObject):
         if system is None:
             raise ValueError("System instance must be provided to render.")
             
-        if not self.children or self.total_bars <= 0:
+        if self.total_bars <= 0:
             return np.zeros(0, dtype=np.float32)
+
+        total_samples_to_fill = system.beat_to_samples(self.total_bars * 4.0)
+        if not self.children:
+            return np.zeros(total_samples_to_fill, dtype=np.float32)
 
         import hashlib
         import random
@@ -571,46 +941,51 @@ class ArrangementObject(AudioObject):
                 audio = child.render(system, **kwargs)
                 cached_audios.append(audio)
                 
-        total_samples_to_fill = system.beat_to_samples(self.total_bars * 4.0)
         master_buffer = np.zeros(total_samples_to_fill, dtype=np.float32)
         
         # Use a reproducible random generator based on the seed
         seed_hash = int(hashlib.md5(str(self.seed).encode()).hexdigest(), 16)
         rng = random.Random(seed_hash)
         
-        current_sample = 0
-        
-        while current_sample < total_samples_to_fill:
-            child_idx = rng.randint(0, len(self.children) - 1)
-            audio = cached_audios[child_idx]
-            _, child = self.children[child_idx]
-            
-            if audio is None:
-                audio = child.render(system, **kwargs)
-                
-            if len(audio) == 0:
-                # To prevent infinite loop if child returns 0-length array
-                break
+        iteration_count = 0
+        boundaries = self.get_section_boundaries()
+        for section_index in range(len(boundaries) - 1):
+            if section_index < len(self.section_enabled) and not self.section_enabled[section_index]:
+                continue
+            section_start = system.beat_to_samples(boundaries[section_index] * 4.0)
+            section_end = system.beat_to_samples(boundaries[section_index + 1] * 4.0)
+            cell_start = section_start
 
-            loop_samples = self.get_child_loop_samples(child, audio, system)
-            if loop_samples <= 0:
-                break
-                
-            # Check probability
-            if rng.random() < self.probability:
-                end_sample = current_sample + len(audio)
-                
-                # Copy audio into master buffer
-                if end_sample <= total_samples_to_fill:
-                    master_buffer[current_sample:end_sample] += audio
-                else:
-                    # Clip it if it exceeds total_samples_to_fill
-                    remaining_samples = total_samples_to_fill - current_sample
-                    if remaining_samples > 0:
-                        master_buffer[current_sample:total_samples_to_fill] += audio[:remaining_samples]
-            
-            # Move the time cursor forward by the beat-quantized loop length
-            current_sample += loop_samples
+            sec_prob = self.get_section_probability(section_index)
+            sec_anchor = self.get_section_quant_anchor(section_index)
+
+            while cell_start < section_end:
+                child_idx = rng.randint(0, len(self.children) - 1)
+                audio = cached_audios[child_idx]
+                _, child = self.children[child_idx]
+
+                if audio is None:
+                    audio = child.render(system, iteration=iteration_count, **kwargs)
+                iteration_count += 1
+                if len(audio) == 0:
+                    break
+
+                quant_samples = self.get_section_quant_samples(section_index, child, audio, system)
+                cell_end = section_end if quant_samples is None else min(section_end, cell_start + quant_samples)
+                event_start = cell_start if sec_anchor == "start" else cell_end - len(audio)
+                event_end = event_start + len(audio)
+
+                # Keep every event inside its section. End anchoring infers a
+                # possibly earlier start and trims the source when necessary.
+                write_start = max(section_start, event_start)
+                write_end = min(section_end, event_end)
+                if write_start < write_end and rng.random() < sec_prob:
+                    source_start = write_start - event_start
+                    source_end = source_start + (write_end - write_start)
+                    master_buffer[write_start:write_end] += audio[source_start:source_end]
+
+                if quant_samples is None or quant_samples <= 0:
+                    break
+                cell_start += quant_samples
                 
         return self.apply_chain(master_buffer, system)
-

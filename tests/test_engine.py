@@ -10,8 +10,8 @@ from core.dsp import load_sample
 def test_graph_render_engine():
     # Assets path
     assets_dir = Path(__file__).parent.parent / "assets"
-    drum_file = assets_dir / "KULTURE_LIQDNB1_DRUM_LOOP_25_171.wav"
-    melody_file = assets_dir / "KULTURE_LIQDNB1_PIANO_11_GMAJ_174.wav"
+    drum_file = assets_dir / "SongA_Stems" / "Drums.wav"
+    melody_file = assets_dir / "SongA_Stems" / "Bass.wav"
 
     if not drum_file.exists() or not melody_file.exists():
         raise FileNotFoundError("Required audio assets missing in assets/ directory.")

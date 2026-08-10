@@ -40,6 +40,22 @@ class BPMAnalyzer:
         return None
 
     @staticmethod
+    def from_loop_duration(duration_seconds: float) -> Optional[float]:
+        """Infer a plausible tempo for a musical loop from its duration.
+
+        The method favors the common four-bar interpretation, then shorter or
+        longer power-of-two loop lengths. It deliberately returns ``None`` for
+        implausible durations instead of fabricating a default tempo.
+        """
+        if not duration_seconds or duration_seconds < 0.2 or duration_seconds > 180.0:
+            return None
+        for bars in (4, 8, 16, 2, 1, 32):
+            bpm = (bars * 4.0 * 60.0) / duration_seconds
+            if 60.0 <= bpm <= 220.0:
+                return float(bpm)
+        return None
+
+    @staticmethod
     def from_duration(duration_seconds: float) -> float:
         """
         Calculates assumed BPM from duration by checking standard loop lengths (in bars).
@@ -48,23 +64,5 @@ class BPMAnalyzer:
         if duration_seconds <= 0:
             return 120.0
 
-        min_bpm = 90.0
-        max_bpm = 180.0
-        # Standard bar lengths to test (2, 4, 8, 16, 32)
-        bar_lengths = [2, 4, 8, 16, 32]
-
-        for bars in bar_lengths:
-            assumed_beats = bars * 4.0
-            assumed_bpm = assumed_beats / (duration_seconds / 60.0)
-            if min_bpm <= assumed_bpm <= max_bpm:
-                return float(assumed_bpm)
-
-        # Secondary pass with wider range (70 to 200) if standard range yielded no result
-        for bars in bar_lengths:
-            assumed_beats = bars * 4.0
-            assumed_bpm = assumed_beats / (duration_seconds / 60.0)
-            if 70.0 <= assumed_bpm <= 200.0:
-                return float(assumed_bpm)
-
-        # Fallback default if none fit into range
-        return 120.0
+        inferred = BPMAnalyzer.from_loop_duration(duration_seconds)
+        return inferred if inferred is not None else 120.0

@@ -46,7 +46,36 @@ class TestMidiFunctionality(unittest.TestCase):
         self.assertIn("sequence", res)
         self.assertEqual(len(res["sequence"]), 16)
         self.assertTrue(len(res["note_events"]) > 0)
+        self.assertEqual(len(res["step_parameters"]), 16)
         print(f"Parsed MIDI: BPM={res['bpm']}, Key={res['key']}, sequence={res['sequence']}")
+
+    def test_03_midi_roll_and_step_parameters(self):
+        events = [
+            {"beat": 0.0, "velocity": 127},
+            {"beat": 0.125, "velocity": 64},
+            {"beat": 0.5 - 0.025, "velocity": 100},
+        ]
+        sequence, parameters = midi_parser.build_step_sequence(events)
+
+        self.assertEqual(sequence[0], 1)
+        self.assertTrue(parameters[0]["subdivision_enabled"])
+        self.assertEqual(parameters[0]["subdivisions"], 2)
+        self.assertEqual(sequence[2], 1)
+        self.assertAlmostEqual(parameters[2]["offset"], -0.1)
+        self.assertAlmostEqual(parameters[2]["velocity"], 100 / 127, places=4)
+
+    def test_04_off_grid_midi_roll_quantizes_to_step_boundary(self):
+        events = [
+            {"beat": 0.125, "velocity": 127},
+            {"beat": 0.1875, "velocity": 127},
+        ]
+
+        sequence, parameters = midi_parser.build_step_sequence(events)
+
+        self.assertEqual(sequence[0], 1)
+        self.assertEqual(parameters[0]["offset"], 0.0)
+        self.assertTrue(parameters[0]["subdivision_enabled"])
+        self.assertEqual(parameters[0]["subdivisions"], 2)
 
 if __name__ == "__main__":
     unittest.main()

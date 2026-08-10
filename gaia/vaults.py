@@ -10,10 +10,8 @@ from . import models
 from . import collection_importer
 
 def vault_store(vault) -> Path:
-    """A vault is only a folder subdivision of GAIA's managed asset root."""
-    vault_name = getattr(vault, "name", None)
-    folder_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(vault_name or f"vault-{vault}")).strip(". ")
-    return collection_importer.ASSET_STORE.parent / "vaults" / (folder_name or f"vault-{getattr(vault, 'id', vault)}")
+    """A vault is a virtual view over GAIA's central asset store."""
+    return collection_importer.ASSET_STORE
 
 def _populate(vault):
     return vault
@@ -27,17 +25,28 @@ def ensure_default_vault(db: Session):
         db.refresh(vault)
     db.query(models.Item).filter(models.Item.vault_id.is_(None)).update({models.Item.vault_id: vault.id}, synchronize_session=False)
     db.commit()
+
+    items_with_vault = db.query(models.Item).filter(models.Item.vault_id.isnot(None)).all()
+    for item in items_with_vault:
+        if not item.vaults:
+            target_vault = db.query(models.Vault).filter(models.Vault.id == item.vault_id).first() or vault
+            item.vaults.append(target_vault)
+    db.commit()
+
     for existing_vault in db.query(models.Vault).all():
         vault_store(existing_vault).mkdir(parents=True, exist_ok=True)
     return _populate(vault)
 
 def initialise_schema(engine):
-    """Add the vault link for databases created before vaults existed."""
-    if "items" in inspect(engine).get_table_names():
-        columns = {column["name"] for column in inspect(engine).get_columns("items")}
+    """Add the vault link and item_vaults table for databases created before they existed."""
+    inspector = inspect(engine)
+    if "items" in inspector.get_table_names():
+        columns = {column["name"] for column in inspector.get_columns("items")}
         if "vault_id" not in columns:
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE items ADD COLUMN vault_id INTEGER"))
+    if "item_vaults" not in inspector.get_table_names():
+        models.Base.metadata.tables["item_vaults"].create(bind=engine, checkfirst=True)
 
 def get_vault(db: Session, vault_id: int):
     vault = db.query(models.Vault).filter(models.Vault.id == vault_id).first()

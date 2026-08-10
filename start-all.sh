@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
-# Start the Beat Generator API, GAIA Library, and Vite development server.
+# Start the Beat Generator API, GAIA Library, and Vite development server with hot reload enabled.
 
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
+
+RELOAD=true
+for arg in "$@"; do
+  case "$arg" in
+    --no-reload)
+      RELOAD=false
+      ;;
+    --reload)
+      RELOAD=true
+      ;;
+  esac
+done
 
 resolve_python() {
   local candidate
@@ -64,10 +76,16 @@ stop_servers() {
 
 trap stop_servers EXIT INT TERM
 
-# Running without reload keeps each server directly owned by this script, so Ctrl+C
-# reliably stops the complete stack. Restart this launcher after Python changes.
-start_server "main API on http://127.0.0.1:8000" "$PYTHON_CMD" run.py --no-reload
-start_server "GAIA Library on http://127.0.0.1:8001" "$PYTHON_CMD" -m uvicorn gaia.main:app --host 127.0.0.1 --port 8001
+if [[ "$RELOAD" == "true" ]]; then
+  echo "Hot reload: ENABLED"
+  start_server "main API on http://127.0.0.1:8000" "$PYTHON_CMD" run.py
+  start_server "GAIA Library on http://127.0.0.1:8001" "$PYTHON_CMD" -m uvicorn gaia.main:app --host 127.0.0.1 --port 8001 --reload
+else
+  echo "Hot reload: DISABLED"
+  start_server "main API on http://127.0.0.1:8000" "$PYTHON_CMD" run.py --no-reload
+  start_server "GAIA Library on http://127.0.0.1:8001" "$PYTHON_CMD" -m uvicorn gaia.main:app --host 127.0.0.1 --port 8001
+fi
+
 start_server "Vite frontend on http://127.0.0.1:5173" npm --prefix frontend run dev -- --host 127.0.0.1
 
 echo

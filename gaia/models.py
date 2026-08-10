@@ -18,6 +18,13 @@ item_collections = Table(
     Column("collection_id", Integer, ForeignKey("collections.id"))
 )
 
+item_vaults = Table(
+    "item_vaults",
+    Base.metadata,
+    Column("item_id", Integer, ForeignKey("items.id", ondelete="CASCADE"), primary_key=True),
+    Column("vault_id", Integer, ForeignKey("vaults.id", ondelete="CASCADE"), primary_key=True),
+)
+
 class Item(Base):
     __tablename__ = "items"
 
@@ -39,7 +46,8 @@ class Item(Base):
     # Relationships
     tags = relationship("Tag", secondary=item_tags, back_populates="items")
     collections = relationship("Collection", secondary=item_collections, back_populates="items")
-    vault = relationship("Vault", back_populates="items")
+    vault = relationship("Vault", back_populates="direct_items")
+    vaults = relationship("Vault", secondary=item_vaults, back_populates="items", passive_deletes=True)
 
 class MidiItem(Item):
     __tablename__ = "midi_items"
@@ -161,7 +169,8 @@ class Vault(Base):
     rules_json = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
-    items = relationship("Item", back_populates="vault")
+    items = relationship("Item", secondary=item_vaults, back_populates="vaults", passive_deletes=True)
+    direct_items = relationship("Item", back_populates="vault")
     import_logs = relationship("VaultImportLog", back_populates="vault", cascade="all, delete-orphan")
 
 

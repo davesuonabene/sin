@@ -33,5 +33,32 @@ class TestAnalyzers(unittest.TestCase):
         self.assertIsInstance(stretched, np.ndarray)
 
 
+    def test_item_pool_original_bpm(self):
+        from core.audio_object import ItemPoolObject
+        selected_items = [
+            {"id": 1, "absolute_path": "loop_120bpm.wav", "bpm": 120.0},
+            {"id": 2, "absolute_path": "loop_140bpm.wav", "bpm": 140.0}
+        ]
+        pool = ItemPoolObject(selected_items=selected_items, playback_mode="Sequential", seed=1)
+        self.assertEqual(len(pool.current_pool), 2)
+        self.assertEqual(pool.current_pool[0]["bpm"], 120.0)
+        self.assertEqual(pool.current_pool[1]["bpm"], 140.0)
+
+    def test_pool_resolve_endpoint(self):
+        from api import resolve_pool, PoolResolveRequest
+        payload = PoolResolveRequest(
+            filters={},
+            selected_items=[
+                {"id": 1, "absolute_path": "loop_140bpm.wav", "bpm": 140.0}
+            ],
+            seed=0,
+            playbackMode="Sequential"
+        )
+        res = resolve_pool(payload)
+        self.assertEqual(res["sample"], "loop_140bpm.wav")
+        self.assertEqual(res["bpm"], 140.0)
+
+
 if __name__ == "__main__":
     unittest.main()
+

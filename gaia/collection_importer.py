@@ -13,12 +13,12 @@ from typing import Any
 
 import soundfile as sf
 
-from . import multitrack_analyzer, text_analyzer
+from . import midi_parser, multitrack_analyzer, text_analyzer
 
 
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".aif", ".aiff"}
 MIDI_EXTENSIONS = {".mid", ".midi"}
-ASSET_STORE = Path(__file__).resolve().parents[1] / "assets" / "gaia-library" / "collections"
+ASSET_STORE = Path(__file__).resolve().parents[1] / "assets"
 
 
 def canonical_source_path(source_path: str) -> str:
@@ -64,22 +64,44 @@ def _extract_zip(source: Path, destination: Path) -> None:
                 shutil.copyfileobj(source_file, target_file)
 
 
-def _content_type(file_path: Path) -> str:
-    extension = file_path.suffix.lower()
-    if extension in MIDI_EXTENSIONS:
-        return "midi"
-    if extension in AUDIO_EXTENSIONS:
-        analysis = text_analyzer.analyze_path(str(file_path))
-        return analysis.get("type", "sample")
-    return "file"
-
-
 def _audio_metadata(file_path: Path) -> dict[str, Any]:
     try:
         info = sf.info(str(file_path))
         return {"duration_seconds": round(float(info.duration), 4)}
     except Exception:
         return {"duration_seconds": None}
+
+
+def analyze_manifest_entry(root: Path, entry: dict[str, Any]) -> dict[str, Any]:
+    """Return a manifest entry with freshly inferred, non-destructive metadata."""
+    file_path = root / Path(entry["relative_path"])
+    extension = file_path.suffix.lower()
+    duration = entry.get("duration_seconds")
+    if extension in AUDIO_EXTENSIONS and duration is None:
+        duration = _audio_metadata(file_path).get("duration_seconds")
+
+    analysis = text_analyzer.analyze_path(str(file_path), duration_seconds=duration)
+    item_type = analysis["type"] if extension in AUDIO_EXTENSIONS else "midi" if extension in MIDI_EXTENSIONS else "file"
+    bpm = analysis.get("bpm")
+    key = analysis.get("key")
+    if extension in MIDI_EXTENSIONS:
+        try:
+            midi_values = midi_parser.parse_midi_file(str(file_path))
+        except Exception:
+            midi_values = {}
+        bpm = midi_values.get("bpm") or bpm
+        key = midi_values.get("key") or key
+
+    return {
+        **entry,
+        "title": analysis["title"],
+        "type": item_type,
+        "duration_seconds": duration,
+        "bpm": round(float(bpm)) if bpm is not None else None,
+        "key": key,
+        "tags": analysis.get("tags", []),
+        "streamable": item_type in {"sample", "loop", "one_shot"},
+    }
 
 
 def build_manifest(root: Path) -> list[dict[str, Any]]:
@@ -91,32 +113,33 @@ def build_manifest(root: Path) -> list[dict[str, Any]]:
             if file_path.is_symlink():
                 continue
             relative_path = file_path.relative_to(root).as_posix()
-            item_type = _content_type(file_path)
-            analysis = text_analyzer.analyze_path(str(file_path)) if item_type != "file" else {}
-            bpm = analysis.get("bpm")
-            try:
-                bpm = int(bpm) if bpm is not None else None
-            except (TypeError, ValueError):
-                bpm = None
-            audio_values = (
-                _audio_metadata(file_path)
-                if item_type in {"sample", "loop", "one_shot"}
-                else {"duration_seconds": None}
-            )
-            contents.append({
+            extension = file_path.suffix.lower()
+            item_type = "midi" if extension in MIDI_EXTENSIONS else "sample" if extension in AUDIO_EXTENSIONS else "file"
+            entry = {
                 "index": len(contents),
                 "filename": filename,
                 "relative_path": relative_path,
                 "type": item_type,
                 "mime_type": mimetypes.guess_type(str(file_path))[0],
                 "size_bytes": file_path.stat().st_size,
-                "bpm": bpm,
-                "key": analysis.get("key"),
-                "streamable": item_type in {"sample", "loop", "one_shot"},
-                **audio_values,
-            })
+                "duration_seconds": None,
+                "bpm": None,
+                "key": None,
+                "tags": [],
+                "streamable": False,
+            }
+            contents.append(analyze_manifest_entry(root, entry))
     return contents
 
+
+def inferred_collection_type(contents: list[dict[str, Any]], is_multitrack: bool = False) -> str:
+    if is_multitrack:
+        return "multitrack"
+    media_count = sum(entry.get("type") in {"sample", "loop", "one_shot", "midi"} for entry in contents)
+    return "sample_pack" if media_count >= 3 and media_count >= len(contents) * 0.5 else "collection"
+
+
+import re
 
 def snapshot_collection_source(source_path: str, asset_store: Path | None = None, allow_multitracks: bool = True) -> dict[str, Any]:
     """Copy or extract a source, then return its collection metadata and manifest."""
@@ -134,26 +157,37 @@ def snapshot_collection_source(source_path: str, asset_store: Path | None = None
         raise ValueError("Select a folder or a .zip archive")
 
     store = (asset_store or ASSET_STORE).resolve()
-    if source.is_dir() and store.is_relative_to(source.resolve()):
-        raise ValueError("Cannot import a folder that contains GAIA's managed asset store")
     store.mkdir(parents=True, exist_ok=True)
-    import_id = uuid.uuid4().hex
-    staging = store / f".{import_id}.staging"
-    destination = store / import_id
-    staging.mkdir(parents=True, exist_ok=False)
 
-    try:
-        if source_kind == "folder":
-            _copy_directory(source, staging)
-        else:
-            _extract_zip(source, staging)
-        manifest = build_manifest(staging)
-        analysis = multitrack_analyzer.analyze_multitrack_folder(str(staging), recursive=False)
-        is_multitrack = allow_multitracks and multitrack_analyzer.is_multitrack_folder(str(staging))
-        os.replace(staging, destination)
-    except Exception:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
+    safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', title).strip('. ') or "Imported_Collection"
+    source_resolved = source.resolve()
+
+    if source_kind == "folder" and (store in source_resolved.parents or source_resolved == store):
+        destination = source_resolved
+    else:
+        destination = store / safe_title
+        if destination.exists() and destination != source_resolved:
+            destination = store / f"{safe_title}_{uuid.uuid4().hex[:6]}"
+
+        staging = store / f".{uuid.uuid4().hex}.staging"
+        staging.mkdir(parents=True, exist_ok=False)
+
+        try:
+            if source_kind == "folder":
+                _copy_directory(source, staging)
+            else:
+                _extract_zip(source, staging)
+            manifest = build_manifest(staging)
+            analysis = multitrack_analyzer.analyze_multitrack_folder(str(staging), recursive=False)
+            is_multitrack = allow_multitracks and multitrack_analyzer.is_multitrack_folder(str(staging))
+            os.replace(staging, destination)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+
+    manifest = build_manifest(destination)
+    analysis = multitrack_analyzer.analyze_multitrack_folder(str(destination), recursive=False)
+    is_multitrack = allow_multitracks and multitrack_analyzer.is_multitrack_folder(str(destination))
 
     # Stem paths must point at the finalized managed copy, not the source snapshot.
     stems = analysis.get("stems", []) if is_multitrack else []
@@ -167,7 +201,7 @@ def snapshot_collection_source(source_path: str, asset_store: Path | None = None
         "source_kind": source_kind,
         "title": title,
         "contents": manifest,
-        "type": "multitrack" if is_multitrack else "collection",
+        "type": inferred_collection_type(manifest, is_multitrack),
         "mime_type": "application/zip" if source_kind == "zip" else "inode/directory",
         "size_bytes": sum(item.get("size_bytes") or 0 for item in manifest),
         "stems": stems,

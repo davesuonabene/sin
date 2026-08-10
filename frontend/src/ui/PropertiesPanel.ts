@@ -24,7 +24,7 @@ export function renderProperties(node: LGraphNode, container: HTMLElement, onClo
             
             <div style="margin-bottom: 15px;">
                 <label style="display: block; font-size: 11px; color: #475569; margin-bottom: 4px;">Original BPM</label>
-                <input type="number" id="prop-orig-bpm" value="${node.properties.original_bpm || 120}" disabled title="Detected original BPM (read-only)" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #64748b; cursor: not-allowed;" />
+                <input type="number" id="prop-orig-bpm" value="${node.properties.original_bpm || 120}" title="Original BPM of the audio sample" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #0f172a;" />
             </div>
 
             <div style="margin-bottom: 15px;">
@@ -84,10 +84,32 @@ export function renderProperties(node: LGraphNode, container: HTMLElement, onClo
 
     const origBpmInput = container.querySelector('#prop-orig-bpm') as HTMLInputElement;
     if (origBpmInput) {
-        origBpmInput.addEventListener('change', (e) => {
-            const val = parseFloat((e.target as HTMLInputElement).value);
-            node.properties.original_bpm = val;
-            updateTrackNode('original_bpm', val);
+        origBpmInput.addEventListener('change', async (e) => {
+            const oldBpm = node.properties.original_bpm || 120;
+            const newBpm = parseFloat((e.target as HTMLInputElement).value);
+            if (isNaN(newBpm) || newBpm <= 0 || newBpm === oldBpm) {
+                origBpmInput.value = oldBpm.toString();
+                return;
+            }
+
+            const confirmed = window.confirm("this will mod the GAIA library item");
+            if (confirmed) {
+                node.properties.original_bpm = newBpm;
+                updateTrackNode('original_bpm', newBpm);
+                if (node.properties.filepath) {
+                    try {
+                        await fetch('/api/library/bpm', {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ filepath: node.properties.filepath, bpm: newBpm })
+                        });
+                    } catch (err) {
+                        console.error('Failed to update GAIA library item BPM:', err);
+                    }
+                }
+            } else {
+                origBpmInput.value = oldBpm.toString();
+            }
         });
     }
 
@@ -95,10 +117,14 @@ export function renderProperties(node: LGraphNode, container: HTMLElement, onClo
     if (targetBpmInput) {
         targetBpmInput.addEventListener('change', (e) => {
             const val = parseFloat((e.target as HTMLInputElement).value);
-            node.properties.target_bpm = val;
-            node.properties.bpm = val;
-            updateTrackNode('target_bpm', val);
-            updateTrackNode('bpm', val);
+            (node as any).updateProperty?.('target_bpm', val);
+            (node as any).updateProperty?.('bpm', val);
+            if (!(node as any).updateProperty) {
+                node.properties.target_bpm = val;
+                node.properties.bpm = val;
+                updateTrackNode('target_bpm', val);
+                updateTrackNode('bpm', val);
+            }
         });
     }
 

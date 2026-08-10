@@ -92,6 +92,24 @@ export class NodeContextMenu {
                 }
             },
             {
+                id: 'create-ghost',
+                label: 'Create Ghost',
+                icon: 'G',
+                action: (n) => {
+                    window.dispatchEvent(new CustomEvent('create-ghost-node', { detail: { nodeId: n.id } }));
+                }
+            },
+            {
+                id: 'global-refresh-highlight',
+                label: node.properties?.global_refresh_highlighted
+                    ? 'Remove Global Refresh Highlight'
+                    : 'Highlight for Global Refresh',
+                icon: node.properties?.global_refresh_highlighted ? '★' : '☆',
+                action: (n) => {
+                    window.dispatchEvent(new CustomEvent('toggle-global-refresh-highlight', { detail: { nodeId: n.id } }));
+                }
+            },
+            {
                 id: 'delete',
                 label: 'Delete Node',
                 icon: '✕',
@@ -117,8 +135,9 @@ export class NodeContextMenu {
             const handler = (e: Event) => {
                 e.stopPropagation();
                 e.preventDefault();
+                const targetNode = this.targetNode;
                 this.hide();
-                item.action(this.targetNode);
+                if (targetNode) item.action(targetNode);
             };
 
             row.onpointerdown = handler;

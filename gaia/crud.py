@@ -1,5 +1,6 @@
 import json
 import os
+from sqlalchemy import delete, insert, update
 from sqlalchemy.orm import Session
 from . import models, schemas
 
@@ -8,6 +9,14 @@ def _populate_item_fields(db_item):
         return db_item
     if not getattr(db_item, "title", None):
         db_item.title = os.path.basename(str(getattr(db_item, "absolute_path", "")).rstrip("/\\"))
+    v_ids = set()
+    if getattr(db_item, "vault_id", None) is not None:
+        v_ids.add(db_item.vault_id)
+    if hasattr(db_item, "vaults") and db_item.vaults:
+        for v in db_item.vaults:
+            v_ids.add(v.id)
+    db_item.vault_ids = sorted(list(v_ids))
+
     if isinstance(db_item, models.CollectionItem) or getattr(db_item, "type", None) in {"collection", "sample_pack", "multitrack"}:
         manifest_raw = getattr(db_item, "manifest_json", None)
         if manifest_raw:
@@ -36,14 +45,20 @@ def get_item(db: Session, item_id: int):
 def get_item_by_path(db: Session, absolute_path: str, vault_id: int | None = None):
     query = db.query(models.Item).filter(models.Item.absolute_path == absolute_path)
     if vault_id is not None:
-        query = query.filter(models.Item.vault_id == vault_id)
+        query = query.filter((models.Item.vault_id == vault_id) | (models.Item.vaults.any(models.Vault.id == vault_id)))
     item = query.first()
+    if not item:
+        source_path = os.path.abspath(absolute_path)
+        source_query = db.query(models.CollectionItem).filter(models.CollectionItem.source_path == source_path)
+        if vault_id is not None:
+            source_query = source_query.filter((models.CollectionItem.vault_id == vault_id) | (models.CollectionItem.vaults.any(models.Vault.id == vault_id)))
+        item = source_query.first()
     return _populate_item_fields(item)
 
 def get_items(db: Session, skip: int = 0, limit: int = 100, vault_id: int | None = None):
     query = db.query(models.Item)
     if vault_id is not None:
-        query = query.filter(models.Item.vault_id == vault_id)
+        query = query.filter((models.Item.vault_id == vault_id) | (models.Item.vaults.any(models.Vault.id == vault_id)))
     items = query.offset(skip).limit(limit).all()
     for item in items:
         _populate_item_fields(item)
@@ -73,6 +88,11 @@ def create_item(db: Session, item: schemas.ItemCreate):
         mime_type=item.mime_type or ("audio/multitrack" if item.type == "multitrack" else None)
     )
     
+    if item.vault_id:
+        target_vault = db.query(models.Vault).filter(models.Vault.id == item.vault_id).first()
+        if target_vault:
+            db_item.vaults.append(target_vault)
+
     if hasattr(item, "key") and hasattr(model_class, "key"):
         db_item.key = item.key
     if hasattr(item, "bpm") and hasattr(model_class, "bpm"):
@@ -83,14 +103,14 @@ def create_item(db: Session, item: schemas.ItemCreate):
         db_item.source_kind = getattr(item, "source_kind", "folder")
         db_item.source_path = getattr(item, "source_path", None)
         contents_val = getattr(item, "contents", [])
-        contents_list = [content.dict() if hasattr(content, "dict") else content for content in contents_val]
+        contents_list = [content.model_dump() if hasattr(content, "model_dump") else content.dict() if hasattr(content, "dict") else content for content in contents_val]
         db_item.manifest_json = json.dumps(contents_list)
         db_item.content_count = len(contents_list)
 
     if model_class == models.MultitrackItem:
         stems_val = getattr(item, "stems", [])
         if isinstance(stems_val, list):
-            stems_list = [s.dict() if hasattr(s, "dict") else s for s in stems_val]
+            stems_list = [s.model_dump() if hasattr(s, "model_dump") else s.dict() if hasattr(s, "dict") else s for s in stems_val]
         else:
             stems_list = []
         db_item.stems_json = json.dumps(stems_list)
@@ -101,6 +121,35 @@ def create_item(db: Session, item: schemas.ItemCreate):
     db.commit()
     db.refresh(db_item)
     return _populate_item_fields(db_item)
+
+def dispatch_items_to_vault(db: Session, item_ids: list[int], vault_id: int):
+    vault = db.query(models.Vault).filter(models.Vault.id == vault_id).first()
+    if not vault:
+        return []
+    items = db.query(models.Item).filter(models.Item.id.in_(item_ids)).all()
+    for item in items:
+        if vault not in item.vaults:
+            item.vaults.append(vault)
+        if item.vault_id is None:
+            item.vault_id = vault_id
+    db.commit()
+    for item in items:
+        db.refresh(item)
+        _populate_item_fields(item)
+    return items
+
+def remove_item_from_vault(db: Session, item_id: int, vault_id: int):
+    vault = db.query(models.Vault).filter(models.Vault.id == vault_id).first()
+    item = db.query(models.Item).filter(models.Item.id == item_id).first()
+    if vault and item:
+        if vault in item.vaults:
+            item.vaults.remove(vault)
+        if item.vault_id == vault_id:
+            item.vault_id = item.vaults[0].id if item.vaults else None
+        db.commit()
+        db.refresh(item)
+        _populate_item_fields(item)
+    return item
 
 def delete_item(db: Session, item_id: int):
     db_item = get_item(db, item_id=item_id)
@@ -117,6 +166,70 @@ def add_tag_to_item(db: Session, item_id: int, tag_id: int):
         db.commit()
         db.refresh(db_item)
     return db_item
+
+
+def set_item_tags(db: Session, item_id: int, names: list[str]):
+    db_item = get_item(db, item_id)
+    if not db_item:
+        return None
+    clean_names = list(dict.fromkeys(name.strip() for name in names if name and name.strip()))
+    existing = {tag.name.casefold(): tag for tag in db.query(models.Tag).filter(models.Tag.name.in_(clean_names)).all()}
+    tags = []
+    for name in clean_names:
+        tag = existing.get(name.casefold())
+        if not tag:
+            tag = models.Tag(name=name)
+            db.add(tag)
+            existing[name.casefold()] = tag
+        tags.append(tag)
+    db_item.tags = tags
+    db.commit()
+    db.refresh(db_item)
+    return _populate_item_fields(db_item)
+
+
+def save_collection_contents(db: Session, item: models.CollectionItem, contents: list[dict]):
+    item.manifest_json = json.dumps(contents)
+    item.content_count = len(contents)
+    db.commit()
+    db.refresh(item)
+    return _populate_item_fields(item)
+
+
+def reclassify_sample(db: Session, item_id: int, new_type: str):
+    """Move an item within the joined-table sample family."""
+    db_item = get_item(db, item_id)
+    sample_types = {"sample", "loop", "one_shot"}
+    if not db_item or db_item.type not in sample_types or new_type not in sample_types:
+        return None
+    if db_item.type == new_type:
+        return db_item
+
+    db.expunge(db_item)
+    db.execute(delete(models.LoopSampleItem.__table__).where(models.LoopSampleItem.__table__.c.id == item_id))
+    db.execute(delete(models.OneShotSampleItem.__table__).where(models.OneShotSampleItem.__table__.c.id == item_id))
+    if new_type == "loop":
+        db.execute(insert(models.LoopSampleItem.__table__).values(id=item_id, bpm=None))
+    elif new_type == "one_shot":
+        db.execute(insert(models.OneShotSampleItem.__table__).values(id=item_id))
+    db.execute(update(models.Item.__table__).where(models.Item.__table__.c.id == item_id).values(type=new_type))
+    db.commit()
+    return get_item(db, item_id)
+
+
+def reclassify_collection(db: Session, item_id: int, new_type: str):
+    db_item = get_item(db, item_id)
+    if not db_item or db_item.type not in {"collection", "sample_pack"} or new_type not in {"collection", "sample_pack"}:
+        return None
+    if db_item.type == new_type:
+        return db_item
+    db.expunge(db_item)
+    db.execute(delete(models.SamplePackItem.__table__).where(models.SamplePackItem.__table__.c.id == item_id))
+    if new_type == "sample_pack":
+        db.execute(insert(models.SamplePackItem.__table__).values(id=item_id))
+    db.execute(update(models.Item.__table__).where(models.Item.__table__.c.id == item_id).values(type=new_type))
+    db.commit()
+    return get_item(db, item_id)
 
 def update_item_type(db: Session, item_id: int, new_type: str):
     """Types are derived at import time in the read-only library manager."""

@@ -3,6 +3,10 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
 import os
+from pathlib import Path
+import shutil
+import uuid
+from collections import Counter
 
 from .. import (
     collection_importer,
@@ -45,6 +49,41 @@ def _vault_for_request(db: Session, vault_id: int | None):
     return vault
 
 
+def _index_child_items_from_snapshot(db: Session, snapshot: dict, vault_id: int):
+    root_path = Path(snapshot["absolute_path"])
+    for entry in snapshot.get("contents", []):
+        rel_path = entry.get("relative_path")
+        if not rel_path:
+            continue
+        child_abs_path = str((root_path / rel_path).resolve())
+        existing = crud.get_item_by_path(db, child_abs_path, vault_id=vault_id)
+        if existing:
+            if vault_id not in (getattr(existing, "vault_ids", []) or []):
+                crud.dispatch_items_to_vault(db, [existing.id], vault_id)
+            continue
+
+        entry_type = entry.get("type", "sample")
+        bpm = entry.get("bpm")
+        key = entry.get("key")
+        size = entry.get("size_bytes")
+        mime = entry.get("mime_type")
+
+        if entry_type == "loop":
+            item_data = schemas.LoopSampleItemCreate(absolute_path=child_abs_path, vault_id=vault_id, size_bytes=size, mime_type=mime, bpm=bpm, key=key)
+        elif entry_type == "one_shot":
+            item_data = schemas.OneShotSampleItemCreate(absolute_path=child_abs_path, vault_id=vault_id, size_bytes=size, mime_type=mime, key=key)
+        elif entry_type in {"sample", "audio"}:
+            item_data = schemas.SampleItemCreate(absolute_path=child_abs_path, vault_id=vault_id, size_bytes=size, mime_type=mime, key=key)
+        elif entry_type == "midi":
+            item_data = schemas.MidiItemCreate(absolute_path=child_abs_path, vault_id=vault_id, size_bytes=size, mime_type=mime, bpm=bpm, key=key)
+        else:
+            item_data = schemas.ItemCreate(absolute_path=child_abs_path, vault_id=vault_id, size_bytes=size, mime_type=mime, type="item")
+
+        child_item = crud.create_item(db, item_data)
+        if entry.get("tags"):
+            crud.set_item_tags(db, child_item.id, entry.get("tags"))
+
+
 def _create_snapshot_item(source_path: str, db: Session, vault_id: int | None = None):
     source = collection_importer.canonical_source_path(source_path)
     vault = _vault_for_request(db, vault_id)
@@ -79,20 +118,35 @@ def _create_snapshot_item(source_path: str, db: Session, vault_id: int | None = 
             length_variance=snapshot["length_variance"],
         )
     else:
-        item = schemas.CollectionItemCreate(
+        item_schema = schemas.SamplePackItemCreate if snapshot["type"] == "sample_pack" else schemas.CollectionItemCreate
+        item = item_schema(
             absolute_path=snapshot["absolute_path"],
             vault_id=vault.id,
             size_bytes=snapshot["size_bytes"],
             mime_type=snapshot["mime_type"],
-            type="collection",
+            type=snapshot["type"],
             title=snapshot["title"],
             source_kind=snapshot["source_kind"],
             source_path=snapshot["source_path"],
             contents=snapshot["contents"],
         )
     result = crud.create_item(db, item)
+    _index_child_items_from_snapshot(db, snapshot, vault.id)
+    inferred_tags = _collection_tags(snapshot["contents"], result.type)
+    if inferred_tags:
+        result = crud.set_item_tags(db, result.id, inferred_tags)
     vaults.log_import(db, vault.id, source, "imported", "snapshot_imported", result.id)
     return result
+
+
+def _collection_tags(contents: list[dict], item_type: str) -> list[str]:
+    media = [entry for entry in contents if entry.get("type") in {"sample", "loop", "one_shot", "midi"}]
+    counts = Counter(tag for entry in media for tag in entry.get("tags", []))
+    threshold = max(2, round(len(media) * 0.03))
+    tags = [tag for tag, count in counts.most_common() if count >= threshold and tag not in {"Loop", "One shot", "MIDI"}][:6]
+    if item_type == "sample_pack":
+        tags.insert(0, "Sample pack")
+    return tags
 
 
 def _get_collection_content(db_item, content_index: int):
@@ -109,6 +163,83 @@ def _get_collection_content(db_item, content_index: int):
     if os.path.commonpath([collection_root, candidate]) != collection_root or not os.path.isfile(candidate):
         raise HTTPException(status_code=404, detail="Collection content is missing on disk")
     return content, candidate
+
+
+def _stage_managed_collection_snapshot(item, db: Session) -> tuple[Path, Path] | None:
+    """Move a managed collection snapshot aside until its database row is removed."""
+    if not isinstance(item, models.CollectionItem):
+        return None
+
+    vault = _vault_for_request(db, item.vault_id)
+    snapshot = Path(item.absolute_path).resolve()
+    store = vaults.vault_store(vault).resolve()
+    try:
+        snapshot.relative_to(store)
+    except ValueError:
+        # Only GAIA-managed snapshots may be removed from disk. Legacy/external
+        # collection paths lose their record but leave the original files intact.
+        return None
+
+    if not snapshot.exists():
+        return None
+
+    staged = snapshot.parent / f".deleting-{item.id}-{uuid.uuid4().hex}"
+    os.replace(snapshot, staged)
+    return snapshot, staged
+
+
+def _clean_tags(values: list[str] | None) -> list[str]:
+    return list(dict.fromkeys(value.strip() for value in (values or []) if value and value.strip()))[:24]
+
+
+def _request_fields(req) -> set[str]:
+    return set(req.model_fields_set) if hasattr(req, "model_fields_set") else set(req.__fields_set__)
+
+
+def _apply_item_update(db_item, req: schemas.ItemUpdate, db: Session):
+    fields = _request_fields(req)
+    requested_type = req.type if "type" in fields else db_item.type
+    if requested_type and requested_type != db_item.type:
+        if db_item.type in {"sample", "loop", "one_shot"} and requested_type in {"sample", "loop", "one_shot"}:
+            db_item = crud.reclassify_sample(db, db_item.id, requested_type)
+        elif db_item.type in {"collection", "sample_pack"} and requested_type in {"collection", "sample_pack"}:
+            db_item = crud.reclassify_collection(db, db_item.id, requested_type)
+        else:
+            raise HTTPException(status_code=400, detail="This asset cannot be changed to the selected type")
+
+    if "title" in fields:
+        if not isinstance(db_item, models.CollectionItem):
+            raise HTTPException(status_code=400, detail="Only collection display titles can be edited")
+        db_item.title = (req.title or "").strip() or Path(db_item.absolute_path).name
+    if "bpm" in fields:
+        if req.bpm is not None and not 20 <= req.bpm <= 400:
+            raise HTTPException(status_code=400, detail="BPM must be between 20 and 400")
+        if not hasattr(db_item, "bpm"):
+            if req.bpm is not None and getattr(db_item, "type", None) in {"sample", "one_shot", "audio"}:
+                db_item = crud.reclassify_sample(db, db_item.id, "loop")
+            else:
+                raise HTTPException(status_code=400, detail="This asset type does not store BPM")
+        if db_item and hasattr(db_item, "bpm"):
+            db_item.bpm = req.bpm
+    if "key" in fields:
+        if not hasattr(db_item, "key"):
+            raise HTTPException(status_code=400, detail="This asset type does not store a musical key")
+        db_item.key = (req.key or "").strip() or None
+
+    if fields.intersection({"title", "bpm", "key"}):
+        db.commit()
+        db.refresh(db_item)
+    if "tags" in fields:
+        db_item = crud.set_item_tags(db, db_item.id, _clean_tags(req.tags))
+    return crud.get_item(db, db_item.id)
+
+
+def _analyze_collection_content(db_item, content: dict) -> dict:
+    relative_path = content.get("relative_path", "")
+    candidate = Path(db_item.absolute_path) / Path(relative_path)
+    if not candidate.is_file():
+        return content
+    return collection_importer.analyze_manifest_entry(Path(db_item.absolute_path), content)
 
 
 @router.get("/types")
@@ -155,10 +286,19 @@ def create_item(item: schemas.ItemCreate, db: Session = Depends(database.get_db)
     return result
 
 @router.get("/", response_model=List[schemas.Item])
-def read_items(skip: int = 0, limit: int = 100, vault_id: int | None = None, db: Session = Depends(database.get_db)):
-    vault = _vault_for_request(db, vault_id)
-    items = crud.get_items(db, skip=skip, limit=limit, vault_id=vault.id)
+def read_items(skip: int = 0, limit: int = 10000, vault_id: int | None = None, db: Session = Depends(database.get_db)):
+    items = crud.get_items(db, skip=skip, limit=limit, vault_id=vault_id)
     return items
+
+@router.post("/dispatch", response_model=List[schemas.Item])
+def dispatch_items(req: schemas.DispatchItemsRequest, db: Session = Depends(database.get_db)):
+    vault = _vault_for_request(db, req.vault_id)
+    return crud.dispatch_items_to_vault(db, req.item_ids, vault.id)
+
+@router.delete("/{item_id}/vaults/{vault_id}", response_model=schemas.Item)
+def remove_from_vault(item_id: int, vault_id: int, db: Session = Depends(database.get_db)):
+    vault = _vault_for_request(db, vault_id)
+    return crud.remove_item_from_vault(db, item_id, vault.id)
 
 @router.get("/browse")
 def browse_folder():
@@ -310,16 +450,70 @@ def add_tag_to_item(item_id: int, req: schemas.ItemTagRequest, db: Session = Dep
 @router.delete("/{item_id}")
 def delete_item(item_id: int, db: Session = Depends(database.get_db)):
     existing = crud.get_item(db, item_id)
-    if isinstance(existing, models.CollectionItem):
-        raise HTTPException(status_code=405, detail="GAIA collection snapshots are read-only")
-    db_item = crud.delete_item(db, item_id=item_id)
-    if not db_item:
+    if not existing:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    staged_snapshot = None
+    try:
+        staged_snapshot = _stage_managed_collection_snapshot(existing, db)
+        crud.delete_item(db, item_id=item_id)
+    except Exception:
+        if staged_snapshot:
+            original, staged = staged_snapshot
+            if staged.exists() and not original.exists():
+                os.replace(staged, original)
+        raise
+
+    if staged_snapshot:
+        _, staged = staged_snapshot
+        if staged.is_dir():
+            shutil.rmtree(staged, ignore_errors=True)
+        elif staged.exists():
+            staged.unlink(missing_ok=True)
     return {"status": "success", "id": item_id}
 
 @router.patch("/{item_id}", response_model=schemas.Item)
 def update_item(item_id: int, req: schemas.ItemUpdate, db: Session = Depends(database.get_db)):
-    raise HTTPException(status_code=405, detail="GAIA assets are read-only. Types are chosen during import.")
+    db_item = crud.get_item(db, item_id=item_id)
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return _apply_item_update(db_item, req, db)
+
+
+@router.post("/{item_id}/analyze", response_model=schemas.Item)
+def analyze_item(item_id: int, db: Session = Depends(database.get_db)):
+    db_item = crud.get_item(db, item_id=item_id)
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if isinstance(db_item, models.CollectionItem):
+        contents = [_analyze_collection_content(db_item, entry) for entry in (db_item.contents or [])]
+        db_item = crud.save_collection_contents(db, db_item, contents)
+        inferred_type = collection_importer.inferred_collection_type(contents, db_item.type == "multitrack")
+        if db_item.type in {"collection", "sample_pack"} and inferred_type != db_item.type:
+            db_item = crud.reclassify_collection(db, db_item.id, inferred_type)
+        return crud.set_item_tags(db, db_item.id, _collection_tags(contents, db_item.type))
+
+    if not os.path.isfile(db_item.absolute_path):
+        raise HTTPException(status_code=404, detail="Asset is missing on disk")
+    duration = collection_importer._audio_metadata(Path(db_item.absolute_path)).get("duration_seconds")
+    analysis = text_analyzer.analyze_path(db_item.absolute_path, duration_seconds=duration)
+    if db_item.type == "midi":
+        midi_values = midi_parser.parse_midi_file(db_item.absolute_path)
+        analysis["bpm"] = midi_values.get("bpm") or analysis.get("bpm")
+        analysis["key"] = midi_values.get("key") or analysis.get("key")
+    requested_type = db_item.type
+    if db_item.type in {"sample", "loop", "one_shot"}:
+        requested_type = analysis["type"]
+    bpm = analysis.get("bpm") if requested_type in {"loop", "midi"} else None
+    key = analysis.get("key") if db_item.type in {"sample", "loop", "one_shot", "midi"} else None
+    values = {"type": requested_type, "tags": analysis.get("tags", [])}
+    if requested_type in {"loop", "midi"}:
+        values["bpm"] = bpm
+    if db_item.type in {"sample", "loop", "one_shot", "midi"}:
+        values["key"] = key
+    request = schemas.ItemUpdate(**values)
+    return _apply_item_update(db_item, request, db)
 
 @router.get("/{item_id}/contents", response_model=List[schemas.CollectionContent])
 def get_collection_contents(item_id: int, db: Session = Depends(database.get_db)):
@@ -329,6 +523,44 @@ def get_collection_contents(item_id: int, db: Session = Depends(database.get_db)
     if not isinstance(db_item, models.CollectionItem):
         raise HTTPException(status_code=400, detail="Item is not a collection")
     return getattr(db_item, "contents", []) or []
+
+
+@router.patch("/{item_id}/contents/{content_index}", response_model=schemas.CollectionContent)
+def update_collection_content(item_id: int, content_index: int, req: schemas.CollectionContentUpdate, db: Session = Depends(database.get_db)):
+    db_item = crud.get_item(db, item_id=item_id)
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    content, _ = _get_collection_content(db_item, content_index)
+    fields = _request_fields(req)
+    extension = Path(content.get("filename", "")).suffix.lower()
+    allowed_types = {"midi"} if extension in collection_importer.MIDI_EXTENSIONS else {"sample", "loop", "one_shot"} if extension in collection_importer.AUDIO_EXTENSIONS else {"file"}
+    if "type" in fields and req.type not in allowed_types:
+        raise HTTPException(status_code=400, detail="The selected type is not valid for this file")
+    if "bpm" in fields and req.bpm is not None and not 20 <= req.bpm <= 400:
+        raise HTTPException(status_code=400, detail="BPM must be between 20 and 400")
+
+    for field in fields:
+        if field == "tags":
+            content[field] = _clean_tags(req.tags)
+        elif field == "title":
+            content[field] = (req.title or "").strip() or text_analyzer.clean_title(content["filename"])
+        elif field in {"type", "bpm", "key"}:
+            value = getattr(req, field)
+            content[field] = value.strip() or None if isinstance(value, str) else value
+    crud.save_collection_contents(db, db_item, db_item.contents)
+    return content
+
+
+@router.post("/{item_id}/contents/{content_index}/analyze", response_model=schemas.CollectionContent)
+def analyze_collection_content(item_id: int, content_index: int, db: Session = Depends(database.get_db)):
+    db_item = crud.get_item(db, item_id=item_id)
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    content, _ = _get_collection_content(db_item, content_index)
+    analyzed = _analyze_collection_content(db_item, content)
+    contents = [analyzed if entry.get("index") == content_index else entry for entry in db_item.contents]
+    crud.save_collection_contents(db, db_item, contents)
+    return analyzed
 
 @router.get("/{item_id}/contents/{content_index}/stream")
 def stream_collection_content(item_id: int, content_index: int, db: Session = Depends(database.get_db)):

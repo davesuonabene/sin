@@ -1,5 +1,6 @@
 import struct
 import os
+import math
 from typing import Dict, Any, List, Optional
 
 KEY_SIGNATURES_MAJOR = {
@@ -11,6 +12,62 @@ KEY_SIGNATURES_MINOR = {
     0: "Am", 1: "Em", 2: "Bm", 3: "F#m", 4: "C#m", 5: "G#m", 6: "D#m", 7: "A#m",
     -1: "Dm", -2: "Gm", -3: "Cm", -4: "Fm", -5: "Bbm", -6: "Ebm", -7: "Abm"
 }
+
+DEFAULT_STEP_PARAMETER = {
+    "offset": 0.0,
+    "velocity": 1.0,
+    "probability": 100.0,
+    "subdivision_enabled": False,
+    "subdivisions": 1,
+}
+
+
+def build_step_sequence(note_events: List[Dict[str, Any]], step_count: int = 16) -> tuple[List[int], List[Dict[str, Any]]]:
+    """Map MIDI onsets to a one-bar grid while retaining timing and roll information."""
+    sequence = [0] * step_count
+    parameters = [dict(DEFAULT_STEP_PARAMETER) for _ in range(step_count)]
+    if not note_events:
+        return sequence, parameters
+
+    grouped: Dict[int, List[tuple[float, int]]] = {}
+    for event in note_events:
+        step_position = (float(event.get("beat", 0.0)) * 4.0) % step_count
+        floor_step = int(math.floor(step_position + 1e-9))
+        fractional = step_position - floor_step
+
+        # Multiple onsets inside one sixteenth are a roll. A lone off-grid onset
+        # belongs to its nearest step so imported timing may be negative or positive.
+        grouped.setdefault(floor_step % step_count, []).append((fractional, int(event.get("velocity", 127))))
+
+    for floor_step, events in grouped.items():
+        unique_positions = sorted({round(position, 5) for position, _ in events})
+        is_roll = len(unique_positions) > 1
+        if is_roll:
+            step_idx = floor_step
+            # A roll is quantized to the parent step. Its individual triggers are
+            # generated as equal partitions by the audio processor; carrying the
+            # first MIDI onset as an offset shifts the whole roll and can spill its
+            # final trigger into the following step.
+            offset = 0.0
+            subdivision_count = min(16, len(unique_positions))
+        else:
+            absolute_position = floor_step + unique_positions[0]
+            nearest = int(math.floor(absolute_position + 0.5))
+            step_idx = nearest % step_count
+            offset = absolute_position - nearest
+            subdivision_count = 1
+
+        sequence[step_idx] = 1
+        velocities = [velocity for _, velocity in events]
+        parameters[step_idx] = {
+            "offset": round(max(-1.0, min(1.0, offset)), 5),
+            "velocity": round(max(0.0, min(1.0, sum(velocities) / len(velocities) / 127.0)), 5),
+            "probability": 100.0,
+            "subdivision_enabled": is_roll,
+            "subdivisions": subdivision_count,
+        }
+
+    return sequence, parameters
 
 def read_varlen(data: bytes, offset: int) -> tuple[int, int]:
     """Reads a variable-length quantity from binary MIDI data."""
@@ -32,17 +89,18 @@ def parse_midi_file(filepath: str) -> Dict[str, Any]:
     - key (str)
     - tracks_count (int)
     - sequence (List[int]): 16-step binary step array
+    - step_parameters (List[dict]): timing, velocity, probability, and roll data
     - note_events (List[dict]): Raw parsed note events
     """
     if not os.path.exists(filepath):
-        return {"bpm": None, "key": None, "sequence": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], "note_events": []}
+        return {"bpm": None, "key": None, "sequence": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], "step_parameters": [dict(DEFAULT_STEP_PARAMETER) for _ in range(16)], "note_events": []}
 
     try:
         with open(filepath, "rb") as f:
             data = f.read()
 
         if len(data) < 14 or data[:4] != b"MThd":
-            return {"bpm": None, "key": None, "sequence": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], "note_events": []}
+            return {"bpm": None, "key": None, "sequence": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], "step_parameters": [dict(DEFAULT_STEP_PARAMETER) for _ in range(16)], "note_events": []}
 
         header_length = struct.unpack(">I", data[4:8])[0]
         fmt, n_tracks, division = struct.unpack(">HHH", data[8:14])
@@ -137,23 +195,17 @@ def parse_midi_file(filepath: str) -> Dict[str, Any]:
                     elif cmd in (0xC0, 0xD0):
                         track_ptr += 1
 
-        # Generate 16-step sequence pattern from note events
-        sequence = [0] * 16
-        if note_events:
-            for event in note_events:
-                beat = event["beat"]
-                # 4 steps per beat (16th notes)
-                step_idx = int(round(beat * 4)) % 16
-                sequence[step_idx] = 1
+        sequence, step_parameters = build_step_sequence(note_events)
 
         return {
             "bpm": bpm,
             "key": key,
             "tracks_count": n_tracks,
             "sequence": sequence if any(sequence) else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+            "step_parameters": step_parameters,
             "note_events": note_events
         }
     except Exception as e:
         import logging
         logging.getLogger("beat_generator.gaia").warning(f"Error parsing MIDI file {filepath}: {e}")
-        return {"bpm": None, "key": None, "sequence": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], "note_events": []}
+        return {"bpm": None, "key": None, "sequence": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], "step_parameters": [dict(DEFAULT_STEP_PARAMETER) for _ in range(16)], "note_events": []}

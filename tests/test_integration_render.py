@@ -5,7 +5,7 @@ from api import AudioNodeModel, render_graph
 
 def test_full_sequence_render():
     assets_dir = Path(__file__).parent.parent / "assets"
-    kick_file = assets_dir / "KULTURE_LIQDNB1_DRUM_LOOP_25_171.wav"
+    kick_file = assets_dir / "SongA_Stems" / "Drums.wav"
     assert kick_file.exists(), f"Asset file missing: {kick_file}"
 
     # Build payload structure: TrackNode -> SequenceNode -> SampleNode
@@ -24,7 +24,7 @@ def test_full_sequence_render():
                     AudioNodeModel(
                         node_name="Kick Sample",
                         node_type="sample",
-                        filepath="KULTURE_LIQDNB1_DRUM_LOOP_25_171.wav"
+                        filepath="SongA_Stems/Drums.wav"
                     )
                 ]
             )

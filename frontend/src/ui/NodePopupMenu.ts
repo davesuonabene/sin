@@ -1,5 +1,5 @@
 export interface PopupNodeItem {
-    type: "sample" | "sample_pool" | "sequence" | "track" | string;
+    type: "sample" | "item_pool" | "sequence" | "track" | string;
     label: string;
     category: "NODES" | "GROUPS" | "PRESETS" | "MODULATORS" | "ADDONS";
     badge: string;
@@ -12,7 +12,7 @@ export class NodePopupMenu {
     private searchInput: HTMLInputElement;
     private gridContainer: HTMLDivElement;
     private tabsContainer: HTMLDivElement;
-    private onSelectCallback: ((nodeType: "sample" | "sample_pool" | "sequence" | "track" | "arrangement") => void) | null = null;
+    private onSelectCallback: ((nodeType: "sample" | "item_pool" | "sequence" | "track" | "arrangement") => void) | null = null;
     private isVisible: boolean = false;
     private openTime: number = 0;
     private activeTab: "NODES" | "GROUPS" | "PRESETS" | "MODULATORS" | "ADDONS" = "NODES";
@@ -20,7 +20,6 @@ export class NodePopupMenu {
     private items: PopupNodeItem[] = [
         // NODES
         { type: "sample", label: "Sample Node", category: "NODES", badge: "SMPL", badgeColor: "#10b981", isCallable: true },
-        { type: "sample_pool", label: "Sample Pool Node", category: "NODES", badge: "POOL", badgeColor: "#8b5cf6", isCallable: true },
         { type: "sequence", label: "Sequence Node", category: "NODES", badge: "SEQ", badgeColor: "#ec4899", isCallable: true },
         { type: "track", label: "Track Node", category: "NODES", badge: "TRACK", badgeColor: "#3b82f6", isCallable: true },
         { type: "arrangement", label: "Arrangement Node", category: "NODES", badge: "ARR", badgeColor: "#f59e0b", isCallable: true },
@@ -160,7 +159,7 @@ export class NodePopupMenu {
             const selectHandler = (e: Event) => {
                 e.stopPropagation();
                 e.preventDefault();
-                if (item.isCallable && (item.type === "sample" || item.type === "sample_pool" || item.type === "sequence" || item.type === "track" || item.type === "arrangement")) {
+                if (item.isCallable && (item.type === "sample" || item.type === "item_pool" || item.type === "sequence" || item.type === "track" || item.type === "arrangement")) {
                     if (this.onSelectCallback) {
                         this.onSelectCallback(item.type as any);
                     }
@@ -175,7 +174,7 @@ export class NodePopupMenu {
         });
     }
 
-    show(x: number, y: number, onSelect: (nodeType: "sample" | "sample_pool" | "sequence" | "track" | "arrangement") => void) {
+    show(x: number, y: number, onSelect: (nodeType: "sample" | "item_pool" | "sequence" | "track" | "arrangement") => void) {
         this.openTime = Date.now();
         this.onSelectCallback = onSelect;
         this.activeTab = "NODES";
@@ -213,4 +212,3 @@ export class NodePopupMenu {
         this.onSelectCallback = null;
     }
 }
-

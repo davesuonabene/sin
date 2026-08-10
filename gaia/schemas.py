@@ -41,7 +41,19 @@ class ItemCreate(ItemBase):
     type: str = "item"
 
 class ItemUpdate(BaseModel):
-    type: str
+    type: Optional[str] = None
+    title: Optional[str] = None
+    bpm: Optional[int] = None
+    key: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+class CollectionContentUpdate(BaseModel):
+    title: Optional[str] = None
+    type: Optional[str] = None
+    bpm: Optional[int] = None
+    key: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 class StemInfo(BaseModel):
     filename: str
@@ -57,6 +69,7 @@ class StemInfo(BaseModel):
 class CollectionContent(BaseModel):
     index: int
     filename: str
+    title: Optional[str] = None
     relative_path: str
     type: str = "file"
     mime_type: Optional[str] = None
@@ -64,6 +77,7 @@ class CollectionContent(BaseModel):
     duration_seconds: Optional[float] = None
     bpm: Optional[int] = None
     key: Optional[str] = None
+    tags: List[str] = []
     streamable: bool = False
 
 class Item(ItemBase):
@@ -83,9 +97,15 @@ class Item(ItemBase):
     contents: Optional[List[CollectionContent]] = None
     tags: List[Tag] = []
     collections: List[Collection] = []
+    vault_ids: List[int] = []
 
     class Config:
         orm_mode = True
+        from_attributes = True
+
+class DispatchItemsRequest(BaseModel):
+    item_ids: List[int]
+    vault_id: int
 
 class AudioItemCreate(ItemCreate):
     type: str = "audio"
@@ -131,7 +151,7 @@ class MidiItem(Item):
 class CollectionItemCreate(ItemCreate):
     type: str = "collection"
     title: Optional[str] = None
-    source_kind: str
+    source_kind: str = "folder"
     source_path: Optional[str] = None
     contents: List[CollectionContent] = []
 
