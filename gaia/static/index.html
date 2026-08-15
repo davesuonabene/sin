@@ -4,20 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GAIA Library</title>
-    <link rel="stylesheet" href="/static/styles.css?v=18">
+    <link rel="stylesheet" href="/static/styles.css?v=22">
 </head>
 <body>
     <div class="app-shell">
-        <nav class="sidebar" aria-label="GAIA navigation">
-            <div class="brand">
-                <strong>Gaia</strong><span>Archive</span>
-                <button id="toggle-sidebar" class="secondary panel-toggle sidebar-toggle" type="button" aria-label="Collapse sidebar" title="Collapse sidebar" aria-pressed="false">‹</button>
-            </div>
-            <p class="nav-label">Workspace</p>
-            <button class="nav-item active" type="button" data-view="library">Library</button>
-            <button class="nav-item" type="button" data-view="import">Import</button>
-        </nav>
-
         <main class="main-content">
             <section id="library-view" class="view">
                 <header class="page-header">
@@ -31,15 +21,35 @@
                             <span id="dispatch-count">0 selected</span>
                             <select id="dispatch-target-select"></select>
                             <button id="dispatch-submit-btn" class="primary" type="button">Dispatch to Vault</button>
+                            <button id="project-from-selection" class="secondary" type="button">Create Project</button>
+                            <button id="projects-per-selection" class="secondary" type="button">Project per file</button>
                         </div>
                         <label class="search" for="search-input">
                             <span aria-hidden="true">⌕</span>
                             <input id="search-input" type="search" placeholder="Filter by title or path">
                         </label>
                         <button id="clear-filter" class="secondary hidden" type="button">Clear filter</button>
+                        <button id="create-project" class="primary" type="button">New Project</button>
                         <button id="refresh" class="secondary" type="button">Refresh</button>
+                        <button id="open-import" class="primary add-import" type="button" aria-label="Import assets" title="Import assets">+</button>
                     </div>
                 </header>
+
+                <div id="analysis-progress-container" class="analysis-progress-container hidden">
+                    <div class="analysis-progress-header">
+                        <div class="analysis-progress-titles">
+                            <span id="analysis-progress-label" class="analysis-progress-label">Analyzing metadata...</span>
+                            <span id="analysis-progress-detail" class="analysis-progress-detail">Starting background thread...</span>
+                        </div>
+                        <div class="analysis-progress-stats">
+                            <span id="analysis-progress-percent" class="analysis-progress-percent">0%</span>
+                            <button id="cancel-analysis-btn" class="secondary micro-btn" type="button" title="Cancel batch analysis">Cancel</button>
+                        </div>
+                    </div>
+                    <div class="analysis-progress-track">
+                        <div id="analysis-progress-fill" class="analysis-progress-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
 
                 <div id="library-layout" class="library-layout">
                     <section class="asset-panel" aria-label="Assets">
@@ -79,42 +89,6 @@
                 </div>
             </section>
 
-            <section id="import-view" class="view hidden">
-                <header class="page-header">
-                    <div>
-                        <p class="eyebrow">Managed snapshots</p>
-                        <h1>Import a collection</h1>
-                    </div>
-                </header>
-
-                <form id="import-form" class="import-card">
-                    <h2>Folder or ZIP archive</h2>
-                    <p>GAIA copies a folder or extracts a ZIP into its managed asset store. Imported contents stay read-only.</p>
-                    <label for="vault-select">Vault</label>
-                    <select id="vault-select" required></select>
-                    <label for="source-path">Folder or ZIP path</label>
-                    <div class="source-input">
-                        <input id="source-path" type="text" required placeholder="C:\Music\My sample pack or C:\Downloads\pack.zip">
-                        <button id="browse-folder" class="secondary" type="button">Browse folder</button>
-                    </div>
-                    <p class="help">GAIA infers titles, type, BPM, key, and tags from filenames, folders, MIDI metadata, and loop duration. A collection becomes a multitrack only when its direct audio files have matching lengths and distinct instrument names.</p>
-                    <button id="import-submit" class="primary" type="submit">Import snapshot</button>
-                    <p id="import-result" class="result hidden" role="status"></p>
-                </form>
-                <form id="vault-form" class="import-card vault-card">
-                    <h2>Create a vault</h2>
-                    <p>Vaults keep their assets, duplicate detection, and import history separate.</p>
-                    <label for="vault-name">Name</label>
-                    <input id="vault-name" type="text" required placeholder="e.g. Sample packs">
-                    <button class="secondary" type="submit">Create vault</button>
-                    <p id="vault-result" class="result hidden" role="status"></p>
-                </form>
-                <section class="import-card vault-log-card" aria-labelledby="vault-log-title">
-                    <h2 id="vault-log-title">Vault activity</h2>
-                    <p id="vault-log-description">Recent imports and file actions for the selected vault.</p>
-                    <div id="vault-import-log" class="vault-import-log">Select a vault to view activity.</div>
-                </section>
-            </section>
         </main>
     </div>
 
@@ -126,6 +100,125 @@
         <button id="remove-vault-entry" type="button" role="menuitem" class="danger-menu-item hidden">Remove from Vault</button>
     </div>
 
-    <script src="/static/app.js?v=17"></script>
+    <dialog id="import-dialog" class="gaia-dialog import-dialog">
+        <div class="dialog-heading">
+            <div>
+                <p class="eyebrow">Add to Gaia</p>
+                <h2>Import assets</h2>
+            </div>
+            <button id="import-dialog-close" class="secondary" type="button" aria-label="Close">×</button>
+        </div>
+        <form id="import-form" class="import-modal-form">
+            <fieldset class="import-mode-fieldset">
+                <legend>How should GAIA inspect this source?</legend>
+                <div class="import-mode-grid">
+                    <button id="import-mode-auto" class="source-choice compact active" type="button" aria-pressed="true">
+                        <span class="source-choice-icon" aria-hidden="true">⌕</span>
+                        <strong>Auto scan</strong>
+                        <small>Detect a collection or import the files individually</small>
+                    </button>
+                    <button id="import-mode-specific" class="source-choice compact" type="button" aria-pressed="false">
+                        <span class="source-choice-icon" aria-hidden="true">▱</span>
+                        <strong>Specific collection</strong>
+                        <small>Choose the collection type before importing</small>
+                    </button>
+                </div>
+            </fieldset>
+            <fieldset id="specific-type-panel" class="analysis-type-fieldset hidden">
+                <legend>Collection type</legend>
+                <div id="analysis-type-list" class="analysis-type-list"></div>
+                <p id="analysis-type-status" class="analysis-type-status" role="status"></p>
+            </fieldset>
+            <div class="import-field-row">
+                <label for="vault-select">Vault</label>
+                <select id="vault-select" required></select>
+            </div>
+            <div class="import-field-row">
+                <label for="source-path">File, folder, or ZIP path</label>
+                <div class="source-input">
+                    <input id="source-path" type="text" required placeholder="Choose a file, folder, or ZIP archive">
+                    <button id="source-file-choice" class="secondary" type="button">File or ZIP</button>
+                    <button id="source-folder-choice" class="secondary" type="button">Folder</button>
+                </div>
+            </div>
+            <div class="dialog-actions import-actions">
+                <button id="import-cancel" class="secondary" type="button">Cancel</button>
+                <button id="import-submit" class="primary" type="submit">Import assets</button>
+            </div>
+            <p id="import-result" class="result hidden" role="status"></p>
+        </form>
+        <details class="vault-tools">
+            <summary>Vault tools</summary>
+            <div class="vault-tools-content">
+                <form id="vault-form" class="vault-inline-form">
+                    <label for="vault-name">Create a vault</label>
+                    <div class="source-input">
+                        <input id="vault-name" type="text" required placeholder="Vault name">
+                        <button class="secondary" type="submit">Create</button>
+                    </div>
+                    <p id="vault-result" class="result hidden" role="status"></p>
+                </form>
+                <section aria-labelledby="vault-log-title">
+                    <h3 id="vault-log-title">Recent activity</h3>
+                    <p id="vault-log-description" class="help">Recent imports and file actions for the selected vault.</p>
+                    <div id="vault-import-log" class="vault-import-log">Select a vault to view activity.</div>
+                </section>
+            </div>
+        </details>
+    </dialog>
+
+    <dialog id="import-summary-dialog" class="gaia-dialog import-summary-dialog">
+        <div class="dialog-heading">
+            <div>
+                <p class="eyebrow">Import complete</p>
+                <h2>Assets added to GAIA</h2>
+            </div>
+            <button id="import-summary-close" class="secondary" type="button" aria-label="Close">×</button>
+        </div>
+        <div id="import-summary-content"></div>
+        <div class="dialog-actions">
+            <button id="import-summary-done" class="primary" type="button">Done</button>
+        </div>
+    </dialog>
+
+    <dialog id="project-dialog" class="gaia-dialog">
+        <form id="project-form" method="dialog">
+            <div class="dialog-heading">
+                <div>
+                    <p class="eyebrow">Managed project</p>
+                    <h2 id="project-dialog-title">Create a Project</h2>
+                </div>
+                <button id="project-dialog-close" class="secondary" type="button" aria-label="Close">×</button>
+            </div>
+            <input id="project-mode" type="hidden" value="empty">
+            <label for="project-name">Project name</label>
+            <input id="project-name" type="text" maxlength="100" required>
+            <label for="project-type">Project type</label>
+            <select id="project-type" required></select>
+            <p id="project-selection-note" class="help hidden"></p>
+            <button id="project-submit" class="primary" type="submit">Create Project</button>
+            <p id="project-result" class="result hidden" role="status"></p>
+        </form>
+    </dialog>
+
+    <dialog id="project-files-dialog" class="gaia-dialog">
+        <form id="project-files-form" method="dialog">
+            <div class="dialog-heading">
+                <div>
+                    <p class="eyebrow">Project files</p>
+                    <h2 id="project-files-title">Add files</h2>
+                </div>
+                <button id="project-files-close" class="secondary" type="button" aria-label="Close">×</button>
+            </div>
+            <input id="project-files-id" type="hidden">
+            <label for="project-file-paths">File paths</label>
+            <textarea id="project-file-paths" rows="6" required placeholder="One file path per line"></textarea>
+            <p class="help">External files are copied. Files already managed by GAIA are moved into the Project.</p>
+            <button class="primary" type="submit">Add files</button>
+            <p id="project-files-result" class="result hidden" role="status"></p>
+        </form>
+    </dialog>
+
+    <script src="/static/app.js?v=22"></script>
 </body>
 </html>

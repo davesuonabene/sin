@@ -13,6 +13,9 @@ document.addEventListener('DOMContentLoaded', () => {
         vaults: [],
         selectedVaultId: null,
         contextEntry: null,
+        importAnalysisTypes: new Set(),
+        importAnalysisTypesInitialized: false,
+        importMode: 'auto',
     };
 
     const assetList = document.getElementById('asset-list');
@@ -21,11 +24,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const clearFilter = document.getElementById('clear-filter');
     const refreshButton = document.getElementById('refresh');
     const importForm = document.getElementById('import-form');
+    const importDialog = document.getElementById('import-dialog');
+    const openImportButton = document.getElementById('open-import');
+    const importDialogClose = document.getElementById('import-dialog-close');
+    const importCancel = document.getElementById('import-cancel');
+    const importModeAuto = document.getElementById('import-mode-auto');
+    const importModeSpecific = document.getElementById('import-mode-specific');
+    const specificTypePanel = document.getElementById('specific-type-panel');
     const sourcePath = document.getElementById('source-path');
-    const browseFolder = document.getElementById('browse-folder');
+    const sourceFileChoice = document.getElementById('source-file-choice');
+    const sourceFolderChoice = document.getElementById('source-folder-choice');
     const importResult = document.getElementById('import-result');
-    const sidebar = document.querySelector('.sidebar');
-    const toggleSidebar = document.getElementById('toggle-sidebar');
     const vaultSelect = document.getElementById('vault-select');
     const vaultForm = document.getElementById('vault-form');
     const vaultName = document.getElementById('vault-name');
@@ -49,6 +58,32 @@ document.addEventListener('DOMContentLoaded', () => {
     const vaultChips = document.getElementById('vault-chips');
     const typeChips = document.getElementById('type-chips');
     const tagChips = document.getElementById('tag-chips');
+    const analysisTypeList = document.getElementById('analysis-type-list');
+    const analysisTypeStatus = document.getElementById('analysis-type-status');
+    const importSubmit = document.getElementById('import-submit');
+    const importSummaryDialog = document.getElementById('import-summary-dialog');
+    const importSummaryContent = document.getElementById('import-summary-content');
+    const importSummaryClose = document.getElementById('import-summary-close');
+    const importSummaryDone = document.getElementById('import-summary-done');
+    const createProjectButton = document.getElementById('create-project');
+    const projectFromSelectionButton = document.getElementById('project-from-selection');
+    const projectsPerSelectionButton = document.getElementById('projects-per-selection');
+    const projectDialog = document.getElementById('project-dialog');
+    const projectForm = document.getElementById('project-form');
+    const projectDialogTitle = document.getElementById('project-dialog-title');
+    const projectDialogClose = document.getElementById('project-dialog-close');
+    const projectMode = document.getElementById('project-mode');
+    const projectName = document.getElementById('project-name');
+    const projectType = document.getElementById('project-type');
+    const projectSelectionNote = document.getElementById('project-selection-note');
+    const projectResult = document.getElementById('project-result');
+    const projectFilesDialog = document.getElementById('project-files-dialog');
+    const projectFilesForm = document.getElementById('project-files-form');
+    const projectFilesTitle = document.getElementById('project-files-title');
+    const projectFilesClose = document.getElementById('project-files-close');
+    const projectFilesId = document.getElementById('project-files-id');
+    const projectFilePaths = document.getElementById('project-file-paths');
+    const projectFilesResult = document.getElementById('project-files-result');
 
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>'"]/g, char => ({
@@ -72,6 +107,15 @@ document.addEventListener('DOMContentLoaded', () => {
         return Boolean(typeDefinition(typeId)?.container);
     }
 
+    function typeIsProject(typeId) {
+        let current = typeDefinition(typeId);
+        while (current) {
+            if (current.id === 'project' || current.project_type) return true;
+            current = current.parent ? typeDefinition(current.parent) : null;
+        }
+        return false;
+    }
+
     function normalizeFacetValue(value) {
         return String(value ?? '').trim().toLocaleLowerCase();
     }
@@ -80,7 +124,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const declaredType = normalizeFacetValue(item?.type);
         if (declaredType && declaredType !== 'item') return declaredType;
         const source = normalizeFacetValue(item?.name || item?.title || item?.absolute_path);
-        return source.endsWith('.mid') || source.endsWith('.midi') ? 'midi' : 'audio';
+        if (source.endsWith('.mid') || source.endsWith('.midi')) return 'midi';
+        if (source.endsWith('.seq')) return 'sequence';
+        return 'audio';
     }
 
     function assetTags(item) {
@@ -280,30 +326,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function collectionDetails(item) {
-        const parts = [`${item.content_count || (item.contents || []).length || 0} files`];
-        if (item.type === 'multitrack') {
-            const stemCount = (item.stems || []).length;
-            parts.push(`${stemCount} matching stems`);
-        }
-        return parts.join(' · ');
-    }
-
-    function entryDetails(entry) {
-        if (entry.kind === 'asset') {
-            if (typeIsContainer(entry.type)) return collectionDetails(entry.item);
-            return [entry.item.bpm ? `${entry.item.bpm} BPM` : '', entry.item.key || ''].filter(Boolean).join(' · ') || 'Library asset';
-        }
-        return [entry.content.bpm ? `${entry.content.bpm} BPM` : '', entry.content.key || '', entry.content.duration_seconds ? `${entry.content.duration_seconds}s` : '']
-            .filter(Boolean).join(' · ') || 'Read-only content';
-    }
-
-    function entrySource(entry) {
-        if (entry.kind === 'content') return `in ${entry.collection.title || filename(entry.collection.absolute_path)}`;
-        if (typeIsContainer(entry.type)) return entry.item.source_kind === 'zip' ? 'ZIP snapshot' : 'Folder snapshot';
-        return filename(entry.item.absolute_path);
-    }
-
     function entryPath(entry) {
         if (entry.kind === 'content') {
             return `${entry.collection.title || 'Collection'} / ${entry.path || entry.content.filename}`;
@@ -334,7 +356,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!Number.isFinite(value) || value < 0) return '—';
         if (value < 1024) return `${value} B`;
         if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-        return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+        if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+        return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
     }
 
     function entryTags(entry) {
@@ -345,10 +368,15 @@ document.addEventListener('DOMContentLoaded', () => {
     function dragPayload(entry) {
         const item = entry.kind === 'content' ? entry.content : entry.item;
         const collection = entry.kind === 'content' ? entry.collection : null;
+        const stableId = collection
+            ? (item.child_id || `collection:${collection.id}:${item.index}`)
+            : item.id;
         return {
             type: 'library-item',
             itemType: entry.type || 'audio',
-            id: collection ? collection.id : item.id,
+            id: stableId,
+            collection_id: collection?.id,
+            content_index: collection ? item.index : undefined,
             filepath: entryAbsolutePath(entry),
             name: entry.title,
             key: entryKey(entry) || null,
@@ -525,6 +553,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isCollection) {
             actions.push(`<button class="expand" type="button" aria-label="Toggle ${escapeHtml(entry.title)}" aria-expanded="${expanded}">${expanded ? '⌄' : '›'}</button>`);
         }
+        if (entry.kind === 'asset' && typeIsProject(entry.type)) {
+            actions.push(`<button class="add-project-files" type="button" aria-label="Add files to ${escapeHtml(entry.title)}">Add files</button>`);
+        }
         if (entry.kind === 'asset') {
             actions.push(`<button class="delete" type="button" aria-label="Delete ${escapeHtml(entry.title)}">Delete</button>`);
         }
@@ -570,6 +601,14 @@ document.addEventListener('DOMContentLoaded', () => {
             };
             deleteButton.addEventListener('click', handleDelete);
             deleteButton.addEventListener('mousedown', event => event.stopPropagation());
+        }
+        const addProjectFilesButton = row.querySelector('.add-project-files');
+        if (addProjectFilesButton) {
+            addProjectFilesButton.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                openProjectFilesDialog(entry.item);
+            });
         }
         row.addEventListener('dragstart', event => {
             if (!event.dataTransfer) return;
@@ -634,8 +673,32 @@ document.addEventListener('DOMContentLoaded', () => {
     function createEntry(entry, options = {}) {
         const wrapper = document.createElement('article');
         wrapper.className = 'asset-entry';
+        wrapper.dataset.entryId = entry.id;
+        if (entry.kind === 'asset') wrapper.dataset.itemId = String(entry.item.id);
         wrapper.appendChild(createRow(entry, options));
         return wrapper;
+    }
+
+    function renderLibraryStatus(entries = visibleEntries()) {
+        const current = filteringIsActive()
+            ? entries.reduce((count, entry) => {
+                if (!typeIsContainer(entry.type)) return count + 1;
+                const matchingContents = collectionContentEntries(entry.item).filter(entryMatches).length;
+                return count + (matchingContents || (entryMatches(entry) ? 1 : 0));
+            }, 0)
+            : entries.length;
+        const sourceCount = state.items.length;
+        const vaultName = state.selectedVaultId !== null ? (selectedVault()?.name || 'vault') : 'All Central Assets';
+        const selectionSuffix = state.selectedEntryIds.size ? ` · ${state.selectedEntryIds.size} selected` : '';
+        summary.textContent = (filteringIsActive()
+            ? `${current} assets match the active filter`
+            : `${sourceCount} assets in ${vaultName}`) + selectionSuffix;
+        const filterEntries = allEntries();
+        const statusCurrent = filteringIsActive()
+            ? filterEntries.filter(entryMatches).length
+            : entries.length;
+        const statusSourceCount = filteringIsActive() ? filterEntries.length : sourceCount;
+        renderFilterStatus(statusCurrent, statusSourceCount);
     }
 
     function renderAssets() {
@@ -672,25 +735,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        const current = filteringIsActive()
-            ? entries.reduce((count, entry) => {
-                if (!typeIsContainer(entry.type)) return count + 1;
-                const matchingContents = collectionContentEntries(entry.item).filter(entryMatches).length;
-                return count + (matchingContents || (entryMatches(entry) ? 1 : 0));
-            }, 0)
-            : entries.length;
-        const sourceCount = state.items.length;
-        const vaultName = state.selectedVaultId !== null ? (selectedVault()?.name || 'vault') : 'All Central Assets';
-        const selectionSuffix = state.selectedEntryIds.size ? ` · ${state.selectedEntryIds.size} selected` : '';
-        summary.textContent = (filteringIsActive()
-            ? `${current} assets match the active filter`
-            : `${sourceCount} assets in ${vaultName}`) + selectionSuffix;
-        const filterEntries = allEntries();
-        const statusCurrent = filteringIsActive()
-            ? filterEntries.filter(entryMatches).length
-            : entries.length;
-        const statusSourceCount = filteringIsActive() ? filterEntries.length : sourceCount;
-        renderFilterStatus(statusCurrent, statusSourceCount);
+        renderLibraryStatus(entries);
     }
 
     function createFilterRail(chips) {
@@ -919,6 +964,204 @@ document.addEventListener('DOMContentLoaded', () => {
         return [...new Set(ids)];
     }
 
+    function getSelectedLooseItemIds() {
+        return allEntries()
+            .filter(entry => state.selectedEntryIds.has(entry.id))
+            .filter(entry => entry.kind === 'asset' && !typeIsContainer(entry.type) && !entry.item.parent_id)
+            .map(entry => Number(entry.item.id))
+            .filter(Number.isFinite);
+    }
+
+    function selectedProjectVaultId() {
+        const fallback = Number(vaultSelect?.value);
+        return state.selectedVaultId ?? (Number.isFinite(fallback) ? fallback : state.vaults[0]?.id);
+    }
+
+    function populateProjectTypes() {
+        if (!projectType) return;
+        projectType.replaceChildren();
+        state.types.filter(type => type.project_type).forEach(type => {
+            const option = document.createElement('option');
+            option.value = type.id;
+            option.textContent = type.label;
+            projectType.appendChild(option);
+        });
+    }
+
+    function importableFolderTypes() {
+        return state.types.filter(type => (
+            type.importable
+            && type.container
+            && !type.project_type
+            && type.id !== 'collection'
+        ));
+    }
+
+    function renderAnalysisTypeToggles() {
+        if (!analysisTypeList) return;
+        const availableTypes = importableFolderTypes();
+        const availableIds = new Set(availableTypes.map(type => type.id));
+        state.importAnalysisTypes = new Set(
+            [...state.importAnalysisTypes].filter(typeId => availableIds.has(typeId))
+        );
+        if (!state.importAnalysisTypesInitialized) {
+            if (availableTypes[0]) state.importAnalysisTypes.add(availableTypes[0].id);
+            state.importAnalysisTypesInitialized = true;
+        }
+
+        analysisTypeList.replaceChildren();
+        availableTypes.forEach(type => {
+            const active = state.importAnalysisTypes.has(type.id);
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `filter-chip analysis-type-toggle${active ? ' active' : ''}`;
+            button.dataset.typeId = type.id;
+            button.setAttribute('aria-pressed', String(active));
+            button.textContent = type.id === 'multitrack' ? 'Stems' : type.label;
+            button.addEventListener('click', () => {
+                state.importAnalysisTypes.clear();
+                state.importAnalysisTypes.add(type.id);
+                renderAnalysisTypeToggles();
+            });
+            analysisTypeList.appendChild(button);
+        });
+
+        if (analysisTypeStatus) analysisTypeStatus.textContent = '';
+        if (importSubmit) {
+            importSubmit.disabled = state.importMode === 'specific' && !state.importAnalysisTypes.size;
+        }
+    }
+
+    function renderImportMode() {
+        const isAuto = state.importMode === 'auto';
+        importModeAuto?.classList.toggle('active', isAuto);
+        importModeAuto?.setAttribute('aria-pressed', String(isAuto));
+        importModeSpecific?.classList.toggle('active', !isAuto);
+        importModeSpecific?.setAttribute('aria-pressed', String(!isAuto));
+        specificTypePanel?.classList.toggle('hidden', isAuto);
+        renderAnalysisTypeToggles();
+    }
+
+    function renderImportSummary(result) {
+        if (!importSummaryDialog || !importSummaryContent) return;
+        const isBatch = result.type === 'batch';
+        const isCollection = !isBatch && typeIsContainer(result.type);
+        const items = isBatch
+            ? (Array.isArray(result.items) ? result.items : [])
+            : isCollection ? (Array.isArray(result.contents) ? result.contents : []) : [result];
+        const collectionCount = isCollection ? 1 : 0;
+        const totalSize = Number(result.size_bytes) || items.reduce(
+            (sum, item) => sum + (Number(item.size_bytes) || 0),
+            0,
+        );
+        const counts = new Map();
+        items.forEach(item => {
+            const itemType = item.type || 'item';
+            counts.set(itemType, (counts.get(itemType) || 0) + 1);
+        });
+        const typeBreakdown = [...counts.entries()]
+            .sort((left, right) => right[1] - left[1] || typeLabel(left[0]).localeCompare(typeLabel(right[0])))
+            .map(([itemType, count]) => `
+                <span class="import-type-count">
+                    <strong>${escapeHtml(count)}</strong>${escapeHtml(typeLabel(itemType))}
+                </span>
+            `).join('');
+        const previewLimit = 14;
+        const rows = items.slice(0, previewLimit).map(item => {
+            const itemName = item.title || item.filename || filename(item.absolute_path);
+            const itemPath = item.relative_path || item.absolute_path || 'Managed asset';
+            return `
+                <div class="import-summary-row">
+                    <span class="import-summary-row-name" title="${escapeHtml(itemName)}">${escapeHtml(itemName)}</span>
+                    <span class="import-summary-row-path" title="${escapeHtml(itemPath)}">${escapeHtml(itemPath)}</span>
+                    <span class="type-badge">${escapeHtml(typeLabel(item.type || 'item'))}</span>
+                </div>
+            `;
+        }).join('');
+        const warnings = Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [];
+        const collectionSection = isCollection ? `
+            <section class="import-summary-section">
+                <h3>Collections found</h3>
+                <div class="import-summary-list">
+                    <div class="import-summary-row">
+                        <span class="import-summary-row-name">${escapeHtml(result.title || filename(result.absolute_path))}</span>
+                        <span class="import-summary-row-path" title="${escapeHtml(result.absolute_path)}">${escapeHtml(result.absolute_path)}</span>
+                        <span class="type-badge">${escapeHtml(typeLabel(result.type))}</span>
+                    </div>
+                </div>
+            </section>
+        ` : '';
+        const itemList = rows || '<div class="import-summary-more">No files were found inside this collection.</div>';
+
+        importSummaryContent.innerHTML = `
+            <div class="import-summary-hero">
+                <div class="import-summary-title">
+                    <h3>${escapeHtml(result.title || result.filename || filename(result.absolute_path))}</h3>
+                    <p>${escapeHtml(result.absolute_path || '')}</p>
+                </div>
+                <div class="import-summary-metrics">
+                    <div class="import-summary-metric"><strong>${collectionCount}</strong><span>Collections</span></div>
+                    <div class="import-summary-metric"><strong>${items.length}</strong><span>Items</span></div>
+                    <div class="import-summary-metric"><strong>${escapeHtml(formatSize(totalSize))}</strong><span>Size</span></div>
+                </div>
+            </div>
+            ${warnings.length ? `
+                <div class="import-warning-box">
+                    <strong>Imported with ${warnings.length === 1 ? 'a warning' : 'warnings'}</strong>
+                    ${warnings.map(warning => `<div>${escapeHtml(warning)}</div>`).join('')}
+                </div>
+            ` : ''}
+            ${collectionSection}
+            <section class="import-summary-section">
+                <h3>Items found</h3>
+                ${typeBreakdown ? `<div class="import-type-breakdown">${typeBreakdown}</div>` : ''}
+                <div class="import-summary-list" style="margin-top: 8px">
+                    ${itemList}
+                    ${items.length > previewLimit ? `<div class="import-summary-more">${items.length - previewLimit} more items are available in the Library.</div>` : ''}
+                </div>
+            </section>
+        `;
+        importSummaryDialog.showModal();
+    }
+
+    function openProjectDialog(mode = 'empty') {
+        if (!projectDialog) return;
+        const selectedIds = getSelectedLooseItemIds();
+        if (mode !== 'empty' && !selectedIds.length) {
+            window.alert('Select one or more loose files first.');
+            return;
+        }
+        populateProjectTypes();
+        projectMode.value = mode;
+        projectResult.className = 'result hidden';
+        projectName.value = '';
+        const nameLabel = projectName.previousElementSibling;
+        const onePerItem = mode === 'one_per_item';
+        projectName.required = !onePerItem;
+        projectName.disabled = onePerItem;
+        projectName.classList.toggle('hidden', onePerItem);
+        nameLabel?.classList.toggle('hidden', onePerItem);
+        projectDialogTitle.textContent = mode === 'empty'
+            ? 'Create a Project'
+            : onePerItem ? 'Create one Project per file' : 'Create a Project from files';
+        projectSelectionNote.classList.toggle('hidden', mode === 'empty');
+        projectSelectionNote.textContent = mode === 'empty'
+            ? ''
+            : `${selectedIds.length} loose file${selectedIds.length === 1 ? '' : 's'} will be encapsulated.`;
+        projectDialog.showModal();
+        if (!onePerItem) projectName.focus();
+    }
+
+    function openProjectFilesDialog(project) {
+        if (!projectFilesDialog) return;
+        projectFilesId.value = String(project.id);
+        projectFilesTitle.textContent = `Add files to ${project.title || filename(project.absolute_path)}`;
+        projectFilePaths.value = '';
+        projectFilesResult.className = 'result hidden';
+        projectFilesDialog.showModal();
+        projectFilePaths.focus();
+    }
+
     async function dispatchSelectedEntriesToVault(targetVaultId) {
         const itemIds = getSelectedNumericItemIds();
         if (!itemIds.length) return;
@@ -948,6 +1191,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         dispatchBar.classList.remove('hidden');
         dispatchCount.textContent = `${selectedCount} selected`;
+        const projectableCount = getSelectedLooseItemIds().length;
+        const canCreateProjects = projectableCount > 0 && projectableCount === selectedCount;
+        projectFromSelectionButton?.classList.toggle('hidden', !canCreateProjects);
+        projectsPerSelectionButton?.classList.toggle('hidden', !canCreateProjects);
         dispatchTargetSelect.innerHTML = '';
         state.vaults.forEach(vault => {
             const option = document.createElement('option');
@@ -959,6 +1206,55 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function deleteSelectedEntries() {
         await deleteEntries(getSelectedEntries());
+    }
+
+    function removeDeletedItems(itemIds) {
+        if (!itemIds.size) return;
+        const filterStateBefore = JSON.stringify({
+            vault: state.selectedVaultId,
+            types: [...state.selectedTypes].sort(),
+            tags: [...state.selectedTags].sort(),
+        });
+
+        state.items = state.items.filter(item => !itemIds.has(Number(item.id)));
+        itemIds.forEach(id => state.expandedCollections.delete(String(id)));
+        state.selectedEntryIds = new Set(
+            [...state.selectedEntryIds].filter(entryId => (
+                ![...itemIds].some(id => entryId === String(id) || entryId.startsWith(`${id}:`))
+            )),
+        );
+        state.contextEntry = null;
+        state.selectionAnchorId = null;
+
+        if (state.audio) {
+            state.audio.pause();
+            state.audio = null;
+            state.playingKey = null;
+        }
+
+        reconcileFilterSelection();
+        renderVaults();
+        renderFilterUI();
+        const filterStateAfter = JSON.stringify({
+            vault: state.selectedVaultId,
+            types: [...state.selectedTypes].sort(),
+            tags: [...state.selectedTags].sort(),
+        });
+        if (filterStateBefore !== filterStateAfter) {
+            renderAssets();
+            return;
+        }
+
+        itemIds.forEach(id => {
+            assetList.querySelector(`[data-item-id="${id}"]`)?.remove();
+        });
+        clearFilter.classList.toggle('hidden', !filteringIsActive());
+        renderDispatchBar();
+        const entries = visibleEntries();
+        if (!entries.length && !assetList.querySelector('.empty')) {
+            assetList.innerHTML = '<div class="empty">No assets match this view.</div>';
+        }
+        renderLibraryStatus(entries);
     }
 
     async function deleteEntries(entries) {
@@ -980,30 +1276,38 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!window.confirm(confirmMsg)) return;
 
         try {
+            const deletedIds = new Set();
+            const failures = [];
             for (const id of itemMap.keys()) {
                 const response = await fetch(`/items/${id}`, { method: 'DELETE' });
                 if (!response.ok) {
                     const result = await response.json().catch(() => ({}));
-                    console.error('Could not remove asset ID', id, result);
+                    failures.push(result.detail || `Could not remove asset ${id}`);
+                } else {
+                    deletedIds.add(id);
                 }
             }
-
-            if (state.audio) {
-                state.audio.pause();
-                state.audio = null;
-                state.playingKey = null;
-            }
-            state.selectedEntryIds.clear();
-            state.contextEntry = null;
-            state.selectionAnchorId = null;
-            await loadLibrary();
+            removeDeletedItems(deletedIds);
+            if (failures.length) window.alert(failures.join('\n'));
         } catch (error) {
-            console.error('Delete asset failed:', error);
+            window.alert(error.message || 'Delete failed');
         }
     }
 
     function renderContextMenu() {
         if (!contextVaultOptions) return;
+
+        const count = (state.contextEntry && state.selectedEntryIds.has(state.contextEntry.id))
+            ? state.selectedEntryIds.size
+            : 1;
+
+        if (analyzeEntryButton) {
+            analyzeEntryButton.textContent = count > 1 ? `Analyze metadata (${count} items)` : 'Analyze metadata';
+        }
+        if (deleteEntryMenuButton) {
+            deleteEntryMenuButton.textContent = count > 1 ? `Delete selected (${count})` : 'Delete selected';
+        }
+
         contextVaultOptions.innerHTML = '<div class="context-header">Dispatch to Vault</div>';
         state.vaults.forEach(vault => {
             const btn = document.createElement('button');
@@ -1031,60 +1335,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return state.vaults.find(vault => vault.id === state.selectedVaultId);
     }
 
-    function renderVaultsLegacy() { /*
-        vaultNav.innerHTML = '';
-        vaultSelect.innerHTML = '';
-
-        const allNav = document.createElement('button');
-        allNav.className = `vault-button${state.selectedVaultId === null ? ' active' : ''}`;
-        allNav.type = 'button';
-        allNav.innerHTML = `<span>⬚</span><small>All Central Assets</small>`;
-        allNav.addEventListener('click', () => {
-            state.selectedVaultId = null;
-            document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'library'));
-            document.querySelectorAll('.view').forEach(view => view.classList.toggle('hidden', view.id !== 'library-view'));
-            renderVaults();
-            loadLibrary();
-        });
-        vaultNav.appendChild(allNav);
-
-        state.vaults.forEach(vault => {
-            const nav = document.createElement('button');
-            nav.className = `vault-button${vault.id === state.selectedVaultId ? ' active' : ''}`;
-            nav.type = 'button';
-            nav.innerHTML = `<span>▣</span><small>${escapeHtml(vault.name)}</small>`;
-            nav.title = vault.description || vault.name;
-
-            nav.addEventListener('dragover', event => {
-                event.preventDefault();
-                if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
-                nav.classList.add('drag-over');
-            });
-            nav.addEventListener('dragleave', () => nav.classList.remove('drag-over'));
-            nav.addEventListener('drop', async event => {
-                event.preventDefault();
-                nav.classList.remove('drag-over');
-                await dispatchSelectedEntriesToVault(vault.id);
-            });
-
-            nav.addEventListener('click', () => {
-                state.selectedVaultId = vault.id;
-                document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'library'));
-                document.querySelectorAll('.view').forEach(view => view.classList.toggle('hidden', view.id !== 'library-view'));
-                renderVaults();
-                loadLibrary();
-            });
-            vaultNav.appendChild(nav);
-
-            const option = document.createElement('option');
-            option.value = String(vault.id);
-            option.textContent = vault.name;
-            option.selected = vault.id === state.selectedVaultId;
-            vaultSelect.appendChild(option);
-        });
-    }
-
-    */ }
     function renderVaults() {
         vaultSelect.innerHTML = '';
         if (!state.vaults.length) {
@@ -1139,6 +1389,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!typesResponse.ok || !itemsResponse.ok) throw new Error('GAIA could not load the library');
             state.types = await typesResponse.json();
             state.items = await itemsResponse.json();
+            renderAnalysisTypeToggles();
             const availableEntryIds = new Set(allEntries().map(entry => entry.id));
             state.selectedEntryIds = new Set([...state.selectedEntryIds].filter(id => availableEntryIds.has(id)));
             if (!availableEntryIds.has(state.selectionAnchorId)) state.selectionAnchorId = null;
@@ -1151,10 +1402,204 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    let currentAnalysisPollTimer = null;
+    let currentAnalysisTaskId = null;
+
+    function stopBatchAnalysisPolling() {
+        if (currentAnalysisPollTimer) {
+            clearInterval(currentAnalysisPollTimer);
+            currentAnalysisPollTimer = null;
+        }
+    }
+
+    function showAnalysisProgress(entry) {
+        const progressContainer = document.getElementById('analysis-progress-container');
+        const progressLabel = document.getElementById('analysis-progress-label');
+        const progressDetail = document.getElementById('analysis-progress-detail');
+        const progressPercent = document.getElementById('analysis-progress-percent');
+        const progressFill = document.getElementById('analysis-progress-fill');
+        const isCollection = entry.kind === 'asset' && typeIsContainer(entry.type);
+        const loadedChildCount = Array.isArray(entry.item?.contents) ? entry.item.contents.length : 0;
+        const declaredChildCount = Number(entry.item?.content_count) || 0;
+        const childCount = isCollection
+            ? Math.max(declaredChildCount, loadedChildCount)
+            : entry.kind === 'content' ? 1 : 0;
+
+        if (progressContainer) progressContainer.classList.remove('hidden');
+        if (progressLabel) progressLabel.textContent = isCollection
+            ? `Analyzing ${entry.title}...`
+            : 'Analyzing metadata...';
+        if (progressDetail) progressDetail.textContent = isCollection
+            ? `Found ${childCount} children · analyzing metadata...`
+            : 'Analyzing metadata...';
+        if (progressPercent) progressPercent.textContent = '0%';
+        if (progressFill) {
+            progressFill.classList.add('is-indeterminate');
+            progressFill.style.width = '34%';
+        }
+        return { childCount, progressContainer, progressDetail, progressFill, progressLabel, progressPercent };
+    }
+
+    function completeAnalysisProgress(progress, entry, result) {
+        if (!progress) return;
+        const analyzedChildCount = entry.kind === 'asset' && typeIsContainer(entry.type)
+            ? Array.isArray(result?.contents) ? result.contents.length : progress.childCount
+            : progress.childCount;
+        if (progress.progressFill) {
+            progress.progressFill.classList.remove('is-indeterminate');
+            progress.progressFill.style.width = '100%';
+        }
+        if (progress.progressPercent) progress.progressPercent.textContent = '100%';
+        if (progress.progressLabel) progress.progressLabel.textContent = 'Analysis complete';
+        if (progress.progressDetail) progress.progressDetail.textContent = entry.kind === 'asset' && typeIsContainer(entry.type)
+            ? `${analyzedChildCount} children analyzed`
+            : 'Metadata analysis complete';
+        setTimeout(() => {
+            if (progress.progressContainer) progress.progressContainer.classList.add('hidden');
+        }, 1800);
+    }
+
+    function hideAnalysisProgress(progress) {
+        if (!progress) return;
+        if (progress.progressFill) progress.progressFill.classList.remove('is-indeterminate');
+        if (progress.progressContainer) progress.progressContainer.classList.add('hidden');
+    }
+
+    function startBatchAnalysisPolling(taskId, totalCount, unitLabel = 'items') {
+        stopBatchAnalysisPolling();
+        const progressContainer = document.getElementById('analysis-progress-container');
+        const progressLabel = document.getElementById('analysis-progress-label');
+        const progressDetail = document.getElementById('analysis-progress-detail');
+        const progressPercent = document.getElementById('analysis-progress-percent');
+        const progressFill = document.getElementById('analysis-progress-fill');
+
+        currentAnalysisPollTimer = setInterval(async () => {
+            try {
+                const res = await fetch(`/items/analyze-batch/${taskId}`);
+                if (!res.ok) return;
+                const data = await res.json();
+
+                const completed = data.completed || 0;
+                const total = data.total || totalCount;
+                const pct = Math.round((completed / total) * 100);
+                const progressUnit = data.children_found && total === data.children_found ? 'children' : unitLabel;
+
+                if (progressPercent) progressPercent.textContent = `${pct}%`;
+                if (progressFill) {
+                    progressFill.classList.remove('is-indeterminate');
+                    progressFill.style.width = `${pct}%`;
+                }
+                if (progressLabel) progressLabel.textContent = `Analyzing ${completed} / ${total} ${progressUnit}...`;
+                if (progressDetail) progressDetail.textContent = data.current_title ? `Current: ${data.current_title}` : (data.status === 'completed' ? 'Analysis complete' : 'Processing...');
+
+                if (Array.isArray(data.updated_items) && data.updated_items.length > 0) {
+                    data.updated_items.forEach(update => {
+                        if (update.kind === 'content') {
+                            const entry = allEntries().find(e => e.kind === 'content' && e.collection.id === update.item_id && e.content.index === update.content_index);
+                            if (entry) updateEntryInState(entry, update.content);
+                        }
+                    });
+                    renderFilterUI();
+                    renderAssets();
+                }
+
+                if (data.status === 'completed' || data.status === 'cancelled' || data.status === 'failed') {
+                    stopBatchAnalysisPolling();
+                    await loadLibrary();
+                    if (progressLabel) progressLabel.textContent = `Completed ${completed} of ${total} ${progressUnit}`;
+                    setTimeout(() => {
+                        if (progressContainer) progressContainer.classList.add('hidden');
+                    }, 2500);
+                }
+            } catch (err) {
+                console.error("Batch polling error", err);
+            }
+        }, 250);
+    }
+
+    async function analyzeSelectedEntries() {
+        const contextEntry = state.contextEntry;
+        let selectedEntries = [];
+        if (contextEntry && state.selectedEntryIds.has(contextEntry.id)) {
+            selectedEntries = allEntries().filter(e => state.selectedEntryIds.has(e.id));
+        } else if (contextEntry) {
+            selectedEntries = [contextEntry];
+        } else if (state.selectedEntryIds.size > 0) {
+            selectedEntries = allEntries().filter(e => state.selectedEntryIds.has(e.id));
+        }
+
+        if (selectedEntries.length === 0) return;
+
+        const includesCollection = selectedEntries.some(entry => entry.kind === 'asset' && typeIsContainer(entry.type));
+        if (selectedEntries.length === 1 && !includesCollection) {
+            await analyzeEntry(selectedEntries[0]);
+            return;
+        }
+
+        const targets = selectedEntries.map(e => {
+            if (e.kind === 'content') {
+                return { kind: 'content', item_id: e.collection.id, content_index: e.content.index };
+            }
+            return { kind: 'item', item_id: e.item.id };
+        });
+
+        const progressContainer = document.getElementById('analysis-progress-container');
+        const progressLabel = document.getElementById('analysis-progress-label');
+        const progressDetail = document.getElementById('analysis-progress-detail');
+        const progressPercent = document.getElementById('analysis-progress-percent');
+        const progressFill = document.getElementById('analysis-progress-fill');
+        const cancelBtn = document.getElementById('cancel-analysis-btn');
+
+        if (progressContainer) progressContainer.classList.remove('hidden');
+        if (progressLabel) progressLabel.textContent = includesCollection ? 'Finding pack children...' : `Analyzing ${selectedEntries.length} items...`;
+        if (progressDetail) progressDetail.textContent = includesCollection ? 'Preparing child analysis...' : 'Initializing background worker thread...';
+        if (progressPercent) progressPercent.textContent = '0%';
+        if (progressFill) progressFill.style.width = '0%';
+        if (progressFill) progressFill.classList.remove('is-indeterminate');
+
+        try {
+            const res = await fetch('/items/analyze-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targets })
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || 'Failed to start batch analysis');
+            }
+
+            const data = await res.json();
+            currentAnalysisTaskId = data.task_id;
+            const unitLabel = data.children_found && data.total === data.children_found ? 'children' : 'items';
+
+            if (data.children_found) {
+                if (progressLabel) progressLabel.textContent = `Found ${data.children_found} children`;
+                if (progressDetail) progressDetail.textContent = 'Starting child analysis...';
+            }
+
+            if (cancelBtn) {
+                cancelBtn.onclick = async () => {
+                    if (currentAnalysisTaskId) {
+                        await fetch(`/items/analyze-batch/${currentAnalysisTaskId}/cancel`, { method: 'POST' }).catch(() => {});
+                    }
+                    stopBatchAnalysisPolling();
+                    if (progressContainer) progressContainer.classList.add('hidden');
+                };
+            }
+
+            startBatchAnalysisPolling(currentAnalysisTaskId, data.total || selectedEntries.length, unitLabel);
+        } catch (err) {
+            window.alert(err.message);
+            if (progressContainer) progressContainer.classList.add('hidden');
+        }
+    }
+
     async function analyzeEntry(entry) {
         const url = entry.kind === 'content'
             ? `/items/${entry.collection.id}/contents/${entry.content.index}/analyze`
             : `/items/${entry.item.id}/analyze`;
+        const progress = showAnalysisProgress(entry);
         analyzeEntryButton.disabled = true;
         analyzeEntryButton.textContent = typeIsContainer(entry.type) ? 'Analyzing collection…' : 'Analyzing…';
         try {
@@ -1164,7 +1609,9 @@ document.addEventListener('DOMContentLoaded', () => {
             updateEntryInState(entry, result);
             renderFilterUI();
             renderAssets();
+            completeAnalysisProgress(progress, entry, result);
         } catch (error) {
+            hideAnalysisProgress(progress);
             window.alert(error.message);
         } finally {
             analyzeEntryButton.disabled = false;
@@ -1202,13 +1649,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    document.querySelectorAll('.nav-item').forEach(button => {
-        button.addEventListener('click', () => {
-            document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item === button));
-            document.querySelectorAll('.view').forEach(view => view.classList.toggle('hidden', view.id !== `${button.dataset.view}-view`));
-        });
-    });
-
     searchInput.addEventListener('input', () => {
         state.query = searchInput.value.trim().toLowerCase();
         renderAssets();
@@ -1218,12 +1658,71 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     refreshButton.addEventListener('click', loadLibrary);
 
+    createProjectButton?.addEventListener('click', () => openProjectDialog('empty'));
+    projectFromSelectionButton?.addEventListener('click', () => openProjectDialog('single'));
+    projectsPerSelectionButton?.addEventListener('click', () => openProjectDialog('one_per_item'));
+    projectDialogClose?.addEventListener('click', () => projectDialog.close());
+    projectFilesClose?.addEventListener('click', () => projectFilesDialog.close());
+
+    projectForm?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const mode = projectMode.value;
+        const payload = {
+            project_type: projectType.value,
+            vault_id: selectedProjectVaultId(),
+        };
+        const url = mode === 'empty' ? '/projects/' : '/projects/from-items';
+        if (mode === 'empty') {
+            payload.name = projectName.value;
+        } else {
+            payload.item_ids = getSelectedLooseItemIds();
+            payload.mode = mode;
+            if (mode === 'single') payload.name = projectName.value;
+        }
+        projectResult.className = 'result hidden';
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Could not create Project');
+            state.selectedEntryIds.clear();
+            projectDialog.close();
+            await loadLibrary();
+            await loadVaultImportLog();
+        } catch (error) {
+            projectResult.textContent = error.message;
+            projectResult.className = 'result error';
+        }
+    });
+
+    projectFilesForm?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const sourcePaths = projectFilePaths.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+        projectFilesResult.className = 'result hidden';
+        try {
+            const response = await fetch(`/projects/${projectFilesId.value}/files`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source_paths: sourcePaths }),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Could not add files');
+            projectFilesDialog.close();
+            await loadLibrary();
+        } catch (error) {
+            projectFilesResult.textContent = error.message;
+            projectFilesResult.className = 'result error';
+        }
+    });
+
     if (analyzeEntryButton) {
         const handleAnalyze = async (event) => {
             if (event) { event.preventDefault(); event.stopPropagation(); }
-            const entry = state.contextEntry;
             contextMenu.classList.add('hidden');
-            if (entry) await analyzeEntry(entry);
+            await analyzeSelectedEntries();
         };
         analyzeEntryButton.addEventListener('click', handleAnalyze);
     }
@@ -1311,48 +1810,76 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function updateViewToggle(button, collapsed, panelName) {
-        button.textContent = collapsed ? '›' : '‹';
-        const action = collapsed ? 'Expand' : 'Collapse';
-        button.setAttribute('aria-label', `${action} ${panelName}`);
-        button.title = `${action} ${panelName}`;
-        button.setAttribute('aria-pressed', String(collapsed));
-    }
-
-    toggleSidebar.addEventListener('click', () => {
-        sidebar.classList.toggle('hidden-sidebar');
-        updateViewToggle(toggleSidebar, sidebar.classList.contains('hidden-sidebar'), 'sidebar');
-    });
-
-    browseFolder.addEventListener('click', async () => {
+    async function browseImportSource(endpoint) {
         try {
-            const response = await fetch('/items/browse');
+            const response = await fetch(endpoint);
             const result = await response.json();
             if (result.path) sourcePath.value = result.path;
-            else throw new Error(result.error || 'Could not open the folder picker');
+            else if (result.error) throw new Error(result.error);
         } catch (error) {
             importResult.textContent = error.message;
             importResult.className = 'result error';
         }
+    }
+
+    openImportButton?.addEventListener('click', async () => {
+        state.importMode = 'auto';
+        importResult.className = 'result hidden';
+        renderImportMode();
+        importDialog?.showModal();
+        if (state.selectedVaultId === null && vaultSelect?.value) {
+            state.selectedVaultId = Number(vaultSelect.value);
+        }
+        await loadVaultImportLog();
     });
+    importDialogClose?.addEventListener('click', () => importDialog?.close());
+    importCancel?.addEventListener('click', () => importDialog?.close());
+    importModeAuto?.addEventListener('click', () => {
+        state.importMode = 'auto';
+        renderImportMode();
+    });
+    importModeSpecific?.addEventListener('click', () => {
+        state.importMode = 'specific';
+        renderImportMode();
+    });
+    sourceFileChoice?.addEventListener('click', () => browseImportSource('/items/browse-file'));
+    sourceFolderChoice?.addEventListener('click', () => browseImportSource('/items/browse'));
+    importSummaryClose?.addEventListener('click', () => importSummaryDialog?.close());
+    importSummaryDone?.addEventListener('click', () => importSummaryDialog?.close());
 
     importForm.addEventListener('submit', async event => {
         event.preventDefault();
-        const submit = document.getElementById('import-submit');
-        submit.disabled = true;
-        submit.textContent = 'Importing…';
+        importSubmit.disabled = true;
+        importSubmit.textContent = 'Importing…';
         importResult.className = 'result hidden';
         try {
-            const response = await fetch('/items/import-collection', {
+            const availableTypeIds = importableFolderTypes().map(type => type.id);
+            const analysisTypes = state.importMode === 'auto'
+                ? availableTypeIds
+                : [...state.importAnalysisTypes];
+            const response = await fetch('/items/import', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ source_path: sourcePath.value, vault_id: Number(vaultSelect.value) }),
+                body: JSON.stringify({
+                    source_path: sourcePath.value,
+                    vault_id: Number(vaultSelect.value),
+                    expected_type: 'auto',
+                    analysis_types: analysisTypes,
+                    fallback_to_files: state.importMode === 'auto',
+                }),
             });
             const result = await response.json();
             if (!response.ok) throw new Error(result.detail || 'Import failed');
             const vault = state.vaults.find(entry => entry.id === Number(vaultSelect.value));
-            importResult.textContent = `${result.title || filename(result.absolute_path)} imported into ${vault?.name || 'the vault'} as ${typeLabel(result.type)}.`;
+            const warnings = Array.isArray(result.warnings) && result.warnings.length
+                ? ` Warning: ${result.warnings.join(' ')}`
+                : '';
+            importResult.textContent = result.type === 'batch'
+                ? `${result.imported} independent ${result.imported === 1 ? 'item' : 'items'} imported into ${vault?.name || 'the vault'}.`
+                : `${result.title || filename(result.absolute_path)} imported into ${vault?.name || 'the vault'} as ${typeLabel(result.type)}.${warnings}`;
             importResult.className = 'result';
+            importDialog?.close();
+            renderImportSummary(result);
             sourcePath.value = '';
             await loadLibrary();
             await loadVaultImportLog();
@@ -1360,8 +1887,8 @@ document.addEventListener('DOMContentLoaded', () => {
             importResult.textContent = error.message;
             importResult.className = 'result error';
         } finally {
-            submit.disabled = false;
-            submit.textContent = 'Import snapshot';
+            importSubmit.disabled = false;
+            importSubmit.textContent = 'Import assets';
         }
     });
 

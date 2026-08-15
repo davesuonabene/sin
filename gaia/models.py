@@ -7,15 +7,15 @@ from .database import Base
 item_tags = Table(
     "item_tags",
     Base.metadata,
-    Column("item_id", Integer, ForeignKey("items.id")),
-    Column("tag_id", Integer, ForeignKey("tags.id"))
+    Column("item_id", Integer, ForeignKey("items.id", ondelete="CASCADE")),
+    Column("tag_id", Integer, ForeignKey("tags.id", ondelete="CASCADE"))
 )
 
 item_collections = Table(
     "item_collections",
     Base.metadata,
-    Column("item_id", Integer, ForeignKey("items.id")),
-    Column("collection_id", Integer, ForeignKey("collections.id"))
+    Column("item_id", Integer, ForeignKey("items.id", ondelete="CASCADE")),
+    Column("collection_id", Integer, ForeignKey("collections.id", ondelete="CASCADE"))
 )
 
 item_vaults = Table(
@@ -30,10 +30,11 @@ class Item(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     absolute_path = Column(String, index=True, nullable=False)
-    vault_id = Column(Integer, ForeignKey("vaults.id"), index=True, nullable=True)
+    vault_id = Column(Integer, ForeignKey("vaults.id", ondelete="SET NULL"), index=True, nullable=True)
     file_hash = Column(String, index=True, nullable=True) # SHA-256 for integrity
     size_bytes = Column(Integer, nullable=True)
     mime_type = Column(String, nullable=True)
+    parent_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), index=True, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     type = Column(String)
@@ -48,6 +49,8 @@ class Item(Base):
     collections = relationship("Collection", secondary=item_collections, back_populates="items")
     vault = relationship("Vault", back_populates="direct_items")
     vaults = relationship("Vault", secondary=item_vaults, back_populates="items", passive_deletes=True)
+    parent = relationship("Item", remote_side=[id], back_populates="children", foreign_keys=[parent_id])
+    children = relationship("Item", back_populates="parent", cascade="all, delete-orphan", foreign_keys=[parent_id])
 
 class MidiItem(Item):
     __tablename__ = "midi_items"
@@ -57,6 +60,15 @@ class MidiItem(Item):
 
     __mapper_args__ = {
         "polymorphic_identity": "midi",
+    }
+
+
+class SequenceItem(Item):
+    __tablename__ = "sequence_items"
+    id = Column(Integer, ForeignKey("items.id"), primary_key=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "sequence",
     }
 
 
@@ -102,23 +114,31 @@ class OneShotSampleItem(SampleItem):
         "polymorphic_identity": "one_shot",
     }
 
-class CollectionItem(Item):
-    """A read-only snapshot of a folder or ZIP archive stored by GAIA."""
+class FolderItem(Item):
+    """Base persistence model for typed folders managed by GAIA."""
     __tablename__ = "collection_items"
     id = Column(Integer, ForeignKey("items.id"), primary_key=True)
     title = Column(String, nullable=True)
-    source_kind = Column(String, nullable=False)  # folder | zip
+    source_kind = Column(String, nullable=False)  # folder | zip | managed
     source_path = Column(String, nullable=True)
     manifest_json = Column(String, nullable=True)
     content_count = Column(Integer, default=0)
+    warnings_json = Column(Text, nullable=False, default="[]")
+
+    __mapper_args__ = {
+        "polymorphic_identity": "folder",
+    }
+
+
+class CollectionItem(FolderItem):
+    """Compatibility subtype for an unclassified, generic folder."""
 
     __mapper_args__ = {
         "polymorphic_identity": "collection",
     }
 
 
-class SamplePackItem(CollectionItem):
-    """Reserved for a future, explicit sample-pack interpretation."""
+class SamplePackItem(FolderItem):
     __tablename__ = "sample_pack_items"
     id = Column(Integer, ForeignKey("collection_items.id"), primary_key=True)
 
@@ -127,7 +147,8 @@ class SamplePackItem(CollectionItem):
     }
 
 
-class MultitrackItem(CollectionItem):
+class MultitrackItem(FolderItem):
+    """A folder interpreted as a collection of aligned audio stems."""
     __tablename__ = "multitrack_items"
     id = Column(Integer, ForeignKey("collection_items.id"), primary_key=True)
     stems_json = Column(String, nullable=True)
@@ -138,6 +159,26 @@ class MultitrackItem(CollectionItem):
 
     __mapper_args__ = {
         "polymorphic_identity": "multitrack",
+    }
+
+
+class ProjectItem(FolderItem):
+    """Base class for user-created project workflows."""
+    __tablename__ = "project_items"
+    id = Column(Integer, ForeignKey("collection_items.id"), primary_key=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "project",
+    }
+
+
+class LiveRecordingProjectItem(ProjectItem):
+    """Project workflow for raw live recordings through mastered exports."""
+    __tablename__ = "live_recording_project_items"
+    id = Column(Integer, ForeignKey("project_items.id"), primary_key=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "live_recording_project",
     }
 
 class Tag(Base):
@@ -178,9 +219,9 @@ class VaultImportLog(Base):
     __tablename__ = "vault_import_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    vault_id = Column(Integer, ForeignKey("vaults.id"), nullable=False, index=True)
+    vault_id = Column(Integer, ForeignKey("vaults.id", ondelete="CASCADE"), nullable=False, index=True)
     source_path = Column(String, nullable=False)
-    item_id = Column(Integer, ForeignKey("items.id"), nullable=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="SET NULL"), nullable=True)
     status = Column(String, nullable=False)  # imported | duplicate | rejected | failed
     action = Column(String, nullable=False, default="imported")
     detail = Column(String, nullable=True)

@@ -50,10 +50,18 @@ def is_multitrack_folder(folder_path: str) -> bool:
         return False
 
     analysis = analyze_multitrack_folder(abs_folder, recursive=False)
-    if not analysis.get("is_valid_length"):
-        return False
+    return is_multitrack_analysis(analysis)
 
-    labels = {_instrument_label(Path(path).stem) for path in direct_audio}
+
+def is_multitrack_analysis(analysis: Dict[str, Any]) -> bool:
+    """Classify an already-computed direct-file analysis without rescanning."""
+    stems = analysis.get("stems", []) or []
+    if len(stems) < 2 or not analysis.get("is_valid_length"):
+        return False
+    labels = {
+        str(stem.get("stem_type") or "other").strip().casefold()
+        for stem in stems
+    }
     labels.discard("other")
     return len(labels) >= 2
 
@@ -145,6 +153,8 @@ def analyze_multitrack_folder(folder_path: str, tolerance_seconds: float = 0.05,
     folder_analysis = text_analyzer.analyze_path(abs_folder)
     overall_bpm = folder_analysis.get("bpm")
     overall_key = folder_analysis.get("key")
+    if overall_key == "none":
+        overall_key = None
 
     if overall_bpm is None:
         for stem in stems:
@@ -156,14 +166,28 @@ def analyze_multitrack_folder(folder_path: str, tolerance_seconds: float = 0.05,
     if overall_key is None:
         for stem in stems:
             stem_analysis = text_analyzer.analyze_path(stem["filename"])
-            if stem_analysis.get("key"):
+            if stem_analysis.get("key") and stem_analysis.get("key") != "none":
                 overall_key = stem_analysis.get("key")
+                break
+
+    if overall_key is None:
+        from core.analyzers import KeyAnalyzer
+        harmonic_stems = [s for s in stems if s.get("stem_type") in ("keys", "synth", "guitar")]
+        if not harmonic_stems:
+            harmonic_stems = [s for s in stems if s.get("stem_type") == "bass"]
+        candidate_stems = harmonic_stems if harmonic_stems else stems
+        for stem in candidate_stems:
+            detected_key = KeyAnalyzer.from_audio_file(stem["absolute_path"])
+            if detected_key:
+                overall_key = detected_key
                 break
 
     bpm_int = None
     if overall_bpm:
         try:
-            bpm_int = int(float(overall_bpm))
+            val = int(float(overall_bpm))
+            if 85 <= val <= 169:
+                bpm_int = val
         except (ValueError, TypeError):
             bpm_int = None
 

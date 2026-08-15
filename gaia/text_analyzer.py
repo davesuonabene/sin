@@ -21,6 +21,12 @@ _AUDIO_TAGS = (
     ("Percussion", ("perc", "conga", "bongo", "shaker", "tambourine", "agogo", "woodblock", "triangle", "cowbell")),
     ("808", (" 808 ", "808s")),
     ("Bass", (" bass ", " sub ", "reese")),
+    ("Synth", (" synth ", " synthesizer ")),
+    ("Lead", (" lead ",)),
+    ("Pad", (" pad ", " pads ")),
+    ("Pluck", (" pluck ", " plucks ")),
+    ("Keys", (" piano ", " keys ", " organ ")),
+    ("Guitar", (" guitar ", " guitars ")),
     ("Vocal", ("vocal", "vocals", " vox ", "acapella", "choir", "voice")),
     ("FX", (" fx ", "sfx", "effect", "effects", "riser", "impact", "transition")),
     ("Melody", ("melody", "melodic", "melodies")),
@@ -28,6 +34,20 @@ _AUDIO_TAGS = (
     ("Fill", (" fill ", " fills ")),
     ("Drums", (" drum ", " drums ", "drumkit", "drum kit", "breakbeat")),
 )
+
+_DRUM_TAGS = {
+    "Drums", "Kick", "Snare", "Clap", "Snap", "Hi-hat", "Open hat",
+    "Percussion", "Cymbal", "Tom", "Rim",
+}
+_TONAL_INSTRUMENT_TAGS = {"Bass", "808", "Synth", "Lead", "Pad", "Pluck", "Keys", "Guitar"}
+_CAMELOT_TO_KEY = {
+    "1A": "G#min", "2A": "D#min", "3A": "A#min", "4A": "Fmin",
+    "5A": "Cmin", "6A": "Gmin", "7A": "Dmin", "8A": "Amin",
+    "9A": "Emin", "10A": "Bmin", "11A": "F#min", "12A": "C#min",
+    "1B": "Bmaj", "2B": "F#maj", "3B": "C#maj", "4B": "G#maj",
+    "5B": "D#maj", "6B": "A#maj", "7B": "Fmaj", "8B": "Cmaj",
+    "9B": "Gmaj", "10B": "Dmaj", "11B": "Amaj", "12B": "Emaj",
+}
 
 
 def _searchable(text: str) -> str:
@@ -49,7 +69,7 @@ def extract_bpm_range(text: str) -> tuple[int, int] | None:
     if not match:
         return None
     low, high = sorted((int(match.group(1)), int(match.group(2))))
-    return (low, high) if 30 <= low <= high <= 400 else None
+    return (low, high) if 85 <= low <= high <= 169 else None
 
 
 def extract_bpm(text: str) -> int | None:
@@ -66,10 +86,10 @@ def extract_bpm(text: str) -> int | None:
     if not match:
         return None
     value = round(float(match.group(1)))
-    return value if 30 <= value <= 400 else None
+    return value if 85 <= value <= 169 else None
 
 
-def extract_key(text: str) -> str | None:
+def extract_key(text: str, allow_bare_note: bool = False) -> str | None:
     """Extract and normalize standard or Camelot musical keys."""
     camelot = re.search(r"\b(1[0-2]|[1-9])\s*([ab])\b", text, re.IGNORECASE)
     if camelot:
@@ -80,11 +100,56 @@ def extract_key(text: str) -> str | None:
         text,
         re.IGNORECASE,
     )
-    if not standard:
+    if standard:
+        note = standard.group(1).upper() + standard.group(2)
+        quality = "min" if standard.group(3).lower().startswith("min") or standard.group(3).lower() == "m" else "maj"
+        return f"{note}{quality}"
+    if allow_bare_note:
+        bare = re.search(r"(?:^|[\s_\-(])([a-g])([#b]?)(?=$|[\s_)\-.])", text, re.IGNORECASE)
+        if bare:
+            return bare.group(1).upper() + bare.group(2)
+    return None
+
+
+def key_role(text: str, sample_type: str, tags: list[str]) -> str:
+    """Return whether an asset is unpitched, a single pitch, or harmonic."""
+    tag_set = set(tags)
+    # 808s and bass sounds are tonal even when they live inside a generic
+    # drum folder. Give their explicit instrument tag precedence over the
+    # folder-level ``Drums`` classification.
+    if "Bass" in tag_set or "808" in tag_set:
+        return "single_note"
+    if tag_set.intersection(_DRUM_TAGS):
+        return "none"
+    searchable = _searchable(text)
+    explicitly_single = bool(re.search(r"\b(single[ -]?note|one[ -]?note|note|tone)\b", searchable))
+    if explicitly_single:
+        return "single_note"
+    if sample_type == "one_shot" and tag_set.intersection(_TONAL_INSTRUMENT_TAGS):
+        return "single_note"
+    return "harmonic"
+
+
+def normalize_key_for_role(key: str | None, role: str) -> str | None:
+    """Normalize a detected key to GAIA's representation for the asset role."""
+    if role == "none":
+        return "none"
+    if not key:
         return None
-    note = standard.group(1).upper() + standard.group(2)
-    quality = "min" if standard.group(3).lower().startswith("min") or standard.group(3).lower() == "m" else "maj"
-    return f"{note}{quality}"
+    normalized = str(key).strip().replace("♯", "#").replace("♭", "b")
+    normalized = _CAMELOT_TO_KEY.get(normalized.upper(), normalized)
+    match = re.match(r"^([A-Ga-g])([#b]?)", normalized)
+    if not match:
+        return None
+    note = match.group(1).upper() + match.group(2)
+    if role == "single_note":
+        return note
+    suffix = normalized[match.end():].strip().lower()
+    if suffix in {"m", "min", "minor"}:
+        return f"{note}min"
+    if suffix in {"maj", "major"}:
+        return f"{note}maj"
+    return note
 
 
 def detect_type(text: str, has_bpm: bool, extension: str = "") -> str:
@@ -94,7 +159,7 @@ def detect_type(text: str, has_bpm: bool, extension: str = "") -> str:
         return "midi"
     if re.search(r"\b(loop|loops|break|breaks)\b", searchable):
         return "loop"
-    if re.search(r"\b(one[ -]?shot|oneshot)\b", searchable):
+    if re.search(r"\b(one[ -]?shots?|oneshots?)\b", searchable):
         return "one_shot"
     hit_words = r"kick|snare|clap|snap|rimshot|rim|hihat|hi hat|hat|cymbal|crash|ride|tom|perc|conga|bongo|shaker|cowbell|808"
     if re.search(rf"\b({hit_words})s?\b", searchable):
@@ -130,7 +195,7 @@ def detect_category(text: str) -> str:
 
 
 def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> dict:
-    """Infer metadata from a filename, nearby folders, and loop duration."""
+    """Infer metadata from a filename, nearby folders, audio signal, and loop duration."""
     path = Path(absolute_path)
     context_parts = path.parts[-6:]
     search_text = " ".join(context_parts)
@@ -138,6 +203,18 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
     bpm_range = extract_bpm_range(metadata_text)
     bpm = extract_bpm(metadata_text)
     sample_type = detect_type(search_text, bool(bpm), path.suffix)
+    tags = extract_tags(search_text, sample_type, bpm_range)
+    role = key_role(search_text, sample_type, tags)
+    if role == "single_note" and "Single note" not in tags:
+        tags.append("Single note")
+
+    if duration_seconds is None and path.is_file() and path.suffix.lower() in {".wav", ".flac", ".mp3", ".ogg", ".aif", ".aiff"}:
+        try:
+            import soundfile as sf
+            info = sf.info(str(path))
+            duration_seconds = float(info.duration)
+        except Exception:
+            duration_seconds = None
 
     # A duration is useful only after the name/folder has established that the
     # asset is a loop. This avoids assigning tempos to arbitrary one-shots.
@@ -145,11 +222,17 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
         inferred = BPMAnalyzer.from_loop_duration(duration_seconds)
         bpm = round(inferred) if inferred is not None else None
 
+    key = extract_key(metadata_text, allow_bare_note=role == "single_note")
+    if key is None and role != "none" and path.is_file() and path.suffix.lower() in {".wav", ".flac", ".mp3", ".ogg", ".aif", ".aiff"}:
+        from core.analyzers import KeyAnalyzer
+        key = KeyAnalyzer.from_audio_file(str(path), pitch_only=role == "single_note")
+    key = normalize_key_for_role(key, role)
+
     return {
         "title": clean_title(path.name),
         "bpm": bpm,
-        "key": extract_key(metadata_text),
+        "key": key,
         "type": sample_type,
         "category": detect_category(search_text),
-        "tags": extract_tags(search_text, sample_type, bpm_range),
+        "tags": tags,
     }

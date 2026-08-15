@@ -20,11 +20,12 @@ def process_sample_transform(
 
     - transpose: pitch shift in semitones (e.g. -24.0 to +24.0)
     - cents: fine tune pitch shift in cents (-100.0 to +100.0)
-    - stretch_mode: 'time_stretch' (independent pitch/tempo), 'varispeed' (locked pitch/tempo via resampling), or 'off'
+    - stretch_mode: 'time_stretch' (independent pitch/tempo), 'pitch_shift'/'varispeed'
+      (locked pitch/tempo repitching via resampling), or 'off'
     - stretch_factor: speed/duration multiplier (e.g. 0.5 = half speed / double duration, 2.0 = 2x speed)
     - sample_type: 'loop' or 'one_shot' / 'oneshot'
     """
-    if len(audio_data) == 0:
+    if audio_data.shape[-1] == 0:
         return audio_data.astype(np.float32)
 
     mode = str(stretch_mode or "time_stretch").lower()
@@ -43,15 +44,20 @@ def process_sample_transform(
 
     total_time_rate = bpm_rate * factor
 
-    if mode == "varispeed":
-        # Varispeed: Pitch and speed are linked together like tape/vinyl speed change.
+    if mode in ("pitch_shift", "repitch", "varispeed"):
+        # Repitch/varispeed: pitch and speed are linked together like tape/vinyl.
         pitch_rate = 2.0 ** (total_semitones / 12.0)
         total_varispeed_rate = pitch_rate * total_time_rate
 
         if abs(total_varispeed_rate - 1.0) > 1e-4:
             target_sr = float(sr) / total_varispeed_rate
             if target_sr > 0:
-                audio_data = librosa.resample(y=audio_data, orig_sr=float(sr), target_sr=target_sr)
+                audio_data = librosa.resample(
+                    y=audio_data,
+                    orig_sr=float(sr),
+                    target_sr=target_sr,
+                    axis=-1,
+                )
     else:
         # Time-stretch mode (or off mode)
         # 1. Pitch shift (independent of duration)
@@ -81,19 +87,18 @@ def stretch_audio(audio_data: np.ndarray, original_bpm: float, target_bpm: float
 
 def load_sample(filepath: Union[str, Path], target_sr: int = 44100) -> Tuple[np.ndarray, float]:
     """
-    Loads an audio file using librosa, forcing mono format and resampling
-    to target_sr to guarantee sample-by-sample compatibility during mixing.
+    Load audio using librosa's native ``(..., samples)`` layout and resample
+    to ``target_sr``. Mono files remain one-dimensional, while multi-channel
+    files use leading channel dimensions (normally ``channels, samples``).
 
     Returns:
-        Tuple[np.ndarray, float]: (1D float32 numpy array of audio samples, duration in seconds).
+        Tuple[np.ndarray, float]: (float32 audio array, duration in seconds).
     """
     path_obj = Path(filepath)
     if not path_obj.exists():
         raise FileNotFoundError(f"Audio file not found: {filepath}")
 
-    # librosa.load forces mono=True by default and resamples to target_sr
-    audio_array, sr = librosa.load(str(path_obj), sr=target_sr, mono=True)
+    audio_array, sr = librosa.load(str(path_obj), sr=target_sr, mono=False)
     audio_array = audio_array.astype(np.float32)
-    duration_seconds = float(len(audio_array)) / float(sr)
+    duration_seconds = float(audio_array.shape[-1]) / float(sr)
     return audio_array, duration_seconds
-

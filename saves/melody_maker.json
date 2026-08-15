@@ -1,0 +1,621 @@
+{
+  "version": 2,
+  "savedAt": "2026-08-13T09:32:38.961Z",
+  "graph": {
+    "last_node_id": 5,
+    "last_link_id": 3,
+    "nodes": [
+      {
+        "id": 5,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 409,
+          "1": 37,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 2
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              3
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "node_name": "Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 4,
+          "probability": 1,
+          "section_points": [],
+          "section_enabled": [
+            true
+          ],
+          "section_probability": [
+            1
+          ],
+          "section_sample_start": [
+            0
+          ],
+          "section_quant": [
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "global"
+          ],
+          "quant": "none",
+          "quant_anchor": "start",
+          "seed": 0.38014320640721555,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "filepath": "",
+          "mix_mode": "sum",
+          "original_bpm": 120,
+          "target_bpm": 140,
+          "bpm": 140,
+          "key": "",
+          "is_main_preview": false,
+          "length_inherited": true,
+          "length_source_id": 1
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 3,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 186,
+          "1": 123,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool 1",
+        "properties": {
+          "node_name": "Asset Pool 1",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "output_value": "",
+          "selected_items": [
+            {
+              "id": "collection:30:353",
+              "collection_id": 30,
+              "name": "Loop 81 (Alessandro Alessandroni - Preludietto).wav",
+              "type": "loop"
+            },
+            {
+              "id": "collection:30:351",
+              "collection_id": 30,
+              "name": "Loop 79 (Sven Libaek - Birds in Flight).wav",
+              "type": "loop"
+            },
+            {
+              "id": "collection:30:350",
+              "collection_id": 30,
+              "name": "Loop 78 (Sven Libaek - Danger).wav",
+              "type": "loop"
+            },
+            {
+              "id": "collection:30:347",
+              "collection_id": 30,
+              "name": "Loop 75 (Sven Libaek - That's Peg's Affair (Solo Guitar)).wav",
+              "type": "loop"
+            },
+            {
+              "id": "collection:30:327",
+              "collection_id": 30,
+              "name": "Loop 54 (Mladen Franko - Sweet Dreams 2).wav",
+              "type": "loop"
+            },
+            {
+              "id": "collection:30:325",
+              "collection_id": 30,
+              "name": "Loop 52 (Peter Luedemann - Mechanical Heart).wav",
+              "type": "loop"
+            },
+            {
+              "id": "collection:30:312",
+              "collection_id": 30,
+              "name": "Loop 38 (The PR TV Group & Strings - Midnight Romance).wav",
+              "type": "loop"
+            },
+            {
+              "id": "collection:30:307",
+              "collection_id": 30,
+              "name": "Loop 33 (The Pr Tv Orchestra - We Belong Together).wav",
+              "type": "loop"
+            },
+            {
+              "id": "collection:30:308",
+              "collection_id": 30,
+              "name": "Loop 34 (The Pr Tv Orchestra - In Your Arms).wav",
+              "type": "loop"
+            },
+            {
+              "id": "collection:30:305",
+              "collection_id": 30,
+              "name": "Loop 31 (Breakwater - No Limit).wav",
+              "type": "loop"
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "local",
+          "sequence_index": -1,
+          "seed": 0.6752137422937304,
+          "color": "#7c3aed",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 2,
+          "target_bpm": 140,
+          "bpm": 140,
+          "accepted_asset_type": "audio",
+          "fixed_item": null,
+          "output_item_id": null,
+          "output_bpm": null,
+          "output_key": ""
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#6d28d9",
+        "shape": 1
+      },
+      {
+        "id": 2,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 220,
+          "1": 72,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              1
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "node_name": "Sample",
+          "filepath": "",
+          "sample_type": "loop",
+          "start_beat": 0,
+          "original_bpm": 120,
+          "target_bpm": 140,
+          "bpm": 140,
+          "key": "",
+          "key_match_mode": "follow",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": -4,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "chain": [
+            {
+              "id": "pre_gain_k3b7uc",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5011872336272722,
+                "gain_db": -6
+              }
+            },
+            {
+              "id": "post_gain_vqlf8c",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "is_main_preview": false,
+          "mix_mode": "sum",
+          "asset_modifier_id": 3,
+          "library_item_id": null,
+          "duration_seconds": null,
+          "key_match_target": "G#maj"
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 1,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 510,
+          "1": -9,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 3
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": null,
+            "slot_index": 0
+          }
+        ],
+        "title": "Master Track",
+        "properties": {
+          "node_name": "Master Track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 140,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "is_main_preview": true,
+          "filepath": "",
+          "original_bpm": 120,
+          "key": ""
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 4,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 315,
+          "1": 37,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 1
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              2
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "node_name": "Sequence",
+          "node_type": "sequence",
+          "sequence": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "gate",
+          "fade_ms": 3,
+          "selected_step": 0,
+          "seed": 6072,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "is_main_preview": false,
+          "filepath": "",
+          "mix_mode": "sum",
+          "original_bpm": 120,
+          "target_bpm": 140,
+          "bpm": 140,
+          "key": ""
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      }
+    ],
+    "links": [
+      [
+        1,
+        2,
+        0,
+        4,
+        0,
+        "audio"
+      ],
+      [
+        2,
+        4,
+        0,
+        5,
+        0,
+        "audio"
+      ],
+      [
+        3,
+        5,
+        0,
+        1,
+        0,
+        "audio"
+      ]
+    ],
+    "groups": [],
+    "config": {
+      "links_ontop": true
+    },
+    "extra": {
+      "global_parameters": {
+        "bpm": 140,
+        "total_bars": 4,
+        "key": "Fmin"
+      },
+      "main_preview": {
+        "node_id": 1,
+        "mode": "auto"
+      }
+    },
+    "version": 0.4
+  }
+}

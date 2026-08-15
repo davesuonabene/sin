@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any, Type
 import numpy as np
 
 from core.system import System
-from core.audio_object import AudioObject, SampleObject, SequenceObject
+from core.audio_object import AudioObject, SampleObject, SequenceObject, ItemPoolObject
 from core.dsp import load_sample, stretch_audio
 
 
@@ -126,6 +126,7 @@ def build_node_object(node_data: Any) -> AudioObject:
             step_parameters=_get_val(node_data, "step_parameters", None),
             step_length=step_length,
             play_mode=play_mode,
+            fade_ms=_get_val(node_data, "fade_ms", 0.0),
             seed=seed,
             seed_mode=seed_mode,
             original_bpm=original_bpm,
@@ -149,25 +150,50 @@ def build_node_object(node_data: Any) -> AudioObject:
             section_points=_get_val(node_data, "section_points", None),
             section_enabled=_get_val(node_data, "section_enabled", None),
             section_probability=_get_val(node_data, "section_probability", None),
+            section_sample_start=_get_val(node_data, "section_sample_start", None),
             section_quant=_get_val(node_data, "section_quant", None),
             section_quant_anchor=_get_val(node_data, "section_quant_anchor", None),
             quant=_get_val(node_data, "quant", "none"),
             quant_anchor=_get_val(node_data, "quant_anchor", "start")
         )
     elif node_type == "sample":
-        obj = SampleObject(
-            name=node_name,
-            filepath=actual_path,
-            original_bpm=original_bpm,
-            chain=chain_list,
-            crop_start=crop_start,
-            crop_end=crop_end,
-            sample_type=sample_type,
-            transpose=transpose,
-            cents=cents,
-            stretch_mode=stretch_mode,
-            stretch_factor=stretch_factor
-        )
+        refresh_mode = str(_get_val(node_data, "refresh_mode", "off") or "off").strip().casefold()
+        selected_items = _get_val(node_data, "selected_items", []) or []
+        if selected_items and refresh_mode in {
+            "local", "local_refresh", "self_render",
+            "parent", "parent_refresh", "parent_render"
+        }:
+            obj = ItemPoolObject(
+                name=node_name,
+                filters=_get_val(node_data, "filters", {}) or {},
+                selected_items=selected_items,
+                playback_mode=_get_val(node_data, "playbackMode", "Random"),
+                seed=_get_val(node_data, "seed", None),
+                refresh_mode=refresh_mode,
+                original_bpm=original_bpm,
+                chain=chain_list,
+                crop_start=crop_start,
+                crop_end=crop_end,
+                sample_type=sample_type,
+                transpose=transpose,
+                cents=cents,
+                stretch_mode=stretch_mode,
+                stretch_factor=stretch_factor
+            )
+        else:
+            obj = SampleObject(
+                name=node_name,
+                filepath=actual_path,
+                original_bpm=original_bpm,
+                chain=chain_list,
+                crop_start=crop_start,
+                crop_end=crop_end,
+                sample_type=sample_type,
+                transpose=transpose,
+                cents=cents,
+                stretch_mode=stretch_mode,
+                stretch_factor=stretch_factor
+            )
     else:
         obj = AudioObject(
             name=node_name,

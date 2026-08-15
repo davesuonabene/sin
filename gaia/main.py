@@ -6,7 +6,7 @@ import uvicorn
 import os
 
 from . import models, database, vaults
-from .routers import items, tags, collections, vaults as vault_router
+from .routers import items, tags, collections, projects, vaults as vault_router
 
 # Create the database tables
 models.Base.metadata.create_all(bind=database.engine)
@@ -33,6 +33,7 @@ app.add_middleware(
 app.include_router(items.router)
 app.include_router(tags.router)
 app.include_router(collections.router)
+app.include_router(projects.router)
 app.include_router(vault_router.router)
 
 # Mount static files

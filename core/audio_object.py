@@ -65,7 +65,7 @@ class AudioObject(BaseObject):
         self.children: List[Tuple[float, AudioObject]] = []
 
     def apply_chain(self, buffer: np.ndarray, system: Optional[System] = None) -> np.ndarray:
-        if len(buffer) == 0:
+        if buffer.shape[-1] == 0:
             return buffer
         sr = system.sample_rate if system is not None else 44100
         if self.chain:
@@ -113,8 +113,8 @@ class AudioObject(BaseObject):
                 self._original_bpm = bpm
                 return bpm
 
-        if self.audio_data is not None and len(self.audio_data) > 0:
-            duration_seconds = float(len(self.audio_data)) / float(sample_rate)
+        if self.audio_data is not None and self.audio_data.shape[-1] > 0:
+            duration_seconds = float(self.audio_data.shape[-1]) / float(sample_rate)
             bpm = BPMAnalyzer.from_duration(duration_seconds)
             self._original_bpm = bpm
             return bpm
@@ -166,7 +166,7 @@ class AudioObject(BaseObject):
         for start_beat, child in self.children:
             child_audio = child.render(system, **kwargs)
             start_sample = system.beat_to_samples(start_beat)
-            end_sample = start_sample + len(child_audio)
+            end_sample = start_sample + child_audio.shape[-1]
 
             if end_sample > max_end_sample:
                 max_end_sample = end_sample
@@ -175,7 +175,7 @@ class AudioObject(BaseObject):
 
         # If base audio_data exists on composite node, include its length in max_end_sample
         if self.audio_data is not None:
-            max_end_sample = max(max_end_sample, len(self.audio_data))
+            max_end_sample = max(max_end_sample, self.audio_data.shape[-1])
 
         timeline_samples = (
             system.beat_to_samples(self.total_bars * 4.0)
@@ -186,39 +186,56 @@ class AudioObject(BaseObject):
         if max_end_sample == 0 and timeline_samples is None:
             return np.zeros(0, dtype=np.float32)
 
+        source_buffers = [child_arr for _, child_arr in rendered_children]
+        if self.audio_data is not None:
+            source_buffers.append(self.audio_data)
+        channel_shape = (
+            np.broadcast_shapes(*(buffer.shape[:-1] for buffer in source_buffers))
+            if source_buffers
+            else ()
+        )
+
         # Instantiate parent master numpy array based on mix_mode
         if self.mix_mode == "chained":
             # Chained mode: sequence all child arrays horizontally ignoring start_beat
             if len(rendered_children) > 0:
-                master_buffer = np.concatenate([child_arr for _, child_arr in rendered_children])
+                master_buffer = np.concatenate([
+                    np.broadcast_to(child_arr, (*channel_shape, child_arr.shape[-1]))
+                    for _, child_arr in rendered_children
+                ], axis=-1)
             else:
-                master_buffer = np.zeros(0, dtype=np.float32)
+                master_buffer = np.zeros((*channel_shape, 0), dtype=np.float32)
 
             if self.audio_data is not None:
                 # Prepend the composite's own data to the chain
-                master_buffer = np.concatenate([self.audio_data, master_buffer])
+                own_audio = np.broadcast_to(
+                    self.audio_data,
+                    (*channel_shape, self.audio_data.shape[-1]),
+                )
+                master_buffer = np.concatenate([own_audio, master_buffer], axis=-1)
 
         else:
             # Sum mode (default): layer child arrays vertically at their start_beat offsets
-            master_buffer = np.zeros(max_end_sample, dtype=np.float32)
+            master_buffer = np.zeros((*channel_shape, max_end_sample), dtype=np.float32)
 
             # If composite node has its own base audio_data, add it
             if self.audio_data is not None:
-                master_buffer[:len(self.audio_data)] += self.audio_data
+                own_samples = self.audio_data.shape[-1]
+                master_buffer[..., :own_samples] += self.audio_data
 
             # SUM child audio arrays into parent buffer at their start_sample offsets
             for start_sample, child_audio in rendered_children:
-                end_sample = start_sample + len(child_audio)
-                master_buffer[start_sample:end_sample] += child_audio
+                end_sample = start_sample + child_audio.shape[-1]
+                master_buffer[..., start_sample:end_sample] += child_audio
 
         # A track with an explicit musical length is the timeline authority. Pad
         # short children and clip long children so every consumer sees exactly
         # the same duration.
         if timeline_samples is not None:
-            fitted_buffer = np.zeros(timeline_samples, dtype=np.float32)
-            copy_samples = min(timeline_samples, len(master_buffer))
+            fitted_buffer = np.zeros((*master_buffer.shape[:-1], timeline_samples), dtype=np.float32)
+            copy_samples = min(timeline_samples, master_buffer.shape[-1])
             if copy_samples > 0:
-                fitted_buffer[:copy_samples] = master_buffer[:copy_samples]
+                fitted_buffer[..., :copy_samples] = master_buffer[..., :copy_samples]
             master_buffer = fitted_buffer
 
         # Apply parent node volume scaling
@@ -276,20 +293,20 @@ class SampleObject(AudioObject):
             logging.getLogger("beat_generator.core").warning(f"Failed to load sample '{self.filepath}': {e}")
             return np.zeros(0, dtype=np.float32)
 
-        if len(audio_array) == 0:
+        if audio_array.shape[-1] == 0:
             return np.zeros(0, dtype=np.float32)
 
         # Apply crop range
         if self.crop_start > 0.0 or self.crop_end < 1.0:
-            total_samples = len(audio_array)
+            total_samples = audio_array.shape[-1]
             s_idx = int(max(0.0, min(1.0, self.crop_start)) * total_samples)
             e_idx = int(max(0.0, min(1.0, self.crop_end)) * total_samples)
             if s_idx < e_idx:
-                audio_array = audio_array[s_idx:e_idx]
+                audio_array = audio_array[..., s_idx:e_idx]
             else:
-                audio_array = np.zeros(0, dtype=np.float32)
+                audio_array = np.zeros((*audio_array.shape[:-1], 0), dtype=np.float32)
 
-        if len(audio_array) == 0:
+        if audio_array.shape[-1] == 0:
             return np.zeros(0, dtype=np.float32)
 
         if self._original_bpm is None:
@@ -328,6 +345,7 @@ class SequenceObject(AudioObject):
         step_parameters: Optional[List[Dict[str, Any]]] = None,
         step_length: float = 0.25,
         play_mode: str = "gate",
+        fade_ms: float = 0.0,
         seed: Optional[Union[float, int]] = None,
         seed_mode: str = "moving",
         volume: float = 1.0,
@@ -336,7 +354,13 @@ class SequenceObject(AudioObject):
         filepath: Optional[Union[str, Path]] = None,
         chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None,
-        sample_type: str = "loop"
+        sample_type: str = "loop",
+        crop_start: float = 0.0,
+        crop_end: float = 1.0,
+        transpose: float = 0.0,
+        cents: float = 0.0,
+        stretch_mode: str = "time_stretch",
+        stretch_factor: float = 1.0
     ) -> None:
         super().__init__(
             name=name,
@@ -346,15 +370,38 @@ class SequenceObject(AudioObject):
             original_bpm=original_bpm,
             chain=chain,
             data=data,
-            sample_type=sample_type
+            sample_type=sample_type,
+            crop_start=crop_start,
+            crop_end=crop_end,
+            transpose=transpose,
+            cents=cents,
+            stretch_mode=stretch_mode,
+            stretch_factor=stretch_factor
         )
         self.sequence: List[int] = sequence if sequence is not None else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
         self.step_length: float = float(step_length)
         self.step_parameters: List[Dict[str, Any]] = step_parameters or []
         self.play_mode: str = str(play_mode).lower() if play_mode else "gate"
+        try:
+            parsed_fade_ms = float(fade_ms)
+        except (TypeError, ValueError):
+            parsed_fade_ms = 0.0
+        self.fade_ms: float = max(0.0, min(5.0, parsed_fade_ms if np.isfinite(parsed_fade_ms) else 0.0))
         self.seed: Union[float, int] = seed if seed is not None else 42
         self.seed_mode: str = str(seed_mode).lower() if seed_mode else "moving"
         self.is_dynamic: bool = (self.seed_mode == "moving")
+
+    def _apply_step_fade(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Apply symmetrical linear edge fades to one rendered step trigger."""
+        fade_samples = int(round(sample_rate * self.fade_ms / 1000.0))
+        sample_count = audio.shape[-1]
+        if fade_samples <= 0 or sample_count == 0:
+            return audio
+
+        positions = np.arange(sample_count, dtype=np.float32)
+        envelope = np.minimum(positions, positions[::-1]) / float(fade_samples)
+        envelope = np.minimum(envelope, 1.0).astype(np.float32, copy=False)
+        return audio * envelope
 
     def _step_parameters(self, index: int) -> Dict[str, Any]:
         """Return a sanitized step configuration, including legacy defaults."""
@@ -417,7 +464,7 @@ class SequenceObject(AudioObject):
         cached_child_audio = None
         if not is_dynamic:
             cached_child_audio = first_child.render(system, **kwargs)
-            if len(cached_child_audio) == 0 or len(self.sequence) == 0:
+            if cached_child_audio.shape[-1] == 0 or len(self.sequence) == 0:
                 return np.zeros(0, dtype=np.float32)
 
         if len(self.sequence) == 0:
@@ -464,19 +511,19 @@ class SequenceObject(AudioObject):
 
                     if start_sample < 0:
                         skipped_samples = -start_sample
-                        audio = audio[skipped_samples:]
+                        audio = audio[..., skipped_samples:]
                         start_sample = 0
 
                     if self.play_mode == "gate":
-                        audio = audio[:slot_samples]
+                        audio = audio[..., :slot_samples]
 
-                    if len(audio) == 0:
+                    if audio.shape[-1] == 0:
                         continue
 
                     rendered_steps.append((start_sample, audio))
 
         # Monophonic voice cutting: a subsequent trigger truncates any playing sample tail
-        mono_rendered_steps = []
+        voice_cut_steps = []
         for i in range(len(rendered_steps)):
             start_i, audio_i = rendered_steps[i]
 
@@ -492,19 +539,28 @@ class SequenceObject(AudioObject):
 
             if next_start is not None:
                 max_len = max(0, next_start - start_i)
-                audio_i = audio_i[:max_len]
+                audio_i = audio_i[..., :max_len]
 
-            if len(audio_i) > 0:
-                mono_rendered_steps.append((start_i, audio_i))
-                end_sample = start_i + len(audio_i)
+            if audio_i.shape[-1] > 0:
+                audio_i = self._apply_step_fade(audio_i, system.sample_rate)
+                voice_cut_steps.append((start_i, audio_i))
+                end_sample = start_i + audio_i.shape[-1]
                 if end_sample > max_end_sample:
                     max_end_sample = end_sample
 
-        master_buffer = np.zeros(max_end_sample, dtype=np.float32)
+        channel_sources = [audio for _, audio in voice_cut_steps]
+        if cached_child_audio is not None:
+            channel_sources.append(cached_child_audio)
+        channel_shape = (
+            np.broadcast_shapes(*(audio.shape[:-1] for audio in channel_sources))
+            if channel_sources
+            else ()
+        )
+        master_buffer = np.zeros((*channel_shape, max_end_sample), dtype=np.float32)
 
-        for start_sample, audio in mono_rendered_steps:
-            end_sample = start_sample + len(audio)
-            master_buffer[start_sample:end_sample] += audio
+        for start_sample, audio in voice_cut_steps:
+            end_sample = start_sample + audio.shape[-1]
+            master_buffer[..., start_sample:end_sample] += audio
 
         return self.apply_chain(master_buffer, system)
 
@@ -527,7 +583,13 @@ class ItemPoolObject(AudioObject):
         original_bpm: Optional[float] = None,
         chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None,
-        sample_type: str = "loop"
+        sample_type: str = "loop",
+        crop_start: float = 0.0,
+        crop_end: float = 1.0,
+        transpose: float = 0.0,
+        cents: float = 0.0,
+        stretch_mode: str = "time_stretch",
+        stretch_factor: float = 1.0
     ) -> None:
         super().__init__(
             name=name,
@@ -536,7 +598,13 @@ class ItemPoolObject(AudioObject):
             original_bpm=original_bpm,
             chain=chain,
             data=data,
-            sample_type=sample_type
+            sample_type=sample_type,
+            crop_start=crop_start,
+            crop_end=crop_end,
+            transpose=transpose,
+            cents=cents,
+            stretch_mode=stretch_mode,
+            stretch_factor=stretch_factor
         )
         self.filters = filters or {}
         # Explicit items are selected in SIN's read-only GAIA browser.  Keep the
@@ -544,26 +612,12 @@ class ItemPoolObject(AudioObject):
         self.selected_items = selected_items or []
         self.playback_mode = playback_mode or "Random"
         self.seed = seed if seed is not None else random.random()
-        self.refresh_mode = refresh_mode
-        self.is_dynamic = False
+        self.refresh_mode = str(refresh_mode or "off").strip().casefold()
+        self.is_dynamic = self.refresh_mode in {"local", "local_refresh", "self_render"}
         self.current_pool = []
         self.last_played_index = -1
+        self._render_count = 0
         self.updatePool()
-        
-        # Pre-load audio data for the statically evaluated render
-        sample_path = self.getNextSample()
-        if sample_path:
-            if not os.path.exists(sample_path):
-                alt_path = os.path.join("assets", sample_path)
-                if os.path.exists(alt_path):
-                    sample_path = alt_path
-            try:
-                from core.dsp import load_sample
-                self.audio_data, _ = load_sample(sample_path)
-                self.filepath = sample_path
-            except Exception as e:
-                import logging
-                logging.getLogger("beat_generator").warning(f"Failed to load pool sample: {e}")
         
     def updatePool(self):
         import json
@@ -579,7 +633,12 @@ class ItemPoolObject(AudioObject):
             db_path = os.path.join("gaia", "gaia.db")
         if not os.path.exists(db_path):
             self.current_pool = [
-                {"id": item.get("id"), "absolute_path": item.get("absolute_path") or item.get("filepath"), "type": item.get("type", "asset")}
+                {
+                    **item,
+                    "absolute_path": item.get("absolute_path") or item.get("filepath"),
+                    "type": item.get("type", "asset"),
+                    "bpm": item.get("bpm") or item.get("original_bpm"),
+                }
                 for item in self.selected_items
                 if (item.get("absolute_path") or item.get("filepath"))
                 and os.path.basename(item.get("absolute_path") or item.get("filepath")).casefold() not in excluded_titles
@@ -679,7 +738,10 @@ class ItemPoolObject(AudioObject):
                         if content_type not in {"sample", "loop", "one_shot", "midi"}:
                             continue
                         content_bpm = content.get("bpm")
-                        content_tags = [*parent_tags, *(content.get("tags") or [])]
+                        # Collections are organizers only; filter the actual
+                        # contained asset metadata, not tags assigned to the
+                        # container itself.
+                        content_tags = content.get("tags") or []
                         if not matches_item_filters(content_type, content_bpm, content_tags):
                             continue
                         content_path = os.path.abspath(os.path.join(collection_root, content.get("relative_path") or ""))
@@ -726,29 +788,38 @@ class ItemPoolObject(AudioObject):
             import logging
             logging.getLogger("beat_generator.core").error(f"Failed to update ItemPool: {e}")
 
-    def getNextSample(self) -> Optional[str]:
+    def getNextSample(self, advance: bool = False) -> Optional[str]:
         if not self.current_pool:
             return None
             
         pool_size = len(self.current_pool)
         if pool_size == 1:
             self.last_played_index = 0
+            if advance:
+                self._render_count += 1
             return self.current_pool[0]["absolute_path"]
             
         if str(self.playback_mode).strip().casefold() == "sequential":
-            next_idx = int(self.seed or 0) % pool_size
+            next_idx = (int(self.seed or 0) + self._render_count) % pool_size
             self.last_played_index = next_idx
+            if advance:
+                self._render_count += 1
             return self.current_pool[next_idx]["absolute_path"]
 
         import hashlib
-        seed_hash = int(hashlib.md5(str(self.seed).encode()).hexdigest(), 16)
+        request_seed = str(self.seed) if self._render_count == 0 else f"{self.seed}_{self._render_count}"
+        seed_hash = int(hashlib.md5(request_seed.encode()).hexdigest(), 16)
         next_idx = seed_hash % pool_size
+        if advance and next_idx == self.last_played_index:
+            next_idx = (next_idx + 1) % pool_size
                 
         self.last_played_index = next_idx
+        if advance:
+            self._render_count += 1
         return self.current_pool[next_idx]["absolute_path"]
         
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
-        filepath = self.getNextSample()
+        filepath = self.getNextSample(advance=True)
         if not filepath:
             return np.zeros(0, dtype=np.float32)
             
@@ -770,14 +841,34 @@ class ItemPoolObject(AudioObject):
         item_bpm = chosen_item.get("bpm") if chosen_item else None
         if item_bpm is None:
             item_bpm = BPMAnalyzer.from_filename(filepath)
-            if item_bpm is None and len(audio_array) > 0:
-                item_bpm = BPMAnalyzer.from_duration(float(len(audio_array)) / sr)
+            if item_bpm is None and audio_array.shape[-1] > 0:
+                item_bpm = BPMAnalyzer.from_duration(float(audio_array.shape[-1]) / sr)
         
         original_bpm = item_bpm if item_bpm is not None else self._original_bpm
                 
-        data_to_render = audio_array
-        if system is not None and original_bpm is not None and original_bpm != system.bpm:
-            data_to_render = stretch_audio(audio_array, original_bpm, system.bpm)
+        if self.crop_start > 0.0 or self.crop_end < 1.0:
+            total_samples = audio_array.shape[-1]
+            start = int(max(0.0, min(1.0, self.crop_start)) * total_samples)
+            end = int(max(0.0, min(1.0, self.crop_end)) * total_samples)
+            audio_array = audio_array[..., start:end] if start < end else np.zeros(
+                (*audio_array.shape[:-1], 0), dtype=np.float32
+            )
+
+        if audio_array.shape[-1] == 0:
+            return np.zeros(0, dtype=np.float32)
+
+        target_bpm = system.bpm if system is not None else 120.0
+        data_to_render = process_sample_transform(
+            audio_data=audio_array,
+            sr=sr,
+            original_bpm=original_bpm,
+            target_bpm=target_bpm,
+            transpose=self.transpose,
+            cents=self.cents,
+            stretch_mode=self.stretch_mode,
+            stretch_factor=self.stretch_factor,
+            sample_type=self.sample_type
+        )
             
         return self.apply_chain(data_to_render, system)
 
@@ -806,6 +897,7 @@ class ArrangementObject(AudioObject):
         section_points: Optional[List[float]] = None,
         section_enabled: Optional[List[bool]] = None,
         section_probability: Optional[List[float]] = None,
+        section_sample_start: Optional[List[float]] = None,
         section_quant: Optional[List[str]] = None,
         section_quant_anchor: Optional[List[str]] = None,
         quant: Optional[Union[str, float]] = "none",
@@ -834,6 +926,7 @@ class ArrangementObject(AudioObject):
             for index in range(num_sections)
         ]
         self.section_probability = list(section_probability) if section_probability is not None else []
+        self.section_sample_start = list(section_sample_start) if section_sample_start is not None else []
         self.section_quant = list(section_quant) if section_quant is not None else []
         self.section_quant_anchor = list(section_quant_anchor) if section_quant_anchor is not None else []
         self.quant = "none" if quant is None else str(quant).lower()
@@ -866,6 +959,15 @@ class ArrangementObject(AudioObject):
                 return str(val).lower()
         return self.quant
 
+    def get_section_sample_start(self, section_index: int) -> float:
+        """Return the section's normalized source offset, clamped to 0..1."""
+        if 0 <= section_index < len(self.section_sample_start):
+            try:
+                return max(0.0, min(1.0, float(self.section_sample_start[section_index])))
+            except (TypeError, ValueError):
+                pass
+        return 0.0
+
     def get_section_quant_anchor(self, section_index: int) -> str:
         if 0 <= section_index < len(self.section_quant_anchor):
             val = self.section_quant_anchor[section_index]
@@ -879,6 +981,10 @@ class ArrangementObject(AudioObject):
             return None
         if s_quant == "auto":
             return self.get_child_loop_samples(child, audio, system)
+        if s_quant == "bar":
+            s_quant = "1.0"
+        elif s_quant == "beat":
+            s_quant = "0.25"
         try:
             quant_bars = float(s_quant)
         except (TypeError, ValueError):
@@ -907,14 +1013,14 @@ class ArrangementObject(AudioObject):
         if child_beats is not None and child_beats > 0:
             return system.beat_to_samples(child_beats)
 
-        if len(audio) > 0:
+        if audio.shape[-1] > 0:
             samples_per_beat = system.beat_to_samples(1.0)
             if samples_per_beat > 0:
-                beats = len(audio) / float(samples_per_beat)
+                beats = audio.shape[-1] / float(samples_per_beat)
                 nearest_beat = round(beats)
                 if abs(beats - nearest_beat) < 0.15 and nearest_beat > 0:
                     return system.beat_to_samples(float(nearest_beat))
-            return len(audio)
+            return audio.shape[-1]
 
         return system.beat_to_samples(4.0)
 
@@ -940,8 +1046,13 @@ class ArrangementObject(AudioObject):
             else:
                 audio = child.render(system, **kwargs)
                 cached_audios.append(audio)
-                
-        master_buffer = np.zeros(total_samples_to_fill, dtype=np.float32)
+
+        observed_channel_shapes = [
+            audio.shape[:-1]
+            for audio in cached_audios
+            if audio is not None
+        ]
+        rendered_events: List[Tuple[int, np.ndarray]] = []
         
         # Use a reproducible random generator based on the seed
         seed_hash = int(hashlib.md5(str(self.seed).encode()).hexdigest(), 16)
@@ -957,6 +1068,7 @@ class ArrangementObject(AudioObject):
             cell_start = section_start
 
             sec_prob = self.get_section_probability(section_index)
+            sec_sample_start = self.get_section_sample_start(section_index)
             sec_anchor = self.get_section_quant_anchor(section_index)
 
             while cell_start < section_end:
@@ -966,26 +1078,51 @@ class ArrangementObject(AudioObject):
 
                 if audio is None:
                     audio = child.render(system, iteration=iteration_count, **kwargs)
+                    observed_channel_shapes.append(audio.shape[:-1])
                 iteration_count += 1
-                if len(audio) == 0:
+                if audio.shape[-1] == 0:
                     break
 
                 quant_samples = self.get_section_quant_samples(section_index, child, audio, system)
-                cell_end = section_end if quant_samples is None else min(section_end, cell_start + quant_samples)
-                event_start = cell_start if sec_anchor == "start" else cell_end - len(audio)
-                event_end = event_start + len(audio)
+                sample_count = audio.shape[-1]
+                sample_offset = min(sample_count, int(sample_count * sec_sample_start))
+                playable_audio = audio[..., sample_offset:]
+                if playable_audio.shape[-1] == 0:
+                    if quant_samples is None:
+                        break
+                    cell_start += quant_samples
+                    continue
 
-                # Keep every event inside its section. End anchoring infers a
-                # possibly earlier start and trims the source when necessary.
-                write_start = max(section_start, event_start)
-                write_end = min(section_end, event_end)
+                cell_end = section_end if quant_samples is None else min(section_end, cell_start + quant_samples)
+                playable_samples = playable_audio.shape[-1]
+                event_start = cell_start if sec_anchor == "start" else cell_end - playable_samples
+                event_end = event_start + playable_samples
+
+                # Gate every trigger to its quant cell. This keeps arrangement
+                # playback monophonic: a long source cannot overlap the next
+                # trigger, regardless of whether it is start- or end-anchored.
+                write_start = max(section_start, cell_start, event_start)
+                write_end = min(section_end, cell_end, event_end)
                 if write_start < write_end and rng.random() < sec_prob:
                     source_start = write_start - event_start
                     source_end = source_start + (write_end - write_start)
-                    master_buffer[write_start:write_end] += audio[source_start:source_end]
+                    rendered_events.append((
+                        write_start,
+                        playable_audio[..., source_start:source_end],
+                    ))
 
                 if quant_samples is None or quant_samples <= 0:
                     break
                 cell_start += quant_samples
-                
+
+        channel_shape = (
+            np.broadcast_shapes(*observed_channel_shapes)
+            if observed_channel_shapes
+            else ()
+        )
+        master_buffer = np.zeros((*channel_shape, total_samples_to_fill), dtype=np.float32)
+        for write_start, event_audio in rendered_events:
+            write_end = write_start + event_audio.shape[-1]
+            master_buffer[..., write_start:write_end] += event_audio
+
         return self.apply_chain(master_buffer, system)

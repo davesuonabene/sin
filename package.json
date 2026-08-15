@@ -2,11 +2,16 @@
   "name": "beat-generator",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Automated Beat Generator Application",
   "scripts": {
     "start": "python run.py",
     "dev": "python run.py",
     "serve": "python cli.py serve",
-    "build:frontend": "npm --prefix frontend run build"
+    "test": "python -B tests/run.py && npm --prefix iride test",
+    "test:python": "python -B tests/run.py",
+    "test:frontend": "npm --prefix iride test",
+    "build:iride": "npm --prefix iride run build",
+    "build:frontend": "npm --prefix iride run build"
   }
 }

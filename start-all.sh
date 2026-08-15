@@ -48,8 +48,13 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -d "$ROOT_DIR/frontend/node_modules" ]]; then
-  echo "Frontend dependencies are missing. Run: npm --prefix frontend install" >&2
+FRONTEND_DIR="iride"
+if [[ ! -d "$ROOT_DIR/$FRONTEND_DIR" ]]; then
+  FRONTEND_DIR="frontend"
+fi
+
+if [[ ! -d "$ROOT_DIR/$FRONTEND_DIR/node_modules" ]]; then
+  echo "IRIDE frontend dependencies are missing. Run: npm --prefix $FRONTEND_DIR install" >&2
   exit 1
 fi
 
@@ -86,13 +91,13 @@ else
   start_server "GAIA Library on http://127.0.0.1:8001" "$PYTHON_CMD" -m uvicorn gaia.main:app --host 127.0.0.1 --port 8001
 fi
 
-start_server "Vite frontend on http://127.0.0.1:5173" npm --prefix frontend run dev -- --host 127.0.0.1
+start_server "IRIDE Node Frontend on http://127.0.0.1:5173" npm --prefix "$FRONTEND_DIR" run dev -- --host 127.0.0.1
 
 echo
 echo "All development servers are starting:"
-echo "  Main app:  http://127.0.0.1:8000"
-echo "  GAIA:      http://127.0.0.1:8001"
-echo "  Frontend:  http://127.0.0.1:5173"
+echo "  Main app:       http://127.0.0.1:8000"
+echo "  GAIA Library:   http://127.0.0.1:8001"
+echo "  IRIDE Frontend: http://127.0.0.1:5173"
 echo "Press Ctrl+C to stop them all."
 
 wait

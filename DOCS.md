@@ -1,141 +1,177 @@
 # SIN Architecture & Technical Documentation
 
-This document maintains high-level structural notes on how data, classes, and execution pipelines operate within the SIN platform. It serves as a guide for architecture refactoring, component reuse, and future development.
+This document maintains high-level structural notes on how data, classes, execution pipelines, and components operate within the SIN platform. It outlines the 3-component architecture (**IRIDE**, **ERMES**, and **GAIA**) and serves as the authoritative blueprint for development, refactoring, and component integration.
 
 ---
 
-## 1. Overview & Refactoring Scope
+## 1. High-Level Architecture Overview
 
-The main goal of the ongoing refactoring is to transition from monolithic script patterns into modular, reusable, and cleanly separated components across both frontend and backend.
+The SIN platform is divided into three distinct, specialized subsystem layers:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Frontend Canvas                      │
-│   User Interaction ──► Node Properties & UI Sync         │
-└──────────────────────────┬──────────────────────────────┘
-                           │ Pre-Serialization Traversal
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│               Serialization / Payload                   │
-│   Subtree JSON Construction ──► API Request Payload      │
-└──────────────────────────┬──────────────────────────────┘
-                           │ HTTP POST / API
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│                     Backend Graph                       │
-│   JSON Parsing ──► Python AudioObjects ──► DSP Render   │
-└─────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                        IRIDE (Node Frontend)                           │
+│   Canvas UI, BaseNode Polymorphism, Inspector Panels & UI Widgets      │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ Visual Graph State
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                     ERMES (Serialization Engine)                       │
+│   Subtree Traversal, Seed Evaluation, Dynamic Asset Resolver, Schemas  │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ Canonical JSON Payload (AudioNodeModel)
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                      GAIA (Backend & DSP Engine)                       │
+│   ┌──────────────────────────────┐  ┌──────────────────────────────┐   │
+│   │   GAIA Asset Library Vaults  │  │     GAIA Audio DSP Engine    │   │
+│   │   (Indexing, DB, Vaults)     │  │   (DSP, FX, AudioObjects)    │   │
+│   └──────────────────────────────┘  └──────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Subsystem Boundaries & Responsibilities
+
+| Subsystem | Folder / Location | Responsibilities | Key Modules |
+| :--- | :--- | :--- | :--- |
+| **IRIDE** | `iride/` | Visual graph editing, drag-and-drop links, LiteGraph canvas rendering, polymorphic `BaseNode` classes, parameter field schemas, inspector UI controls. | `nodes/*`, `fields/*`, `ui/*`, `main.ts` |
+| **ERMES** | `ermes/` | Interop & serialization engine. Pre-serialization node subtree traversal (`visit`), random seed generation, dynamic asset pool resolution, Pydantic schemas, payload compilation. | `ermes/ts/*` (TS engine), `ermes/py/*` (Python models) |
+| **GAIA** | `gaia/` & `core/` | Python backend platform housing **GAIA Asset Library Vaults** (asset indexing, SQLite database, metadata extraction) and **GAIA Audio DSP Engine** (synthesis renderers, FX chains, pitch shifting, `AudioObject` trees, WAV rendering). | `gaia/*` (Vaults/DB), `core/*` (DSP Engine), `api.py` |
+
+---
+
+## 2. Component Layout & Directory Structure
+
+```
+sin/
+├── gaia/                     # [GAIA Backend, Library Manager & DSP Engine]
+│   ├── dsp/ (or core/)       # Audio DSP operations, FX modules, AudioObjects, renderers
+│   │   ├── dsp.py            # Resampling, pitch shifting, gain, stretching
+│   │   ├── fx.py             # Equalizer, Compressor, Reverb, Saturation
+│   │   ├── engines.py        # Sample, Sequence, Track & Arrangement renderers
+│   │   └── audio_object.py   # Audio tree structure & graph execution
+│   ├── vaults/               # Asset management & DB controllers
+│   ├── main.py               # GAIA service entry point (Port 8001)
+│   └── routers/              # GAIA & DSP API endpoints
+│
+├── ermes/                    # [ERMES Serialization Engine]
+│   ├── ts/                   # TypeScript serialization & traversal engine
+│   │   ├── traversal.ts      # Subtree recursive traversal & link validation
+│   │   ├── assetResolver.ts  # Dynamic asset pool seed & filter resolver
+│   │   └── serializer.ts     # Main ErmesSerializer class
+│   └── py/                   # Python serialization models & validation
+│       ├── schemas.py        # Ermes AudioNodeModel & FxModuleModel Pydantic schemas
+│       └── validator.py      # Backend payload validator & graph constructor
+│
+└── iride/                    # [IRIDE Node Frontend - frontend/]
+    ├── src/
+    │   ├── nodes/            # BaseNode hierarchy & polymorphic custom nodes
+    │   ├── fields/           # FieldSchema & NodePanelSchema declarations
+    │   ├── ui/               # Inspector components (WidgetFactory, PropertiesWindow)
+    │   └── main.ts           # LiteGraph canvas setup & main UI event loop
+    ├── package.json
+    └── vite.config.ts
 ```
 
 ---
 
-## 2. Node Editor Processing (Before Serialization)
+## 3. Node Editor & Subtree Traversal (IRIDE ➔ ERMES)
 
-Before graph data is serialized into JSON payload structures for saving or backend execution, the node editor performs in-memory state management, link validation, dynamic parameter resolution, and node subtree traversal.
+Before graph data is transmitted to the backend for preview or DSP rendering, **IRIDE** delegates state processing to **ERMES**.
 
-### 2.1 Core Classes & Roles
+### 3.1 Core Classes & Roles
 
-#### **Frontend Canvas & Nodes (`frontend/src/nodes/`)**
-* **[`BaseNode`](file:///c:/web-projects/sin/frontend/src/nodes/BaseNode.ts)**: Abstract base class extending `LiteGraph.LGraphNode`. 
+#### **Frontend Canvas & Nodes (`iride/src/nodes/`)**
+* **[`BaseNode`](file:///c:/web-projects/sin/frontend/src/nodes/BaseNode.ts)**: Abstract base class extending `LiteGraph.LGraphNode`.
   * Declares static metadata defaults (`defaultColor`, `defaultIcon`, `badgeLabel`, `nodeType`, `defaultTab`, `tabs`) and dynamic fallback getters (`nodeColor`, `nodeIcon`, `badgeLabel`, `nodeType`, `propertiesTabs`, `defaultPropertiesTab`).
-  * Encapsulates square canvas node rendering (`drawCanvas()`) with modular sub-methods (`drawSelectionRing()`, `drawBody()`, `drawIcon()`, `drawSlots()`, `drawBadges()`, `drawNameBadge()`), allowing `LGraphCanvas.prototype.drawNode` in `main.ts` to delegate directly to node instances.
-  * Provides action buttons ([`CanvasButton`](file:///c:/web-projects/sin/frontend/src/ui/CanvasButton.ts)) for canvas preview, modulator connection, and deletion.
-  * Injects default FX gain chains (`getDefaultFxChain()`).
-  * Manages connection change listeners (`onConnectionsChange`).
+  * Encapsulates square canvas node rendering (`drawCanvas()`) with sub-methods (`drawSelectionRing()`, `drawBody()`, `drawIcon()`, `drawSlots()`, `drawBadges()`, `drawNameBadge()`).
+  * Integrates canvas action buttons ([`CanvasButton`](file:///c:/web-projects/sin/frontend/src/ui/CanvasButton.ts)).
 * **Concrete Node Implementations**:
-  * **[`SampleNode`](file:///c:/web-projects/sin/frontend/src/nodes/SampleNode.ts)** (`Audio/Sample`): Audio sample playback unit. Declares `static defaultColor = "#10b981"`, `static defaultIcon = "🎵"`, `static badgeLabel = "SMPL"`, `static nodeType = "sample"`, and `static fields: FieldSchema[]`.
-  * **[`SequenceNode`](file:///c:/web-projects/sin/frontend/src/nodes/SequenceNode.ts)** (`Audio/Sequence`): Step sequencer pattern generator. Declares `static defaultColor = "#ec4899"`, `static defaultIcon = "🎹"`, `static badgeLabel = "SEQ"`, `static nodeType = "sequence"`, and `static fields: FieldSchema[]`.
-  * **[`TrackNode`](file:///c:/web-projects/sin/frontend/src/nodes/TrackNode.ts)** (`Audio/Track`): Track mixing & output routing node. Declares `static defaultColor = "#4f46e5"`, `static defaultIcon = "🎛️"`, `static badgeLabel = "TRACK"`, `static nodeType = "track"`, and `static fields: FieldSchema[]`.
-  * **[`ArrangementNode`](file:///c:/web-projects/sin/frontend/src/nodes/ArrangementNode.ts)** (`Audio/Arrangement`): Timeline arrangement & section quantizer. Declares `static defaultColor = "#f59e0b"`, `static defaultIcon = "🎼"`, `static badgeLabel = "ARR"`, `static nodeType = "arrangement"`, and `static fields: FieldSchema[]`.
-  * **[`ModulatorNode`](file:///c:/web-projects/sin/frontend/src/nodes/ModulatorNode.ts)**: Base modulator/modifier node parent-owned by standard graph nodes. Declares `static defaultColor = "#9333ea"`, `static defaultIcon = "⚡"`, `static badgeLabel = "MOD"`, `static nodeType = "modulator"`, and `static fields: FieldSchema[]`.
-  * **[`AssetFilterNode`](file:///c:/web-projects/sin/frontend/src/nodes/AssetFilterNode.ts)** (`Audio/AssetFilter`): **The active Asset Pool implementation**. It extends `ModulatorNode` as a parent-owned modifier. Declares `static defaultColor = "#7c3aed"`, `static defaultIcon = "⌕"`, `static badgeLabel = "PATH"`, `static nodeType = "asset_filter"`, and `static fields: FieldSchema[]`.
-  * **[`DisabledNode`](file:///c:/web-projects/sin/frontend/src/nodes/DisabledNode.ts)** (`Audio/Disabled`): Bypass state indicator node. Extends `BaseNode` directly and declares `static defaultColor = "#64748b"`, `static defaultIcon = "⚠"`, `static badgeLabel = "DIS"`, `static nodeType = "disabled"`.
+  * **[`SampleNode`](file:///c:/web-projects/sin/frontend/src/nodes/SampleNode.ts)** (`Audio/Sample`): Audio sample playback unit.
+  * **[`SequenceNode`](file:///c:/web-projects/sin/frontend/src/nodes/SequenceNode.ts)** (`Audio/Sequence`): Step sequencer pattern generator.
+  * **[`TrackNode`](file:///c:/web-projects/sin/frontend/src/nodes/TrackNode.ts)** (`Audio/Track`): Track mixing & output routing node.
+  * **[`ArrangementNode`](file:///c:/web-projects/sin/frontend/src/nodes/ArrangementNode.ts)** (`Audio/Arrangement`): Timeline arrangement & section quantizer.
+  * **[`AssetFilterNode`](file:///c:/web-projects/sin/frontend/src/nodes/AssetFilterNode.ts)** (`Audio/AssetFilter`): Asset Pool filter modifier.
+  * **[`DisabledNode`](file:///c:/web-projects/sin/frontend/src/nodes/DisabledNode.ts)** (`Audio/Disabled`): Bypass state indicator node.
 
-#### **UI Controls, Panel Schemas & Component Renderers (`frontend/src/fields/` & `frontend/src/ui/`)**
-* **[`FieldSchema`](file:///c:/web-projects/sin/frontend/src/fields/FieldSchema.ts)**: Declarative parameter schema interface (`key`, `label`, `type`, `default`, `min`, `max`, `step`, `unit`, `options`). Declared statically on node classes and accessed via `node.getFields(tab)`.
-* **[`NodePanelSchema`](file:///c:/web-projects/sin/frontend/src/fields/NodePanelSchema.ts)**: Declarative inspector layout blueprint interface. Declared statically on node classes (`SampleNode.panelSchema`, `SequenceNode.panelSchema`, etc.) to organize inspector controls and visualizers into tabs and section configurations.
-* **[`SectionRendererFactory`](file:///c:/web-projects/sin/frontend/src/ui/SectionRendererFactory.ts)**: Reusable UI component builder. Reads section configurations (`fields`, `info_table`, `waveform_crop`, `sequence_grid`, `arrangement_timeline`, `fx_chain`, `pool_editor`) and instantiates modular inspector UI widgets.
-* **[`WidgetFactory`](file:///c:/web-projects/sin/frontend/src/ui/WidgetFactory.ts)**: Centralized field widget builder service. Automates creation of `.td-param-row` parameter controls (string, number, dropdown, toggle, interactive drag dB float box, seed randomize button) with bounds clamping and validation.
-* **[`PropertiesWindow`](file:///c:/web-projects/sin/frontend/src/ui/PropertiesWindow.ts)**: Lightweight, generic inspector host. Resolves `node.getPanelSchema()`, iterates over tab sections, and delegates section rendering to `SectionRendererFactory`.
-* **Single Source of Truth Node State**: Node state lives strictly in `node.properties`. `node.updateProperty(key, val)` directly mutates `node.properties`, syncs ghost node link bindings, and guarantees zero state drift prior to serialization.
+#### **UI Controls, Panel Schemas & Component Renderers (`iride/src/fields/` & `iride/src/ui/`)**
+* **[`FieldSchema`](file:///c:/web-projects/sin/frontend/src/fields/FieldSchema.ts)**: Declarative parameter schema interface (`key`, `label`, `type`, `default`, `min`, `max`, `step`, `unit`, `options`).
+* **[`NodePanelSchema`](file:///c:/web-projects/sin/frontend/src/fields/NodePanelSchema.ts)**: Declarative inspector layout blueprint interface.
+* **[`SectionRendererFactory`](file:///c:/web-projects/sin/frontend/src/ui/SectionRendererFactory.ts)**: Reusable UI component builder.
+* **[`WidgetFactory`](file:///c:/web-projects/sin/frontend/src/ui/WidgetFactory.ts)**: Centralized field widget builder service (`.td-param-row`).
+* **[`PropertiesWindow`](file:///c:/web-projects/sin/frontend/src/ui/PropertiesWindow.ts)**: Inspector host resolving `node.getPanelSchema()`.
 
 ---
 
-### 2.2 Data Flow & Pre-Serialization Pipeline
+### 3.2 ERMES Serialization Pipeline
 
-When a node operation (e.g., render preview, parameter change, connection update) is triggered, data flows through the following stages **prior to serialization**:
+When a render/preview is requested, ERMES executes the following pipeline:
 
 ```
 [ User Action / Property Edit ]
               │
               ▼
 [ Properties Sync & Connection Validation ]
-  - LiteGraph Node properties updated (`nodeObj.properties`)
-  - UI State synced (`syncGhostTrackData`)
-  - Pin links normalized (`normalizeInputs`)
+  - LiteGraph Node properties synced (node.properties)
+  - Pin links normalized (normalizeInputs)
               │
               ▼
-[ Subtree Traversal (`visit(rootNodeId)`) ]
-  - Recursive traversal of connected upstream input nodes
+[ ERMES Subtree Traversal (visit(rootNodeId)) ]
+  - Recursive traversal of connected upstream input pins
+  - Exclude disabled/Audio/Disabled nodes
               │
               ▼
-[ Dynamic Pre-computation (`serializeNodeSubtree`) ]
-  - Resolution of BPM, step lengths, arrangement sections
-  - Random seed evaluation based on `refresh_mode` ("self_render" vs "parent_render")
-  - Exclude/bypass check (`disabled` nodes skipped)
+[ ERMES Asset & Seed Resolution ]
+  - Query GAIA database for assigned asset pool filters (AssetFilterNode)
+  - Advance dynamic random seeds (moving vs self_render)
+  - Inject resolved audio file paths & original_bpm into payload
               │
               ▼
-[ Ready for JSON Serialization & API Payload ]
+[ ERMES Canonical JSON Serialization ]
+  - Output AudioNodeModel payload dictionary to GAIA API (/api/render, /api/preview)
 ```
-
-#### **Key Processing Steps**:
-
-1. **State Synchronization (`syncGhostTrackData`)**:
-   * Synchronizes LiteGraph canvas `LGraphNode.properties` with UI cache structures (`trackNodes`).
-   * Ensures editable fields (e.g. sequence steps, FX chains, filters) reflect the latest user input.
-
-2. **Connection Normalization (`normalizeInputs`)**:
-   * Evaluates input/output connection changes.
-   * Adjusts slot connections dynamically to ensure correct signal routing between upstream source nodes and downstream targets.
-
-3. **Upstream Subtree Traversal (`visit`)**:
-   * Traverses input pins recursively using link origins (`link.origin_id`) to assemble only the required subtree of nodes connected to the targeted output or preview node.
-
-4. **Asset Pool Modulator Resolution (`resolveAssignedAssetFilters`)**:
-   * Prior to graph serialization for preview or rendering, `resolveAssignedAssetFilters(graph, rootNodeId)` is invoked.
-   * It inspects assigned asset modulators (`asset_modifier_id`), resolves matching audio files using [`AssetFilterNode`](file:///c:/web-projects/sin/frontend/src/nodes/AssetFilterNode.ts) filter rules (`resolveAssetFilterNode`), updates pool seeds (`advanceAssetPoolSeed`), and dynamically injects the chosen asset's `filepath` and `original_bpm` into the host node (e.g. [`SampleNode`](file:///c:/web-projects/sin/frontend/src/nodes/SampleNode.ts)).
-
-5. **Dynamic Parameter & Seed Evaluation**:
-   * **FX Chain Verification**: Ensures pre-gain and post-gain FX chains (`getDefaultFxChain`) are initialized and attached.
-   * **Filtering & Bypassing**: Skips nodes marked as `disabled` or `Audio/Disabled`.
 
 ---
 
-## 3. Backend Processing (Before Serialization & Rendering)
+## 4. Backend Processing & DSP Engine (ERMES ➔ GAIA)
 
-On the backend ([`api.py`](file:///c:/web-projects/sin/api.py) and [`core/`](file:///c:/web-projects/sin/core/)), graph dictionaries received from the frontend are converted into Python object instances prior to DSP pipeline execution.
+Upon receiving an `AudioNodeModel` payload from ERMES, GAIA converts graph dictionaries into execution objects for DSP rendering:
 
-### 3.1 Backend Core Hierarchy (`core/`)
+### 4.1 GAIA Object Hierarchy (`core/`)
 
-* **[`BaseObject`](file:///c:/web-projects/sin/core/base_object.py)**: Root class for all backend graph nodes.
-* **[`AudioObject`](file:///c:/web-projects/sin/core/audio_object.py)**: Base for audio-producing nodes. Subclasses include:
+* **[`BaseObject`](file:///c:/web-projects/sin/core/base_object.py)**: Root class for all backend graph execution objects.
+* **[`AudioObject`](file:///c:/web-projects/sin/core/audio_object.py)**: Base class for audio rendering units. Subclasses include:
   * `SampleObject`
   * `TrackObject`
   * `SequenceObject`
   * `ArrangementObject`
   * `ItemPoolObject`
-* **DSP & Engine Modules**:
-  * **[`core/engines.py`](file:///c:/web-projects/sin/core/engines.py)**: Audio synthesis and engine execution.
-  * **[`core/dsp.py`](file:///c:/web-projects/sin/core/dsp.py)**: Digital signal processing utilities (resampling, pitch shifting, gain scaling).
-  * **[`core/fx.py`](file:///c:/web-projects/sin/core/fx.py)**: FX chain processing (equalizer, compressor, gain, reverb).
+
+### 4.2 GAIA DSP Modules
+
+* **[`core/engines.py`](file:///c:/web-projects/sin/core/engines.py)**: Node synthesis renderers (`SampleRenderer`, `SequenceRenderer`, `TrackRenderer`, `ArrangementRenderer`).
+* **[`core/dsp.py`](file:///c:/web-projects/sin/core/dsp.py)**: DSP operations (resampling, pitch shifting, time stretching, gain scaling).
+* **[`core/fx.py`](file:///c:/web-projects/sin/core/fx.py)**: Audio FX chain modules (equalizer, compressor, gain, reverb).
 
 ---
 
-## 4. Next Steps & Reorganization Targets
+## 5. GAIA Asset Hierarchy and Managed Imports
 
-1. **Frontend Modularization**:
-   * Extract graph serialization and state sync functions out of [`main.ts`](file:///c:/web-projects/sin/frontend/src/main.ts) into a dedicated `NodeGraphManager` or `GraphSerializer` service.
-   * Standardize node creation and property synchronization interfaces across custom node classes.
+GAIA stores every library entry under one polymorphic Asset hierarchy. Files are typed as audio, samples, loops, one-shots, MIDI, sequences, or generic files. Typed root folders inherit from `FolderItem` and contain canonical child Item rows while retaining a derived JSON manifest for compatibility.
 
-2. **Component Reuse**:
-   * Consolidate duplicate UI inspector controls in [`PropertiesWindow.ts`](file:///c:/web-projects/sin/frontend/src/ui/PropertiesWindow.ts) into reusable UI widgets.
+Folder types currently include generic collections, sample packs, stem collections (`multitrack` remains the compatibility identifier), and Projects. `LiveRecordingProjectItem` is the first concrete Project workflow. Nested filesystem structure is preserved through each child's relative path rather than additional database folder rows.
+
+`POST /items/import` accepts a file, folder, or ZIP. The optional `analysis_types` array limits folder classification to enabled registered types; omitting it preserves the legacy `expected_type` behavior. GAIA opens importing from the `+` action in the Library—there is no separate import page. Auto scan checks every recognizable collection type and uses `fallback_to_files` to import independent managed items when none match. Specific collection presents the currently registered, recognizable collection types and forces the selected type. A directly selected file is always imported as one item. Project types remain explicit creation workflows and are never auto-detected. Explicit stem imports retain the stem type and persist validation warnings when lengths or filename roles look inconsistent.
+
+The import view uses one source action for files, folders, and ZIP archives. Folder-analysis types are presented as independent toggles, and a completed import opens a summary of collections, item counts, detected types, size, warnings, and representative paths.
+
+Project management is owned exclusively by GAIA through `/projects`. External files are copied into a Project; files already inside GAIA's managed asset store are moved while retaining their Item IDs. Project and folder filesystem changes are paired with database transactions and rollback actions.
+
+---
+
+## 6. Architectural Compliance Rules
+
+As outlined in `AGENTS.md`:
+1. **GAIA Library Ownership**: GAIA is the sole library-management application. IRIDE is a read-only consumer of GAIA assets (browsing, previewing, and using assets in nodes).
+2. **Polymorphic Node Architecture**: All node rendering, styling, badges, default properties, and panel schemas are encapsulated within `BaseNode` subclasses in `nodes/`. External `if (node.type === ...)` conditionals are strictly prohibited.
+3. **Declarative Fields & Widget Factory**: Node parameters must be declared via `FieldSchema[]` arrays and rendered via `WidgetFactory.createRow()`.

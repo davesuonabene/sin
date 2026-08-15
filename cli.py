@@ -2,7 +2,6 @@ import typer
 from pathlib import Path
 from typing import Optional
 from core.audio_object import AudioObject
-from database.db import init_db, get_db_connection
 
 app = typer.Typer(help="Automated Beat Generator CLI")
 
@@ -12,8 +11,7 @@ def callback():
     """
     Automated Beat Generator CLI tool.
     """
-    # Ensure database table exists
-    init_db()
+    pass
 
 
 @app.command()
@@ -23,20 +21,10 @@ def add_sample(
     duration: float = typer.Option(0.0, "--duration", "-d", help="Duration in seconds")
 ):
     """
-    Add an audio sample to the beat generator library.
+    Register an audio sample (GAIA library manager handles asset vaults).
     """
     audio_obj = AudioObject(name=name, filepath=Path(filepath) if filepath else None, duration=duration)
-    
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO audio_objects (name, filepath, duration, is_composite) VALUES (?, ?, ?, ?)",
-            (audio_obj.name, str(audio_obj.filepath) if audio_obj.filepath else None, audio_obj.duration, 0)
-        )
-        conn.commit()
-        sample_id = cursor.lastrowid
-
-    typer.echo(f"Successfully registered AudioObject [ID: {sample_id}] '{audio_obj.name}' (Duration: {audio_obj.duration}s)")
+    typer.echo(f"Created AudioObject '{audio_obj.name}' (Duration: {audio_obj.duration}s). Note: Library assets are managed via GAIA.")
 
 
 @app.command()

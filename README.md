@@ -21,11 +21,11 @@ graph TD
         API["FastAPI REST Endpoints (api.py)"]
         GE_Engine["Audio Graph Engine (core/graph.py)"]
         DSP["DSP Mixer & Sequencer (core/dsp.py)"]
-        DB["SQLite Database (beat_generator.db)"]
+        GAIA["GAIA Asset Library Vaults (gaia.db)"]
         
         API --> GE_Engine
         GE_Engine --> DSP
-        API <--> DB
+        API <--> GAIA
     end
 
     PW -- "Render / Serialized Tree Payload" --> API
@@ -93,6 +93,19 @@ python api.py
 uvicorn api:app --reload --log-level debug
 ```
 
+### Tests
+
+Run the focused backend and frontend suites together:
+
+```bash
+npm test
+```
+
+The Python runner executes from a disposable working directory, so generated
+audio, SQLite databases, exports, bytecode, and other test artifacts do not
+remain in the repository. Use `npm run test:python` or
+`npm run test:frontend` when working on only one side of the application.
+
 ---
 
 ## Project Structure
@@ -101,7 +114,7 @@ uvicorn api:app --reload --log-level debug
 - `run.py` - Easy terminal launcher script with debug logging.
 - `cli.py` - Typer CLI tool for managing samples and starting the server.
 - `core/` - Audio graph engine, DSP processing, sample loading, and BPM analyzer routines.
-- `database/` - SQLite database helper and schema initialization (`beat_generator.db`).
+- `gaia/` - GAIA Asset Library Vaults, metadata indexing, and SQLite database (`gaia.db`).
 - `frontend/` - Modern Vite TypeScript frontend source code.
   - `src/main.ts` - Application entry point, LiteGraph initialization, Dockview window management, and collapse logic.
   - `src/ui/PropertiesWindow.ts` - Node properties UI forms for Track, Sample, and Step Sequencer.
