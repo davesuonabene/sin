@@ -121,7 +121,7 @@ export function findLibraryFileForPoolLocator(files: LibraryFile[], asset: any):
     const directIdMatch = !idText.startsWith('collection:')
         ? findLibraryFileById(files, asset.id)
         : undefined;
-    if (directIdMatch && !['collection', 'sample_pack', 'project', 'live_recording_project'].includes(String(directIdMatch.type))) {
+    if (directIdMatch && !['collection', 'sample_pack', 'project'].includes(String(directIdMatch.type))) {
         return directIdMatch;
     }
     const collectionId = asset.collection_id ?? (directIdMatch ? asset.id : undefined) ?? (

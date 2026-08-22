@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the Beat Generator API, GAIA Library, and Vite development server with hot reload enabled.
+# Start the SIN API, GAIA library manager, and IRIDE Vite client.
 
 set -Eeuo pipefail
 
@@ -49,9 +49,6 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 FRONTEND_DIR="iride"
-if [[ ! -d "$ROOT_DIR/$FRONTEND_DIR" ]]; then
-  FRONTEND_DIR="frontend"
-fi
 
 if [[ ! -d "$ROOT_DIR/$FRONTEND_DIR/node_modules" ]]; then
   echo "IRIDE frontend dependencies are missing. Run: npm --prefix $FRONTEND_DIR install" >&2

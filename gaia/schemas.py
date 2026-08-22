@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field
-from typing import List, Optional, Literal
+from typing import Any, List, Optional, Literal
 from datetime import datetime
 
 # Tags
@@ -13,18 +13,6 @@ class Tag(TagBase):
     id: int
     model_config = ConfigDict(from_attributes=True)
 
-# Collections
-class CollectionBase(BaseModel):
-    name: str
-    description: Optional[str] = None
-
-class CollectionCreate(CollectionBase):
-    pass
-
-class Collection(CollectionBase):
-    id: int
-    model_config = ConfigDict(from_attributes=True)
-
 # Items
 class ItemBase(BaseModel):
     absolute_path: str
@@ -33,6 +21,7 @@ class ItemBase(BaseModel):
     mime_type: Optional[str] = None
     vault_id: Optional[int] = None
     parent_id: Optional[int] = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
 
 class ItemCreate(ItemBase):
     type: str = "item"
@@ -42,6 +31,8 @@ class ItemUpdate(BaseModel):
     title: Optional[str] = None
     bpm: Optional[int] = None
     key: Optional[str] = None
+    is_loop: Optional[bool] = None
+    attributes: Optional[dict[str, Any]] = None
     tags: Optional[List[str]] = None
 
 
@@ -57,6 +48,7 @@ class CollectionContentUpdate(BaseModel):
     type: Optional[str] = None
     bpm: Optional[int] = None
     key: Optional[str] = None
+    is_loop: Optional[bool] = None
     tags: Optional[List[str]] = None
 
 class StemInfo(BaseModel):
@@ -81,6 +73,7 @@ class CollectionContent(BaseModel):
     duration_seconds: Optional[float] = None
     bpm: Optional[int] = None
     key: Optional[str] = None
+    is_loop: Optional[bool] = None
     tags: List[str] = Field(default_factory=list)
     streamable: bool = False
     child_id: Optional[int] = None
@@ -94,6 +87,7 @@ class Item(ItemBase):
     title: Optional[str] = None
     key: Optional[str] = None
     bpm: Optional[int] = None
+    is_loop: Optional[bool] = None
     stems: Optional[List[StemInfo]] = None
     is_valid_length: Optional[bool] = None
     length_variance: Optional[float] = None
@@ -103,12 +97,9 @@ class Item(ItemBase):
     contents: Optional[List[CollectionContent]] = None
     warnings: List[str] = Field(default_factory=list)
     tags: List[Tag] = Field(default_factory=list)
-    collections: List[Collection] = Field(default_factory=list)
-    vault_ids: List[int] = Field(default_factory=list)
-
     model_config = ConfigDict(from_attributes=True)
 
-class DispatchItemsRequest(BaseModel):
+class MoveItemsRequest(BaseModel):
     item_ids: List[int]
     vault_id: int
 
@@ -127,22 +118,13 @@ class TrackItem(AudioItem):
 class SampleItemCreate(AudioItemCreate):
     type: str = "sample"
     key: Optional[str] = None
+    bpm: Optional[int] = None
+    is_loop: bool = False
 
 class SampleItem(AudioItem):
     key: Optional[str] = None
-
-class LoopSampleItemCreate(SampleItemCreate):
-    type: str = "loop"
     bpm: Optional[int] = None
-
-class LoopSampleItem(SampleItem):
-    bpm: Optional[int] = None
-
-class OneShotSampleItemCreate(SampleItemCreate):
-    type: str = "one_shot"
-
-class OneShotSampleItem(SampleItem):
-    pass
+    is_loop: bool = False
 
 class MidiItemCreate(ItemCreate):
     type: str = "midi"
@@ -169,12 +151,6 @@ class CollectionItem(Item):
     contents: List[CollectionContent] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
 
-class SamplePackItemCreate(CollectionItemCreate):
-    type: str = "sample_pack"
-
-class SamplePackItem(CollectionItem):
-    pass
-
 class MultitrackItemCreate(CollectionItemCreate):
     type: str = "multitrack"
     stems: List[StemInfo] = Field(default_factory=list)
@@ -196,47 +172,26 @@ class ProjectItemCreate(CollectionItemCreate):
     source_kind: str = "managed"
 
 
-class LiveRecordingProjectItemCreate(ProjectItemCreate):
-    type: str = "live_recording_project"
-
-
 class ProjectItem(CollectionItem):
     pass
 
 # Requests
-class DirectoryScanRequest(BaseModel):
-    directory_path: str
-    look_for_multitracks: bool = False
-    vault_id: Optional[int] = None
-    expected_type: str = "files"
-    analysis_types: Optional[List[str]] = None
-
-class CollectionImportRequest(BaseModel):
+class ImportPreviewRequest(BaseModel):
     source_path: str
     vault_id: Optional[int] = None
-    expected_type: str = "auto"
-    analysis_types: Optional[List[str]] = None
-    fallback_to_files: bool = False
 
 
-class BatchImportResult(BaseModel):
-    type: str = "batch"
-    title: str
-    absolute_path: str
-    imported: int
-    skipped: int = 0
-    size_bytes: int = 0
-    items: List[Item] = Field(default_factory=list)
-    warnings: List[str] = Field(default_factory=list)
-
-class MultitrackRegisterRequest(BaseModel):
-    folder_path: str
-    vault_id: Optional[int] = None
+class ImportJobCreateRequest(BaseModel):
+    preview_id: str
+    folder_assignments: dict[str, str] = Field(default_factory=dict)
+    item_types: dict[int, str] = Field(default_factory=dict)
+    excluded_indexes: List[int] = Field(default_factory=list)
+    conflict_action: Optional[Literal["skip", "new_snapshot"]] = None
 
 
 class ProjectCreateRequest(BaseModel):
     name: str
-    project_type: str = "live_recording_project"
+    project_type: str = "project"
     vault_id: Optional[int] = None
 
 
@@ -248,12 +203,74 @@ class ProjectAddPathsRequest(BaseModel):
     source_paths: List[str] = Field(default_factory=list)
 
 
+class FolderPlacementRequest(BaseModel):
+    item_ids: List[int] = Field(default_factory=list)
+    mode: Literal["move", "reference"]
+
+
 class ProjectFromItemsRequest(BaseModel):
     item_ids: List[int] = Field(default_factory=list)
     mode: Literal["single", "one_per_item"] = "single"
     name: Optional[str] = None
-    project_type: str = "live_recording_project"
+    project_type: str = "project"
     vault_id: Optional[int] = None
+
+
+ReferenceKind = Literal["source", "component", "use", "derived", "supersedes"]
+
+
+class ItemReferenceCreate(BaseModel):
+    context_id: int
+    from_item_id: int
+    to_item_id: int
+    relation_kind: ReferenceKind = "use"
+    stage_name: Optional[str] = None
+    revision_label: Optional[str] = None
+    is_master: bool = False
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectReferenceCreate(BaseModel):
+    from_item_id: int
+    to_item_id: int
+    relation_kind: ReferenceKind = "use"
+    stage_name: Optional[str] = None
+    revision_label: Optional[str] = None
+    is_master: bool = False
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectReferenceUpdate(BaseModel):
+    revision_label: Optional[str] = None
+
+
+class ItemReference(ItemReferenceCreate):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectDerivedPathRequest(BaseModel):
+    source_path: str
+    from_item_id: int
+    relation_kind: Literal["derived", "supersedes"] = "derived"
+    stage_name: Optional[str] = None
+    revision_label: Optional[str] = None
+    is_master: bool = False
+    target_type: Literal["audio", "track", "sample", "multitrack"] = "audio"
+
+
+class ProjectProfileApplyRequest(BaseModel):
+    source_item_id: int
+    profile_id: str
+    mark_suggested_master: bool = True
+
+
+class ProjectDerivedPathResult(BaseModel):
+    item: Item
+    reference: ItemReference
 
 class ItemTagRequest(BaseModel):
     tag_id: int
@@ -265,6 +282,10 @@ class VaultBase(BaseModel):
 
 class VaultCreate(VaultBase):
     pass
+
+class VaultUpdate(BaseModel):
+    name: str
+    description: Optional[str] = None
 
 class Vault(VaultBase):
     id: int

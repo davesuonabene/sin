@@ -1,7 +1,4 @@
 import typer
-from pathlib import Path
-from typing import Optional
-from core.audio_object import AudioObject
 
 app = typer.Typer(help="Automated Beat Generator CLI")
 
@@ -12,19 +9,6 @@ def callback():
     Automated Beat Generator CLI tool.
     """
     pass
-
-
-@app.command()
-def add_sample(
-    name: str = typer.Argument(..., help="Name of the audio sample"),
-    filepath: Optional[str] = typer.Option(None, "--file", "-f", help="Path to audio file"),
-    duration: float = typer.Option(0.0, "--duration", "-d", help="Duration in seconds")
-):
-    """
-    Register an audio sample (GAIA library manager handles asset vaults).
-    """
-    audio_obj = AudioObject(name=name, filepath=Path(filepath) if filepath else None, duration=duration)
-    typer.echo(f"Created AudioObject '{audio_obj.name}' (Duration: {audio_obj.duration}s). Note: Library assets are managed via GAIA.")
 
 
 @app.command()
@@ -52,4 +36,3 @@ def serve(
 
 if __name__ == "__main__":
     app()
-

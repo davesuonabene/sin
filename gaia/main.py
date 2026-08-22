@@ -5,14 +5,16 @@ from fastapi.responses import FileResponse
 import uvicorn
 import os
 
-from . import models, database, vaults
-from .routers import items, tags, collections, projects, vaults as vault_router
+from . import import_jobs, models, database, profiles, vaults
+from .routers import items, tags, projects, vaults as vault_router
 
-# Create the database tables
+# Migrate the removed SamplePack subtype before ORM mappings query legacy rows.
+database.migrate_sample_pack_profiles()
 models.Base.metadata.create_all(bind=database.engine)
-vaults.initialise_schema(database.engine)
 with database.SessionLocal() as db:
     vaults.ensure_default_vault(db)
+profiles.ensure_builtin_profile_bundles()
+import_jobs.cleanup_stale_staging()
 
 app = FastAPI(
     title="Gaia Archive Manager",
@@ -32,7 +34,6 @@ app.add_middleware(
 # Include routers
 app.include_router(items.router)
 app.include_router(tags.router)
-app.include_router(collections.router)
 app.include_router(projects.router)
 app.include_router(vault_router.router)
 

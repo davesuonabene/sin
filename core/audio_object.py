@@ -652,11 +652,11 @@ class ItemPoolObject(AudioObject):
             
             query = """
                 SELECT i.id, i.absolute_path, i.type, i.vault_id,
-                       COALESCE(l.bpm, m.bpm, mt.bpm) AS bpm,
+                       COALESCE(s.bpm, m.bpm, mt.bpm) AS bpm,
                        ci.manifest_json,
                        GROUP_CONCAT(DISTINCT t.name) AS tag_names
                 FROM items i
-                LEFT JOIN loop_sample_items l ON i.id = l.id
+                LEFT JOIN sample_items s ON i.id = s.id
                 LEFT JOIN midi_items m ON i.id = m.id
                 LEFT JOIN multitrack_items mt ON i.id = mt.id
                 LEFT JOIN collection_items ci ON i.id = ci.id
@@ -735,7 +735,7 @@ class ItemPoolObject(AudioObject):
                     collection_root = os.path.abspath(row["absolute_path"] or "")
                     for content in contents:
                         content_type = content.get("type")
-                        if content_type not in {"sample", "loop", "one_shot", "midi"}:
+                        if content_type not in {"audio", "sample", "track", "midi"}:
                             continue
                         content_bpm = content.get("bpm")
                         # Collections are organizers only; filter the actual

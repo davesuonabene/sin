@@ -1,4 +1,4 @@
-document.addEventListener('DOMContentLoaded', () => {
+function initializeGaiaLibrary() {
     const state = {
         items: [],
         types: [],
@@ -12,14 +12,44 @@ document.addEventListener('DOMContentLoaded', () => {
         playingKey: null,
         vaults: [],
         selectedVaultId: null,
+        importVaultId: null,
+        importPreview: null,
+        importFolderAssignments: new Map(),
+        importItemTypes: new Map(),
+        importExcludedIndexes: new Set(),
+        importCollapsedFolders: new Set(),
+        importConflictAction: null,
+        importJobId: null,
+        importLastJob: null,
+        sourcePickerDirectory: null,
+        sourcePickerParent: null,
+        sourcePickerSelection: null,
         contextEntry: null,
-        importAnalysisTypes: new Set(),
-        importAnalysisTypesInitialized: false,
-        importMode: 'auto',
+        projectReferencedItems: new Map(),
+        projectReferencesLoading: new Set(),
+        projectDialogSources: [],
+        projectSourceIds: new Set(),
+        pendingPlacement: null,
     };
 
     const assetList = document.getElementById('asset-list');
     const summary = document.getElementById('library-summary');
+    const vaultPicker = document.getElementById('vault-picker');
+    const activeVaultName = document.getElementById('active-vault-name');
+    const vaultMenu = document.getElementById('vault-menu');
+    const vaultMenuList = document.getElementById('vault-menu-list');
+    const createVaultButton = document.getElementById('create-vault');
+    const deleteVaultButton = document.getElementById('delete-vault');
+    const vaultOptionsButton = document.getElementById('vault-options');
+    const vaultDialog = document.getElementById('vault-dialog');
+    const vaultForm = document.getElementById('vault-form');
+    const vaultDialogEyebrow = document.getElementById('vault-dialog-eyebrow');
+    const vaultDialogTitle = document.getElementById('vault-dialog-title');
+    const vaultDialogClose = document.getElementById('vault-dialog-close');
+    const vaultDialogCancel = document.getElementById('vault-dialog-cancel');
+    const vaultDialogSubmit = document.getElementById('vault-dialog-submit');
+    const vaultNameInput = document.getElementById('vault-name-input');
+    const vaultDialogResult = document.getElementById('vault-dialog-result');
     const searchInput = document.getElementById('search-input');
     const clearFilter = document.getElementById('clear-filter');
     const refreshButton = document.getElementById('refresh');
@@ -27,55 +57,74 @@ document.addEventListener('DOMContentLoaded', () => {
     const importDialog = document.getElementById('import-dialog');
     const openImportButton = document.getElementById('open-import');
     const importDialogClose = document.getElementById('import-dialog-close');
+    const importHeadingSource = document.getElementById('import-heading-source');
     const importCancel = document.getElementById('import-cancel');
-    const importModeAuto = document.getElementById('import-mode-auto');
-    const importModeSpecific = document.getElementById('import-mode-specific');
-    const specificTypePanel = document.getElementById('specific-type-panel');
     const sourcePath = document.getElementById('source-path');
-    const sourceFileChoice = document.getElementById('source-file-choice');
-    const sourceFolderChoice = document.getElementById('source-folder-choice');
+    const chooseSourcePath = document.getElementById('choose-source-path');
+    const sourcePickerDialog = document.getElementById('source-picker-dialog');
+    const sourcePickerClose = document.getElementById('source-picker-close');
+    const sourcePickerCancel = document.getElementById('source-picker-cancel');
+    const sourcePickerUp = document.getElementById('source-picker-up');
+    const sourcePickerLocationForm = document.getElementById('source-picker-location-form');
+    const sourcePickerLocation = document.getElementById('source-picker-location');
+    const sourcePickerLocations = document.getElementById('source-picker-locations');
+    const sourcePickerList = document.getElementById('source-picker-list');
+    const sourcePickerResult = document.getElementById('source-picker-result');
+    const sourcePickerSelection = document.getElementById('source-picker-selection');
+    const sourcePickerChoose = document.getElementById('source-picker-choose');
     const importResult = document.getElementById('import-result');
     const vaultSelect = document.getElementById('vault-select');
-    const vaultForm = document.getElementById('vault-form');
-    const vaultName = document.getElementById('vault-name');
-    const vaultResult = document.getElementById('vault-result');
-    const vaultImportLog = document.getElementById('vault-import-log');
-    const vaultLogDescription = document.getElementById('vault-log-description');
+    const importSourceStep = document.getElementById('import-source-step');
+    const importPreviewStep = document.getElementById('import-preview-step');
     const listHeader = document.getElementById('list-header');
-    const assetPanel = document.querySelector('.asset-panel');
     const contextMenu = document.getElementById('context-menu');
     const analyzeEntryButton = document.getElementById('analyze-entry');
     const deleteEntryMenuButton = document.getElementById('delete-entry-menu');
-    const dispatchBar = document.getElementById('dispatch-bar');
-    const dispatchCount = document.getElementById('dispatch-count');
-    const dispatchTargetSelect = document.getElementById('dispatch-target-select');
-    const dispatchSubmitBtn = document.getElementById('dispatch-submit-btn');
+    const moveBar = document.getElementById('move-bar');
+    const moveCount = document.getElementById('move-count');
+    const moveTargetSelect = document.getElementById('move-target-select');
+    const moveSubmitBtn = document.getElementById('move-submit-btn');
+    const analyzeSelectionButton = document.getElementById('analyze-selection');
+    const deleteSelectionButton = document.getElementById('delete-selection');
+    const selectionTypeActions = document.getElementById('selection-type-actions');
     const contextVaultOptions = document.getElementById('context-vault-options');
-    const removeVaultEntryButton = document.getElementById('remove-vault-entry');
-    const scrollLeftBtn = document.getElementById('scroll-left-header');
-    const scrollRightBtn = document.getElementById('scroll-right-header');
     const filterStatus = document.getElementById('filter-status');
-    const vaultChips = document.getElementById('vault-chips');
     const typeChips = document.getElementById('type-chips');
     const tagChips = document.getElementById('tag-chips');
-    const analysisTypeList = document.getElementById('analysis-type-list');
-    const analysisTypeStatus = document.getElementById('analysis-type-status');
     const importSubmit = document.getElementById('import-submit');
     const importSummaryDialog = document.getElementById('import-summary-dialog');
     const importSummaryContent = document.getElementById('import-summary-content');
     const importSummaryClose = document.getElementById('import-summary-close');
     const importSummaryDone = document.getElementById('import-summary-done');
+    const importProgressContainer = document.getElementById('import-progress-container');
+    const importProgressLabel = document.getElementById('import-progress-label');
+    const importProgressDetail = document.getElementById('import-progress-detail');
+    const importProgressFill = document.getElementById('import-progress-fill');
+    const importProgressCount = document.getElementById('import-progress-count');
+    const importProgressCancel = document.getElementById('import-progress-cancel');
+    const importProgressResults = document.getElementById('import-progress-results');
+    const importProgressDismiss = document.getElementById('import-progress-dismiss');
+    const importVaultCreate = document.getElementById('import-vault-create');
+    const importVaultName = document.getElementById('import-vault-name');
+    const importVaultCreateSubmit = document.getElementById('import-vault-create-submit');
+    const importVaultCreateCancel = document.getElementById('import-vault-create-cancel');
+    const importVaultCreateResult = document.getElementById('import-vault-create-result');
     const createProjectButton = document.getElementById('create-project');
-    const projectFromSelectionButton = document.getElementById('project-from-selection');
-    const projectsPerSelectionButton = document.getElementById('projects-per-selection');
     const projectDialog = document.getElementById('project-dialog');
     const projectForm = document.getElementById('project-form');
     const projectDialogTitle = document.getElementById('project-dialog-title');
+    const projectDialogSubtitle = document.getElementById('project-dialog-subtitle');
     const projectDialogClose = document.getElementById('project-dialog-close');
+    const projectDialogCancel = document.getElementById('project-dialog-cancel');
     const projectMode = document.getElementById('project-mode');
     const projectName = document.getElementById('project-name');
     const projectType = document.getElementById('project-type');
+    const projectSourcePreview = document.getElementById('project-source-preview');
+    const projectSourceTitle = document.getElementById('project-source-title');
+    const projectSourceCount = document.getElementById('project-source-count');
+    const projectSourceList = document.getElementById('project-source-list');
     const projectSelectionNote = document.getElementById('project-selection-note');
+    const projectSubmit = document.getElementById('project-submit');
     const projectResult = document.getElementById('project-result');
     const projectFilesDialog = document.getElementById('project-files-dialog');
     const projectFilesForm = document.getElementById('project-files-form');
@@ -84,6 +133,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const projectFilesId = document.getElementById('project-files-id');
     const projectFilePaths = document.getElementById('project-file-paths');
     const projectFilesResult = document.getElementById('project-files-result');
+    const itemPlacementDialog = document.getElementById('item-placement-dialog');
+    const itemPlacementTitle = document.getElementById('item-placement-title');
+    const itemPlacementSummary = document.getElementById('item-placement-summary');
+    const itemPlacementClose = document.getElementById('item-placement-close');
+    const itemPlacementCancel = document.getElementById('item-placement-cancel');
+    const itemPlacementMove = document.getElementById('item-placement-move');
+    const itemPlacementReference = document.getElementById('item-placement-reference');
+    const itemPlacementResult = document.getElementById('item-placement-result');
+    let vaultDialogMode = 'create';
 
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>'"]/g, char => ({
@@ -116,6 +174,69 @@ document.addEventListener('DOMContentLoaded', () => {
         return false;
     }
 
+    const ROW_LAYOUTS = Object.freeze({
+        main: {
+            id: 'main',
+            columns: 'minmax(0, 1fr) minmax(82px, .35fr) 80px',
+            fields: ['name', 'type', 'size'],
+        },
+        collection: {
+            id: 'collection',
+            columns: 'minmax(150px, 1.3fr) minmax(82px, .45fr) minmax(90px, .7fr) 76px',
+            fields: ['name', 'type', 'tags', 'size'],
+        },
+        samplePack: {
+            id: 'sample-pack',
+            columns: 'minmax(145px, 1.25fr) minmax(140px, 1fr) minmax(78px, .45fr) 58px 62px minmax(100px, .8fr) 78px',
+            fields: ['name', 'path', 'type', 'bpm', 'key', 'tags', 'size'],
+        },
+    });
+
+    const ROW_HEADER_LABELS = Object.freeze({
+        name: 'Name',
+        path: 'Path',
+        type: 'Type',
+        bpm: 'BPM',
+        key: 'Key',
+        tags: 'Tags',
+        size: 'Size',
+    });
+
+    function isSamplePackCollection(collection) {
+        const attributes = collection?.attributes || {};
+        const profile = [attributes.profile_id, attributes.profile_label]
+            .filter(Boolean)
+            .join(' ')
+            .toLocaleLowerCase();
+        return profile.includes('sample_pack') || profile.includes('sample pack');
+    }
+
+    function collectionRowLayout(collection) {
+        return isSamplePackCollection(collection) ? ROW_LAYOUTS.samplePack : ROW_LAYOUTS.collection;
+    }
+
+    function rowLayoutFor(entry, { nested = false } = {}) {
+        return nested ? collectionRowLayout(entry.collection) : ROW_LAYOUTS.main;
+    }
+
+    function renderRowHeader(header, layout, className) {
+        header.className = `row-header ${className}`;
+        header.style.setProperty('--row-columns', layout.columns);
+        header.replaceChildren();
+        layout.fields.forEach(field => {
+            const cell = document.createElement('span');
+            cell.textContent = ROW_HEADER_LABELS[field];
+            header.appendChild(cell);
+        });
+        return header;
+    }
+
+    function createCollectionHeader(collection) {
+        const header = document.createElement('div');
+        renderRowHeader(header, collectionRowLayout(collection), 'collection-row-header');
+        return header;
+    }
+
     function normalizeFacetValue(value) {
         return String(value ?? '').trim().toLocaleLowerCase();
     }
@@ -143,11 +264,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function assetVaultIds(item) {
-        const rawIds = [
-            ...(Array.isArray(item?.vault_ids) ? item.vault_ids : []),
-            item?.vault_id,
-        ];
-        return [...new Set(rawIds.map(value => Number(value)).filter(Number.isFinite))];
+        const vaultId = Number(item?.vault_id);
+        return Number.isFinite(vaultId) ? [vaultId] : [];
     }
 
     function tagMatches(selectedTag, itemTag) {
@@ -171,11 +289,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function filterableItem(entry) {
-        if (entry.kind === 'asset') return entry.item;
+        if (entry.kind === 'asset' || entry.kind === 'reference') return entry.item;
         return {
             type: entry.type,
             tags: [...assetTags(entry.collection), ...assetTags(entry.content)],
-            vault_ids: assetVaultIds(entry.collection),
+            vault_id: entry.collection?.vault_id,
             name: entry.title,
             absolute_path: entry.path,
         };
@@ -222,23 +340,59 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
 
         state.items.filter(item => typeIsContainer(item.type)).forEach(collection => {
-            (collection.contents || []).forEach(content => {
-                entries.push({
-                    kind: 'content',
-                    id: `${collection.id}:${content.index}`,
-                    type: content.type,
-                    title: content.title || content.filename,
-                    path: content.relative_path,
-                    content,
-                    collection,
-                });
-            });
+            entries.push(...collectionContentEntries(collection));
         });
         return entries;
     }
 
+    function projectReferenceEntries(project) {
+        if (!typeIsContainer(project?.type)) return [];
+        return (state.projectReferencedItems.get(Number(project.id)) || []).map(record => ({
+            kind: 'reference',
+            id: `${project.id}:reference:${record.reference.id}`,
+            type: record.item.type,
+            title: record.item.title || filename(record.item.absolute_path),
+            path: record.item.absolute_path,
+            item: record.item,
+            reference: record.reference,
+            collection: project,
+        }));
+    }
+
+    async function loadProjectReferencedItems(projectId) {
+        const numericId = Number(projectId);
+        if (!Number.isFinite(numericId) || state.projectReferencedItems.has(numericId) || state.projectReferencesLoading.has(numericId)) return;
+        state.projectReferencesLoading.add(numericId);
+        try {
+            const [itemsResponse, referencesResponse] = await Promise.all([
+                fetch(`/projects/${numericId}/referenced-items`),
+                fetch(`/projects/${numericId}/references`),
+            ]);
+            const items = await itemsResponse.json().catch(() => ([]));
+            const references = await referencesResponse.json().catch(() => ([]));
+            if (!itemsResponse.ok || !referencesResponse.ok) {
+                throw new Error(items.detail || references.detail || 'Could not load folder references');
+            }
+            const itemsById = new Map((Array.isArray(items) ? items : []).map(item => [Number(item.id), item]));
+            state.projectReferencedItems.set(numericId, (Array.isArray(references) ? references : [])
+                .map(reference => ({ reference, item: itemsById.get(Number(reference.to_item_id)) }))
+                .filter(record => record.item));
+        } catch (error) {
+            console.warn('Could not load folder references', error);
+            state.projectReferencedItems.set(numericId, []);
+        } finally {
+            state.projectReferencesLoading.delete(numericId);
+            const entry = allEntries().find(candidate => candidate.kind === 'asset' && candidate.item?.id === numericId);
+            if (entry && state.expandedCollections.has(entry.id)) renderAssets();
+        }
+    }
+
     function collectionContentEntries(collection) {
-        return (collection.contents || []).map(content => ({
+        const references = projectReferenceEntries(collection);
+        const referencedItemIds = new Set(references.map(entry => Number(entry.item.id)));
+        const contents = (collection.contents || [])
+            .filter(content => !referencedItemIds.has(Number(content.child_id)))
+            .map(content => ({
             kind: 'content',
             id: `${collection.id}:${content.index}`,
             type: content.type,
@@ -247,6 +401,7 @@ document.addEventListener('DOMContentLoaded', () => {
             content,
             collection,
         }));
+        return contents.concat(references);
     }
 
     function entryMatches(entry) {
@@ -294,7 +449,7 @@ document.addEventListener('DOMContentLoaded', () => {
             entries.push(entry);
             if (entry.kind === 'asset' && typeIsContainer(entry.type) && state.expandedCollections.has(entry.id)) {
                 const contents = collectionContentEntries(entry.item);
-                entries.push(...(filteringIsActive() ? contents.filter(entryMatches) : contents));
+                entries.push(...(filteringIsActive() && !entryMatches(entry) ? contents.filter(entryMatches) : contents));
             }
         });
         return entries;
@@ -330,15 +485,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (entry.kind === 'content') {
             return `${entry.collection.title || 'Collection'} / ${entry.path || entry.content.filename}`;
         }
+        if (entry.kind === 'reference') return entry.item.absolute_path || entry.path || '—';
         return entry.item.source_path || entry.item.absolute_path || '—';
     }
 
     function entryBpm(entry) {
-        return entry.kind === 'content' ? entry.content.bpm : entry.item.bpm;
+        return entry.kind === 'content' ? entry.content.bpm : (entry.item.bpm ?? entry.item.attributes?.analysis?.bpm);
     }
 
     function entryKey(entry) {
-        return entry.kind === 'content' ? entry.content.key : entry.item.key;
+        return entry.kind === 'content' ? entry.content.key : (entry.item.key ?? entry.item.attributes?.analysis?.key);
     }
 
     function entrySize(entry) {
@@ -365,6 +521,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return (Array.isArray(rawTags) ? rawTags : []).map(tag => tag?.name || tag).filter(Boolean);
     }
 
+    function entryReferenceLabel(entry) {
+        if (entry.kind !== 'reference') return null;
+        return entry.reference?.revision_label
+            || entry.reference?.stage_name
+            || entry.reference?.attributes?.label
+            || entry.reference?.relation_kind
+            || 'source';
+    }
+
+    function numericItemId(entry) {
+        if (entry.kind === 'content') return Number(entry.content?.child_id) || null;
+        return Number(entry.item?.id) || null;
+    }
+
     function dragPayload(entry) {
         const item = entry.kind === 'content' ? entry.content : entry.item;
         const collection = entry.kind === 'content' ? entry.collection : null;
@@ -375,6 +545,7 @@ document.addEventListener('DOMContentLoaded', () => {
             type: 'library-item',
             itemType: entry.type || 'audio',
             id: stableId,
+            gaia_item_id: numericItemId(entry),
             collection_id: collection?.id,
             content_index: collection ? item.index : undefined,
             filepath: entryAbsolutePath(entry),
@@ -394,7 +565,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function canPreview(entry) {
         if (entry.kind === 'content') return Boolean(entry.content.streamable);
-        return ['audio', 'track', 'sample', 'loop', 'one_shot', 'multitrack'].includes(entry.type);
+        return ['audio', 'track', 'sample', 'multitrack'].includes(entry.type);
+    }
+
+    function itemEntry(item, id) {
+        return {
+            kind: 'asset',
+            id,
+            type: item.type,
+            title: item.title || filename(item.absolute_path),
+            path: item.absolute_path,
+            item,
+        };
+    }
+
+    async function previewContainer(entry) {
+        if (!entry.item?.id) return;
+        try {
+            const response = await fetch(`/items/${entry.item.id}/preview`);
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result?.id) return;
+            const previewEntry = itemEntry(result, `preview:${entry.id}:${result.id}`);
+            if (canPreview(previewEntry)) play(previewEntry);
+        } catch (error) {
+            console.warn('Could not resolve the item preview', error);
+        }
+    }
+
+    function stopPlayback() {
+        if (!state.audio) return;
+        const audio = state.audio;
+        state.audio = null;
+        state.playingKey = null;
+        try {
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+        } catch (_error) {
+            // The media element is already detached; clearing GAIA state is enough.
+        }
     }
 
     function play(entry) {
@@ -408,7 +617,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        if (state.audio) state.audio.pause();
+        if (state.audio) stopPlayback();
         state.audio = new Audio(streamUrl(entry));
         state.playingKey = key;
         state.audio.onended = () => {
@@ -420,14 +629,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function canEdit(entry, field) {
+        if (entry.kind === 'reference') return false;
         if (field === 'tags') return true;
         if (field === 'title') return entry.kind === 'content' || typeIsContainer(entry.type);
         if (field === 'type') {
-            if (entry.kind === 'content') return ['sample', 'loop', 'one_shot'].includes(entry.type);
-            return ['sample', 'loop', 'one_shot', 'collection', 'sample_pack'].includes(entry.type);
+            if (entry.kind === 'content') return ['audio', 'sample', 'track'].includes(entry.type);
+            return ['audio', 'sample', 'track'].includes(entry.type);
         }
-        if (field === 'bpm') return ['audio', 'sample', 'loop', 'one_shot', 'midi', 'multitrack'].includes(entry.type);
-        if (field === 'key') return ['sample', 'loop', 'one_shot', 'midi', 'multitrack'].includes(entry.type);
+        if (field === 'bpm') return ['audio', 'sample', 'midi', 'multitrack'].includes(entry.type);
+        if (field === 'key') return ['audio', 'sample', 'midi', 'multitrack'].includes(entry.type);
         return false;
     }
 
@@ -455,6 +665,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let value = rawValue;
         if (field === 'tags') value = String(rawValue).split(',').map(tag => tag.trim()).filter(Boolean);
         if (field === 'bpm') value = rawValue === '' ? null : Number(rawValue);
+        if (field === 'title' && entry.kind === 'asset' && typeIsProject(entry.type)) stopPlayback();
         const url = entry.kind === 'content'
             ? `/items/${entry.collection.id}/contents/${entry.content.index}`
             : `/items/${entry.item.id}`;
@@ -468,6 +679,60 @@ document.addEventListener('DOMContentLoaded', () => {
         updateEntryInState(entry, result);
         renderFilterUI();
         renderAssets();
+    }
+
+    async function saveReferenceLabel(entry, rawValue) {
+        const response = await fetch(`/projects/${entry.collection.id}/references/${entry.reference.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ revision_label: rawValue.trim() || null }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.detail || 'Could not update the relationship label');
+        const records = state.projectReferencedItems.get(Number(entry.collection.id)) || [];
+        const record = records.find(candidate => Number(candidate.reference.id) === Number(entry.reference.id));
+        if (record) record.reference = result;
+        renderAssets();
+    }
+
+    function beginReferenceLabelEdit(button, entry) {
+        if (button.querySelector('input')) return;
+        const initial = entryReferenceLabel(entry) || '';
+        const editor = document.createElement('input');
+        editor.className = 'reference-label-editor';
+        editor.type = 'text';
+        editor.maxLength = 120;
+        editor.value = initial;
+        button.replaceWith(editor);
+        let finished = false;
+        const finish = async save => {
+            if (finished) return;
+            finished = true;
+            const value = editor.value.trim();
+            if (!save || value === initial) {
+                renderAssets();
+                return;
+            }
+            try {
+                await saveReferenceLabel(entry, value);
+            } catch (error) {
+                window.alert(error.message);
+                renderAssets();
+            }
+        };
+        editor.addEventListener('click', event => event.stopPropagation());
+        editor.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                finish(true);
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                finish(false);
+            }
+        });
+        editor.addEventListener('blur', () => finish(true));
+        editor.focus();
+        editor.select();
     }
 
     function rowEditing(editor, entry, field, initial) {
@@ -507,9 +772,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const editor = field === 'type' ? document.createElement('select') : document.createElement('input');
         editor.className = 'cell-editor';
         if (field === 'type') {
-            const options = ['collection', 'sample_pack'].includes(entry.type)
-                ? ['collection', 'sample_pack']
-                : ['sample', 'loop', 'one_shot'];
+            const options = ['audio', 'sample', 'track'];
             options.forEach(type => {
                 const option = document.createElement('option');
                 option.value = type;
@@ -540,41 +803,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function createRow(entry, { nested = false } = {}) {
         const row = document.createElement('div');
-        const isSamplePack = entry.kind === 'asset' && entry.type === 'sample_pack';
-        row.className = `asset-row${isSamplePack ? ' sample-pack-row' : ''}${state.selectedEntryIds.has(entry.id) ? ' selected' : ''}`;
+        row.className = `asset-row${state.selectedEntryIds.has(entry.id) ? ' selected' : ''}${entry.kind === 'reference' ? ' referenced-row' : ''}`;
+        const layout = rowLayoutFor(entry, { nested });
+        row.classList.add(nested ? 'nested-row' : 'main-row', `row-layout-${layout.id}`);
+        row.style.setProperty('--row-columns', layout.columns);
         row.setAttribute('role', 'listitem');
         row.setAttribute('aria-selected', String(state.selectedEntryIds.has(entry.id)));
-        row.draggable = true;
+        row.draggable = Boolean(numericItemId(entry));
         const isCollection = entry.kind === 'asset' && typeIsContainer(entry.type);
-        if (isCollection) row.title = 'Double-click to show collection contents';
-        const expanded = isCollection && state.expandedCollections.has(entry.id);
-        const actions = [];
+        if (isCollection) row.title = 'Click to preview the master · double-click to show contents';
+        if (entry.kind === 'reference') row.title = 'Referenced file · click its relationship tag to edit';
 
-        if (isCollection) {
-            actions.push(`<button class="expand" type="button" aria-label="Toggle ${escapeHtml(entry.title)}" aria-expanded="${expanded}">${expanded ? '⌄' : '›'}</button>`);
-        }
-        if (entry.kind === 'asset' && typeIsProject(entry.type)) {
-            actions.push(`<button class="add-project-files" type="button" aria-label="Add files to ${escapeHtml(entry.title)}">Add files</button>`);
-        }
-        if (entry.kind === 'asset') {
-            actions.push(`<button class="delete" type="button" aria-label="Delete ${escapeHtml(entry.title)}">Delete</button>`);
-        }
-
-        const titleCell = `<div class="asset-title${canEdit(entry, 'title') ? ' editable-cell' : ''}" data-field="title"${canEdit(entry, 'title') ? ' title="Click to edit"' : ''}><span class="asset-title-text">${escapeHtml(entry.title)}</span></div>`;
-        row.innerHTML = isSamplePack ? `
-            ${titleCell}
-            <span></span><span></span><span></span><span></span><span></span><span></span>
-            <span>${actions.join('')}</span>
-        ` : `
-            ${titleCell}
-            <span class="path-text">${escapeHtml(entryPath(entry))}</span>
-            ${editableCell(entry, 'type', 'type-badge', typeLabel(entry.type))}
-            ${editableCell(entry, 'bpm', 'metadata-text', entryBpm(entry))}
-            ${editableCell(entry, 'key', 'metadata-text', entryKey(entry))}
-            ${editableCell(entry, 'tags', 'tags-text', entryTags(entry).join(', '))}
-            <span class="size-text">${escapeHtml(formatSize(entrySize(entry)))}</span>
-            <span>${actions.join('')}</span>
-        `;
+        const referenceLabel = entryReferenceLabel(entry);
+        const titleCell = `<div class="asset-title${canEdit(entry, 'title') ? ' editable-cell' : ''}" data-field="title"${canEdit(entry, 'title') ? ' title="Click to edit"' : ''}>
+            <span class="asset-title-text">${escapeHtml(entry.title)}</span>
+            ${referenceLabel ? `<button class="reference-label" type="button" title="Click to edit relationship label">${escapeHtml(referenceLabel)}</button>` : ''}
+        </div>`;
+        const displayType = entry.kind === 'asset' ? entry.item.attributes?.profile_label || typeLabel(entry.type) : typeLabel(entry.type);
+        const cells = {
+            name: titleCell,
+            path: `<span class="path-text">${escapeHtml(entryPath(entry))}</span>`,
+            type: editableCell(entry, 'type', 'type-badge', displayType),
+            bpm: editableCell(entry, 'bpm', 'metadata-text', entryBpm(entry)),
+            key: editableCell(entry, 'key', 'metadata-text', entryKey(entry)),
+            tags: editableCell(entry, 'tags', 'tags-text', entryTags(entry).join(', ')),
+            size: `<span class="size-text">${escapeHtml(formatSize(entrySize(entry)))}</span>`,
+        };
+        row.innerHTML = layout.fields.map(field => cells[field]).join('');
 
         row.querySelectorAll('.editable-cell').forEach(cell => {
             cell.addEventListener('click', event => {
@@ -582,48 +837,56 @@ document.addEventListener('DOMContentLoaded', () => {
                 beginCellEdit(cell, entry, cell.dataset.field);
             });
         });
+        row.querySelector('.reference-label')?.addEventListener('click', event => {
+            event.stopPropagation();
+            beginReferenceLabelEdit(event.currentTarget, entry);
+        });
 
-        const expandButton = row.querySelector('.expand');
-        if (expandButton) {
-            expandButton.addEventListener('click', event => {
-                event.stopPropagation();
-                if (state.expandedCollections.has(entry.id)) state.expandedCollections.delete(entry.id);
-                else state.expandedCollections.add(entry.id);
-                renderAssets();
-            });
-        }
-        const deleteButton = row.querySelector('.delete');
-        if (deleteButton) {
-            const handleDelete = async event => {
-                event.preventDefault();
-                event.stopPropagation();
-                await deleteEntry(entry);
-            };
-            deleteButton.addEventListener('click', handleDelete);
-            deleteButton.addEventListener('mousedown', event => event.stopPropagation());
-        }
-        const addProjectFilesButton = row.querySelector('.add-project-files');
-        if (addProjectFilesButton) {
-            addProjectFilesButton.addEventListener('click', event => {
-                event.preventDefault();
-                event.stopPropagation();
-                openProjectFilesDialog(entry.item);
-            });
-        }
         row.addEventListener('dragstart', event => {
             if (!event.dataTransfer) return;
             const selectedEntries = state.selectedEntryIds.has(entry.id)
                 ? allEntries().filter(candidate => state.selectedEntryIds.has(candidate.id))
                 : [entry];
+            const itemIds = [...new Set(selectedEntries.map(numericItemId).filter(Boolean))];
+            if (!itemIds.length) {
+                event.preventDefault();
+                return;
+            }
             const payload = JSON.stringify(selectedEntries.length === 1
                 ? dragPayload(selectedEntries[0])
                 : { type: 'library-items', items: selectedEntries.map(dragPayload) });
-            event.dataTransfer.effectAllowed = 'copy';
+            event.dataTransfer.effectAllowed = 'copyMove';
             event.dataTransfer.setData('application/x-gaia-library-item', payload);
+            event.dataTransfer.setData('application/x-gaia-item-ids', JSON.stringify(itemIds));
             event.dataTransfer.setData('text/plain', payload);
             row.classList.add('dragging');
         });
         row.addEventListener('dragend', () => row.classList.remove('dragging'));
+        if (isCollection) {
+            row.addEventListener('dragover', event => {
+                if (!Array.from(event.dataTransfer?.types || []).includes('application/x-gaia-item-ids')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                event.dataTransfer.dropEffect = 'move';
+                row.classList.add('drop-target');
+            });
+            row.addEventListener('dragleave', event => {
+                if (!row.contains(event.relatedTarget)) row.classList.remove('drop-target');
+            });
+            row.addEventListener('drop', event => {
+                row.classList.remove('drop-target');
+                const rawIds = event.dataTransfer?.getData('application/x-gaia-item-ids');
+                if (!rawIds) return;
+                event.preventDefault();
+                event.stopPropagation();
+                try {
+                    const itemIds = JSON.parse(rawIds).map(Number).filter(id => Number.isFinite(id) && id !== Number(entry.item.id));
+                    if (itemIds.length) openItemPlacementDialog(entry, [...new Set(itemIds)]);
+                } catch (_error) {
+                    window.alert('GAIA could not read the dragged items.');
+                }
+            });
+        }
         row.addEventListener('mousedown', event => {
             if (event.target.closest('.editable-cell, input, select, button')) return;
             if (event.ctrlKey || event.metaKey || event.shiftKey) {
@@ -636,15 +899,17 @@ document.addEventListener('DOMContentLoaded', () => {
             if (event.target.closest('.editable-cell, input, select, button')) return;
             if (event.ctrlKey || event.metaKey || event.shiftKey) return;
             selectEntry(entry, event);
-            if (!isCollection && canPreview(entry)) {
-                play(entry);
-            }
+            if (isCollection) previewContainer(entry);
+            else if (canPreview(entry)) play(entry);
             renderAssets();
         });
         row.addEventListener('dblclick', event => {
             if (!isCollection || event.target.closest('button, .editable-cell')) return;
             if (state.expandedCollections.has(entry.id)) state.expandedCollections.delete(entry.id);
-            else state.expandedCollections.add(entry.id);
+            else {
+                state.expandedCollections.add(entry.id);
+                loadProjectReferencedItems(entry.item.id);
+            }
             renderAssets();
         });
         row.addEventListener('contextmenu', event => {
@@ -666,10 +931,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return row;
     }
 
-    async function deleteEntry(entry) {
-        await deleteEntries([entry]);
-    }
-
     function createEntry(entry, options = {}) {
         const wrapper = document.createElement('article');
         wrapper.className = 'asset-entry';
@@ -688,7 +949,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 0)
             : entries.length;
         const sourceCount = state.items.length;
-        const vaultName = state.selectedVaultId !== null ? (selectedVault()?.name || 'vault') : 'All Central Assets';
+        const vaultName = state.selectedVaultId !== null ? (selectedVault()?.name || 'vault') : 'Show all';
         const selectionSuffix = state.selectedEntryIds.size ? ` · ${state.selectedEntryIds.size} selected` : '';
         summary.textContent = (filteringIsActive()
             ? `${current} assets match the active filter`
@@ -705,14 +966,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const entries = visibleEntries();
         assetList.innerHTML = '';
         clearFilter.classList.toggle('hidden', !filteringIsActive());
-        renderDispatchBar();
-
-        if (filteringIsActive()) {
-            const note = document.createElement('div');
-            note.className = 'read-only-note';
-            note.textContent = 'The active filter selects matching files inside each collection.';
-            assetList.appendChild(note);
-        }
+        renderMoveBar();
 
         if (!entries.length) {
             assetList.innerHTML += '<div class="empty">No assets match this view.</div>';
@@ -722,12 +976,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (entry.kind === 'asset' && typeIsContainer(entry.type) && state.expandedCollections.has(entry.id)) {
                     const contentContainer = document.createElement('div');
-                    contentContainer.className = 'collection-contents';
+                    const collectionLayout = collectionRowLayout(entry.item);
+                    contentContainer.className = `collection-contents collection-layout-${collectionLayout.id}`;
                     const contents = collectionContentEntries(entry.item);
-                    const displayedContents = filteringIsActive() ? contents.filter(entryMatches) : contents;
+                    const displayedContents = filteringIsActive() && !entryMatches(entry) ? contents.filter(entryMatches) : contents;
+                    if (displayedContents.length) contentContainer.appendChild(createCollectionHeader(entry.item));
                     displayedContents.forEach(content => contentContainer.appendChild(createEntry(content, { nested: true })));
                     if (!displayedContents.length) {
-                        contentContainer.innerHTML = `<div class="empty">${filteringIsActive() ? 'No files in this collection match the active filter.' : 'This snapshot has no readable files.'}</div>`;
+                        const loadingReferences = state.projectReferencesLoading.has(Number(entry.item.id));
+                        contentContainer.innerHTML = `<div class="empty">${loadingReferences ? 'Loading referenced files…' : filteringIsActive() ? 'No files in this collection match the active filter.' : 'This snapshot has no readable files.'}</div>`;
                     }
                     wrapper.appendChild(contentContainer);
                 }
@@ -814,37 +1071,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function updateVaultChips(availableVaultIds) {
-        if (!vaultChips) return;
-        const scrollLeft = vaultChips.scrollLeft;
-        vaultChips.replaceChildren();
-        state.vaults.filter(vault => availableVaultIds.has(vault.id)).forEach(vault => {
-            const selected = vault.id === state.selectedVaultId;
-            const chip = document.createElement('button');
-            chip.type = 'button';
-            chip.className = `filter-chip${selected ? ' active' : ''}`;
-            chip.textContent = vault.name;
-            chip.title = selected ? 'Show assets from all vaults' : vault.description || `Show assets from ${vault.name}`;
-            chip.setAttribute('aria-pressed', String(selected));
-            chip.addEventListener('click', event => {
-                event.stopPropagation();
-                state.selectedVaultId = selected ? null : vault.id;
-                reconcileFilterSelection();
-                renderVaults();
-                renderFilterUI();
-                renderAssets();
-                loadVaultImportLog();
-            });
-            vaultChips.appendChild(chip);
-        });
-        if (!vaultChips.children.length) vaultChips.innerHTML = '<span class="filter-empty">No vaults available</span>';
-        vaultChips.scrollLeft = scrollLeft;
-    }
-
     function reconcileFilterSelection() {
         const items = filterableEntries();
-        const populatedVaultIds = new Set(items.flatMap(assetVaultIds));
-        if (state.selectedVaultId !== null && !populatedVaultIds.has(state.selectedVaultId)) {
+        if (state.selectedVaultId !== null && !state.vaults.some(vault => vault.id === state.selectedVaultId)) {
             state.selectedVaultId = null;
         }
 
@@ -881,8 +1110,6 @@ document.addEventListener('DOMContentLoaded', () => {
             types: state.selectedTypes,
             tags: state.selectedTags,
         });
-        updateVaultChips(facets.vaultIds);
-
         const typeScrollLeft = typeChips.scrollLeft;
         typeChips.replaceChildren();
         [...facets.types].sort().forEach(type => {
@@ -964,12 +1191,21 @@ document.addEventListener('DOMContentLoaded', () => {
         return [...new Set(ids)];
     }
 
-    function getSelectedLooseItemIds() {
+    function getSelectedProjectSourceEntries() {
+        const seen = new Set();
         return allEntries()
             .filter(entry => state.selectedEntryIds.has(entry.id))
-            .filter(entry => entry.kind === 'asset' && !typeIsContainer(entry.type) && !entry.item.parent_id)
-            .map(entry => Number(entry.item.id))
-            .filter(Number.isFinite);
+            .filter(entry => entry.kind === 'asset' && entry.item && entry.item.id)
+            .filter(entry => {
+                const id = Number(entry.item.id);
+                if (!Number.isFinite(id) || seen.has(id)) return false;
+                seen.add(id);
+                return true;
+            });
+    }
+
+    function getSelectedProjectSourceIds() {
+        return getSelectedProjectSourceEntries().map(entry => Number(entry.item.id));
     }
 
     function selectedProjectVaultId() {
@@ -986,60 +1222,6 @@ document.addEventListener('DOMContentLoaded', () => {
             option.textContent = type.label;
             projectType.appendChild(option);
         });
-    }
-
-    function importableFolderTypes() {
-        return state.types.filter(type => (
-            type.importable
-            && type.container
-            && !type.project_type
-            && type.id !== 'collection'
-        ));
-    }
-
-    function renderAnalysisTypeToggles() {
-        if (!analysisTypeList) return;
-        const availableTypes = importableFolderTypes();
-        const availableIds = new Set(availableTypes.map(type => type.id));
-        state.importAnalysisTypes = new Set(
-            [...state.importAnalysisTypes].filter(typeId => availableIds.has(typeId))
-        );
-        if (!state.importAnalysisTypesInitialized) {
-            if (availableTypes[0]) state.importAnalysisTypes.add(availableTypes[0].id);
-            state.importAnalysisTypesInitialized = true;
-        }
-
-        analysisTypeList.replaceChildren();
-        availableTypes.forEach(type => {
-            const active = state.importAnalysisTypes.has(type.id);
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = `filter-chip analysis-type-toggle${active ? ' active' : ''}`;
-            button.dataset.typeId = type.id;
-            button.setAttribute('aria-pressed', String(active));
-            button.textContent = type.id === 'multitrack' ? 'Stems' : type.label;
-            button.addEventListener('click', () => {
-                state.importAnalysisTypes.clear();
-                state.importAnalysisTypes.add(type.id);
-                renderAnalysisTypeToggles();
-            });
-            analysisTypeList.appendChild(button);
-        });
-
-        if (analysisTypeStatus) analysisTypeStatus.textContent = '';
-        if (importSubmit) {
-            importSubmit.disabled = state.importMode === 'specific' && !state.importAnalysisTypes.size;
-        }
-    }
-
-    function renderImportMode() {
-        const isAuto = state.importMode === 'auto';
-        importModeAuto?.classList.toggle('active', isAuto);
-        importModeAuto?.setAttribute('aria-pressed', String(isAuto));
-        importModeSpecific?.classList.toggle('active', !isAuto);
-        importModeSpecific?.setAttribute('aria-pressed', String(!isAuto));
-        specificTypePanel?.classList.toggle('hidden', isAuto);
-        renderAnalysisTypeToggles();
     }
 
     function renderImportSummary(result) {
@@ -1124,56 +1306,154 @@ document.addEventListener('DOMContentLoaded', () => {
         importSummaryDialog.showModal();
     }
 
-    function openProjectDialog(mode = 'empty') {
-        if (!projectDialog) return;
-        const selectedIds = getSelectedLooseItemIds();
-        if (mode !== 'empty' && !selectedIds.length) {
-            window.alert('Select one or more loose files first.');
+    function renderProjectSourcePreview() {
+        const candidates = state.projectDialogSources;
+        const selectedSources = candidates.filter(source => state.projectSourceIds.has(Number(source.item.id)));
+        const hasCandidates = candidates.length > 0;
+        const usingSources = selectedSources.length > 0;
+
+        projectMode.value = usingSources ? 'single' : 'empty';
+        projectDialogSubtitle.textContent = usingSources
+            ? 'Selected material stays in the library and is linked read-only.'
+            : 'Create a workspace in the active vault.';
+        projectSourcePreview.classList.toggle('hidden', !hasCandidates);
+        projectSubmit.textContent = 'Create Project';
+        if (!hasCandidates) {
+            projectSourceList.replaceChildren();
             return;
         }
+
+        projectSourceTitle.textContent = 'Selected source files';
+        projectSourceCount.textContent = `${selectedSources.length} of ${candidates.length} selected`;
+        projectSelectionNote.textContent = usingSources
+            ? 'Choose which selected files to link. They remain in the library and are not moved.'
+            : 'No sources selected. This will create an empty project.';
+        projectSourceList.innerHTML = candidates.map(source => {
+            const sourceId = Number(source.item.id);
+            return `
+                <label class="project-source-item">
+                    <input type="checkbox" data-project-source-id="${sourceId}" ${state.projectSourceIds.has(sourceId) ? 'checked' : ''}>
+                    <span class="project-source-icon" aria-hidden="true">${typeIsContainer(source.type) ? '▣' : '♪'}</span>
+                    <span class="project-source-copy">
+                        <strong>${escapeHtml(source.title)}</strong>
+                        <small>${escapeHtml(typeLabel(source.type))}</small>
+                    </span>
+                </label>
+            `;
+        }).join('');
+        projectSourceList.querySelectorAll('[data-project-source-id]').forEach(input => {
+            input.addEventListener('change', event => {
+                const sourceId = Number(event.currentTarget.dataset.projectSourceId);
+                if (event.currentTarget.checked) state.projectSourceIds.add(sourceId);
+                else state.projectSourceIds.delete(sourceId);
+                renderProjectSourcePreview();
+            });
+        });
+    }
+
+    function openProjectDialog() {
+        if (!projectDialog) return;
+        const selectedSources = getSelectedProjectSourceEntries();
+        // New Project becomes selection-aware: selected library items are
+        // linked as read-only sources and a single selection suggests a name.
+        state.projectDialogSources = selectedSources;
+        state.projectSourceIds = new Set(selectedSources.map(source => Number(source.item.id)));
         populateProjectTypes();
-        projectMode.value = mode;
         projectResult.className = 'result hidden';
-        projectName.value = '';
-        const nameLabel = projectName.previousElementSibling;
-        const onePerItem = mode === 'one_per_item';
-        projectName.required = !onePerItem;
-        projectName.disabled = onePerItem;
-        projectName.classList.toggle('hidden', onePerItem);
-        nameLabel?.classList.toggle('hidden', onePerItem);
-        projectDialogTitle.textContent = mode === 'empty'
-            ? 'Create a Project'
-            : onePerItem ? 'Create one Project per file' : 'Create a Project from files';
-        projectSelectionNote.classList.toggle('hidden', mode === 'empty');
-        projectSelectionNote.textContent = mode === 'empty'
-            ? ''
-            : `${selectedIds.length} loose file${selectedIds.length === 1 ? '' : 's'} will be encapsulated.`;
+        projectName.value = selectedSources.length === 1 ? selectedSources[0].title : '';
+        projectName.required = true;
+        projectName.disabled = false;
+        projectDialogTitle.textContent = 'Create a Project';
+        renderProjectSourcePreview();
         projectDialog.showModal();
-        if (!onePerItem) projectName.focus();
+        projectName.focus();
+        if (selectedSources.length === 1) projectName.select();
     }
 
     function openProjectFilesDialog(project) {
         if (!projectFilesDialog) return;
         projectFilesId.value = String(project.id);
-        projectFilesTitle.textContent = `Add files to ${project.title || filename(project.absolute_path)}`;
+        projectFilesTitle.textContent = `Add source files to ${project.title || filename(project.absolute_path)}`;
         projectFilePaths.value = '';
         projectFilesResult.className = 'result hidden';
         projectFilesDialog.showModal();
         projectFilePaths.focus();
     }
 
-    async function dispatchSelectedEntriesToVault(targetVaultId) {
+    function openItemPlacementDialog(targetEntry, itemIds) {
+        const entryByItemId = new Map();
+        allEntries().forEach(candidate => {
+            const itemId = numericItemId(candidate);
+            if (itemId && !entryByItemId.has(itemId)) entryByItemId.set(itemId, candidate);
+        });
+        const titles = itemIds.map(itemId => entryByItemId.get(itemId)?.title || `Item ${itemId}`);
+        state.pendingPlacement = {
+            targetId: Number(targetEntry.item.id),
+            targetTitle: targetEntry.title,
+            itemIds,
+            titles,
+        };
+        itemPlacementTitle.textContent = `Add to ${targetEntry.title}`;
+        itemPlacementSummary.textContent = titles.length === 1
+            ? `“${titles[0]}” will be added as a source.`
+            : `${titles.length} items will be added as sources.`;
+        itemPlacementResult.className = 'result error hidden';
+        itemPlacementMove.disabled = false;
+        itemPlacementReference.disabled = false;
+        itemPlacementClose.disabled = false;
+        itemPlacementCancel.disabled = false;
+        itemPlacementDialog.showModal();
+    }
+
+    async function performItemPlacement(mode) {
+        const placement = state.pendingPlacement;
+        if (!placement) return;
+        if (mode === 'move') stopPlayback();
+        itemPlacementMove.disabled = true;
+        itemPlacementReference.disabled = true;
+        itemPlacementClose.disabled = true;
+        itemPlacementCancel.disabled = true;
+        itemPlacementResult.className = 'result error hidden';
+        try {
+            const response = await fetch(`/items/${placement.targetId}/place-items`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ item_ids: placement.itemIds, mode }),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Could not add the selected items');
+            const targetId = placement.targetId;
+            state.pendingPlacement = null;
+            state.selectedEntryIds.clear();
+            state.selectionAnchorId = null;
+            state.expandedCollections.add(String(targetId));
+            state.projectReferencedItems.delete(targetId);
+            itemPlacementDialog.close();
+            await loadLibrary();
+        } catch (error) {
+            itemPlacementResult.textContent = error.message;
+            itemPlacementResult.className = 'result error';
+        } finally {
+            itemPlacementMove.disabled = false;
+            itemPlacementReference.disabled = false;
+            itemPlacementClose.disabled = false;
+            itemPlacementCancel.disabled = false;
+        }
+    }
+
+    async function moveSelectedEntriesToVault(targetVaultId) {
         const itemIds = getSelectedNumericItemIds();
         if (!itemIds.length) return;
+        stopPlayback();
         try {
-            const response = await fetch('/items/dispatch', {
+            const response = await fetch('/items/move-to-vault', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ item_ids: itemIds, vault_id: targetVaultId }),
             });
             if (!response.ok) {
                 const err = await response.json().catch(() => ({}));
-                throw new Error(err.detail || 'Dispatch failed');
+                throw new Error(err.detail || 'Move failed');
             }
             state.selectedEntryIds.clear();
             await loadLibrary();
@@ -1182,26 +1462,102 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function renderDispatchBar() {
-        if (!dispatchBar) return;
-        const selectedCount = state.selectedEntryIds.size;
+    function selectedCommandEntries() {
+        return allEntries().filter(entry => state.selectedEntryIds.has(entry.id));
+    }
+
+    function renderSelectionTypeActions(selectedEntries) {
+        if (!selectionTypeActions) return;
+        selectionTypeActions.replaceChildren();
+
+        if (selectedEntries.length === 1 && selectedEntries[0].kind === 'asset' && typeIsProject(selectedEntries[0].type)) {
+            const projectEntry = selectedEntries[0];
+            const addSourcesButton = document.createElement('button');
+            addSourcesButton.type = 'button';
+            addSourcesButton.className = 'secondary toolbar-type-action toolbar-icon-button';
+            addSourcesButton.textContent = '＋';
+            addSourcesButton.title = 'Add source files to project';
+            addSourcesButton.setAttribute('aria-label', 'Add source files to project');
+            addSourcesButton.addEventListener('click', event => {
+                event.stopPropagation();
+                openProjectFilesDialog(projectEntry.item);
+            });
+            selectionTypeActions.appendChild(addSourcesButton);
+
+            const adoptOrphansButton = document.createElement('button');
+            adoptOrphansButton.type = 'button';
+            adoptOrphansButton.className = 'secondary toolbar-type-action';
+            adoptOrphansButton.textContent = 'Adopt orphans';
+            adoptOrphansButton.title = 'Move loose files already referenced by this project into its sources folder';
+            adoptOrphansButton.setAttribute('aria-label', 'Adopt orphan assets into project');
+            adoptOrphansButton.addEventListener('click', async event => {
+                event.stopPropagation();
+                const confirmed = window.confirm(`Move loose files already referenced by “${projectEntry.title}” into that project?`);
+                if (!confirmed) return;
+                stopPlayback();
+                adoptOrphansButton.disabled = true;
+                try {
+                    const response = await fetch(`/projects/${projectEntry.item.id}/adopt-orphans`, { method: 'POST' });
+                    const result = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(result.detail || 'Could not adopt orphan assets');
+                    await loadLibrary();
+                    window.alert(result.adopted
+                        ? `Adopted ${result.adopted} orphan asset${result.adopted === 1 ? '' : 's'}.`
+                        : 'This vault has no orphan assets to adopt.');
+                } catch (error) {
+                    window.alert(error.message);
+                } finally {
+                    adoptOrphansButton.disabled = false;
+                }
+            });
+            selectionTypeActions.appendChild(adoptOrphansButton);
+        }
+
+        const sampleEntries = selectedEntries.filter(entry => entry.type === 'sample' && entry.kind !== 'reference');
+        if (sampleEntries.length === selectedEntries.length && sampleEntries.length > 0) {
+            const allLoops = sampleEntries.every(entry => Boolean(entry.kind === 'content' ? entry.content.is_loop : entry.item.is_loop));
+            const loopButton = document.createElement('button');
+            loopButton.type = 'button';
+            loopButton.className = 'secondary toolbar-type-action toolbar-icon-button';
+            loopButton.textContent = '◌';
+            loopButton.title = allLoops ? 'Set selected samples as one-shot' : 'Set selected samples as loops';
+            loopButton.setAttribute('aria-label', loopButton.title);
+            loopButton.addEventListener('click', async event => {
+                event.stopPropagation();
+                loopButton.disabled = true;
+                try {
+                    for (const entry of sampleEntries) await saveMetadata(entry, 'is_loop', !allLoops);
+                } catch (error) {
+                    window.alert(error.message);
+                } finally {
+                    loopButton.disabled = false;
+                }
+            });
+            selectionTypeActions.appendChild(loopButton);
+        }
+    }
+
+    function renderMoveBar() {
+        if (!moveBar) return;
+        const selectedEntries = selectedCommandEntries();
+        const selectedCount = selectedEntries.length;
         if (selectedCount === 0) {
-            dispatchBar.classList.add('hidden');
+            moveBar.classList.add('hidden');
+            renderSelectionTypeActions([]);
             return;
         }
-        dispatchBar.classList.remove('hidden');
-        dispatchCount.textContent = `${selectedCount} selected`;
-        const projectableCount = getSelectedLooseItemIds().length;
-        const canCreateProjects = projectableCount > 0 && projectableCount === selectedCount;
-        projectFromSelectionButton?.classList.toggle('hidden', !canCreateProjects);
-        projectsPerSelectionButton?.classList.toggle('hidden', !canCreateProjects);
-        dispatchTargetSelect.innerHTML = '';
+        moveBar.classList.remove('hidden');
+        moveCount.textContent = `${selectedCount} selected`;
+        analyzeSelectionButton?.classList.remove('hidden');
+        deleteSelectionButton?.classList.toggle('hidden', !selectedEntries.some(entry => entry.kind === 'asset'));
+        moveTargetSelect.innerHTML = '';
         state.vaults.forEach(vault => {
             const option = document.createElement('option');
             option.value = String(vault.id);
             option.textContent = vault.name;
-            dispatchTargetSelect.appendChild(option);
+            moveTargetSelect.appendChild(option);
         });
+        renderSelectionTypeActions(selectedEntries);
     }
 
     async function deleteSelectedEntries() {
@@ -1226,11 +1582,7 @@ document.addEventListener('DOMContentLoaded', () => {
         state.contextEntry = null;
         state.selectionAnchorId = null;
 
-        if (state.audio) {
-            state.audio.pause();
-            state.audio = null;
-            state.playingKey = null;
-        }
+        stopPlayback();
 
         reconcileFilterSelection();
         renderVaults();
@@ -1249,7 +1601,7 @@ document.addEventListener('DOMContentLoaded', () => {
             assetList.querySelector(`[data-item-id="${id}"]`)?.remove();
         });
         clearFilter.classList.toggle('hidden', !filteringIsActive());
-        renderDispatchBar();
+        renderMoveBar();
         const entries = visibleEntries();
         if (!entries.length && !assetList.querySelector('.empty')) {
             assetList.innerHTML = '<div class="empty">No assets match this view.</div>';
@@ -1275,6 +1627,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!window.confirm(confirmMsg)) return;
 
+        stopPlayback();
         try {
             const deletedIds = new Set();
             const failures = [];
@@ -1308,51 +1661,242 @@ document.addEventListener('DOMContentLoaded', () => {
             deleteEntryMenuButton.textContent = count > 1 ? `Delete selected (${count})` : 'Delete selected';
         }
 
-        contextVaultOptions.innerHTML = '<div class="context-header">Dispatch to Vault</div>';
+        contextVaultOptions.innerHTML = '<div class="context-header">Move to Vault</div>';
         state.vaults.forEach(vault => {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.textContent = `▶ ${vault.name}`;
-            const handleDispatch = async event => {
+            const handleMove = async event => {
                 if (event) { event.preventDefault(); event.stopPropagation(); }
                 contextMenu.classList.add('hidden');
-                await dispatchSelectedEntriesToVault(vault.id);
+                await moveSelectedEntriesToVault(vault.id);
             };
-            btn.addEventListener('click', handleDispatch);
+            btn.addEventListener('click', handleMove);
             contextVaultOptions.appendChild(btn);
         });
 
-        if (state.selectedVaultId !== null) {
-            removeVaultEntryButton.classList.remove('hidden');
-            const vault = selectedVault();
-            removeVaultEntryButton.textContent = `Remove from ${vault?.name || 'Vault'}`;
-        } else {
-            removeVaultEntryButton.classList.add('hidden');
-        }
     }
 
     function selectedVault() {
         return state.vaults.find(vault => vault.id === state.selectedVaultId);
     }
 
+    function closeVaultMenu() {
+        vaultMenu?.classList.add('hidden');
+        vaultPicker?.setAttribute('aria-expanded', 'false');
+    }
+
+    function renderVaultMenu() {
+        if (!vaultMenuList) return;
+        const activeVault = selectedVault();
+        const showAll = state.selectedVaultId === null;
+        if (activeVaultName) activeVaultName.textContent = activeVault?.name || 'Show all';
+        if (deleteVaultButton) {
+            deleteVaultButton.disabled = !activeVault || state.vaults.length <= 1;
+            deleteVaultButton.title = state.vaults.length <= 1 ? 'The last vault cannot be deleted' : 'Delete active vault';
+        }
+        if (vaultOptionsButton) vaultOptionsButton.disabled = !activeVault;
+
+        vaultMenuList.replaceChildren();
+        const addOption = (value, label, selected) => {
+            const option = document.createElement('button');
+            option.type = 'button';
+            option.className = `vault-menu-option${selected ? ' active' : ''}`;
+            option.setAttribute('role', 'option');
+            option.setAttribute('aria-selected', String(selected));
+            const check = document.createElement('span');
+            check.className = 'vault-menu-option-check';
+            check.textContent = selected ? '✓' : '';
+            const text = document.createElement('span');
+            text.textContent = label;
+            option.append(check, text);
+            option.addEventListener('click', event => {
+                event.stopPropagation();
+                state.selectedVaultId = value;
+                closeVaultMenu();
+                reconcileFilterSelection();
+                renderVaults();
+                renderFilterUI();
+                renderAssets();
+                loadVaultImportLog();
+            });
+            vaultMenuList.appendChild(option);
+        };
+
+        addOption(null, 'Show all', showAll);
+        if (state.vaults.length) {
+            const divider = document.createElement('div');
+            divider.className = 'vault-menu-divider';
+            divider.setAttribute('aria-hidden', 'true');
+            vaultMenuList.appendChild(divider);
+        }
+        state.vaults.forEach(vault => addOption(vault.id, vault.name, vault.id === state.selectedVaultId));
+    }
+
+    function openVaultDialog(mode) {
+        const activeVault = selectedVault();
+        if (mode === 'rename' && !activeVault) return;
+        vaultDialogMode = mode;
+        if (vaultDialogEyebrow) vaultDialogEyebrow.textContent = mode === 'rename' ? 'Vault options' : 'New vault';
+        if (vaultDialogTitle) vaultDialogTitle.textContent = mode === 'rename' ? 'Vault options' : 'Create a vault';
+        if (vaultDialogSubmit) vaultDialogSubmit.textContent = mode === 'rename' ? 'Save changes' : 'Create vault';
+        if (vaultNameInput) {
+            vaultNameInput.value = mode === 'rename' ? activeVault.name : '';
+            vaultNameInput.select();
+        }
+        vaultDialogResult?.classList.add('hidden');
+        vaultDialogResult.textContent = '';
+        vaultDialog?.showModal();
+        vaultNameInput?.focus();
+    }
+
+    function showVaultDialogError(message) {
+        if (!vaultDialogResult) return;
+        vaultDialogResult.textContent = message;
+        vaultDialogResult.className = 'result error';
+        vaultDialogResult.classList.remove('hidden');
+    }
+
+    async function createVaultRecord(name) {
+        const response = await fetch('/vaults/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description: null }),
+        });
+        const vault = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(vault.detail || 'Could not create vault');
+        return vault;
+    }
+
+    async function submitVaultDialog(event) {
+        event.preventDefault();
+        const name = vaultNameInput?.value.trim() || '';
+        if (!name) {
+            showVaultDialogError('Enter a vault name.');
+            vaultNameInput?.focus();
+            return;
+        }
+        const activeVault = selectedVault();
+        if (vaultDialogMode === 'rename' && !activeVault) return;
+        if (vaultDialogSubmit) {
+            vaultDialogSubmit.disabled = true;
+            vaultDialogSubmit.textContent = vaultDialogMode === 'rename' ? 'Saving…' : 'Creating…';
+        }
+        try {
+            if (vaultDialogMode === 'rename') {
+                const response = await fetch(`/vaults/${activeVault.id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, description: activeVault.description || null }),
+                });
+                const updated = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(updated.detail || 'Could not rename vault');
+                state.vaults = state.vaults.map(vault => vault.id === updated.id ? updated : vault);
+            } else {
+                const vault = await createVaultRecord(name);
+                state.vaults.push(vault);
+                state.selectedVaultId = vault.id;
+                state.importVaultId = vault.id;
+            }
+            vaultDialog?.close();
+            reconcileFilterSelection();
+            renderVaults();
+            renderFilterUI();
+            renderAssets();
+        } catch (error) {
+            showVaultDialogError(error.message || 'Could not save vault');
+        } finally {
+            if (vaultDialogSubmit) {
+                vaultDialogSubmit.disabled = false;
+                vaultDialogSubmit.textContent = vaultDialogMode === 'rename' ? 'Save changes' : 'Create vault';
+            }
+        }
+    }
+
+    async function deleteActiveVault() {
+        const activeVault = selectedVault();
+        if (!activeVault || state.vaults.length <= 1) return;
+        if (!window.confirm(`Delete the vault “${activeVault.name}”? Only empty vaults can be deleted.`)) return;
+        deleteVaultButton.disabled = true;
+        try {
+            const response = await fetch(`/vaults/${activeVault.id}`, { method: 'DELETE' });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Could not delete vault');
+            state.vaults = state.vaults.filter(vault => vault.id !== activeVault.id);
+            state.selectedVaultId = null;
+            if (state.importVaultId === activeVault.id) state.importVaultId = state.vaults[0]?.id ?? null;
+            reconcileFilterSelection();
+            renderVaults();
+            renderFilterUI();
+            renderAssets();
+        } catch (error) {
+            window.alert(error.message || 'Could not delete vault');
+            renderVaultMenu();
+        }
+    }
+
+    function showImportVaultCreate(show) {
+        importVaultCreate.classList.toggle('hidden', !show);
+        if (!show) {
+            importVaultCreateResult.classList.add('hidden');
+            importVaultCreateResult.textContent = '';
+        }
+    }
+
     function renderVaults() {
+        renderVaultMenu();
         vaultSelect.innerHTML = '';
         if (!state.vaults.length) {
             const option = document.createElement('option');
-            option.textContent = 'No vaults available';
-            option.disabled = true;
+            option.value = '__create__';
+            option.textContent = '＋ Create new vault…';
             option.selected = true;
             vaultSelect.appendChild(option);
+            state.importVaultId = null;
+            showImportVaultCreate(true);
             return;
         }
-        const importVaultId = state.selectedVaultId ?? state.vaults[0].id;
+        if (state.importVaultId === null || !state.vaults.some(vault => vault.id === state.importVaultId)) {
+            state.importVaultId = state.selectedVaultId ?? state.vaults[0].id;
+        }
         state.vaults.forEach(vault => {
             const option = document.createElement('option');
             option.value = String(vault.id);
             option.textContent = vault.name;
-            option.selected = vault.id === importVaultId;
+            option.selected = vault.id === state.importVaultId;
             vaultSelect.appendChild(option);
         });
+        const createOption = document.createElement('option');
+        createOption.value = '__create__';
+        createOption.textContent = '＋ Create new vault…';
+        vaultSelect.appendChild(createOption);
+        vaultSelect.value = String(state.importVaultId);
+        showImportVaultCreate(false);
+    }
+
+    async function createImportVault() {
+        const name = importVaultName.value.trim();
+        if (!name) {
+            importVaultCreateResult.textContent = 'Enter a vault name.';
+            importVaultCreateResult.classList.remove('hidden');
+            importVaultName.focus();
+            return;
+        }
+        importVaultCreateSubmit.disabled = true;
+        importVaultCreateResult.classList.add('hidden');
+        try {
+            const vault = await createVaultRecord(name);
+            state.vaults.push(vault);
+            state.importVaultId = vault.id;
+            importVaultName.value = '';
+            renderVaults();
+            renderFilterUI();
+        } catch (error) {
+            importVaultCreateResult.textContent = error.message;
+            importVaultCreateResult.classList.remove('hidden');
+        } finally {
+            importVaultCreateSubmit.disabled = false;
+        }
     }
 
     async function loadVaults() {
@@ -1363,19 +1907,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function loadVaultImportLog() {
-        if (!state.selectedVaultId) return;
-        const vault = selectedVault();
-        vaultLogDescription.textContent = `Recent imports and file actions for ${vault?.name || 'this vault'}.`;
-        try {
-            const response = await fetch(`/vaults/${state.selectedVaultId}/imports?limit=10`);
-            if (!response.ok) throw new Error('Could not load vault activity');
-            const logs = await response.json();
-            vaultImportLog.innerHTML = logs.length
-                ? logs.map(log => `<div class="vault-log-entry"><strong>${escapeHtml(log.action.replaceAll('_', ' '))}</strong><span title="${escapeHtml(log.source_path)}">${escapeHtml(filename(log.source_path))} — ${escapeHtml(log.detail || log.status)}</span></div>`).join('')
-                : '<div class="empty">No imports have been recorded for this vault yet.</div>';
-        } catch (error) {
-            vaultImportLog.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-        }
+        // Import history is now written per job under gaia/log/imports.
     }
 
     async function loadLibrary() {
@@ -1389,13 +1921,17 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!typesResponse.ok || !itemsResponse.ok) throw new Error('GAIA could not load the library');
             state.types = await typesResponse.json();
             state.items = await itemsResponse.json();
-            renderAnalysisTypeToggles();
+            state.projectReferencedItems.clear();
+            state.projectReferencesLoading.clear();
             const availableEntryIds = new Set(allEntries().map(entry => entry.id));
             state.selectedEntryIds = new Set([...state.selectedEntryIds].filter(id => availableEntryIds.has(id)));
             if (!availableEntryIds.has(state.selectionAnchorId)) state.selectionAnchorId = null;
             reconcileFilterSelection();
             renderFilterUI();
             renderAssets();
+            state.items
+                .filter(item => typeIsContainer(item.type) && state.expandedCollections.has(String(item.id)))
+                .forEach(item => loadProjectReferencedItems(item.id));
         } catch (error) {
             assetList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
             summary.textContent = 'Library unavailable';
@@ -1619,35 +2155,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function initializeColumnResizing() {
-        const minimums = [120, 160, 82, 58, 72, 110, 68, 56];
-        listHeader.querySelectorAll('.column-resizer').forEach((handle, index) => {
-            handle.addEventListener('pointerdown', event => {
-                event.preventDefault();
-                event.stopPropagation();
-                const cells = [...listHeader.children];
-                const widths = cells.map(cell => cell.getBoundingClientRect().width);
-                const startX = event.clientX;
-                document.body.classList.add('resizing-columns');
-
-                const move = moveEvent => {
-                    const combined = widths[index] + widths[index + 1];
-                    const left = Math.max(minimums[index], Math.min(combined - minimums[index + 1], widths[index] + moveEvent.clientX - startX));
-                    const next = [...widths];
-                    next[index] = left;
-                    next[index + 1] = combined - left;
-                    assetPanel.style.setProperty('--asset-columns', next.map(width => `${width}px`).join(' '));
-                };
-                const stop = () => {
-                    document.body.classList.remove('resizing-columns');
-                    window.removeEventListener('pointermove', move);
-                    window.removeEventListener('pointerup', stop);
-                };
-                window.addEventListener('pointermove', move);
-                window.addEventListener('pointerup', stop, { once: true });
-            });
-        });
-    }
+    renderRowHeader(listHeader, ROW_LAYOUTS.main, 'main-row-header');
 
     searchInput.addEventListener('input', () => {
         state.query = searchInput.value.trim().toLowerCase();
@@ -1658,26 +2166,30 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     refreshButton.addEventListener('click', loadLibrary);
 
-    createProjectButton?.addEventListener('click', () => openProjectDialog('empty'));
-    projectFromSelectionButton?.addEventListener('click', () => openProjectDialog('single'));
-    projectsPerSelectionButton?.addEventListener('click', () => openProjectDialog('one_per_item'));
+    createProjectButton?.addEventListener('click', () => openProjectDialog());
     projectDialogClose?.addEventListener('click', () => projectDialog.close());
+    projectDialogCancel?.addEventListener('click', () => projectDialog.close());
     projectFilesClose?.addEventListener('click', () => projectFilesDialog.close());
+    itemPlacementClose?.addEventListener('click', () => itemPlacementDialog.close());
+    itemPlacementCancel?.addEventListener('click', () => itemPlacementDialog.close());
+    itemPlacementMove?.addEventListener('click', () => performItemPlacement('move'));
+    itemPlacementReference?.addEventListener('click', () => performItemPlacement('reference'));
+    itemPlacementDialog?.addEventListener('close', () => {
+        if (!itemPlacementMove.disabled && !itemPlacementReference.disabled) state.pendingPlacement = null;
+    });
 
     projectForm?.addEventListener('submit', async event => {
         event.preventDefault();
-        const mode = projectMode.value;
+        const sourceIds = [...state.projectSourceIds];
         const payload = {
             project_type: projectType.value,
             vault_id: selectedProjectVaultId(),
         };
-        const url = mode === 'empty' ? '/projects/' : '/projects/from-items';
-        if (mode === 'empty') {
-            payload.name = projectName.value;
-        } else {
-            payload.item_ids = getSelectedLooseItemIds();
-            payload.mode = mode;
-            if (mode === 'single') payload.name = projectName.value;
+        const url = sourceIds.length ? '/projects/from-items' : '/projects/';
+        payload.name = projectName.value;
+        if (sourceIds.length) {
+            payload.item_ids = sourceIds;
+            payload.mode = 'single';
         }
         projectResult.className = 'result hidden';
         try {
@@ -1689,6 +2201,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.detail || 'Could not create Project');
             state.selectedEntryIds.clear();
+            state.selectionAnchorId = null;
+            state.projectDialogSources = [];
+            state.projectSourceIds.clear();
             projectDialog.close();
             await loadLibrary();
             await loadVaultImportLog();
@@ -1709,7 +2224,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ source_paths: sourcePaths }),
             });
             const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(result.detail || 'Could not add files');
+            if (!response.ok) throw new Error(result.detail || 'Could not add sources');
             projectFilesDialog.close();
             await loadLibrary();
         } catch (error) {
@@ -1736,50 +2251,24 @@ document.addEventListener('DOMContentLoaded', () => {
         deleteEntryMenuButton.addEventListener('click', handleDeleteMenu);
     }
 
-    if (dispatchSubmitBtn) {
-        dispatchSubmitBtn.addEventListener('click', async () => {
-            const targetVaultId = Number(dispatchTargetSelect.value);
+    if (moveSubmitBtn) {
+        moveSubmitBtn.addEventListener('click', async () => {
+            const targetVaultId = Number(moveTargetSelect.value);
             if (targetVaultId) {
-                await dispatchSelectedEntriesToVault(targetVaultId);
+                await moveSelectedEntriesToVault(targetVaultId);
             }
         });
     }
 
-    if (removeVaultEntryButton) {
-        const handleRemove = async (event) => {
-            if (event) { event.preventDefault(); event.stopPropagation(); }
-            contextMenu.classList.add('hidden');
-            const entry = state.contextEntry;
-            if (!entry || state.selectedVaultId === null) return;
-            try {
-                const response = await fetch(`/items/${entry.item.id}/vaults/${state.selectedVaultId}`, {
-                    method: 'DELETE',
-                });
-                if (!response.ok) throw new Error('Could not remove item from vault');
-                await loadLibrary();
-            } catch (error) {
-                console.error(error);
-            }
-        };
-        removeVaultEntryButton.addEventListener('click', handleRemove);
-    }
+    analyzeSelectionButton?.addEventListener('click', async event => {
+        event.preventDefault();
+        await analyzeSelectedEntries();
+    });
 
-    if (scrollLeftBtn) {
-        const doScrollLeft = (event) => {
-            if (event) { event.preventDefault(); event.stopPropagation(); }
-            if (listHeader) listHeader.scrollBy({ left: -160, behavior: 'smooth' });
-            if (assetList) assetList.scrollBy({ left: -160, behavior: 'smooth' });
-        };
-        scrollLeftBtn.addEventListener('click', doScrollLeft);
-    }
-    if (scrollRightBtn) {
-        const doScrollRight = (event) => {
-            if (event) { event.preventDefault(); event.stopPropagation(); }
-            if (listHeader) listHeader.scrollBy({ left: 160, behavior: 'smooth' });
-            if (assetList) assetList.scrollBy({ left: 160, behavior: 'smooth' });
-        };
-        scrollRightBtn.addEventListener('click', doScrollRight);
-    }
+    deleteSelectionButton?.addEventListener('click', async event => {
+        event.preventDefault();
+        await deleteSelectedEntries();
+    });
 
     contextMenu.addEventListener('pointerdown', event => event.stopPropagation());
     contextMenu.addEventListener('mousedown', event => event.stopPropagation());
@@ -1788,7 +2277,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!contextMenu.contains(event.target)) contextMenu.classList.add('hidden');
     });
     window.addEventListener('keydown', async event => {
-        if (event.key === 'Escape') contextMenu.classList.add('hidden');
+        if (event.key === 'Escape') {
+            contextMenu.classList.add('hidden');
+            if (state.selectedEntryIds.size || state.selectionAnchorId) {
+                state.selectedEntryIds.clear();
+                state.selectionAnchorId = null;
+                state.contextEntry = null;
+                renderAssets();
+            }
+            return;
+        }
         if (event.key === 'Delete' || event.key === 'Backspace') {
             const activeEl = document.activeElement;
             if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
@@ -1800,137 +2298,571 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     });
-    if (assetList && listHeader) {
-        assetList.addEventListener('scroll', () => {
-            listHeader.scrollLeft = assetList.scrollLeft;
-            contextMenu.classList.add('hidden');
-        });
-        listHeader.addEventListener('scroll', () => {
-            assetList.scrollLeft = listHeader.scrollLeft;
-        });
+    assetList?.addEventListener('scroll', () => contextMenu.classList.add('hidden'));
+
+    let importPollTimer = null;
+
+    function stopImportPolling() {
+        if (importPollTimer) clearTimeout(importPollTimer);
+        importPollTimer = null;
     }
 
-    async function browseImportSource(endpoint) {
+    function setImportBusy(busy) {
+        importDialogClose.disabled = busy;
+        importCancel.disabled = busy;
+        importSubmit.disabled = busy;
+        sourcePath.disabled = busy;
+        chooseSourcePath.disabled = busy;
+        vaultSelect.disabled = busy;
+        importVaultName.disabled = busy;
+        importVaultCreateSubmit.disabled = busy;
+        importVaultCreateCancel.disabled = busy;
+    }
+
+    function resetImportFlow() {
+        state.importPreview = null;
+        state.importFolderAssignments = new Map();
+        state.importItemTypes = new Map();
+        state.importExcludedIndexes = new Set();
+        state.importCollapsedFolders = new Set();
+        state.importConflictAction = null;
+        importResult.className = 'result hidden';
+        importSourceStep.classList.remove('hidden');
+        importPreviewStep.classList.add('hidden');
+        importPreviewStep.replaceChildren();
+        importHeadingSource.classList.add('hidden');
+        importHeadingSource.replaceChildren();
+        importSubmit.textContent = 'Inspect source';
+        renderVaults();
+        setImportBusy(false);
+    }
+
+    function importTypeLabel(type, displayType = null) {
+        return displayType || typeLabel(type);
+    }
+
+    function folderAssignmentOptions(preview, selected) {
+        const typeOptions = (preview.folder_type_options || []).map(option =>
+            `<option value="${escapeHtml(option.value)}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`
+        ).join('');
+        const profileOptions = (preview.profiles || [])
+            .filter(profile => ['collection', 'multitrack'].includes(profile.container_type))
+            .map(profile => {
+                const value = `profile:${profile.id}`;
+                return `<option value="${escapeHtml(value)}" ${selected === value ? 'selected' : ''}>${escapeHtml(profile.label)}</option>`;
+            }).join('');
+        return `<option value="" ${selected ? '' : 'selected'}>Unclassified folder</option>${typeOptions ? `<optgroup label="Folder types">${typeOptions}</optgroup>` : ''}${profileOptions ? `<optgroup label="Profiles">${profileOptions}</optgroup>` : ''}`;
+    }
+
+    function fileTypeOptions(entry, selected) {
+        const familyLabel = entry.family === 'midi' ? 'MIDI' : entry.family === 'sequence' ? 'Sequence' : entry.family === 'audio' ? 'Audio' : 'File';
+        const options = (entry.allowed_types || [entry.type]).map(type =>
+            `<option value="${escapeHtml(type)}" ${selected === type ? 'selected' : ''}>${escapeHtml(typeLabel(type))}</option>`
+        ).join('');
+        return `<optgroup label="${escapeHtml(familyLabel)}">${options}</optgroup>`;
+    }
+
+    function importNodeSort(left, right) {
+        if (left.relative_path === '.') return -1;
+        if (right.relative_path === '.') return 1;
+        return left.relative_path.localeCompare(right.relative_path, undefined, { numeric: true, sensitivity: 'base' })
+            || (left.kind === 'folder' ? -1 : 1);
+    }
+
+    function assignedAncestor(node) {
+        if (node.kind !== 'folder' || node.relative_path === '.') return null;
+        const parts = node.relative_path.split('/');
+        for (let length = parts.length - 1; length >= 0; length -= 1) {
+            const candidate = length === 0 ? '.' : parts.slice(0, length).join('/');
+            if (state.importFolderAssignments.get(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    function importPathIsWithin(relativePath, folderPath) {
+        return folderPath === '.' ? relativePath !== '.' : relativePath.startsWith(`${folderPath}/`);
+    }
+
+    function hiddenByCollapsedFolder(node) {
+        return [...state.importCollapsedFolders].some(folderPath => importPathIsWithin(node.relative_path, folderPath));
+    }
+
+    function renderImportPreview() {
+        const preview = state.importPreview;
+        if (!preview) return;
+        const includedCount = preview.file_count - state.importExcludedIndexes.size;
+        const remainingArtifacts = (preview.entries || []).filter(entry => entry.artifact && !state.importExcludedIndexes.has(entry.index));
+        importHeadingSource.innerHTML = `<div class="import-heading-source-copy"><h3>${escapeHtml(preview.title)}</h3><p>${escapeHtml(preview.source_path)}</p></div><div class="import-preview-stats"><span>${escapeHtml(preview.source_kind)}</span><span>${preview.folder_count || 0} folders</span><span>${includedCount}/${preview.file_count} files</span><span>${escapeHtml(formatSize(preview.size_bytes))}</span><span>${preview.inspection_ms || 0} ms</span></div>`;
+        importHeadingSource.classList.remove('hidden');
+        const rows = [...(preview.nodes || [])].sort(importNodeSort).filter(node => !hiddenByCollapsedFolder(node)).map(node => {
+            if (node.kind === 'folder') {
+                const selected = state.importFolderAssignments.get(node.relative_path) || '';
+                const inheritedFrom = assignedAncestor(node);
+                const collapsed = state.importCollapsedFolders.has(node.relative_path);
+                const detection = node.detection_label
+                    ? `<span class="import-detection ${node.detected_assignment ? 'detected' : 'suggested'}">${escapeHtml(node.detected_assignment ? 'Detected' : 'Suggested')}: ${escapeHtml(node.detection_label)}</span>`
+                    : '';
+                const reason = node.detection_reason ? `<small title="${escapeHtml(node.detection_reason)}">${escapeHtml(node.detection_reason)}</small>` : '';
+                const warning = node.warning_count
+                    ? `<span class="import-folder-warning" title="${escapeHtml(`${node.warning_count} flagged file${node.warning_count === 1 ? '' : 's'}: ${(node.warning_messages || []).join(', ')}`)}">⚠<span>${node.warning_count}</span></span>`
+                    : '';
+                return `<div class="import-tree-row folder" style="--import-depth:${Number(node.depth) || 0}">
+                    <div class="import-tree-name"><button class="import-folder-toggle" type="button" data-import-collapse="${escapeHtml(node.relative_path)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}" aria-expanded="${!collapsed}">${collapsed ? '▸' : '▾'}</button><span class="import-tree-label"><strong>${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}</strong>${reason}</span>${warning}</div>
+                    <div class="import-tree-detection">${detection}</div>
+                    <select data-import-folder="${escapeHtml(node.relative_path)}" ${inheritedFrom ? `disabled title="Contained by classified folder ${escapeHtml(inheritedFrom)}"` : ''}>${folderAssignmentOptions(preview, selected)}</select>
+                    <span class="import-tree-size">${node.relative_path === '.' ? escapeHtml(formatSize(preview.size_bytes)) : '—'}</span>
+                </div>`;
+            }
+            const selected = state.importItemTypes.get(node.index) || node.type;
+            const locked = (node.allowed_types || []).length <= 1;
+            const excluded = state.importExcludedIndexes.has(node.index);
+            const inspection = [
+                node.artifact ? `<span class="import-artifact-flag" title="${escapeHtml(node.artifact_reason)}">⚑ Artifact</span>` : '',
+                node.profile_role ? `<span class="import-role-badge ${escapeHtml(node.profile_role)}" title="${escapeHtml(node.profile_role_reason)}">${escapeHtml(node.profile_role === 'mixdown' ? 'Mixdown' : 'Source channel')}</span>` : '',
+                !node.artifact && !node.profile_role ? `<span class="import-family">${escapeHtml(node.family)}</span>` : '',
+            ].filter(Boolean).join('');
+            return `<div class="import-tree-row file${excluded ? ' excluded' : ''}" style="--import-depth:${Number(node.depth) || 0}">
+                <div class="import-tree-name" title="${escapeHtml(node.relative_path)}"><input type="checkbox" data-import-include="${node.index}" ${excluded ? '' : 'checked'} aria-label="Include ${escapeHtml(node.filename)}"><span class="import-tree-label">${escapeHtml(node.filename)}</span></div>
+                <div class="import-tree-detection">${inspection}</div>
+                <select data-import-item="${node.index}" ${locked ? 'disabled' : ''}>${fileTypeOptions(node, selected)}</select>
+                <span class="import-tree-size">${escapeHtml(formatSize(node.size_bytes))}</span>
+            </div>`;
+        }).join('');
+        const conflicts = preview.conflicts || [];
+        const conflictPanel = conflicts.length ? `
+            <div class="import-conflicts"><strong>${conflicts.length} conflict${conflicts.length === 1 ? '' : 's'} need a decision</strong>
+                <ul>${conflicts.slice(0, 6).map(conflict => `<li>${escapeHtml(conflict.message)}</li>`).join('')}</ul>
+                <label>On conflict <select id="import-conflict-action"><option value="">Choose an action</option><option value="skip" ${state.importConflictAction === 'skip' ? 'selected' : ''}>Skip existing content</option><option value="new_snapshot" ${state.importConflictAction === 'new_snapshot' ? 'selected' : ''}>Keep a new immutable snapshot</option></select></label>
+            </div>` : '';
+        const canStart = includedCount > 0 && (!conflicts.length || state.importConflictAction);
+        importPreviewStep.innerHTML = `
+            ${preview.warnings?.length ? `<div class="import-warning-box"><strong>Inspection warnings</strong>${preview.warnings.map(warning => `<div>${escapeHtml(warning)}</div>`).join('')}</div>` : ''}
+            ${conflictPanel}
+            <section class="import-preview-section"><div class="import-section-heading"><h3>Inspected folders and files</h3><button id="import-exclude-artifacts" class="secondary compact" type="button" ${remainingArtifacts.length ? '' : 'disabled'}>Exclude flagged artifacts${remainingArtifacts.length ? ` (${remainingArtifacts.length})` : ''}</button></div><div class="import-tree-head"><span>Name</span><span>Inspection</span><span>Type or profile</span><span>Size</span></div><div class="import-tree">${rows || '<div class="empty">No files were found.</div>'}</div></section>
+            <div class="dialog-actions"><button id="import-preview-back" class="secondary" type="button">Choose another source</button><button id="import-job-start" class="primary" type="button" ${canStart ? '' : 'disabled'}>Start background import</button></div>`;
+        importPreviewStep.querySelectorAll('[data-import-collapse]').forEach(button => button.addEventListener('click', () => {
+            const path = button.dataset.importCollapse;
+            if (state.importCollapsedFolders.has(path)) state.importCollapsedFolders.delete(path);
+            else state.importCollapsedFolders.add(path);
+            renderImportPreview();
+        }));
+        importPreviewStep.querySelectorAll('[data-import-folder]').forEach(select => select.addEventListener('change', () => {
+            if (select.value) state.importFolderAssignments.set(select.dataset.importFolder, select.value);
+            else state.importFolderAssignments.delete(select.dataset.importFolder);
+            renderImportPreview();
+        }));
+        importPreviewStep.querySelectorAll('[data-import-item]').forEach(select => select.addEventListener('change', () => {
+            state.importItemTypes.set(Number(select.dataset.importItem), select.value);
+        }));
+        importPreviewStep.querySelectorAll('[data-import-include]').forEach(input => input.addEventListener('change', () => {
+            const index = Number(input.dataset.importInclude);
+            if (input.checked) state.importExcludedIndexes.delete(index);
+            else state.importExcludedIndexes.add(index);
+            renderImportPreview();
+        }));
+        importPreviewStep.querySelector('#import-exclude-artifacts')?.addEventListener('click', () => {
+            (preview.entries || []).filter(entry => entry.artifact).forEach(entry => state.importExcludedIndexes.add(entry.index));
+            renderImportPreview();
+        });
+        importPreviewStep.querySelector('#import-conflict-action')?.addEventListener('change', event => {
+            state.importConflictAction = event.target.value || null;
+            renderImportPreview();
+        });
+        importPreviewStep.querySelector('#import-preview-back')?.addEventListener('click', resetImportFlow);
+        importPreviewStep.querySelector('#import-job-start')?.addEventListener('click', startImportJob);
+    }
+
+    function renderImportJob(job) {
+        const total = Math.max(1, Number(job.total) || 1);
+        const progress = Math.min(100, Math.round((Number(job.completed) / total) * 100));
+        const active = ['queued', 'running', 'cancelling'].includes(job.status);
+        const labels = {
+            queued: 'Import queued', running: 'Importing assets', cancelling: 'Cancelling import',
+            completed: 'Import complete', failed: 'Import failed', cancelled: 'Import cancelled', stale: 'Import source changed',
+        };
+        const terminalDetail = job.status === 'completed'
+            ? `${job.imported || 0} assets imported · ${job.excluded || 0} files excluded`
+            : job.error || job.current_title || job.phase || job.status;
+        importProgressContainer.classList.remove('hidden');
+        importProgressContainer.classList.toggle('failed', ['failed', 'stale'].includes(job.status));
+        importProgressContainer.classList.toggle('complete', job.status === 'completed');
+        importProgressLabel.textContent = labels[job.status] || job.phase || job.status;
+        importProgressDetail.textContent = active ? (job.current_title || job.phase || 'Preparing managed import…') : terminalDetail;
+        importProgressFill.style.width = `${job.status === 'completed' ? 100 : progress}%`;
+        importProgressCount.textContent = active ? `${job.completed || 0} / ${job.total || 0} · ${progress}%` : `${job.completed || 0} / ${job.total || 0}`;
+        importProgressCancel.classList.toggle('hidden', !active);
+        importProgressCancel.disabled = job.status === 'cancelling';
+        importProgressCancel.textContent = job.status === 'cancelling' ? 'Cancelling…' : 'Cancel';
+        importProgressResults.classList.toggle('hidden', active);
+        importProgressDismiss.classList.toggle('hidden', active);
+        openImportButton.disabled = active;
+        openImportButton.title = active ? 'An import is already running' : 'Import assets';
+    }
+
+    function renderImportPollingIssue(message) {
+        importProgressContainer.classList.remove('hidden');
+        importProgressContainer.classList.add('failed');
+        importProgressLabel.textContent = 'Import status unavailable';
+        importProgressDetail.textContent = `${message} · retrying…`;
+        importProgressCancel.classList.add('hidden');
+        importProgressResults.classList.add('hidden');
+        importProgressDismiss.classList.add('hidden');
+        openImportButton.disabled = true;
+        openImportButton.title = 'Reconnecting to background import';
+    }
+
+    function showImportJobSummary(job) {
+        const resultItems = Array.isArray(job.result_items) ? job.result_items : [];
+        importSummaryContent.innerHTML = `<div class="import-summary-hero"><div class="import-summary-title"><h3>${escapeHtml(job.status === 'completed' ? 'Import complete' : `Import ${job.status}`)}</h3><p>${escapeHtml(job.log_path || '')}</p></div><div class="import-summary-metrics"><div class="import-summary-metric"><strong>${job.imported || 0}</strong><span>Imported</span></div><div class="import-summary-metric"><strong>${job.skipped || 0}</strong><span>Skipped</span></div><div class="import-summary-metric"><strong>${job.excluded || 0}</strong><span>Excluded</span></div></div></div>${job.error ? `<div class="import-warning-box"><strong>Import error</strong><div>${escapeHtml(job.error)}</div></div>` : ''}${job.warnings?.length ? `<div class="import-warning-box"><strong>Warnings</strong>${job.warnings.map(warning => `<div>${escapeHtml(warning)}</div>`).join('')}</div>` : ''}<section class="import-summary-section"><h3>Imported assets</h3><div class="import-summary-list">${resultItems.length ? resultItems.map(item => `<div class="import-summary-row"><span class="import-summary-row-name">${escapeHtml(item.title)}</span><span class="import-summary-row-path">${escapeHtml(item.absolute_path)}</span><span class="type-badge">${escapeHtml(importTypeLabel(item.type, item.display_type))}</span></div>`).join('') : '<div class="import-summary-more">No managed assets were created.</div>'}</div></section>`;
+        importSummaryDialog.showModal();
+    }
+
+    async function pollImportJob() {
+        if (!state.importJobId) return;
         try {
-            const response = await fetch(endpoint);
-            const result = await response.json();
-            if (result.path) sourcePath.value = result.path;
-            else if (result.error) throw new Error(result.error);
+            const response = await fetch(`/items/import/jobs/${state.importJobId}`);
+            const job = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                if (response.status === 404) {
+                    stopImportPolling();
+                    localStorage.removeItem('gaia.activeImportJobId');
+                    state.importJobId = null;
+                    state.importLastJob = null;
+                    importProgressContainer.classList.add('hidden');
+                    openImportButton.disabled = false;
+                    openImportButton.title = 'Import assets';
+                    return;
+                }
+                throw new Error(job.detail || 'Could not read import progress');
+            }
+            renderImportJob(job);
+            if (['completed', 'failed', 'cancelled', 'stale'].includes(job.status)) {
+                stopImportPolling();
+                localStorage.removeItem('gaia.activeImportJobId');
+                state.importLastJob = job;
+                state.importJobId = null;
+                setImportBusy(false);
+                if (job.status === 'completed') {
+                    sourcePath.value = '';
+                    await loadLibrary();
+                }
+                return;
+            }
+            importPollTimer = setTimeout(pollImportJob, 650);
+        } catch (error) {
+            renderImportPollingIssue(error.message);
+            importPollTimer = setTimeout(pollImportJob, 1800);
+        }
+    }
+
+    async function startImportJob() {
+        const preview = state.importPreview;
+        if (!preview) return;
+        setImportBusy(true);
+        try {
+            const response = await fetch('/items/import/jobs', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    preview_id: preview.preview_id,
+                    folder_assignments: Object.fromEntries(state.importFolderAssignments),
+                    item_types: Object.fromEntries(state.importItemTypes),
+                    excluded_indexes: [...state.importExcludedIndexes],
+                    conflict_action: state.importConflictAction,
+                }),
+            });
+            const job = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(job.detail || 'Could not start import');
+            state.importJobId = job.job_id;
+            state.importLastJob = null;
+            localStorage.setItem('gaia.activeImportJobId', job.job_id);
+            renderImportJob(job);
+            importDialog.close();
+            resetImportFlow();
+            pollImportJob();
         } catch (error) {
             importResult.textContent = error.message;
             importResult.className = 'result error';
+            setImportBusy(false);
         }
     }
 
-    openImportButton?.addEventListener('click', async () => {
-        state.importMode = 'auto';
-        importResult.className = 'result hidden';
-        renderImportMode();
-        importDialog?.showModal();
-        if (state.selectedVaultId === null && vaultSelect?.value) {
-            state.selectedVaultId = Number(vaultSelect.value);
+    async function cancelImportJob() {
+        if (!state.importJobId) return;
+        importProgressCancel.disabled = true;
+        try {
+            const response = await fetch(`/items/import/jobs/${state.importJobId}/cancel`, { method: 'POST' });
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.detail || 'Could not cancel import');
+            }
+        } catch (error) {
+            renderImportPollingIssue(error.message);
         }
-        await loadVaultImportLog();
+    }
+
+    vaultPicker?.addEventListener('click', event => {
+        event.stopPropagation();
+        const isOpen = !vaultMenu?.classList.contains('hidden');
+        if (isOpen) closeVaultMenu();
+        else {
+            renderVaultMenu();
+            vaultMenu?.classList.remove('hidden');
+            vaultPicker?.setAttribute('aria-expanded', 'true');
+        }
+    });
+    vaultMenu?.addEventListener('click', event => event.stopPropagation());
+    document.addEventListener('click', closeVaultMenu);
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeVaultMenu();
+    });
+    createVaultButton?.addEventListener('click', () => openVaultDialog('create'));
+    deleteVaultButton?.addEventListener('click', deleteActiveVault);
+    vaultOptionsButton?.addEventListener('click', () => openVaultDialog('rename'));
+    vaultForm?.addEventListener('submit', submitVaultDialog);
+    vaultDialogClose?.addEventListener('click', () => vaultDialog?.close());
+    vaultDialogCancel?.addEventListener('click', () => vaultDialog?.close());
+    vaultDialog?.addEventListener('click', event => {
+        if (event.target === vaultDialog) vaultDialog.close();
+    });
+
+    openImportButton?.addEventListener('click', () => {
+        if (state.importJobId) return;
+        state.importVaultId = state.selectedVaultId ?? state.importVaultId ?? state.vaults[0]?.id ?? null;
+        renderVaults();
+        resetImportFlow();
+        importDialog?.showModal();
     });
     importDialogClose?.addEventListener('click', () => importDialog?.close());
     importCancel?.addEventListener('click', () => importDialog?.close());
-    importModeAuto?.addEventListener('click', () => {
-        state.importMode = 'auto';
-        renderImportMode();
-    });
-    importModeSpecific?.addEventListener('click', () => {
-        state.importMode = 'specific';
-        renderImportMode();
-    });
-    sourceFileChoice?.addEventListener('click', () => browseImportSource('/items/browse-file'));
-    sourceFolderChoice?.addEventListener('click', () => browseImportSource('/items/browse'));
     importSummaryClose?.addEventListener('click', () => importSummaryDialog?.close());
     importSummaryDone?.addEventListener('click', () => importSummaryDialog?.close());
+    importProgressCancel?.addEventListener('click', cancelImportJob);
+    importProgressResults?.addEventListener('click', () => {
+        if (state.importLastJob) showImportJobSummary(state.importLastJob);
+    });
+    importProgressDismiss?.addEventListener('click', () => {
+        state.importLastJob = null;
+        importProgressContainer.classList.add('hidden');
+    });
 
-    importForm.addEventListener('submit', async event => {
-        event.preventDefault();
+    function sourcePickerIcon(entry) {
+        if (entry.kind === 'folder') {
+            return '<span class="source-picker-file-icon folder" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v9.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/></svg></span>';
+        }
+        if (entry.is_archive) {
+            return '<span class="source-picker-file-icon archive" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l3 3V20H7zM14 3.5V7h3M11.7 7.5h1.8M11.7 10h1.8M11.7 12.5h1.8M11.8 15h1.6v2.5h-1.6z"/></svg></span>';
+        }
+        return '<span class="source-picker-file-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l3 3V20H7zM14 3.5V7h3"/></svg></span>';
+    }
+
+    function sourcePickerDate(value) {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '—';
+        return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
+    }
+
+    function renderSourcePicker(result) {
+        state.sourcePickerDirectory = result.path;
+        state.sourcePickerParent = result.parent;
+        state.sourcePickerSelection = result.selected_path || null;
+        sourcePickerLocation.value = result.path;
+        sourcePickerUp.disabled = !result.parent;
+
+        sourcePickerLocations.innerHTML = (result.locations || []).map(location => {
+            const active = String(location.path).toLocaleLowerCase() === String(result.path).toLocaleLowerCase();
+            const symbol = location.kind === 'home' ? '⌂' : location.kind === 'music' ? '♫' : location.kind === 'drive' ? '▣' : '▱';
+            return `<button class="source-picker-location ${active ? 'active' : ''}" type="button" data-path="${escapeHtml(location.path)}">
+                <span class="source-picker-location-symbol" aria-hidden="true">${symbol}</span>
+                <span class="source-picker-location-label">${escapeHtml(location.label)}</span>
+            </button>`;
+        }).join('');
+
+        if (!result.entries?.length) {
+            sourcePickerList.innerHTML = '<div class="source-picker-empty">This folder is empty.</div>';
+        } else {
+            sourcePickerList.innerHTML = result.entries.map(entry => {
+                const selected = entry.path === state.sourcePickerSelection;
+                const actionLabel = entry.kind === 'folder' ? `Open ${entry.name}` : `Select ${entry.name}`;
+                return `<button class="source-picker-row" type="button" role="option" aria-label="${escapeHtml(actionLabel)}" aria-selected="${selected}" data-kind="${escapeHtml(entry.kind)}" data-path="${escapeHtml(entry.path)}" data-name="${escapeHtml(entry.name)}">
+                    <span class="source-picker-name">${sourcePickerIcon(entry)}<strong>${escapeHtml(entry.name)}</strong></span>
+                    <span class="source-picker-date">${escapeHtml(sourcePickerDate(entry.modified_at))}</span>
+                    <span class="source-picker-size">${entry.kind === 'folder' ? '—' : escapeHtml(formatSize(entry.size_bytes))}</span>
+                </button>`;
+            }).join('');
+        }
+        updateSourcePickerSelection();
+    }
+
+    function updateSourcePickerSelection() {
+        sourcePickerList.querySelectorAll('.source-picker-row').forEach(row => {
+            row.setAttribute('aria-selected', String(row.dataset.path === state.sourcePickerSelection));
+        });
+        if (state.sourcePickerSelection) {
+            sourcePickerSelection.textContent = state.sourcePickerSelection;
+            sourcePickerChoose.textContent = 'Choose file';
+        } else {
+            sourcePickerSelection.textContent = 'No file selected — the current folder will be used.';
+            sourcePickerChoose.textContent = 'Choose this folder';
+        }
+        sourcePickerChoose.disabled = !state.sourcePickerDirectory;
+    }
+
+    async function loadSourcePicker(path = null) {
+        sourcePickerResult.className = 'inline-error hidden';
+        sourcePickerList.innerHTML = '<div class="source-picker-empty">Loading location…</div>';
+        sourcePickerChoose.disabled = true;
+        try {
+            const query = path ? `?${new URLSearchParams({ path })}` : '';
+            const response = await fetch(`/items/import/browse-source${query}`);
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Could not open that location');
+            renderSourcePicker(result);
+        } catch (error) {
+            state.sourcePickerDirectory = null;
+            state.sourcePickerParent = null;
+            state.sourcePickerSelection = null;
+            sourcePickerList.innerHTML = '<div class="source-picker-empty">Location unavailable.</div>';
+            sourcePickerResult.textContent = error.message;
+            sourcePickerResult.className = 'inline-error';
+            sourcePickerChoose.disabled = true;
+        }
+    }
+
+    async function openSourcePicker() {
+        if (!sourcePickerDialog.open) sourcePickerDialog.showModal();
+        await loadSourcePicker(sourcePath.value.trim() || null);
+    }
+
+    function chooseSourcePickerPath() {
+        const path = state.sourcePickerSelection || state.sourcePickerDirectory;
+        if (!path) return;
+        sourcePath.value = path;
+        sourcePickerDialog.close();
+        importResult.className = 'result hidden';
+        importSubmit.focus();
+    }
+
+    async function inspectImportSource() {
+        if (!state.importVaultId || vaultSelect.value === '__create__') {
+            importResult.textContent = 'Choose or create a destination vault first.';
+            importResult.className = 'result error';
+            return;
+        }
+        if (!sourcePath.value.trim()) {
+            importResult.textContent = 'Choose a source first.';
+            importResult.className = 'result error';
+            return;
+        }
         importSubmit.disabled = true;
-        importSubmit.textContent = 'Importing…';
+        importSubmit.textContent = 'Inspecting…';
         importResult.className = 'result hidden';
         try {
-            const availableTypeIds = importableFolderTypes().map(type => type.id);
-            const analysisTypes = state.importMode === 'auto'
-                ? availableTypeIds
-                : [...state.importAnalysisTypes];
-            const response = await fetch('/items/import', {
+            const response = await fetch('/items/import/preview', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    source_path: sourcePath.value,
-                    vault_id: Number(vaultSelect.value),
-                    expected_type: 'auto',
-                    analysis_types: analysisTypes,
-                    fallback_to_files: state.importMode === 'auto',
-                }),
+                body: JSON.stringify({ source_path: sourcePath.value, vault_id: state.importVaultId }),
             });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.detail || 'Import failed');
-            const vault = state.vaults.find(entry => entry.id === Number(vaultSelect.value));
-            const warnings = Array.isArray(result.warnings) && result.warnings.length
-                ? ` Warning: ${result.warnings.join(' ')}`
-                : '';
-            importResult.textContent = result.type === 'batch'
-                ? `${result.imported} independent ${result.imported === 1 ? 'item' : 'items'} imported into ${vault?.name || 'the vault'}.`
-                : `${result.title || filename(result.absolute_path)} imported into ${vault?.name || 'the vault'} as ${typeLabel(result.type)}.${warnings}`;
-            importResult.className = 'result';
-            importDialog?.close();
-            renderImportSummary(result);
-            sourcePath.value = '';
-            await loadLibrary();
-            await loadVaultImportLog();
+            const preview = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(preview.detail || 'Could not inspect source');
+            state.importPreview = preview;
+            state.importFolderAssignments = new Map(
+                (preview.nodes || [])
+                    .filter(node => node.kind === 'folder' && node.detected_assignment)
+                    .map(node => [node.relative_path, node.detected_assignment]),
+            );
+            state.importItemTypes = new Map((preview.entries || []).map(entry => [entry.index, entry.type]));
+            state.importExcludedIndexes = new Set();
+            state.importCollapsedFolders = new Set(
+                (preview.nodes || []).filter(node => node.kind === 'folder').map(node => node.relative_path),
+            );
+            state.importConflictAction = preview.conflicts?.length ? null : 'skip';
+            importSourceStep.classList.add('hidden');
+            importPreviewStep.classList.remove('hidden');
+            renderImportPreview();
         } catch (error) {
             importResult.textContent = error.message;
             importResult.className = 'result error';
         } finally {
             importSubmit.disabled = false;
-            importSubmit.textContent = 'Import assets';
+            importSubmit.textContent = 'Inspect source';
         }
-    });
+    }
 
-    vaultSelect.addEventListener('change', async () => {
-        state.selectedVaultId = Number(vaultSelect.value);
-        reconcileFilterSelection();
-        renderVaults();
-        renderFilterUI();
-        renderAssets();
-        await loadVaultImportLog();
-    });
-
-    vaultForm.addEventListener('submit', async event => {
+    importForm.addEventListener('submit', async event => {
         event.preventDefault();
-        vaultResult.className = 'result hidden';
-        try {
-            const response = await fetch('/vaults/', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: vaultName.value }),
-            });
-            const vault = await response.json();
-            if (!response.ok) throw new Error(vault.detail || 'Could not create vault');
-            state.vaults.push(vault);
-            state.selectedVaultId = vault.id;
-            renderVaults();
-            vaultName.value = '';
-            vaultResult.textContent = `${vault.name} is ready. Its imports and duplicate checks are now isolated.`;
-            vaultResult.className = 'result';
-            await loadLibrary();
-        } catch (error) {
-            vaultResult.textContent = error.message;
-            vaultResult.className = 'result error';
+        await inspectImportSource();
+    });
+    chooseSourcePath.addEventListener('click', openSourcePicker);
+    sourcePickerClose.addEventListener('click', () => sourcePickerDialog.close());
+    sourcePickerCancel.addEventListener('click', () => sourcePickerDialog.close());
+    sourcePickerUp.addEventListener('click', () => {
+        if (state.sourcePickerParent) loadSourcePicker(state.sourcePickerParent);
+    });
+    sourcePickerLocationForm.addEventListener('submit', event => {
+        event.preventDefault();
+        loadSourcePicker(sourcePickerLocation.value.trim());
+    });
+    sourcePickerLocations.addEventListener('click', event => {
+        const location = event.target.closest('[data-path]');
+        if (location) loadSourcePicker(location.dataset.path);
+    });
+    sourcePickerList.addEventListener('click', event => {
+        const entry = event.target.closest('.source-picker-row');
+        if (!entry) return;
+        if (entry.dataset.kind === 'folder') {
+            loadSourcePicker(entry.dataset.path);
+            return;
+        }
+        state.sourcePickerSelection = entry.dataset.path;
+        updateSourcePickerSelection();
+    });
+    sourcePickerList.addEventListener('dblclick', event => {
+        const entry = event.target.closest('.source-picker-row[data-kind="file"]');
+        if (!entry) return;
+        state.sourcePickerSelection = entry.dataset.path;
+        chooseSourcePickerPath();
+    });
+    sourcePickerChoose.addEventListener('click', chooseSourcePickerPath);
+    sourcePickerDialog.addEventListener('click', event => {
+        if (event.target === sourcePickerDialog) sourcePickerDialog.close();
+    });
+
+    vaultSelect.addEventListener('change', () => {
+        if (vaultSelect.value === '__create__') {
+            showImportVaultCreate(true);
+            importVaultName.focus();
+            return;
+        }
+        state.importVaultId = Number(vaultSelect.value);
+        showImportVaultCreate(false);
+    });
+    importVaultCreateSubmit.addEventListener('click', createImportVault);
+    importVaultCreateCancel.addEventListener('click', () => renderVaults());
+    importVaultName.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            createImportVault();
         }
     });
 
-    [vaultChips, typeChips, tagChips].forEach(chips => {
+    [typeChips, tagChips].forEach(chips => {
         if (!chips) return;
         const parent = chips.parentNode;
         const rail = createFilterRail(chips);
         parent.appendChild(rail);
         enableHorizontalDragScroll(chips);
     });
-    initializeColumnResizing();
+    const restoredImportJobId = localStorage.getItem('gaia.activeImportJobId');
+    if (restoredImportJobId) {
+        state.importJobId = restoredImportJobId;
+        renderImportPollingIssue('Reconnecting to background import');
+        pollImportJob();
+    }
     loadLibrary();
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeGaiaLibrary, { once: true });
+} else {
+    initializeGaiaLibrary();
+}

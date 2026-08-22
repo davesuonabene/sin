@@ -1,0 +1,23 @@
+{
+  "schema": "gaia-profile-bundle-v1",
+  "bundle_id": "sample-packs",
+  "label": "Sample pack layouts",
+  "profiles": [
+    {
+      "id": "sample_pack",
+      "label": "Sample pack",
+      "description": "An immutable collected pack that preserves every original file and relative path.",
+      "container_type": "collection",
+      "match": {
+        "filename_patterns": ["*.wav"]
+      },
+      "components": [
+        {
+          "pattern": "*",
+          "label": "pack content",
+          "relation_kind": "component"
+        }
+      ]
+    }
+  ]
+}

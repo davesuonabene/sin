@@ -12,7 +12,7 @@ import soundfile as sf
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from gaia import collection_importer, database, models, vaults
+from gaia import collection_importer, database, models, paths, vaults
 
 
 @contextmanager
@@ -69,6 +69,10 @@ class GaiaTestCase(unittest.TestCase):
         self.addCleanup(self._temporary_directory.cleanup)
         self.temp_path = Path(self._temporary_directory.name)
 
+        self.original_import_logs_directory = paths.import_logs_directory
+        paths.import_logs_directory = lambda: self.temp_path / "logs"
+        self.addCleanup(setattr, paths, "import_logs_directory", self.original_import_logs_directory)
+
         self.original_asset_store = collection_importer.ASSET_STORE
         self.asset_store = self.temp_path / "managed"
         collection_importer.ASSET_STORE = self.asset_store
@@ -84,7 +88,6 @@ class GaiaTestCase(unittest.TestCase):
             lambda connection, _record: connection.execute("PRAGMA foreign_keys=ON"),
         )
         models.Base.metadata.create_all(bind=self.engine)
-        vaults.initialise_schema(self.engine)
         self.addCleanup(self.engine.dispose)
 
         self.session_factory = sessionmaker(
@@ -125,3 +128,50 @@ class GaiaTestCase(unittest.TestCase):
                 return status
             time.sleep(0.01)
         self.fail(f"GAIA batch task {task_id} did not finish within {timeout:.1f}s")
+
+    def preview_import(self, source_path: Path | str) -> dict:
+        """Inspect a source through the public preview-first import service."""
+        from gaia.import_jobs import import_job_manager
+
+        return import_job_manager.create_preview(str(source_path), self.vault.id, self.db)
+
+    def start_import(
+        self,
+        preview: dict,
+        *,
+        folder_assignments: dict[str, str] | None = None,
+        item_types: dict[int, str] | None = None,
+        excluded_indexes: list[int] | None = None,
+        conflict_action: str | None = None,
+    ) -> dict:
+        """Queue a background import and wait only for its terminal test state."""
+        from gaia import schemas
+        from gaia.import_jobs import import_job_manager
+
+        detected_assignments = {
+            node["relative_path"]: node["detected_assignment"]
+            for node in preview.get("nodes", [])
+            if node.get("kind") == "folder" and node.get("detected_assignment")
+        }
+        job = import_job_manager.create_job(
+            schemas.ImportJobCreateRequest(
+                preview_id=preview["preview_id"],
+                folder_assignments=detected_assignments if folder_assignments is None else folder_assignments,
+                item_types=item_types or {},
+                excluded_indexes=excluded_indexes or [],
+                conflict_action=conflict_action,
+            )
+        )
+        return self.wait_for_import(job["job_id"])
+
+    def wait_for_import(self, job_id: str, timeout: float = 5.0) -> dict:
+        from gaia.import_jobs import import_job_manager
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status = import_job_manager.get_job(job_id)
+            if status and status["status"] in {"completed", "failed", "cancelled", "stale"}:
+                self.db.expire_all()
+                return status
+            time.sleep(0.01)
+        self.fail(f"GAIA import job {job_id} did not finish within {timeout:.1f}s")

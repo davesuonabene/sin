@@ -4,36 +4,78 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GAIA Library</title>
-    <link rel="stylesheet" href="/static/styles.css?v=22">
+    <link rel="stylesheet" href="/static/styles.css?v=33">
 </head>
 <body>
     <div class="app-shell">
         <main class="main-content">
             <section id="library-view" class="view">
                 <header class="page-header">
-                    <div>
-                        <p class="eyebrow">Gaia archive</p>
-                        <h1>Your library</h1>
+                    <div class="vault-heading">
+                        <div class="vault-title-row">
+                            <div class="vault-picker-wrap">
+                                <h1>
+                                    <button id="vault-picker" class="vault-picker" type="button" aria-haspopup="listbox" aria-expanded="false">
+                                        <span id="active-vault-name">Show all</span>
+                                        <span class="vault-picker-chevron" aria-hidden="true">⌄</span>
+                                    </button>
+                                </h1>
+                                <div id="vault-menu" class="vault-menu hidden" role="listbox" aria-label="Choose a vault">
+                                    <div id="vault-menu-list"></div>
+                                </div>
+                            </div>
+                            <div class="vault-actions" aria-label="Vault actions">
+                                <button id="create-vault" class="icon-button secondary" type="button" aria-label="Create vault" title="Create vault">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+                                </button>
+                                <button id="delete-vault" class="icon-button secondary" type="button" aria-label="Delete active vault" title="Delete active vault" disabled>
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 11v6M14 11v6M8 7l1-3h6l1 3m-9 0 1 13h8l1-13"></path></svg>
+                                </button>
+                                <button id="vault-options" class="icon-button secondary" type="button" aria-label="Vault options" title="Vault options" disabled>
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"></path></svg>
+                                </button>
+                            </div>
+                        </div>
                         <p id="library-summary" class="summary" aria-live="polite">Loading assets…</p>
                     </div>
                     <div class="header-actions">
-                        <div id="dispatch-bar" class="dispatch-bar hidden">
-                            <span id="dispatch-count">0 selected</span>
-                            <select id="dispatch-target-select"></select>
-                            <button id="dispatch-submit-btn" class="primary" type="button">Dispatch to Vault</button>
-                            <button id="project-from-selection" class="secondary" type="button">Create Project</button>
-                            <button id="projects-per-selection" class="secondary" type="button">Project per file</button>
-                        </div>
                         <label class="search" for="search-input">
                             <span aria-hidden="true">⌕</span>
                             <input id="search-input" type="search" placeholder="Filter by title or path">
                         </label>
                         <button id="clear-filter" class="secondary hidden" type="button">Clear filter</button>
-                        <button id="create-project" class="primary" type="button">New Project</button>
-                        <button id="refresh" class="secondary" type="button">Refresh</button>
-                        <button id="open-import" class="primary add-import" type="button" aria-label="Import assets" title="Import assets">+</button>
                     </div>
                 </header>
+
+                    <div class="library-toolbar" aria-label="Library commands">
+                        <div class="toolbar-group toolbar-general" aria-label="Library commands">
+                        <button id="create-project" class="primary toolbar-icon-button" type="button" title="Create project" aria-label="Create project"><span class="toolbar-icon" aria-hidden="true">＋</span></button>
+                        <button id="open-import" class="secondary toolbar-icon-button" type="button" title="Import assets" aria-label="Import assets"><span class="toolbar-icon" aria-hidden="true">⇩</span></button>
+                        <button id="refresh" class="secondary toolbar-icon-button" type="button" title="Refresh library" aria-label="Refresh library"><span class="toolbar-icon" aria-hidden="true">↻</span></button>
+                        </div>
+                    <div id="move-bar" class="toolbar-group toolbar-selection hidden" aria-label="Commands for the current selection">
+                        <span id="move-count" class="selection-count">0 selected</span>
+                        <select id="move-target-select" aria-label="Target vault"></select>
+                        <button id="move-submit-btn" class="secondary toolbar-icon-button" type="button" title="Move selected assets to the chosen vault" aria-label="Move selected assets to the chosen vault"><span class="toolbar-icon" aria-hidden="true">→</span></button>
+                        <button id="analyze-selection" class="secondary toolbar-icon-button" type="button" title="Analyze selected assets" aria-label="Analyze selected assets"><span class="toolbar-icon" aria-hidden="true">⌁</span></button>
+                        <button id="delete-selection" class="danger-toolbar toolbar-icon-button" type="button" title="Delete selected assets" aria-label="Delete selected assets"><span class="toolbar-icon" aria-hidden="true">⌫</span></button>
+                        <span id="selection-type-actions" class="selection-type-actions"></span>
+                    </div>
+                </div>
+
+                <div id="import-progress-container" class="background-job-strip hidden" role="status" aria-live="polite">
+                    <div class="background-job-copy">
+                        <span id="import-progress-label" class="background-job-label">Import queued</span>
+                        <span id="import-progress-detail" class="background-job-detail">Preparing managed import…</span>
+                    </div>
+                    <div class="background-job-meter" aria-hidden="true">
+                        <div id="import-progress-fill" class="background-job-fill" style="width: 0%;"></div>
+                    </div>
+                    <span id="import-progress-count" class="background-job-count">0 / 0</span>
+                    <button id="import-progress-cancel" class="secondary micro-btn" type="button">Cancel</button>
+                    <button id="import-progress-results" class="secondary micro-btn hidden" type="button">Results</button>
+                    <button id="import-progress-dismiss" class="secondary micro-btn hidden" type="button" aria-label="Dismiss import status">×</button>
+                </div>
 
                 <div id="analysis-progress-container" class="analysis-progress-container hidden">
                     <div class="analysis-progress-header">
@@ -54,15 +96,9 @@
                 <div id="library-layout" class="library-layout">
                     <section class="asset-panel" aria-label="Assets">
                         <div id="library-filters" class="filter-bar" aria-label="Library filters">
-                            <div class="filter-pair">
-                                <div class="filter-row">
-                                    <span class="filter-row-label">Vaults</span>
-                                    <div id="vault-chips" class="filter-chips" aria-label="Filter by vault"></div>
-                                </div>
-                                <div class="filter-row">
-                                    <span class="filter-row-label">Types</span>
-                                    <div id="type-chips" class="filter-chips" aria-label="Filter by type"></div>
-                                </div>
+                            <div class="filter-row">
+                                <span class="filter-row-label">Types</span>
+                                <div id="type-chips" class="filter-chips" aria-label="Filter by type"></div>
                             </div>
                             <div class="filter-row">
                                 <span class="filter-row-label">Tags</span>
@@ -70,20 +106,7 @@
                             </div>
                             <div id="filter-status" class="filter-status" aria-live="polite"></div>
                         </div>
-                        <div class="header-scroll-container">
-                            <button id="scroll-left-header" class="secondary header-scroll-btn" type="button" title="Scroll left parameters">‹</button>
-                            <div id="list-header" class="list-header">
-                                <span>Name<i class="column-resizer" aria-hidden="true"></i></span>
-                                <span>Path<i class="column-resizer" aria-hidden="true"></i></span>
-                                <span>Type<i class="column-resizer" aria-hidden="true"></i></span>
-                                <span>BPM<i class="column-resizer" aria-hidden="true"></i></span>
-                                <span>Key<i class="column-resizer" aria-hidden="true"></i></span>
-                                <span>Tags<i class="column-resizer" aria-hidden="true"></i></span>
-                                <span>Size<i class="column-resizer" aria-hidden="true"></i></span>
-                                <span aria-label="Actions">Action</span>
-                            </div>
-                            <button id="scroll-right-header" class="secondary header-scroll-btn" type="button" title="Scroll right parameters">›</button>
-                        </div>
+                        <div id="list-header" class="row-header main-row-header" aria-label="Asset columns"></div>
                         <div id="asset-list" class="asset-list" role="list"></div>
                     </section>
                 </div>
@@ -97,74 +120,98 @@
         <button id="delete-entry-menu" type="button" role="menuitem" class="danger-menu-item">Delete selected</button>
         <div class="context-divider"></div>
         <div id="context-vault-options" class="context-vault-options"></div>
-        <button id="remove-vault-entry" type="button" role="menuitem" class="danger-menu-item hidden">Remove from Vault</button>
     </div>
+
+    <dialog id="vault-dialog" class="gaia-dialog vault-dialog">
+        <form id="vault-form">
+            <div class="dialog-heading">
+                <div>
+                    <p id="vault-dialog-eyebrow" class="eyebrow">New vault</p>
+                    <h2 id="vault-dialog-title">Create a vault</h2>
+                </div>
+                <button id="vault-dialog-close" class="secondary" type="button" aria-label="Close">×</button>
+            </div>
+            <label for="vault-name-input">Vault name</label>
+            <input id="vault-name-input" type="text" maxlength="100" required autocomplete="off">
+            <p id="vault-dialog-result" class="result hidden" role="status"></p>
+            <div class="dialog-actions">
+                <button id="vault-dialog-cancel" class="secondary" type="button">Cancel</button>
+                <button id="vault-dialog-submit" class="primary" type="submit">Create vault</button>
+            </div>
+        </form>
+    </dialog>
 
     <dialog id="import-dialog" class="gaia-dialog import-dialog">
         <div class="dialog-heading">
-            <div>
-                <p class="eyebrow">Add to Gaia</p>
-                <h2>Import assets</h2>
+            <div class="import-heading-title">
+                <p class="eyebrow">Managed import</p>
+                <h2>Inspect source</h2>
             </div>
+            <div id="import-heading-source" class="import-heading-source hidden"></div>
             <button id="import-dialog-close" class="secondary" type="button" aria-label="Close">×</button>
         </div>
         <form id="import-form" class="import-modal-form">
-            <fieldset class="import-mode-fieldset">
-                <legend>How should GAIA inspect this source?</legend>
-                <div class="import-mode-grid">
-                    <button id="import-mode-auto" class="source-choice compact active" type="button" aria-pressed="true">
-                        <span class="source-choice-icon" aria-hidden="true">⌕</span>
-                        <strong>Auto scan</strong>
-                        <small>Detect a collection or import the files individually</small>
-                    </button>
-                    <button id="import-mode-specific" class="source-choice compact" type="button" aria-pressed="false">
-                        <span class="source-choice-icon" aria-hidden="true">▱</span>
-                        <strong>Specific collection</strong>
-                        <small>Choose the collection type before importing</small>
-                    </button>
+            <div id="import-source-step">
+                <p class="help">Enter one file, folder, or ZIP path. GAIA performs a quick read-only path inspection; content analysis starts only after you confirm the background import.</p>
+                <div class="import-field-row">
+                    <label for="vault-select">Vault</label>
+                    <select id="vault-select" required></select>
+                    <div id="import-vault-create" class="import-vault-create hidden">
+                        <input id="import-vault-name" type="text" maxlength="100" placeholder="New vault name" autocomplete="off">
+                        <button id="import-vault-create-submit" class="primary compact-control" type="button">Create</button>
+                        <button id="import-vault-create-cancel" class="secondary compact-control" type="button">Cancel</button>
+                    </div>
+                    <p id="import-vault-create-result" class="inline-error hidden" role="status"></p>
                 </div>
-            </fieldset>
-            <fieldset id="specific-type-panel" class="analysis-type-fieldset hidden">
-                <legend>Collection type</legend>
-                <div id="analysis-type-list" class="analysis-type-list"></div>
-                <p id="analysis-type-status" class="analysis-type-status" role="status"></p>
-            </fieldset>
-            <div class="import-field-row">
-                <label for="vault-select">Vault</label>
-                <select id="vault-select" required></select>
-            </div>
-            <div class="import-field-row">
-                <label for="source-path">File, folder, or ZIP path</label>
-                <div class="source-input">
-                    <input id="source-path" type="text" required placeholder="Choose a file, folder, or ZIP archive">
-                    <button id="source-file-choice" class="secondary" type="button">File or ZIP</button>
-                    <button id="source-folder-choice" class="secondary" type="button">Folder</button>
+                <div class="import-field-row">
+                    <label for="source-path">File, folder, or ZIP path</label>
+                    <div class="source-input">
+                        <input id="source-path" type="text" required placeholder="Paste a file, folder, or ZIP path">
+                        <button id="choose-source-path" class="secondary" type="button">Choose path</button>
+                    </div>
+                </div>
+                <div class="dialog-actions import-actions">
+                    <button id="import-cancel" class="secondary" type="button">Cancel</button>
+                    <button id="import-submit" class="primary" type="submit">Inspect source</button>
                 </div>
             </div>
-            <div class="dialog-actions import-actions">
-                <button id="import-cancel" class="secondary" type="button">Cancel</button>
-                <button id="import-submit" class="primary" type="submit">Import assets</button>
-            </div>
+            <section id="import-preview-step" class="import-preview hidden" aria-live="polite"></section>
             <p id="import-result" class="result hidden" role="status"></p>
         </form>
-        <details class="vault-tools">
-            <summary>Vault tools</summary>
-            <div class="vault-tools-content">
-                <form id="vault-form" class="vault-inline-form">
-                    <label for="vault-name">Create a vault</label>
-                    <div class="source-input">
-                        <input id="vault-name" type="text" required placeholder="Vault name">
-                        <button class="secondary" type="submit">Create</button>
-                    </div>
-                    <p id="vault-result" class="result hidden" role="status"></p>
-                </form>
-                <section aria-labelledby="vault-log-title">
-                    <h3 id="vault-log-title">Recent activity</h3>
-                    <p id="vault-log-description" class="help">Recent imports and file actions for the selected vault.</p>
-                    <div id="vault-import-log" class="vault-import-log">Select a vault to view activity.</div>
-                </section>
+    </dialog>
+
+    <dialog id="source-picker-dialog" class="gaia-dialog source-picker-dialog" aria-labelledby="source-picker-title">
+        <div class="dialog-heading source-picker-heading">
+            <div>
+                <p class="eyebrow">Local files</p>
+                <h2 id="source-picker-title">Choose an import source</h2>
+                <p class="dialog-subtitle">Select a folder, an individual asset, or a ZIP archive.</p>
             </div>
-        </details>
+            <button id="source-picker-close" class="secondary icon-button" type="button" aria-label="Close path selector">×</button>
+        </div>
+        <div class="source-picker-toolbar">
+            <button id="source-picker-up" class="secondary icon-button" type="button" aria-label="Go to parent folder" title="Go to parent folder">←</button>
+            <form id="source-picker-location-form" class="source-picker-location-form">
+                <span class="source-picker-location-icon" aria-hidden="true">⌘</span>
+                <input id="source-picker-location" type="text" aria-label="Current location" autocomplete="off" spellcheck="false">
+                <button class="secondary source-picker-go" type="submit">Go</button>
+            </form>
+        </div>
+        <div class="source-picker-layout">
+            <nav id="source-picker-locations" class="source-picker-locations" aria-label="Locations"></nav>
+            <section class="source-picker-browser" aria-label="Files and folders">
+                <div class="source-picker-list-heading" aria-hidden="true">
+                    <span>Name</span><span>Modified</span><span>Size</span>
+                </div>
+                <div id="source-picker-list" class="source-picker-list" role="listbox" aria-label="Files and folders"></div>
+            </section>
+        </div>
+        <p id="source-picker-result" class="inline-error hidden" role="status"></p>
+        <div class="dialog-actions source-picker-actions">
+            <span id="source-picker-selection" class="source-picker-selection">No file selected — the current folder will be used.</span>
+            <button id="source-picker-cancel" class="secondary" type="button">Cancel</button>
+            <button id="source-picker-choose" class="primary" type="button">Choose this folder</button>
+        </div>
     </dialog>
 
     <dialog id="import-summary-dialog" class="gaia-dialog import-summary-dialog">
@@ -181,22 +228,40 @@
         </div>
     </dialog>
 
-    <dialog id="project-dialog" class="gaia-dialog">
+    <dialog id="project-dialog" class="gaia-dialog project-dialog">
         <form id="project-form" method="dialog">
             <div class="dialog-heading">
                 <div>
                     <p class="eyebrow">Managed project</p>
                     <h2 id="project-dialog-title">Create a Project</h2>
+                    <p id="project-dialog-subtitle" class="dialog-subtitle">Create a workspace in the active vault.</p>
                 </div>
                 <button id="project-dialog-close" class="secondary" type="button" aria-label="Close">×</button>
             </div>
             <input id="project-mode" type="hidden" value="empty">
-            <label for="project-name">Project name</label>
-            <input id="project-name" type="text" maxlength="100" required>
-            <label for="project-type">Project type</label>
-            <select id="project-type" required></select>
-            <p id="project-selection-note" class="help hidden"></p>
-            <button id="project-submit" class="primary" type="submit">Create Project</button>
+            <div class="project-field">
+                <label for="project-name">Project name</label>
+                <input id="project-name" type="text" maxlength="100" required placeholder="e.g. Friday live edit">
+            </div>
+            <div class="project-field">
+                <label for="project-type">Project type</label>
+                <select id="project-type" required></select>
+            </div>
+            <section id="project-source-preview" class="project-source-preview hidden" aria-live="polite">
+                <div class="project-source-heading">
+                    <div>
+                        <p class="eyebrow">Starting material</p>
+                        <h3 id="project-source-title">Selected sources</h3>
+                    </div>
+                    <span id="project-source-count" class="project-source-count"></span>
+                </div>
+                <p id="project-selection-note" class="project-selection-note"></p>
+                <div id="project-source-list" class="project-source-list"></div>
+            </section>
+            <div class="dialog-actions project-dialog-actions">
+                <button id="project-dialog-cancel" class="secondary" type="button">Cancel</button>
+                <button id="project-submit" class="primary" type="submit">Create Project</button>
+            </div>
             <p id="project-result" class="result hidden" role="status"></p>
         </form>
     </dialog>
@@ -205,20 +270,51 @@
         <form id="project-files-form" method="dialog">
             <div class="dialog-heading">
                 <div>
-                    <p class="eyebrow">Project files</p>
-                    <h2 id="project-files-title">Add files</h2>
+                    <p class="eyebrow">Project sources</p>
+                    <h2 id="project-files-title">Add source files</h2>
                 </div>
                 <button id="project-files-close" class="secondary" type="button" aria-label="Close">×</button>
             </div>
             <input id="project-files-id" type="hidden">
-            <label for="project-file-paths">File paths</label>
+            <label for="project-file-paths">Source file paths</label>
             <textarea id="project-file-paths" rows="6" required placeholder="One file path per line"></textarea>
-            <p class="help">External files are copied. Files already managed by GAIA are moved into the Project.</p>
-            <button class="primary" type="submit">Add files</button>
+            <p class="help">External files are imported into GAIA and linked read-only. Existing sources are never moved into this Project.</p>
+            <button class="primary" type="submit">Add sources</button>
             <p id="project-files-result" class="result hidden" role="status"></p>
         </form>
     </dialog>
 
-    <script src="/static/app.js?v=22"></script>
+    <dialog id="item-placement-dialog" class="gaia-dialog item-placement-dialog" aria-labelledby="item-placement-title">
+        <div class="dialog-heading">
+            <div>
+                <p class="eyebrow">Add to folder</p>
+                <h2 id="item-placement-title">Move or reference?</h2>
+                <p id="item-placement-summary" class="dialog-subtitle"></p>
+            </div>
+            <button id="item-placement-close" class="secondary icon-button" type="button" aria-label="Close">×</button>
+        </div>
+        <div class="item-placement-choices">
+            <button id="item-placement-move" class="item-placement-choice" type="button">
+                <span class="item-placement-icon" aria-hidden="true">→</span>
+                <span class="item-placement-copy">
+                    <strong>Full move</strong>
+                    <small>Move the managed file into the destination vault and add it as a source.</small>
+                </span>
+            </button>
+            <button id="item-placement-reference" class="item-placement-choice" type="button">
+                <span class="item-placement-icon" aria-hidden="true">↗</span>
+                <span class="item-placement-copy">
+                    <strong>Reference only</strong>
+                    <small>Keep the file in its current location and add a source relationship.</small>
+                </span>
+            </button>
+        </div>
+        <p id="item-placement-result" class="result error hidden" role="status"></p>
+        <div class="dialog-actions">
+            <button id="item-placement-cancel" class="secondary" type="button">Cancel</button>
+        </div>
+    </dialog>
+
+    <script src="/static/app.js?v=42"></script>
 </body>
 </html>

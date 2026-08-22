@@ -39,14 +39,8 @@ export function getAssetTags(item: any): string[] {
 }
 
 export function getAssetVaultIds(item: any): number[] {
-    const rawIds = [
-        ...(Array.isArray(item?.vault_ids) ? item.vault_ids : []),
-        item?.vault_id,
-    ];
-    const ids: number[] = rawIds
-        .map((value: unknown) => Number(value))
-        .filter((value: number): value is number => Number.isFinite(value));
-    return [...new Set(ids)];
+    const vaultId = Number(item?.vault_id);
+    return Number.isFinite(vaultId) ? [vaultId] : [];
 }
 
 /**
@@ -56,23 +50,21 @@ export function getAssetVaultIds(item: any): number[] {
  * actual assets inside it.
  */
 export function isAssetOrganizer(item: any): boolean {
-    return ['collection', 'sample_pack', 'project', 'live_recording_project'].includes(normalizeFacetValue(item?.type))
+    return ['collection', 'sample_pack', 'project'].includes(normalizeFacetValue(item?.type))
         && Array.isArray(item?.contents);
 }
 
 export function getFilterableAssetItems(item: any): any[] {
     if (!isAssetOrganizer(item)) return [item];
 
-    const vaultIds = getAssetVaultIds(item);
     return item.contents
         .filter((content: any) => content && typeof content === 'object')
         .map((content: any) => ({
             ...content,
             name: content.name || content.title || content.filename,
-            vault_id: content.vault_id ?? item.vault_id,
-            vault_ids: getAssetVaultIds(content).length
-                ? getAssetVaultIds(content)
-                : vaultIds,
+            vault_id: getAssetVaultIds(content).length
+                ? content.vault_id
+                : item.vault_id,
         }));
 }
 

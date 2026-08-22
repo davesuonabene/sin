@@ -111,7 +111,7 @@ def extract_key(text: str, allow_bare_note: bool = False) -> str | None:
     return None
 
 
-def key_role(text: str, sample_type: str, tags: list[str]) -> str:
+def key_role(text: str, is_loop: bool, tags: list[str]) -> str:
     """Return whether an asset is unpitched, a single pitch, or harmonic."""
     tag_set = set(tags)
     # 808s and bass sounds are tonal even when they live inside a generic
@@ -125,7 +125,7 @@ def key_role(text: str, sample_type: str, tags: list[str]) -> str:
     explicitly_single = bool(re.search(r"\b(single[ -]?note|one[ -]?note|note|tone)\b", searchable))
     if explicitly_single:
         return "single_note"
-    if sample_type == "one_shot" and tag_set.intersection(_TONAL_INSTRUMENT_TAGS):
+    if not is_loop and tag_set.intersection(_TONAL_INSTRUMENT_TAGS):
         return "single_note"
     return "harmonic"
 
@@ -152,30 +152,28 @@ def normalize_key_for_role(key: str | None, role: str) -> str | None:
     return note
 
 
-def detect_type(text: str, has_bpm: bool, extension: str = "") -> str:
-    """Classify an asset using explicit folder/name evidence."""
+def detect_is_loop(text: str, has_bpm: bool, extension: str = "") -> bool:
+    """Infer loop metadata without promoting it to a library item type."""
     searchable = _searchable(text)
-    if extension.lower() in {".mid", ".midi"}:
-        return "midi"
     if re.search(r"\b(loop|loops|break|breaks)\b", searchable):
-        return "loop"
+        return True
     if re.search(r"\b(one[ -]?shots?|oneshots?)\b", searchable):
-        return "one_shot"
+        return False
     hit_words = r"kick|snare|clap|snap|rimshot|rim|hihat|hi hat|hat|cymbal|crash|ride|tom|perc|conga|bongo|shaker|cowbell|808"
     if re.search(rf"\b({hit_words})s?\b", searchable):
-        return "one_shot"
+        return False
     if has_bpm:
-        return "loop"
-    return "sample"
+        return True
+    return False
 
 
-def extract_tags(text: str, sample_type: str, bpm_range: tuple[int, int] | None = None) -> list[str]:
+def extract_tags(text: str, is_loop: bool = False, bpm_range: tuple[int, int] | None = None, is_midi: bool = False) -> list[str]:
     searchable = _searchable(text)
     tags: list[str] = []
     for label, needles in _AUDIO_TAGS:
         if any(needle in searchable for needle in needles):
             tags.append(label)
-    type_tag = {"loop": "Loop", "one_shot": "One shot", "midi": "MIDI"}.get(sample_type)
+    type_tag = "MIDI" if is_midi else "Loop" if is_loop else None
     if type_tag:
         tags.append(type_tag)
     if bpm_range:
@@ -184,7 +182,7 @@ def extract_tags(text: str, sample_type: str, bpm_range: tuple[int, int] | None 
 
 
 def detect_category(text: str) -> str:
-    tags = extract_tags(text, "sample")
+    tags = extract_tags(text)
     if any(tag in tags for tag in {"Drums", "Kick", "Snare", "Clap", "Snap", "Hi-hat", "Open hat", "Percussion", "Cymbal", "Tom", "Rim"}):
         return "Drums"
     if "Bass" in tags or "808" in tags:
@@ -202,9 +200,10 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
     metadata_text = search_text.replace("_", " ")
     bpm_range = extract_bpm_range(metadata_text)
     bpm = extract_bpm(metadata_text)
-    sample_type = detect_type(search_text, bool(bpm), path.suffix)
-    tags = extract_tags(search_text, sample_type, bpm_range)
-    role = key_role(search_text, sample_type, tags)
+    is_midi = path.suffix.lower() in {".mid", ".midi"}
+    is_loop = detect_is_loop(search_text, bool(bpm), path.suffix)
+    tags = extract_tags(search_text, is_loop, bpm_range, is_midi)
+    role = key_role(search_text, is_loop, tags)
     if role == "single_note" and "Single note" not in tags:
         tags.append("Single note")
 
@@ -218,7 +217,7 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
 
     # A duration is useful only after the name/folder has established that the
     # asset is a loop. This avoids assigning tempos to arbitrary one-shots.
-    if bpm is None and sample_type == "loop" and duration_seconds:
+    if bpm is None and is_loop and duration_seconds:
         inferred = BPMAnalyzer.from_loop_duration(duration_seconds)
         bpm = round(inferred) if inferred is not None else None
 
@@ -232,7 +231,8 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
         "title": clean_title(path.name),
         "bpm": bpm,
         "key": key,
-        "type": sample_type,
+        "type": "midi" if is_midi else "audio",
+        "is_loop": is_loop,
         "category": detect_category(search_text),
         "tags": tags,
     }

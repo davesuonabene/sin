@@ -20,8 +20,6 @@ type LibraryTypeVisual = {
 const LIBRARY_TYPE_VISUALS: Record<string, LibraryTypeVisual> = {
     audio: { icon: 'speaker', color: '#10b981', label: 'Audio' },
     sample: { icon: 'sample', color: '#10b981', label: 'Sample' },
-    one_shot: { icon: 'pulse', color: '#f59e0b', label: 'One-shot' },
-    loop: { icon: 'wave', color: '#0284c7', label: 'Loop' },
     midi: { icon: 'sequence', color: '#8b5cf6', label: 'MIDI' },
     sequence: { icon: 'sequence', color: '#ec4899', label: 'Sequence' },
     track: { icon: 'mixer', color: '#06b6d4', label: 'Track' },
@@ -29,7 +27,6 @@ const LIBRARY_TYPE_VISUALS: Record<string, LibraryTypeVisual> = {
     collection: { icon: 'arrangement', color: '#ec4899', label: 'Collection' },
     sample_pack: { icon: 'arrangement', color: '#ec4899', label: 'Sample pack' },
     project: { icon: 'arrangement', color: '#38bdf8', label: 'Project' },
-    live_recording_project: { icon: 'mixer', color: '#38bdf8', label: 'Live recording' },
 };
 
 function getLibraryTypeVisual(item: any): LibraryTypeVisual {

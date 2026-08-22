@@ -457,9 +457,8 @@ def _get_gaia_metadata(filepath: str) -> Dict[str, Any]:
         cursor = conn.cursor()
         target_abs = os.path.abspath(filepath)
         cursor.execute("""
-            SELECT l.bpm, s.key
+            SELECT s.bpm, s.key
             FROM items i
-            LEFT JOIN loop_sample_items l ON i.id = l.id
             LEFT JOIN sample_items s ON i.id = s.id
             WHERE i.absolute_path = ? OR i.absolute_path = ?
         """, (filepath, target_abs))
@@ -559,8 +558,8 @@ def get_library(vault_id: Optional[int] = None):
     raw_items = []
 
     def prepare_and_filter_library(items_list: list[dict]) -> list[dict]:
-        folder_types = {"collection", "sample_pack", "multitrack", "project", "live_recording_project"}
-        organizer_types = {"collection", "sample_pack", "project", "live_recording_project"}
+        folder_types = {"collection", "sample_pack", "multitrack", "project"}
+        organizer_types = {"collection", "sample_pack", "project"}
         pack_roots = []
         for item in items_list:
             item_type = item.get("type", "audio")
@@ -623,17 +622,8 @@ def get_library(vault_id: Optional[int] = None):
                     })
                 item["contents"] = prepared_contents
 
-            vault_ids = {
-                int(candidate)
-                for candidate in [*(item.get("vault_ids") or []), item.get("vault_id")]
-                if candidate is not None
-            }
-            item["vault_ids"] = sorted(vault_ids)
             key = str(item.get("id") or item.get("absolute_path") or len(final_files))
-            existing = files_by_key.get(key)
-            if existing is not None:
-                existing["vault_ids"] = sorted(set(existing.get("vault_ids") or []) | vault_ids)
-            else:
+            if key not in files_by_key:
                 files_by_key[key] = item
                 final_files.append(item)
 
@@ -671,7 +661,6 @@ def get_library(vault_id: Optional[int] = None):
                     raw_items.append({
                         "id": f.get("id"),
                         "vault_id": f.get("vault_id"),
-                        "vault_ids": [*(f.get("vault_ids") or []), requested_vault_id],
                         "absolute_path": abs_path,
                         "name": os.path.basename(abs_path),
                         "tags": f.get("tags", []),
@@ -704,12 +693,11 @@ def get_library(vault_id: Optional[int] = None):
                 SELECT i.id, i.absolute_path, i.type,
                        i.vault_id,
                        COALESCE(s.key, m.key, mt.key) as key,
-                       COALESCE(l.bpm, m.bpm, mt.bpm) as bpm,
+                       COALESCE(s.bpm, m.bpm, mt.bpm) as bpm,
                        mt.stems_json, mt.is_valid_length, mt.length_variance,
                        ci.manifest_json
                 FROM items i
                 LEFT JOIN sample_items s ON i.id = s.id
-                LEFT JOIN loop_sample_items l ON i.id = l.id
                 LEFT JOIN midi_items m ON i.id = m.id
                 LEFT JOIN multitrack_items mt ON i.id = mt.id
                 LEFT JOIN collection_items ci ON i.id = ci.id
@@ -720,15 +708,8 @@ def get_library(vault_id: Optional[int] = None):
                 params.append(vault_id)
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            cursor.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'item_vaults'")
-            has_item_vaults = cursor.fetchone() is not None
-
             for row in rows:
                 item_id = row["id"]
-                vault_ids = {row["vault_id"]} if row["vault_id"] is not None else set()
-                if has_item_vaults:
-                    cursor.execute("SELECT vault_id FROM item_vaults WHERE item_id = ?", (item_id,))
-                    vault_ids.update(vault_row["vault_id"] for vault_row in cursor.fetchall())
                 cursor.execute("""
                     SELECT t.id, t.name
                     FROM tags t
@@ -767,7 +748,6 @@ def get_library(vault_id: Optional[int] = None):
                 raw_items.append({
                     "id": item_id,
                     "vault_id": row["vault_id"],
-                    "vault_ids": sorted(vault_ids),
                     "absolute_path": abs_path,
                     "name": os.path.basename(abs_path),
                     "tags": tags,
@@ -1085,110 +1065,7 @@ def update_library_bpm(req: LibraryBpmUpdateRequest):
         finally:
             db.close()
 
-    # A healthy current-schema database can simply have no matching row (for
-    # example while opening an older portable workspace). In that case the
-    # legacy GAIA adapter still needs a chance to resolve the local database;
-    # it is not limited to ORM schema errors.
-    if not gaia_updated:
-        from gaia import legacy_store
-
-        db_path = Path("gaia.db")
-        if not db_path.exists():
-            db_path = Path("gaia") / "gaia.db"
-        try:
-            gaia_updated = legacy_store.update_bpm(
-                db_path,
-                int(round(bpm_val)),
-                filepath=req.filepath,
-                item_id=int(file_id_str) if file_id_str.isdigit() else None,
-            )
-        except Exception as legacy_exc:
-            logger.error(f"[API /library/bpm] GAIA legacy service fallback failed: {legacy_exc}")
-
     return {"status": "success", "bpm": bpm_val, "updated": gaia_updated}
-
-class LibraryScanRequest(BaseModel):
-    directory_path: str
-    look_for_multitracks: bool = False
-    vault_id: Optional[int] = None
-
-@api_router.post("/library/scan", tags=["System"])
-def scan_library_folder(req: LibraryScanRequest):
-    import urllib.request
-    import json
-    from fastapi import HTTPException
-    
-    try:
-        data = json.dumps({
-            "directory_path": req.directory_path,
-            "look_for_multitracks": req.look_for_multitracks,
-            "vault_id": req.vault_id,
-        }).encode('utf-8')
-        request = urllib.request.Request("http://127.0.0.1:8001/items/scan", data=data, headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(request, timeout=15.0) as response:
-            if response.status == 200:
-                return json.loads(response.read().decode('utf-8'))
-    except Exception as e:
-        logger.warning(f"[API /library/scan] Gaia API unreachable ({e}). Running local scanner fallback.")
-
-    from gaia import database, crud, schemas, routers
-    db = database.SessionLocal()
-    try:
-        scan_req = schemas.DirectoryScanRequest(
-        directory_path=req.directory_path,
-            look_for_multitracks=req.look_for_multitracks,
-            vault_id=req.vault_id,
-        )
-        return routers.items.scan_directory(scan_req, db)
-    finally:
-        db.close()
-
-class MultitrackFolderRequest(BaseModel):
-    folder_path: str
-    vault_id: Optional[int] = None
-
-@api_router.post("/library/multitrack", tags=["System"])
-def register_multitrack_library(req: MultitrackFolderRequest):
-    import urllib.request
-    import json
-    from fastapi import HTTPException
-    
-    try:
-        data = json.dumps({"folder_path": req.folder_path, "vault_id": req.vault_id}).encode('utf-8')
-        request = urllib.request.Request("http://127.0.0.1:8001/items/multitrack", data=data, headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(request, timeout=3.0) as response:
-            if response.status == 200:
-                res_data = json.loads(response.read().decode('utf-8'))
-                return res_data
-    except Exception as e:
-        logger.warning(f"[API /library/multitrack] Gaia API unreachable ({e}). Running local analyzer fallback.")
-
-    from gaia import multitrack_analyzer, database, crud, schemas
-    db = database.SessionLocal()
-    try:
-        analysis = multitrack_analyzer.analyze_multitrack_folder(req.folder_path)
-        abs_path = analysis["folder_path"]
-        existing = crud.get_item_by_path(db, absolute_path=abs_path)
-        if existing:
-            return existing
-            
-        new_item = schemas.MultitrackItemCreate(
-            absolute_path=abs_path,
-            vault_id=req.vault_id,
-            mime_type="audio/multitrack",
-            type="multitrack",
-            stems=analysis["stems"],
-            key=analysis["key"],
-            bpm=analysis["bpm"],
-            is_valid_length=analysis["is_valid_length"],
-            length_variance=analysis["length_variance"]
-        )
-        db_item = crud.create_item(db, new_item)
-        tag = crud.get_or_create_tag(db, "Multitrack")
-        crud.add_tag_to_item(db, item_id=db_item.id, tag_id=tag.id)
-        return db_item
-    finally:
-        db.close()
 
 @api_router.get("/library/stream/{file_id}")
 def stream_library_file(file_id: str):

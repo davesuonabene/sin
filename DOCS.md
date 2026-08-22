@@ -63,7 +63,7 @@ sin/
 │       ├── schemas.py        # Ermes AudioNodeModel & FxModuleModel Pydantic schemas
 │       └── validator.py      # Backend payload validator & graph constructor
 │
-└── iride/                    # [IRIDE Node Frontend - frontend/]
+└── iride/                    # [IRIDE Node Frontend]
     ├── src/
     │   ├── nodes/            # BaseNode hierarchy & polymorphic custom nodes
     │   ├── fields/           # FieldSchema & NodePanelSchema declarations
@@ -82,24 +82,24 @@ Before graph data is transmitted to the backend for preview or DSP rendering, **
 ### 3.1 Core Classes & Roles
 
 #### **Frontend Canvas & Nodes (`iride/src/nodes/`)**
-* **[`BaseNode`](file:///c:/web-projects/sin/frontend/src/nodes/BaseNode.ts)**: Abstract base class extending `LiteGraph.LGraphNode`.
+* **[`BaseNode`](file:///c:/web-projects/sin/iride/src/nodes/BaseNode.ts)**: Abstract base class extending `LiteGraph.LGraphNode`.
   * Declares static metadata defaults (`defaultColor`, `defaultIcon`, `badgeLabel`, `nodeType`, `defaultTab`, `tabs`) and dynamic fallback getters (`nodeColor`, `nodeIcon`, `badgeLabel`, `nodeType`, `propertiesTabs`, `defaultPropertiesTab`).
   * Encapsulates square canvas node rendering (`drawCanvas()`) with sub-methods (`drawSelectionRing()`, `drawBody()`, `drawIcon()`, `drawSlots()`, `drawBadges()`, `drawNameBadge()`).
-  * Integrates canvas action buttons ([`CanvasButton`](file:///c:/web-projects/sin/frontend/src/ui/CanvasButton.ts)).
+  * Integrates canvas action buttons ([`CanvasButton`](file:///c:/web-projects/sin/iride/src/ui/CanvasButton.ts)).
 * **Concrete Node Implementations**:
-  * **[`SampleNode`](file:///c:/web-projects/sin/frontend/src/nodes/SampleNode.ts)** (`Audio/Sample`): Audio sample playback unit.
-  * **[`SequenceNode`](file:///c:/web-projects/sin/frontend/src/nodes/SequenceNode.ts)** (`Audio/Sequence`): Step sequencer pattern generator.
-  * **[`TrackNode`](file:///c:/web-projects/sin/frontend/src/nodes/TrackNode.ts)** (`Audio/Track`): Track mixing & output routing node.
-  * **[`ArrangementNode`](file:///c:/web-projects/sin/frontend/src/nodes/ArrangementNode.ts)** (`Audio/Arrangement`): Timeline arrangement & section quantizer.
-  * **[`AssetFilterNode`](file:///c:/web-projects/sin/frontend/src/nodes/AssetFilterNode.ts)** (`Audio/AssetFilter`): Asset Pool filter modifier.
-  * **[`DisabledNode`](file:///c:/web-projects/sin/frontend/src/nodes/DisabledNode.ts)** (`Audio/Disabled`): Bypass state indicator node.
+  * **[`SampleNode`](file:///c:/web-projects/sin/iride/src/nodes/SampleNode.ts)** (`Audio/Sample`): Audio sample playback unit.
+  * **[`SequenceNode`](file:///c:/web-projects/sin/iride/src/nodes/SequenceNode.ts)** (`Audio/Sequence`): Step sequencer pattern generator.
+  * **[`TrackNode`](file:///c:/web-projects/sin/iride/src/nodes/TrackNode.ts)** (`Audio/Track`): Track mixing & output routing node.
+  * **[`ArrangementNode`](file:///c:/web-projects/sin/iride/src/nodes/ArrangementNode.ts)** (`Audio/Arrangement`): Timeline arrangement & section quantizer.
+  * **[`AssetFilterNode`](file:///c:/web-projects/sin/iride/src/nodes/AssetFilterNode.ts)** (`Audio/AssetFilter`): Asset Pool filter modifier.
+  * **[`DisabledNode`](file:///c:/web-projects/sin/iride/src/nodes/DisabledNode.ts)** (`Audio/Disabled`): Bypass state indicator node.
 
 #### **UI Controls, Panel Schemas & Component Renderers (`iride/src/fields/` & `iride/src/ui/`)**
-* **[`FieldSchema`](file:///c:/web-projects/sin/frontend/src/fields/FieldSchema.ts)**: Declarative parameter schema interface (`key`, `label`, `type`, `default`, `min`, `max`, `step`, `unit`, `options`).
-* **[`NodePanelSchema`](file:///c:/web-projects/sin/frontend/src/fields/NodePanelSchema.ts)**: Declarative inspector layout blueprint interface.
-* **[`SectionRendererFactory`](file:///c:/web-projects/sin/frontend/src/ui/SectionRendererFactory.ts)**: Reusable UI component builder.
-* **[`WidgetFactory`](file:///c:/web-projects/sin/frontend/src/ui/WidgetFactory.ts)**: Centralized field widget builder service (`.td-param-row`).
-* **[`PropertiesWindow`](file:///c:/web-projects/sin/frontend/src/ui/PropertiesWindow.ts)**: Inspector host resolving `node.getPanelSchema()`.
+* **[`FieldSchema`](file:///c:/web-projects/sin/iride/src/fields/FieldSchema.ts)**: Declarative parameter schema interface (`key`, `label`, `type`, `default`, `min`, `max`, `step`, `unit`, `options`).
+* **[`NodePanelSchema`](file:///c:/web-projects/sin/iride/src/fields/NodePanelSchema.ts)**: Declarative inspector layout blueprint interface.
+* **[`SectionRendererFactory`](file:///c:/web-projects/sin/iride/src/ui/SectionRendererFactory.ts)**: Reusable UI component builder.
+* **[`WidgetFactory`](file:///c:/web-projects/sin/iride/src/ui/WidgetFactory.ts)**: Centralized field widget builder service (`.td-param-row`).
+* **[`PropertiesWindow`](file:///c:/web-projects/sin/iride/src/ui/PropertiesWindow.ts)**: Inspector host resolving `node.getPanelSchema()`.
 
 ---
 
@@ -157,15 +157,15 @@ Upon receiving an `AudioNodeModel` payload from ERMES, GAIA converts graph dicti
 
 ## 5. GAIA Asset Hierarchy and Managed Imports
 
-GAIA stores every library entry under one polymorphic Asset hierarchy. Files are typed as audio, samples, loops, one-shots, MIDI, sequences, or generic files. Typed root folders inherit from `FolderItem` and contain canonical child Item rows while retaining a derived JSON manifest for compatibility.
+GAIA stores each library entry in one polymorphic Asset hierarchy. `audio` is the concrete raw-audio type; `track` and `sample` inherit from it. `sample.is_loop` is metadata, so loop and one-shot are not library types. MIDI, sequences, and generic files stay separate. Folder items keep their imported child rows and manifest projection; `ProjectItem` is the folder subtype used for project-owned Markdown and derived material.
 
-Folder types currently include generic collections, sample packs, stem collections (`multitrack` remains the compatibility identifier), and Projects. `LiveRecordingProjectItem` is the first concrete Project workflow. Nested filesystem structure is preserved through each child's relative path rather than additional database folder rows.
+Folder types are generic collections, sample packs, multitracks, and managed Projects. `multitrack` is a folder interpretation: its children remain generic audio files. A device profile, such as Zoom H4, is a shareable JSON bundle in `.gaia/profiles/`; it supplies labels and a default preview without creating a database subtype.
 
-`POST /items/import` accepts a file, folder, or ZIP. The optional `analysis_types` array limits folder classification to enabled registered types; omitting it preserves the legacy `expected_type` behavior. GAIA opens importing from the `+` action in the Library—there is no separate import page. Auto scan checks every recognizable collection type and uses `fallback_to_files` to import independent managed items when none match. Specific collection presents the currently registered, recognizable collection types and forces the selected type. A directly selected file is always imported as one item. Project types remain explicit creation workflows and are never auto-detected. Explicit stem imports retain the stem type and persist validation warnings when lengths or filename roles look inconsistent.
+`POST /items/import` accepts a file, folder, or ZIP. Folder analysis selects collections, sample packs, or multitracks; a directly selected audio file is registered as raw `audio`. Projects are explicit creation workflows and are never auto-detected. Explicit multitrack imports retain validation warnings when lengths or filename roles look inconsistent.
 
-The import view uses one source action for files, folders, and ZIP archives. Folder-analysis types are presented as independent toggles, and a completed import opens a summary of collections, item counts, detected types, size, warnings, and representative paths.
+Projects are the sole owners of logical relationship contexts. `item_references` is a generic directed graph table: any item can be an endpoint, while `context_id` must be a Project. Creating a project from a file, folder, multitrack, sample pack, or another project leaves the source untouched and creates a read-only `source` reference. Stages, revisions, derived results, master selection, and profile interpretations are references in that project context. Derived outputs are copied into `projects/<name>/files/<stage>/`; sources are never moved there.
 
-Project management is owned exclusively by GAIA through `/projects`. External files are copied into a Project; files already inside GAIA's managed asset store are moved while retaining their Item IDs. Project and folder filesystem changes are paired with database transactions and rollback actions.
+Each project regenerates `PROJECT_CONTEXT.md`, `SOURCES.md`, and stage/version Markdown projections. The SQLite graph remains canonical; Markdown is a safe human- and agent-readable view.
 
 ---
 

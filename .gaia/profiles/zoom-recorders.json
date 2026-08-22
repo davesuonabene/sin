@@ -1,0 +1,30 @@
+{
+  "schema": "gaia-profile-bundle-v1",
+  "bundle_id": "zoom-recorders",
+  "label": "Zoom recorders",
+  "profiles": [
+    {
+      "id": "zoom_h4",
+      "label": "Zoom H4",
+      "description": "Zoom H4 folder layout with recorder channels and a rendered mixdown.",
+      "container_type": "multitrack",
+      "match": {
+        "filename_patterns": ["Tr?.wav", "TrLR*.wav"]
+      },
+      "components": [
+        {
+          "pattern": "TrLR*.wav",
+          "label": "mixdown",
+          "relation_kind": "component",
+          "stage_name": "mixdown",
+          "suggested_master": true
+        },
+        {
+          "pattern": "Tr*.wav",
+          "label": "source channel",
+          "relation_kind": "component"
+        }
+      ]
+    }
+  ]
+}
