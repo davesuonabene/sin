@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import crud, database, models, profiles, project_service, reference_service, schemas
+from .. import crud, database, deletion_service, media_editor, models, profiles, project_service, reference_service, schemas
 
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -54,6 +54,8 @@ def create_projects_from_items(
             req.name,
             req.project_type,
             req.vault_id,
+            req.move_files,
+            req.move_item_ids,
         )
     except (ValueError, OSError) as exc:
         _bad_request(exc)
@@ -71,8 +73,17 @@ def add_items_to_project(
         _bad_request(exc)
 
 
-@router.post("/{project_id}/sources", response_model=schemas.Item)
-def add_sources_to_project(
+@router.get("/{project_id}/table", response_model=list[schemas.ProjectTableRow])
+def get_project_table(project_id: int, db: Session = Depends(database.get_db)):
+    try:
+        return reference_service.project_table(db, project_id)
+    except (ValueError, OSError, reference_service.ReferenceError) as exc:
+        _bad_request(exc)
+
+
+@router.post("/{project_id}/links", response_model=schemas.Item)
+@router.post("/{project_id}/sources", response_model=schemas.Item, include_in_schema=False)
+def add_links_to_project(
     project_id: int,
     req: schemas.ProjectAddItemsRequest,
     db: Session = Depends(database.get_db),
@@ -103,6 +114,26 @@ def add_files_to_project(
         _bad_request(exc)
 
 
+@router.get("/{project_id}/editor-state")
+def get_project_editor_state(project_id: int, db: Session = Depends(database.get_db)):
+    try:
+        return media_editor.read_project_editor_state(db, project_id)
+    except ValueError as exc:
+        _bad_request(exc)
+
+
+@router.put("/{project_id}/editor-state")
+def put_project_editor_state(
+    project_id: int,
+    req: schemas.MediaEditorState,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        return media_editor.save_project_editor_state(db, project_id, req)
+    except (ValueError, OSError, reference_service.ReferenceError) as exc:
+        _bad_request(exc)
+
+
 @router.get("/{project_id}/referenced-items", response_model=list[schemas.Item])
 def get_project_referenced_items(project_id: int, db: Session = Depends(database.get_db)):
     try:
@@ -118,7 +149,7 @@ def get_project_referenced_items(project_id: int, db: Session = Depends(database
             seen_ids.add(item.id)
             items.append(crud.get_item(db, item.id))
         return items
-    except reference_service.ReferenceError as exc:
+    except (ValueError, OSError, reference_service.ReferenceError) as exc:
         _bad_request(exc)
 
 
@@ -138,9 +169,9 @@ def create_project_reference(
 ):
     try:
         reference = reference_service.create_reference(db, req, context_id=project_id)
-        project_service.regenerate_markdown(db, project_id)
+        project_service.sync_project_manifest(db, project_id)
         return reference
-    except reference_service.ReferenceError as exc:
+    except (ValueError, OSError, reference_service.ReferenceError) as exc:
         _bad_request(exc)
 
 
@@ -153,7 +184,7 @@ def update_project_reference(
 ):
     try:
         reference = reference_service.update_reference(db, project_id, reference_id, req)
-        project_service.regenerate_markdown(db, project_id)
+        project_service.sync_project_manifest(db, project_id)
         return reference
     except (ValueError, OSError, reference_service.ReferenceError) as exc:
         _bad_request(exc)
@@ -166,10 +197,17 @@ def remove_project_reference(
     db: Session = Depends(database.get_db),
 ):
     try:
-        reference_service.delete_reference(db, project_id, reference_id)
-        project_service.regenerate_markdown(db, project_id)
+        deletion_service.delete_entries(
+            db,
+            [
+                schemas.ProjectReferenceDeleteLocator(
+                    project_id=project_id,
+                    reference_id=reference_id,
+                )
+            ],
+        )
         return {"status": "deleted", "id": reference_id}
-    except reference_service.ReferenceError as exc:
+    except (ValueError, OSError, reference_service.ReferenceError) as exc:
         _bad_request(exc)
 
 
@@ -181,9 +219,9 @@ def set_project_master(
 ):
     try:
         reference = reference_service.set_master(db, project_id, reference_id)
-        project_service.regenerate_markdown(db, project_id)
+        project_service.sync_project_manifest(db, project_id)
         return reference
-    except reference_service.ReferenceError as exc:
+    except (ValueError, OSError, reference_service.ReferenceError) as exc:
         _bad_request(exc)
 
 
@@ -221,7 +259,7 @@ def apply_project_profile(
             req.profile_id,
             mark_suggested_master=req.mark_suggested_master,
         )
-        project_service.regenerate_markdown(db, project_id)
+        project_service.sync_project_manifest(db, project_id)
         return references
     except (reference_service.ReferenceError, profiles.ProfileValidationError) as exc:
         _bad_request(exc)
@@ -243,10 +281,13 @@ def register_project_derived_file(
         _bad_request(exc)
 
 
-@router.post("/{project_id}/markdown")
-def regenerate_project_markdown(project_id: int, db: Session = Depends(database.get_db)):
+@router.post("/{project_id}/manifest")
+def sync_project_manifest(project_id: int, db: Session = Depends(database.get_db)):
     try:
-        paths = project_service.regenerate_markdown(db, project_id)
-        return {name: str(path) for name, path in paths.items()}
+        result = project_service.sync_project_manifest(db, project_id)
+        return {
+            "manifest": result["manifest"],
+            "removed_markdown": result["removed_markdown"],
+        }
     except (ValueError, OSError, reference_service.ReferenceError) as exc:
         _bad_request(exc)

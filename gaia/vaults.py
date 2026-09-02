@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import os
 import re
+import shutil
+import uuid
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from . import models, paths
@@ -260,22 +263,68 @@ def update_vault(db: Session, vault_id: int, name: str, description: str | None)
     return _populate(vault)
 
 
-def delete_vault(db: Session, vault_id: int) -> None:
-    """Delete an empty vault while protecting managed assets and the final vault."""
+def delete_vault(
+    db: Session,
+    vault_id: int,
+    *,
+    delete_contents: bool = False,
+    background_tasks=None,
+) -> None:
+    """Delete a vault, optionally purging every asset and relationship it owns.
+
+    A content purge stages the whole managed directory with one atomic rename.
+    The database transaction can therefore be rolled back without leaving the
+    filesystem half-deleted, regardless of how many items the vault contains.
+    """
     vault = db.query(models.Vault).filter(models.Vault.id == vault_id).first()
     if not vault:
         raise ValueError("Vault not found")
     if db.query(models.Vault).count() <= 1:
         raise ValueError("The last vault cannot be deleted")
-    if db.query(models.Item.id).filter(models.Item.vault_id == vault_id).first() is not None:
+    has_items = db.query(models.Item.id).filter(models.Item.vault_id == vault_id).first() is not None
+    if has_items and not delete_contents:
         raise ValueError("Move or delete the vault's assets before deleting it")
 
     store = vault_store(vault)
-    if store.exists() and any(store.iterdir()):
+    if not delete_contents and store.exists() and any(store.iterdir()):
         raise ValueError("The vault folder is not empty")
-    db.delete(vault)
-    db.commit()
-    if store.exists():
+
+    staged_store: Path | None = None
+    if delete_contents and store.exists():
+        staged_store = store.parent / f".deleting-vault-{vault.id}-{uuid.uuid4().hex}"
+        os.replace(store, staged_store)
+
+    try:
+        if delete_contents and has_items:
+            vault_item_ids = db.query(models.Item.id).filter(models.Item.vault_id == vault_id)
+            db.query(models.ItemReference).filter(
+                or_(
+                    models.ItemReference.context_id.in_(vault_item_ids),
+                    models.ItemReference.from_item_id.in_(vault_item_ids),
+                    models.ItemReference.to_item_id.in_(vault_item_ids),
+                )
+            ).delete(synchronize_session=False)
+
+            # Joined-table inheritance needs ORM deletion so every concrete
+            # subtype row is removed before its base Item row.
+            for item in db.query(models.Item).filter(models.Item.vault_id == vault_id).all():
+                db.delete(item)
+            db.flush()
+
+        db.delete(vault)
+        db.commit()
+    except Exception:
+        db.rollback()
+        if staged_store and staged_store.exists() and not store.exists():
+            os.replace(staged_store, store)
+        raise
+
+    if staged_store and staged_store.exists():
+        if background_tasks is None:
+            shutil.rmtree(staged_store)
+        else:
+            background_tasks.add_task(shutil.rmtree, staged_store, True)
+    elif store.exists():
         store.rmdir()
 
 
@@ -289,6 +338,7 @@ def log_import(
     detail: str | None = None,
     *,
     commit: bool = True,
+    flush: bool = True,
 ) -> models.VaultImportLog:
     entry = models.VaultImportLog(
         vault_id=vault_id,
@@ -302,7 +352,7 @@ def log_import(
     if commit:
         db.commit()
         db.refresh(entry)
-    else:
+    elif flush:
         db.flush()
     return entry
 

@@ -1,7 +1,6 @@
 export interface NodeContextMenuItem {
     id: string;
     label: string;
-    icon: string;
     action: (node: any) => void;
     danger?: boolean;
 }
@@ -14,7 +13,7 @@ export class NodeContextMenu {
 
     constructor() {
         this.menuElement = document.createElement('div');
-        this.menuElement.className = 'td-node-context-menu';
+        this.menuElement.className = 'td-node-context-menu sin-menu-surface';
         this.menuElement.style.display = 'none';
 
         document.body.appendChild(this.menuElement);
@@ -60,7 +59,6 @@ export class NodeContextMenu {
             {
                 id: 'preview',
                 label: 'Preview (RAM)',
-                icon: '▶',
                 action: (n) => {
                     window.dispatchEvent(new CustomEvent('preview-node', { detail: { nodeId: n.id } }));
                 }
@@ -68,7 +66,6 @@ export class NodeContextMenu {
             {
                 id: 'render',
                 label: 'Render (Save to Temp)',
-                icon: '🎬',
                 action: (n) => {
                     window.dispatchEvent(new CustomEvent('render-node', { detail: { nodeId: n.id } }));
                 }
@@ -76,7 +73,6 @@ export class NodeContextMenu {
             {
                 id: 'properties',
                 label: 'Open Parameters',
-                icon: '⚙️',
                 action: (n) => {
                     if (typeof (window as any).openParamWindow === 'function') {
                         (window as any).openParamWindow(n);
@@ -86,7 +82,6 @@ export class NodeContextMenu {
             {
                 id: 'modulator',
                 label: 'Add Modulator',
-                icon: '⚡',
                 action: (n) => {
                     window.dispatchEvent(new CustomEvent('add-modulator-node', { detail: { parentId: n.id } }));
                 }
@@ -94,7 +89,6 @@ export class NodeContextMenu {
             {
                 id: 'create-ghost',
                 label: 'Create Ghost',
-                icon: 'G',
                 action: (n) => {
                     window.dispatchEvent(new CustomEvent('create-ghost-node', { detail: { nodeId: n.id } }));
                 }
@@ -104,7 +98,6 @@ export class NodeContextMenu {
                 label: (window as any).isManualMainPreviewNode?.(node.id)
                     ? 'Use Automatic Main Preview'
                     : 'Set as Main Preview',
-                icon: (window as any).isMainPreviewNode?.(node.id) ? '▶' : '▷',
                 action: (n) => {
                     window.dispatchEvent(new CustomEvent('set-main-preview-node', { detail: { nodeId: n.id } }));
                 }
@@ -112,7 +105,6 @@ export class NodeContextMenu {
             {
                 id: 'delete',
                 label: 'Delete Node',
-                icon: '✕',
                 danger: true,
                 action: (n) => {
                     if (n.graph) {
@@ -128,11 +120,8 @@ export class NodeContextMenu {
             .filter(item => item.id !== 'main-preview' || node.canBeMainPreview?.())
             .forEach(item => {
             const row = document.createElement('div');
-            row.className = `ctx-menu-item ${item.danger ? 'danger' : ''}`;
-            row.innerHTML = `
-                <span class="ctx-item-icon">${item.icon}</span>
-                <span class="ctx-item-label">${item.label}</span>
-            `;
+            row.className = `ctx-menu-item sin-menu-item ${item.danger ? 'danger' : ''}`;
+            row.textContent = item.label;
 
             const handler = (e: Event) => {
                 e.stopPropagation();

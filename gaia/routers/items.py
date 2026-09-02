@@ -5,7 +5,6 @@ from typing import List
 import os
 import re
 from pathlib import Path
-import shutil
 import uuid
 import json
 import datetime
@@ -14,6 +13,7 @@ from collections import Counter
 from .. import (
     collection_importer,
     crud,
+    deletion_service,
     schemas,
     models,
     database,
@@ -52,6 +52,7 @@ class BatchAnalysisTaskManager:
             "current_title": "",
             "status": "running",
             "updated_items": [],
+            "errors": [],
             "cancelled": False,
         }
         with self._lock:
@@ -67,7 +68,8 @@ class BatchAnalysisTaskManager:
                 return None
             return {
                 **task,
-                "updated_items": list(task["updated_items"])
+                "updated_items": list(task["updated_items"]),
+                "errors": list(task.get("errors", [])),
             }
 
     def cancel_task(self, task_id: str) -> bool:
@@ -99,6 +101,7 @@ class BatchAnalysisTaskManager:
                         with self._lock:
                             task["failed"] += 1
                             task["completed"] += 1
+                            task["errors"].append({"item_id": item_id, "error": "Item not found"})
                         continue
 
                     if kind == "content" and content_index is not None and isinstance(db_item, models.FolderItem):
@@ -136,44 +139,21 @@ class BatchAnalysisTaskManager:
                         with self._lock:
                             task["current_title"] = title
 
-                        if os.path.isfile(db_item.absolute_path):
-                            duration = collection_importer._audio_metadata(Path(db_item.absolute_path)).get("duration_seconds")
-                            analysis = text_analyzer.analyze_path(db_item.absolute_path, duration_seconds=duration)
-                            if db_item.type == "midi":
-                                midi_values = midi_parser.parse_midi_file(db_item.absolute_path)
-                                analysis["bpm"] = midi_values.get("bpm") or analysis.get("bpm")
-                                role = text_analyzer.key_role(
-                                    db_item.absolute_path, False, analysis.get("tags", [])
-                                )
-                                analysis["key"] = text_analyzer.normalize_key_for_role(
-                                    midi_values.get("key") or analysis.get("key"), role
-                                )
+                        updated_db_item = _analyze_and_update_item(db, db_item)
 
-                            req = _analysis_update_request(db_item, analysis)
-                            updated_db_item = _apply_item_update(db_item, req, db)
-
-                            with self._lock:
-                                task["completed"] += 1
-                                task["updated_items"].append({
-                                    "kind": "item",
-                                    "item_id": item_id,
-                                    "item": {
-                                        "id": updated_db_item.id,
-                                        "bpm": getattr(updated_db_item, "bpm", None),
-                                        "key": getattr(updated_db_item, "key", None),
-                                        "type": updated_db_item.type,
-                                        "tags": [t.name for t in getattr(updated_db_item, "tags", [])]
-                                    }
-                                })
-                        else:
-                            with self._lock:
-                                task["failed"] += 1
-                                task["completed"] += 1
+                        with self._lock:
+                            task["completed"] += 1
+                            task["updated_items"].append({
+                                "kind": "item",
+                                "item_id": item_id,
+                                "item": crud.item_summary(updated_db_item),
+                            })
 
                 except Exception as exc:
                     with self._lock:
                         task["failed"] += 1
                         task["completed"] += 1
+                        task["errors"].append({"item_id": item_id, "error": str(exc) or exc.__class__.__name__})
 
             with self._lock:
                 task = self._tasks.get(task_id)
@@ -191,8 +171,15 @@ class BatchAnalysisTaskManager:
             with self._lock:
                 task = self._tasks.get(task_id)
                 if task and task["status"] != "cancelled":
-                    task["status"] = "completed"
+                    task["status"] = "failed" if task["total"] and task["failed"] >= task["total"] else "completed"
                     task["current_title"] = ""
+        except Exception as exc:
+            with self._lock:
+                task = self._tasks.get(task_id)
+                if task and task["status"] != "cancelled":
+                    task["status"] = "failed"
+                    task["current_title"] = ""
+                    task["errors"].append({"error": str(exc) or exc.__class__.__name__})
         finally:
             db.close()
 
@@ -324,57 +311,6 @@ def _get_collection_content(db_item, content_index: int):
     return content, candidate
 
 
-def _stage_managed_item_path(item, db: Session) -> tuple[Path, Path, Path] | None:
-    """Move any managed item aside until its database row is removed."""
-    vault = _vault_for_request(db, item.vault_id)
-    snapshot = Path(item.absolute_path).resolve()
-    store = vaults.vault_store(vault).resolve()
-    if snapshot == store:
-        # A malformed legacy row must never make the asset-store root deletable.
-        return None
-    try:
-        snapshot.relative_to(store)
-    except ValueError:
-        # Only GAIA-managed paths may be removed from disk. Legacy/external
-        # paths lose their record but leave the original files intact.
-        return None
-
-    if not snapshot.exists():
-        return None
-    if isinstance(item, models.FolderItem) != snapshot.is_dir():
-        # A malformed row must not broaden a file deletion into a directory
-        # deletion (or vice versa).
-        return None
-
-    staged = snapshot.parent / f".deleting-{item.id}-{uuid.uuid4().hex}"
-    os.replace(snapshot, staged)
-    return snapshot, staged, store / "files"
-
-
-def _remove_empty_import_parents(start: Path, files_root: Path) -> None:
-    """Remove obsolete per-import folders without ever removing ``files/`` itself."""
-    current = start.resolve()
-    boundary = files_root.resolve()
-    try:
-        current.relative_to(boundary)
-    except ValueError:
-        return
-    while current != boundary:
-        try:
-            current.rmdir()
-        except OSError:
-            return
-        current = current.parent
-
-
-def _remove_staged_snapshot(staged: Path, original_parent: Path, files_root: Path) -> None:
-    if staged.is_dir():
-        shutil.rmtree(staged, ignore_errors=True)
-    elif staged.exists():
-        staged.unlink(missing_ok=True)
-    _remove_empty_import_parents(original_parent, files_root)
-
-
 def _clean_tags(values: list[str] | None) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in (values or []) if value and value.strip()))[:24]
 
@@ -386,10 +322,15 @@ def _request_fields(req) -> set[str]:
 def _analysis_attributes(db_item: models.Item, analysis: dict) -> dict:
     attributes = dict(getattr(db_item, "attributes", {}) or {})
     attributes["analysis"] = {
+        "duration_seconds": analysis.get("duration_seconds"),
         "is_loop": bool(analysis.get("is_loop")),
         "bpm": analysis.get("bpm"),
         "key": analysis.get("key"),
     }
+    embedded_metadata = dict(analysis.get("audio_metadata") or {})
+    if embedded_metadata:
+        existing_metadata = dict(attributes.get("audio_metadata") or {})
+        attributes["audio_metadata"] = {**existing_metadata, **embedded_metadata}
     return attributes
 
 
@@ -400,12 +341,36 @@ def _analysis_update_request(db_item: models.Item, analysis: dict) -> schemas.It
             bpm=analysis.get("bpm"),
             key=analysis.get("key"),
             is_loop=bool(analysis.get("is_loop")),
+            attributes=_analysis_attributes(db_item, analysis),
         )
-    elif db_item.type == "audio":
+    elif db_item.type in {"audio", "track"}:
         values["attributes"] = _analysis_attributes(db_item, analysis)
+        if db_item.type == "audio" and analysis.get("type") == "track":
+            values["type"] = "track"
     elif db_item.type == "midi":
         values.update(bpm=analysis.get("bpm"), key=analysis.get("key"))
     return schemas.ItemUpdate(**values)
+
+
+def _analyze_and_update_item(db: Session, db_item: models.Item):
+    """Run the one canonical file-analysis path used by single and batch requests."""
+    path = Path(db_item.absolute_path)
+    if not path.is_file():
+        raise FileNotFoundError("Asset is missing on disk")
+
+    if path.suffix.casefold() in collection_importer.AUDIO_EXTENSIONS:
+        analysis = collection_importer.analyze_audio_file(path)
+    else:
+        analysis = text_analyzer.analyze_path(db_item.absolute_path)
+
+    if db_item.type == "midi":
+        midi_values = midi_parser.parse_midi_file(db_item.absolute_path)
+        analysis["bpm"] = midi_values.get("bpm") or analysis.get("bpm")
+        role = text_analyzer.key_role(db_item.absolute_path, False, analysis.get("tags", []))
+        analysis["key"] = text_analyzer.normalize_key_for_role(
+            midi_values.get("key") or analysis.get("key"), role
+        )
+    return _apply_item_update(db_item, _analysis_update_request(db_item, analysis), db)
 
 
 def _apply_item_update(db_item, req: schemas.ItemUpdate, db: Session):
@@ -425,9 +390,19 @@ def _apply_item_update(db_item, req: schemas.ItemUpdate, db: Session):
             raise HTTPException(status_code=400, detail="This asset cannot be changed to the selected type")
 
     if "title" in fields:
-        if not isinstance(db_item, models.FolderItem):
-            raise HTTPException(status_code=400, detail="Only collection display titles can be edited")
-        db_item.title = (req.title or "").strip() or Path(db_item.absolute_path).name
+        display_title = (req.title or "").strip() or Path(db_item.absolute_path).name
+        if isinstance(db_item, models.FolderItem):
+            db_item.title = display_title
+        else:
+            attributes = dict(db_item.attributes or {})
+            if db_item.type in {"audio", "track", "sample"}:
+                audio_metadata = dict(attributes.get("audio_metadata") or {})
+                audio_metadata["title"] = display_title
+                attributes["audio_metadata"] = audio_metadata
+            else:
+                attributes["title"] = display_title
+            db_item.attributes = attributes
+            db_item.title = display_title
     if "bpm" in fields:
         if req.bpm is not None and not 20 <= req.bpm <= 400:
             raise HTTPException(status_code=400, detail="BPM must be between 20 and 400")
@@ -459,10 +434,42 @@ def _apply_item_update(db_item, req: schemas.ItemUpdate, db: Session):
             raise HTTPException(status_code=400, detail="Only samples store loop metadata")
         db_item.is_loop = bool(req.is_loop)
 
-    if "attributes" in fields:
-        db_item.attributes = req.attributes or {}
+    if "favourite" in fields:
+        attributes = dict(db_item.attributes or {})
+        attributes["favourite"] = bool(req.favourite)
+        db_item.attributes = attributes
 
-    if fields.intersection({"title", "bpm", "key", "is_loop", "attributes"}):
+    if "attributes" in fields:
+        attributes = dict(req.attributes or {})
+        existing_attributes = dict(db_item.attributes or {})
+        existing_import = dict(existing_attributes.get("import") or {})
+        incoming_import = dict(attributes.get("import") or {})
+        original_source = existing_import.get("source_path")
+        if original_source:
+            requested_source = incoming_import.get("source_path", original_source)
+            if requested_source != original_source:
+                raise HTTPException(status_code=400, detail="An imported asset's source is immutable")
+            attributes["import"] = {**existing_import, **incoming_import, "source_path": original_source}
+        db_item.attributes = attributes
+
+    metadata_fields = set(crud.TRACK_METADATA_FIELDS) - {"title"}
+    if fields.intersection(metadata_fields):
+        # Embedded tags can be present on any audio-family item.  Tracks are
+        # the usual case, but analysis also preserves metadata on generic
+        # audio and sample items when their type is intentionally retained.
+        if db_item.type not in {"audio", "track", "sample"}:
+            raise HTTPException(status_code=400, detail="Only audio assets store embedded audio metadata")
+        attributes = dict(db_item.attributes or {})
+        metadata = dict(attributes.get("audio_metadata") or {})
+        for field in fields.intersection(metadata_fields):
+            value = getattr(req, field)
+            if isinstance(value, str):
+                value = value.strip() or None
+            metadata[field] = value
+        attributes["audio_metadata"] = {key: value for key, value in metadata.items() if value is not None}
+        db_item.attributes = attributes
+
+    if fields.intersection({"title", "bpm", "key", "is_loop", "favourite", "attributes"} | metadata_fields):
         db.commit()
         db.refresh(db_item)
     if "tags" in fields:
@@ -471,11 +478,29 @@ def _apply_item_update(db_item, req: schemas.ItemUpdate, db: Session):
 
 
 def _analyze_collection_content(db_item, content: dict) -> dict:
-    relative_path = content.get("relative_path", "")
-    candidate = Path(db_item.absolute_path) / Path(relative_path)
+    relative_path = str(content.get("relative_path", ""))
+    root = Path(db_item.absolute_path)
+    candidate = root / Path(relative_path)
+    # Older manifests created from archives may retain an ``extracted/<name>``
+    # prefix even though the managed files were flattened under the collection
+    # root. Resolve that legacy path the same way streaming does.
+    if not candidate.is_file():
+        stripped_rel = re.sub(r"^extracted/[^/]+/", "", relative_path)
+        candidate = root / Path(stripped_rel)
+    try:
+        if os.path.commonpath([str(root.resolve()), str(candidate.resolve())]) != str(root.resolve()):
+            return content
+    except ValueError:
+        return content
     if not candidate.is_file():
         return content
-    return collection_importer.analyze_manifest_entry(Path(db_item.absolute_path), content)
+    analysis_entry = dict(content)
+    analysis_entry["relative_path"] = os.path.relpath(candidate, root).replace(os.sep, "/")
+    analyzed = collection_importer.analyze_manifest_entry(root, analysis_entry)
+    # Keep the manifest's public path stable; only the filesystem lookup used
+    # for analysis should change.
+    analyzed["relative_path"] = relative_path
+    return analyzed
 
 
 def _relative_content_path(root: str, path: str) -> str:
@@ -570,6 +595,22 @@ def _expand_collection_analysis_targets(db: Session, targets: list[dict]) -> tup
 def read_type_definitions():
     """The fixed, read-only taxonomy used by the manager and its clients."""
     return type_registry.type_definitions()
+
+
+@router.get("/summaries", response_model=List[schemas.ItemSummary])
+def read_item_summaries(
+    skip: int = 0,
+    limit: int = 10000,
+    vault_id: int | None = None,
+    query: str | None = None,
+    db: Session = Depends(database.get_db),
+):
+    """Return compact root rows for the library manager.
+
+    Unlike the legacy list endpoint, this does not serialize collection
+    contents for collapsed rows.
+    """
+    return crud.get_item_summaries(db, skip=skip, limit=limit, vault_id=vault_id, query_text=query)
 
 
 @router.post("/import/preview")
@@ -776,39 +817,43 @@ def add_tag_to_item(item_id: int, req: schemas.ItemTagRequest, db: Session = Dep
         raise HTTPException(status_code=404, detail="Item or Tag not found")
     return db_item
 
+def _delete_entries(
+    locators,
+    db: Session,
+    background_tasks: BackgroundTasks | None = None,
+):
+    try:
+        return deletion_service.delete_entries(
+            db,
+            list(locators),
+            background_tasks=background_tasks,
+        )
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/entries/delete")
+def delete_library_entries(
+    req: schemas.LibraryEntriesDeleteRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(database.get_db),
+):
+    """Delete any heterogeneous entry selection through one atomic command."""
+    return _delete_entries(req.entries, db, background_tasks)
+
+
 def delete_item(
     item_id: int,
     db: Session,
     background_tasks: BackgroundTasks | None = None,
 ):
-    existing = crud.get_item(db, item_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Item not found")
-
-    staged_snapshot = None
-    try:
-        staged_snapshot = _stage_managed_item_path(existing, db)
-        crud.delete_item(db, item_id=item_id)
-    except (ValueError, OSError) as exc:
-        if staged_snapshot:
-            original, staged, _ = staged_snapshot
-            if staged.exists() and not original.exists():
-                os.replace(staged, original)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception:
-        if staged_snapshot:
-            original, staged, _ = staged_snapshot
-            if staged.exists() and not original.exists():
-                os.replace(staged, original)
-        raise
-
-    if staged_snapshot:
-        original, staged, files_root = staged_snapshot
-        if background_tasks is not None:
-            background_tasks.add_task(_remove_staged_snapshot, staged, original.parent, files_root)
-        else:
-            _remove_staged_snapshot(staged, original.parent, files_root)
-    return {"status": "success", "id": item_id}
+    """Compatibility wrapper around the polymorphic deletion command."""
+    result = _delete_entries(
+        [schemas.ItemDeleteLocator(item_id=item_id)],
+        db,
+        background_tasks,
+    )
+    return {"status": result["status"], "id": item_id, "deleted": result["deleted"]}
 
 
 @router.delete("/{item_id}")
@@ -837,15 +882,10 @@ def analyze_item(item_id: int, db: Session = Depends(database.get_db)):
         contents = _analyze_collection_contents(db, db_item)
         return _finalize_collection_analysis(db, db_item, contents)
 
-    if not os.path.isfile(db_item.absolute_path):
-        raise HTTPException(status_code=404, detail="Asset is missing on disk")
-    duration = collection_importer._audio_metadata(Path(db_item.absolute_path)).get("duration_seconds")
-    analysis = text_analyzer.analyze_path(db_item.absolute_path, duration_seconds=duration)
-    if db_item.type == "midi":
-        midi_values = midi_parser.parse_midi_file(db_item.absolute_path)
-        analysis["bpm"] = midi_values.get("bpm") or analysis.get("bpm")
-        analysis["key"] = midi_values.get("key") or analysis.get("key")
-    return _apply_item_update(db_item, _analysis_update_request(db_item, analysis), db)
+    try:
+        return _analyze_and_update_item(db, db_item)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/analyze-batch")
@@ -897,6 +937,25 @@ def get_collection_contents(item_id: int, db: Session = Depends(database.get_db)
     return getattr(db_item, "contents", []) or []
 
 
+@router.get("/{item_id}/contents-page", response_model=schemas.CollectionContentPage)
+def get_collection_contents_page(
+    item_id: int,
+    offset: int = 0,
+    limit: int = 250,
+    query: str | None = None,
+    db: Session = Depends(database.get_db),
+):
+    db_item = db.query(models.Item).filter(models.Item.id == item_id).first()
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if not isinstance(db_item, models.FolderItem):
+        raise HTTPException(status_code=400, detail="Item is not a collection")
+    result = crud.get_collection_contents_page(db, item_id, offset=offset, limit=limit, query=query)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return result
+
+
 @router.patch("/{item_id}/contents/{content_index}", response_model=schemas.CollectionContent)
 def update_collection_content(item_id: int, content_index: int, req: schemas.CollectionContentUpdate, db: Session = Depends(database.get_db)):
     db_item = crud.get_item(db, item_id=item_id)
@@ -924,6 +983,10 @@ def update_collection_content(item_id: int, content_index: int, req: schemas.Col
                 update_kwargs["key"] = req.key
             if "is_loop" in fields:
                 update_kwargs["is_loop"] = req.is_loop
+            if "favourite" in fields:
+                update_kwargs["favourite"] = req.favourite
+            for field in fields.intersection(set(crud.TRACK_METADATA_FIELDS)):
+                update_kwargs[field] = getattr(req, field)
             if "tags" in fields:
                 update_kwargs["tags"] = req.tags
             if update_kwargs:
@@ -931,6 +994,12 @@ def update_collection_content(item_id: int, content_index: int, req: schemas.Col
             db.refresh(db_item)
             crud._populate_item_fields(db_item)
             content, _ = _get_collection_content(db_item, content_index)
+            if "title" in fields:
+                content["title"] = (req.title or "").strip() or text_analyzer.clean_title(content["filename"])
+                crud.save_collection_contents(db, db_item, db_item.contents)
+            if "favourite" in fields:
+                content["favourite"] = bool(req.favourite)
+                crud.save_collection_contents(db, db_item, db_item.contents)
             return content
 
     for field in fields:
@@ -938,11 +1007,39 @@ def update_collection_content(item_id: int, content_index: int, req: schemas.Col
             content[field] = _clean_tags(req.tags)
         elif field == "title":
             content[field] = (req.title or "").strip() or text_analyzer.clean_title(content["filename"])
-        elif field in {"type", "bpm", "key", "is_loop"}:
+        elif field == "favourite":
+            content[field] = bool(req.favourite)
+        elif field in {"type", "bpm", "key", "is_loop", *crud.TRACK_METADATA_FIELDS}:
             value = getattr(req, field)
             content[field] = value.strip() or None if isinstance(value, str) else value
     crud.save_collection_contents(db, db_item, db_item.contents)
     return content
+
+
+@router.delete("/{item_id}/contents/{content_index}")
+def delete_collection_content(
+    item_id: int,
+    content_index: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(database.get_db),
+):
+    """Compatibility wrapper for clients using the former content route."""
+    result = _delete_entries(
+        [
+            schemas.CollectionContentDeleteLocator(
+                collection_id=item_id,
+                content_index=content_index,
+            )
+        ],
+        db,
+        background_tasks,
+    )
+    return {
+        "status": result["status"],
+        "collection_id": item_id,
+        "content_index": content_index,
+        "deleted": result["deleted"],
+    }
 
 
 @router.post("/{item_id}/contents/{content_index}/analyze", response_model=schemas.CollectionContent)

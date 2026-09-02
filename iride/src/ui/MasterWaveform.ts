@@ -1,3 +1,5 @@
+import { loggedTask } from '../runtimeLog';
+
 export class MasterWaveform {
     private readonly canvas: HTMLCanvasElement;
     private readonly ctx: CanvasRenderingContext2D;
@@ -10,6 +12,9 @@ export class MasterWaveform {
     private isSeeking = false;
     private message = 'Ready to render';
     private loadToken = 0;
+    private peakCache: Float32Array | null = null;
+    private peakCacheBuffer: AudioBuffer | null = null;
+    private peakCacheColumns = 0;
     private readonly onSeek: (progress: number) => void;
 
     constructor(container: HTMLElement, onSeek: (progress: number) => void) {
@@ -73,6 +78,7 @@ export class MasterWaveform {
     async load(source: string) {
         const token = ++this.loadToken;
         this.audioBuffer = null;
+        this.invalidatePeaks();
         this.progress = 0;
         this.currentTime = 0;
         this.knownDuration = 0;
@@ -83,12 +89,15 @@ export class MasterWaveform {
                 const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
                 this.audioContext = new AudioContextCtor();
             }
-            const response = await fetch(source);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.arrayBuffer();
-            const decoded = await this.audioContext.decodeAudioData(data);
+            const decoded = await loggedTask('Load preview waveform', async () => {
+                const response = await fetch(source);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.arrayBuffer();
+                return this.audioContext!.decodeAudioData(data);
+            });
             if (token !== this.loadToken) return;
             this.audioBuffer = decoded;
+            this.invalidatePeaks();
             this.knownDuration = decoded.duration;
             this.message = '';
             this.updateAccessibility();
@@ -116,6 +125,7 @@ export class MasterWaveform {
     clear(message = 'Ready to render') {
         this.loadToken++;
         this.audioBuffer = null;
+        this.invalidatePeaks();
         this.progress = 0;
         this.currentTime = 0;
         this.knownDuration = 0;
@@ -154,6 +164,44 @@ export class MasterWaveform {
         return `${minutes}:${(total % 60).toString().padStart(2, '0')}`;
     }
 
+    private invalidatePeaks() {
+        this.peakCache = null;
+        this.peakCacheBuffer = null;
+        this.peakCacheColumns = 0;
+    }
+
+    private waveformPeaks(columns: number): Float32Array {
+        if (!this.audioBuffer || columns <= 0) return new Float32Array(0);
+        if (
+            this.peakCache
+            && this.peakCacheBuffer === this.audioBuffer
+            && this.peakCacheColumns === columns
+        ) {
+            return this.peakCache;
+        }
+
+        const channels = Array.from(
+            { length: this.audioBuffer.numberOfChannels },
+            (_, channel) => this.audioBuffer!.getChannelData(channel)
+        );
+        const sampleCount = this.audioBuffer.length;
+        const samplesPerColumn = Math.max(1, Math.floor(sampleCount / columns));
+        const peaks = new Float32Array(columns);
+        for (let x = 0; x < columns; x++) {
+            const start = x * samplesPerColumn;
+            const end = Math.min(sampleCount, start + samplesPerColumn);
+            let peak = 0;
+            for (let i = start; i < end; i += 4) {
+                for (const samples of channels) peak = Math.max(peak, Math.abs(samples[i] || 0));
+            }
+            peaks[x] = peak;
+        }
+        this.peakCache = peaks;
+        this.peakCacheBuffer = this.audioBuffer;
+        this.peakCacheColumns = columns;
+        return peaks;
+    }
+
     private draw() {
         const rect = this.canvas.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
@@ -174,26 +222,9 @@ export class MasterWaveform {
         this.ctx.fillRect(0, 0, cssWidth, cssHeight);
 
         if (this.audioBuffer) {
-            const channels = Array.from(
-                { length: this.audioBuffer.numberOfChannels },
-                (_, channel) => this.audioBuffer!.getChannelData(channel)
-            );
-            const sampleCount = this.audioBuffer.length;
             const columns = Math.max(1, Math.floor(cssWidth));
-            const samplesPerColumn = Math.max(1, Math.floor(sampleCount / columns));
             const middle = cssHeight / 2;
-            const peaks: number[] = [];
-            for (let x = 0; x < columns; x++) {
-                const start = x * samplesPerColumn;
-                const end = Math.min(sampleCount, start + samplesPerColumn);
-                let peak = 0;
-                for (let i = start; i < end; i += 4) {
-                    for (const samples of channels) {
-                        peak = Math.max(peak, Math.abs(samples[i] || 0));
-                    }
-                }
-                peaks.push(Math.max(1, peak * (cssHeight * 0.38)));
-            }
+            const peaks = this.waveformPeaks(columns);
             const drawPeaks = (color: string, startX: number, endX: number) => {
                 this.ctx.save();
                 this.ctx.beginPath();
@@ -202,9 +233,10 @@ export class MasterWaveform {
                 this.ctx.strokeStyle = color;
                 this.ctx.lineWidth = 1;
                 for (let x = 0; x < columns; x++) {
+                    const peakHeight = Math.max(1, peaks[x] * (cssHeight * 0.38));
                     this.ctx.beginPath();
-                    this.ctx.moveTo(x + 0.5, middle - peaks[x]);
-                    this.ctx.lineTo(x + 0.5, middle + peaks[x]);
+                    this.ctx.moveTo(x + 0.5, middle - peakHeight);
+                    this.ctx.lineTo(x + 0.5, middle + peakHeight);
                     this.ctx.stroke();
                 }
                 this.ctx.restore();

@@ -4,12 +4,13 @@ import {
     getCompatibleAssetFacets,
     getAssetDisplayName,
     getAssetType,
-    getAssetVaultIds,
     getFilterableAssetItems,
     isAssetOrganizer,
     normalizeFacetValue,
 } from './libraryFilters';
 import { drawNeonIcon, type NeonIcon } from '../nodes/NodeVisuals';
+import { fetchLibrary as fetchCachedLibrary, submitLibraryMetadataProposal } from '../api';
+import { groupFileVersions, type GroupedFileVersion } from '../libraryVersioning';
 
 type LibraryTypeVisual = {
     icon: NeonIcon;
@@ -41,6 +42,18 @@ function drawLibraryTypeIcon(canvas: HTMLCanvasElement, visual: LibraryTypeVisua
     drawNeonIcon(context, visual.icon, canvas.width / 2, canvas.height / 2, 16, '#ffffff');
 }
 
+let libraryPreviewEnabled = true;
+
+export function isLibraryPreviewEnabled(): boolean {
+    return libraryPreviewEnabled;
+}
+
+export function setLibraryPreviewEnabled(enabled: boolean): boolean {
+    libraryPreviewEnabled = enabled;
+    window.dispatchEvent(new CustomEvent('library-preview-changed', { detail: { enabled } }));
+    return libraryPreviewEnabled;
+}
+
 export class LibraryPanel {
     private static readonly INITIAL_RENDER_LIMIT = 200;
     private static readonly RENDER_BATCH_SIZE = 200;
@@ -59,75 +72,44 @@ export class LibraryPanel {
     private selectedTags: Set<string> = new Set();
     private selectedItemKeys: Set<string> = new Set();
     private selectionAnchorKey: string | null = null;
-    private previewEnabled: boolean = true;
+    private previewEnabled: boolean = isLibraryPreviewEnabled();
     private currentAudio: HTMLAudioElement | null = null;
     private playingRow: HTMLElement | null = null;
     private renderLimit: number = LibraryPanel.INITIAL_RENDER_LIMIT;
+    private onlyFavourites: boolean = false;
+    private favFilterBtn: HTMLButtonElement | null = null;
+    private fileVersionSelections = new Map<string, string>();
+    private readonly handlePreviewStateChange = (event: Event) => {
+        this.previewEnabled = Boolean((event as CustomEvent).detail?.enabled);
+        if (!this.previewEnabled) this.stopCurrentPreview();
+    };
 
     constructor(parent: HTMLElement) {
         this.container = document.createElement('div');
         this.container.className = 'td-library-panel';
         
-        // Header
-        const header = document.createElement('div');
-        header.className = 'td-node-popup-header';
-        
-        const togglePreviewBtn = document.createElement('button');
-        togglePreviewBtn.className = 'td-node-popup-close';
-        togglePreviewBtn.innerText = '🔊';
-        togglePreviewBtn.title = 'Toggle Auto-Preview';
-        togglePreviewBtn.onclick = () => {
-            this.previewEnabled = !this.previewEnabled;
-            togglePreviewBtn.innerText = this.previewEnabled ? '🔊' : '🔇';
-            if (!this.previewEnabled && this.currentAudio) {
-                this.currentAudio.pause();
-                if (this.playingRow) {
-                    this.playingRow.style.backgroundColor = '';
-                    this.playingRow.style.borderColor = '';
-                }
-                this.playingRow = null;
-            }
-        };
-
-        const refreshBtn = document.createElement('button');
-        refreshBtn.className = 'td-node-popup-close';
-        refreshBtn.innerText = '↻';
-        refreshBtn.title = 'Refresh Library';
-        refreshBtn.onclick = () => this.fetchLibrary();
-
-        const isFloating = () => {
-            const dv = (window as any).dockview;
-            const p = dv?.getGroupPanel('library_panel');
-            return p?.group?.api?.location?.type === 'floating';
-        };
-
-        const dockBtn = document.createElement('button');
-        dockBtn.className = 'td-node-popup-close';
-        dockBtn.innerText = isFloating() ? '📌' : '↗';
-        dockBtn.title = isFloating() ? 'Dock to Left Side' : 'Float Window';
-        dockBtn.onclick = () => {
-            window.dispatchEvent(new CustomEvent('toggle-library-dock'));
-        };
-
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'td-node-popup-close';
-        closeBtn.innerText = '✕';
-        closeBtn.title = 'Close Library';
-        closeBtn.onclick = () => {
-            window.dispatchEvent(new CustomEvent('close-library-panel'));
-        };
-
-        header.appendChild(togglePreviewBtn);
-        header.appendChild(refreshBtn);
-        header.appendChild(dockBtn);
-        header.appendChild(closeBtn);
-
         const searchRow = document.createElement('div');
         searchRow.className = 'td-library-search-row';
         this.searchInput = document.createElement('input');
         this.searchInput.className = 'td-node-popup-search';
         this.searchInput.placeholder = 'Search loops...';
+
+        this.favFilterBtn = document.createElement('button');
+        this.favFilterBtn.type = 'button';
+        this.favFilterBtn.className = 'td-library-fav-filter-btn';
+        this.favFilterBtn.innerHTML = '★';
+        this.favFilterBtn.title = 'Filter by favourites only';
+        this.favFilterBtn.onclick = () => {
+            this.onlyFavourites = !this.onlyFavourites;
+            this.favFilterBtn?.classList.toggle('active', this.onlyFavourites);
+            this.favFilterBtn?.setAttribute('title', this.onlyFavourites ? 'Show all assets' : 'Filter by favourites only');
+            this.renderLimit = LibraryPanel.INITIAL_RENDER_LIMIT;
+            this.reconcileFilterSelection();
+            this.refreshView();
+        };
+
         searchRow.appendChild(this.searchInput);
+        searchRow.appendChild(this.favFilterBtn);
 
         // Filter Bar
         this.filterContainer = document.createElement('div');
@@ -163,12 +145,12 @@ export class LibraryPanel {
         this.listContainer = document.createElement('div');
         this.listContainer.className = 'td-library-list';
 
-        this.container.appendChild(header);
         this.container.appendChild(searchRow);
         this.container.appendChild(this.filterContainer);
         this.container.appendChild(this.listContainer);
         
         parent.appendChild(this.container);
+        window.addEventListener('library-preview-changed', this.handlePreviewStateChange);
 
         [this.vaultChipsContainer, this.typeChipsContainer, this.tagChipsContainer]
             .forEach(rail => this.enableHorizontalDragScroll(rail));
@@ -188,10 +170,49 @@ export class LibraryPanel {
                 this.renderList();
             }
         });
+        window.addEventListener('library-favourite-changed', (event: Event) => {
+            const { item, favourite } = (event as CustomEvent).detail || {};
+            if (!item) return;
+            const key = this.getItemKey(item);
+            const found = this.items.find(candidate => this.getItemKey(candidate) === key);
+            if (found) {
+                found.favourite = favourite;
+                if (found.attributes) found.attributes.favourite = favourite;
+            }
+            this.items.forEach(parent => {
+                if (Array.isArray(parent.contents)) {
+                    const child = parent.contents.find((c: any) => this.getItemKey(c) === key);
+                    if (child) {
+                        child.favourite = favourite;
+                        if (child.attributes) child.attributes.favourite = favourite;
+                    }
+                }
+            });
+            if (this.onlyFavourites) {
+                this.renderList();
+            }
+        });
         window.addEventListener('library-content-changed', () => {
             void this.loadVaults();
         });
         this.loadVaults();
+    }
+
+    dispose(): void {
+        window.removeEventListener('library-preview-changed', this.handlePreviewStateChange);
+        this.stopCurrentPreview();
+    }
+
+    private stopCurrentPreview(): void {
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio = null;
+        }
+        if (this.playingRow) {
+            this.playingRow.style.backgroundColor = '';
+            this.playingRow.style.borderColor = '';
+            this.playingRow = null;
+        }
     }
 
     private createFilterRail(chips: HTMLDivElement): HTMLDivElement {
@@ -276,6 +297,10 @@ export class LibraryPanel {
                 : this.vaults.some(vault => vault.id === preferredId)
                     ? preferredId
                     : this.vaults[0]?.id ?? null;
+            localStorage.setItem(
+                'sin.selectedVaultId',
+                this.selectedVaultId === null ? 'all' : String(this.selectedVaultId),
+            );
             await this.fetchLibrary();
         } catch (error) {
             console.error('Failed to load vaults', error);
@@ -283,10 +308,13 @@ export class LibraryPanel {
         }
     }
 
-    private updateVaultUI(availableVaultIds: Set<number>) {
+    private updateVaultUI(_availableVaultIds: Set<number>) {
         const scrollLeft = this.vaultChipsContainer.scrollLeft;
         this.vaultChipsContainer.replaceChildren();
-        this.vaults.filter(vault => availableVaultIds.has(vault.id)).forEach(vault => {
+        // Keep every vault selectable even when only the active vault's compact
+        // dataset is loaded. Previously the panel downloaded every vault just
+        // to populate these chips.
+        this.vaults.forEach(vault => {
             const chip = document.createElement('button');
             const isSelected = vault.id === this.selectedVaultId;
             chip.type = 'button';
@@ -304,21 +332,17 @@ export class LibraryPanel {
                     'sin.selectedVaultId',
                     this.selectedVaultId === null ? 'all' : String(this.selectedVaultId),
                 );
-                this.reconcileFilterSelection();
-                this.refreshView();
+                void this.fetchLibrary();
             };
             this.vaultChipsContainer.appendChild(chip);
         });
         this.vaultChipsContainer.scrollLeft = scrollLeft;
     }
 
-    private async fetchLibrary() {
+    private async fetchLibrary(forceRefresh = false) {
         this.listContainer.innerHTML = '<div class="td-node-popup-empty">Loading...</div>';
         try {
-            const res = await fetch('/api/library');
-            if (!res.ok) throw new Error('Unable to load vault assets');
-            const data = await res.json();
-            this.items = data.files || [];
+            this.items = await fetchCachedLibrary(forceRefresh, this.selectedVaultId === null);
             this.renderLimit = LibraryPanel.INITIAL_RENDER_LIMIT;
             this.reconcileFilterSelection();
             this.refreshView();
@@ -334,8 +358,10 @@ export class LibraryPanel {
 
     /** Remove stale choices after a refresh or externally changed vault without broadening valid filters. */
     private reconcileFilterSelection() {
-        const populatedVaultIds = new Set(this.items.flatMap(item => getAssetVaultIds(item)));
-        if (this.selectedVaultId !== null && !populatedVaultIds.has(this.selectedVaultId)) {
+        if (
+            this.selectedVaultId !== null
+            && !this.vaults.some(vault => vault.id === this.selectedVaultId)
+        ) {
             this.selectedVaultId = null;
         }
         localStorage.setItem(
@@ -347,7 +373,7 @@ export class LibraryPanel {
         const typesInVault = new Set(
             this.items
                 .flatMap(getFilterableAssetItems)
-                .filter(item => assetMatchesFilters(item, { vaultIds }))
+                .filter(item => assetMatchesFilters(item, { vaultIds, onlyFavourites: this.onlyFavourites }))
                 .map(getAssetType),
         );
         this.selectedTypes.forEach(type => {
@@ -361,6 +387,7 @@ export class LibraryPanel {
                 vaultIds,
                 types: this.selectedTypes,
                 tags: candidateTags,
+                onlyFavourites: this.onlyFavourites,
             }));
             if (hasMatch) compatibleTags.add(tag);
         });
@@ -369,7 +396,7 @@ export class LibraryPanel {
         const compatibleTypes = new Set(
             this.items
                 .flatMap(getFilterableAssetItems)
-                .filter(item => assetMatchesFilters(item, { vaultIds, tags: this.selectedTags }))
+                .filter(item => assetMatchesFilters(item, { vaultIds, tags: this.selectedTags, onlyFavourites: this.onlyFavourites }))
                 .map(getAssetType),
         );
         this.selectedTypes.forEach(type => {
@@ -392,6 +419,7 @@ export class LibraryPanel {
             vaultIds: this.getSelectedVaultIds(),
             types: this.selectedTypes,
             tags: this.selectedTags,
+            onlyFavourites: this.onlyFavourites,
         });
 
         this.updateVaultUI(facets.vaultIds);
@@ -453,6 +481,57 @@ export class LibraryPanel {
         return String(item.id ?? item.absolute_path ?? item.filepath ?? item.name ?? '');
     }
 
+    private getItemPath(item: any): string {
+        return String(item?.absolute_path || item?.filepath || item?.relative_path || item?.name || '');
+    }
+
+    private groupFileVersions(items: any[], scope: string): GroupedFileVersion<any>[] {
+        return groupFileVersions(items, {
+            pathFor: item => this.getItemPath(item),
+            idFor: item => this.getItemKey(item),
+            scope,
+            selections: this.fileVersionSelections,
+        });
+    }
+
+    private createFileVersionSelector(versionedItem: GroupedFileVersion<any>): HTMLSpanElement | null {
+        if (!versionedItem.fileVersionGroup || !versionedItem.fileVersions || versionedItem.fileVersions.length < 2) {
+            return null;
+        }
+
+        const control = document.createElement('span');
+        control.className = 'td-library-file-version-control';
+
+        const select = document.createElement('select');
+        select.className = 'td-library-file-version-selector';
+        select.title = 'Select file version';
+        select.setAttribute('aria-label', `Select version for ${versionedItem.fileVersionDisplayName || 'file'}`);
+        for (const version of versionedItem.fileVersions) {
+            const option = document.createElement('option');
+            option.value = version.id;
+            option.textContent = version.label;
+            option.selected = version.record === versionedItem.record;
+            select.appendChild(option);
+        }
+
+        const chevron = document.createElement('span');
+        chevron.className = 'td-library-file-version-chevron';
+        chevron.setAttribute('aria-hidden', 'true');
+        chevron.textContent = '⌄';
+        control.append(select, chevron);
+
+        // A version choice is a view interaction, not an asset preview or a
+        // library mutation. Re-rendering swaps only the exposed GAIA record.
+        select.addEventListener('mousedown', event => event.stopPropagation());
+        select.addEventListener('click', event => event.stopPropagation());
+        select.addEventListener('change', event => {
+            event.stopPropagation();
+            this.fileVersionSelections.set(versionedItem.fileVersionGroup!, select.value);
+            this.renderList();
+        });
+        return control;
+    }
+
     private itemMatchesSearch(item: any, query: string): boolean {
         if (!query) return true;
         return [item?.name, item?.title, item?.filename, item?.absolute_path, item?.filepath]
@@ -468,6 +547,7 @@ export class LibraryPanel {
                 vaultIds: this.getSelectedVaultIds(),
                 types: this.selectedTypes,
                 tags: this.selectedTags,
+                onlyFavourites: this.onlyFavourites,
             });
         });
     }
@@ -572,13 +652,16 @@ export class LibraryPanel {
                 vaultIds: this.getSelectedVaultIds(),
                 types: this.selectedTypes,
                 tags: this.selectedTags,
+                onlyFavourites: this.onlyFavourites,
             });
         });
+        const visibleItems = this.groupFileVersions(filtered, 'root');
 
-        const activeFilterCount = this.selectedTypes.size + this.selectedTags.size;
+        const activeFilterCount = this.selectedTypes.size + this.selectedTags.size + (this.onlyFavourites ? 1 : 0);
         this.filterStatus.replaceChildren();
         const summary = document.createElement('span');
-        summary.textContent = `${filtered.length} of ${this.items.length} assets${activeFilterCount ? ' · types match any, tags match all' : ''}`;
+        const favSuffix = this.onlyFavourites ? ' · ★ favourites only' : '';
+        summary.textContent = `${visibleItems.length} logical assets (${filtered.length} files) of ${this.items.length} files${activeFilterCount ? favSuffix + ' · types match any, tags match all' : ''}`;
         this.filterStatus.appendChild(summary);
         if (activeFilterCount) {
             const clearButton = document.createElement('button');
@@ -587,13 +670,16 @@ export class LibraryPanel {
             clearButton.onclick = () => {
                 this.selectedTypes.clear();
                 this.selectedTags.clear();
+                this.onlyFavourites = false;
+                this.favFilterBtn?.classList.remove('active');
+                this.favFilterBtn?.setAttribute('title', 'Filter by favourites only');
                 this.renderLimit = LibraryPanel.INITIAL_RENDER_LIMIT;
                 this.refreshView();
             };
             this.filterStatus.appendChild(clearButton);
         }
 
-        if (filtered.length === 0) {
+        if (visibleItems.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'td-node-popup-empty';
             empty.innerText = query ? `No matches for "${query}"` : 'No matching items';
@@ -601,9 +687,14 @@ export class LibraryPanel {
             return;
         }
 
-        filtered.slice(0, this.renderLimit).forEach(item => {
+        visibleItems.slice(0, this.renderLimit).forEach(versionedItem => {
+            const item = versionedItem.record;
             const itemWrapper = document.createElement('div');
             const visibleOrganizerContents = this.getVisibleOrganizerContents(item, query);
+            const versionedOrganizerContents = this.groupFileVersions(
+                visibleOrganizerContents,
+                `organizer:${this.getItemKey(item)}`,
+            );
             itemWrapper.className = 'td-library-item-wrapper';
 
             const el = document.createElement('div');
@@ -613,14 +704,14 @@ export class LibraryPanel {
             el.classList.toggle('is-selected', this.selectedItemKeys.has(itemKey));
             el.setAttribute('aria-selected', String(this.selectedItemKeys.has(itemKey)));
             
-            const displayName = getAssetDisplayName(item);
+            const displayName = versionedItem.fileVersionDisplayName || getAssetDisplayName(item);
             const typeVisual = getLibraryTypeVisual(item);
 
             const metaParts: string[] = [];
             if (item.type === 'multitrack' && Array.isArray(item.stems)) {
                 metaParts.push(`${item.stems.length} Stems`);
             } else if (isAssetOrganizer(item)) {
-                metaParts.push(`${visibleOrganizerContents.length} Items`);
+                metaParts.push(`${versionedOrganizerContents.length} Items`);
             }
             if (item.bpm) metaParts.push(`${item.bpm} BPM`);
             if (item.key) metaParts.push(item.key);
@@ -641,15 +732,33 @@ export class LibraryPanel {
                 accordionToggle = `<button class="pack-toggle-btn multitrack-toggle-btn" title="Toggle Pack Contents" aria-label="Toggle pack contents">▼</button>`;
             }
 
+            const isFav = Boolean(item.favourite ?? item.attributes?.favourite);
+
             el.innerHTML = `
                 <span class="library-type-icon" style="--library-icon-color: ${typeVisual.color}; background-color: ${typeVisual.color}; border-color: ${typeVisual.color}" title="${typeVisual.label}" aria-label="${typeVisual.label}">
                     <canvas width="24" height="24"></canvas>
                 </span>
                 <span class="item-label" title="${item.absolute_path}">${displayName}${metaStr} ${lengthBadge}</span>
                 ${accordionToggle}
+                <button class="td-library-row-fav-btn${isFav ? ' active' : ''}" type="button" title="${isFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isFav ? '★' : '☆'}</button>
             `;
             const typeIconCanvas = el.querySelector('.library-type-icon canvas') as HTMLCanvasElement | null;
             if (typeIconCanvas) drawLibraryTypeIcon(typeIconCanvas, typeVisual);
+
+            const favBtn = el.querySelector('.td-library-row-fav-btn') as HTMLButtonElement | null;
+            if (favBtn) {
+                favBtn.onmousedown = (e) => e.stopPropagation();
+                favBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    void this.toggleFavourite(item, favBtn);
+                };
+            }
+
+            const versionSelector = this.createFileVersionSelector(versionedItem);
+            if (versionSelector) {
+                el.querySelector('.item-label')?.after(versionSelector);
+            }
 
             // Organizer rows group assets but are not themselves draggable
             // library assets; contained rows provide the drag payload.
@@ -661,7 +770,9 @@ export class LibraryPanel {
                 }
                 if (e.dataTransfer) {
                     const selectedItems = this.selectedItemKeys.has(itemKey)
-                        ? this.items.filter(candidate => this.selectedItemKeys.has(this.getItemKey(candidate)))
+                        ? visibleItems
+                            .map(candidate => candidate.record)
+                            .filter(candidate => this.selectedItemKeys.has(this.getItemKey(candidate)))
                         : [item];
                     const draggedItems = selectedItems.length ? selectedItems : [item];
                     const payload = draggedItems.length === 1
@@ -675,7 +786,7 @@ export class LibraryPanel {
             el.onmousedown = (e) => {
                 if (isAssetOrganizer(item)) return;
                 if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                    this.selectItem(item, filtered, e);
+                    this.selectItem(item, visibleItems.map(candidate => candidate.record), e);
                     // Keep this modifier gesture out of the preview click handler.
                     e.preventDefault();
                 }
@@ -708,7 +819,7 @@ export class LibraryPanel {
                 if (e.ctrlKey || e.metaKey || e.shiftKey) return;
                 if (isAssetOrganizer(item)) return;
 
-                this.selectItem(item, filtered, e);
+                this.selectItem(item, visibleItems.map(candidate => candidate.record), e);
 
                 if (!this.previewEnabled) return;
                 
@@ -788,12 +899,13 @@ export class LibraryPanel {
                 itemWrapper.appendChild(stemContainer);
             }
 
-            if (isAssetOrganizer(item) && visibleOrganizerContents.length > 0) {
+            if (isAssetOrganizer(item) && versionedOrganizerContents.length > 0) {
                 const packContainer = document.createElement('div');
                 packContainer.className = 'pack-content-container multitrack-stem-container';
                 packContainer.style.display = 'none';
 
-                visibleOrganizerContents.forEach((content: any) => {
+                versionedOrganizerContents.forEach(versionedContent => {
+                    const content = versionedContent.record;
                     const contentRow = document.createElement('div');
                     contentRow.className = 'multitrack-stem-row pack-content-row';
                     contentRow.draggable = true;
@@ -804,15 +916,33 @@ export class LibraryPanel {
                     if (content.key) contentMeta.push(content.key);
                     const metaInfo = contentMeta.length ? ` (${contentMeta.join(' • ')})` : '';
 
+                    const isContentFav = Boolean(content.favourite ?? content.attributes?.favourite);
+
                     contentRow.innerHTML = `
                         <span class="library-type-icon library-type-icon--small" style="--library-icon-color: ${contentVisual.color}; background-color: ${contentVisual.color}; border-color: ${contentVisual.color}" title="${contentVisual.label}" aria-label="${contentVisual.label}">
                             <canvas width="24" height="24"></canvas>
                         </span>
-                        <span class="stem-name" title="${content.absolute_path || content.relative_path}">${content.filename}${metaInfo}</span>
+                        <span class="stem-name" title="${content.absolute_path || content.relative_path}">${versionedContent.fileVersionDisplayName || content.filename}${metaInfo}</span>
                         <span class="stem-duration">${content.duration_seconds ? content.duration_seconds + 's' : ''}</span>
+                        <button class="td-library-row-fav-btn${isContentFav ? ' active' : ''}" type="button" title="${isContentFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isContentFav ? '★' : '☆'}</button>
                     `;
                     const contentIconCanvas = contentRow.querySelector('.library-type-icon canvas') as HTMLCanvasElement | null;
                     if (contentIconCanvas) drawLibraryTypeIcon(contentIconCanvas, contentVisual);
+
+                    const contentFavBtn = contentRow.querySelector('.td-library-row-fav-btn') as HTMLButtonElement | null;
+                    if (contentFavBtn) {
+                        contentFavBtn.onmousedown = (e) => e.stopPropagation();
+                        contentFavBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            void this.toggleFavourite(content, contentFavBtn, item);
+                        };
+                    }
+
+                    const contentVersionSelector = this.createFileVersionSelector(versionedContent);
+                    if (contentVersionSelector) {
+                        contentRow.querySelector('.stem-name')?.after(contentVersionSelector);
+                    }
 
                     contentRow.ondragstart = (e) => {
                         if (e.dataTransfer) {
@@ -845,8 +975,8 @@ export class LibraryPanel {
             this.listContainer.appendChild(itemWrapper);
         });
 
-        if (filtered.length > this.renderLimit) {
-            const remaining = filtered.length - this.renderLimit;
+        if (visibleItems.length > this.renderLimit) {
+            const remaining = visibleItems.length - this.renderLimit;
             const loadMore = document.createElement('button');
             loadMore.type = 'button';
             loadMore.className = 'td-library-load-more';
@@ -856,6 +986,41 @@ export class LibraryPanel {
                 this.renderList();
             };
             this.listContainer.appendChild(loadMore);
+        }
+    }
+
+    private async toggleFavourite(item: any, btn: HTMLElement, _parentItem?: any) {
+        const currentFav = Boolean(item.favourite ?? item.attributes?.favourite);
+        const newFav = !currentFav;
+
+        item.favourite = newFav;
+        if (item.attributes) item.attributes.favourite = newFav;
+        btn.classList.toggle('active', newFav);
+        btn.innerHTML = newFav ? '★' : '☆';
+        btn.title = newFav ? 'Remove from favourites' : 'Add to favourites';
+
+        try {
+            await submitLibraryMetadataProposal({
+                fileId: item.id,
+                filepath: item.absolute_path || item.filepath,
+                field: 'favourite',
+                value: newFav,
+                previousValue: currentFav,
+            });
+            window.dispatchEvent(new CustomEvent('library-favourite-changed', {
+                detail: { item, favourite: newFav },
+            }));
+        } catch (err) {
+            console.error('Failed to toggle favourite', err);
+            item.favourite = currentFav;
+            if (item.attributes) item.attributes.favourite = currentFav;
+            btn.classList.toggle('active', currentFav);
+            btn.innerHTML = currentFav ? '★' : '☆';
+            btn.title = currentFav ? 'Remove from favourites' : 'Add to favourites';
+        }
+
+        if (this.onlyFavourites && !newFav) {
+            this.renderList();
         }
     }
 }

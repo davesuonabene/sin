@@ -12,6 +12,9 @@ item_tags = Table(
     Column("tag_id", Integer, ForeignKey("tags.id", ondelete="CASCADE"))
 )
 
+Index("ix_item_tags_item_id", item_tags.c.item_id)
+Index("ix_item_tags_tag_id", item_tags.c.tag_id)
+
 class Item(Base):
     __tablename__ = "items"
 
@@ -185,6 +188,11 @@ class ItemReference(Base):
     def attributes(self, value: dict | None) -> None:
         self.metadata_json = json.dumps(value or {})
 
+    @property
+    def tags(self) -> list[str]:
+        values = self.attributes.get("tags", [])
+        return [str(value) for value in values if str(value).strip()]
+
 class Tag(Base):
     __tablename__ = "tags"
 
@@ -222,3 +230,34 @@ class VaultImportLog(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     vault = relationship("Vault", back_populates="import_logs")
+
+
+class SinMetadataProposal(Base):
+    """A metadata edit staged by SIN for GAIA to review and apply.
+
+    The target is intentionally stored as GAIA's stable item locator rather
+    than as a foreign key: a proposal remains reviewable when an asset has
+    since been moved or deleted.
+    """
+
+    __tablename__ = "sin_metadata_proposals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    asset_ref = Column(String, nullable=False, index=True)
+    absolute_path = Column(String, nullable=False, index=True)
+    field = Column(String, nullable=False, index=True)
+    proposed_value_json = Column(Text, nullable=False)
+    previous_value_json = Column(Text, nullable=True)
+    source_node_id = Column(Integer, nullable=True)
+    status = Column(String, nullable=False, default="pending", index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+    resolved_at = Column(DateTime, nullable=True)
+
+
+Index(
+    "ix_sin_metadata_proposals_pending_target",
+    SinMetadataProposal.asset_ref,
+    SinMetadataProposal.field,
+    SinMetadataProposal.status,
+)

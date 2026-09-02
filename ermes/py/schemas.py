@@ -32,7 +32,6 @@ class AudioNodeModel(BaseModel):
     step_length: Optional[float] = None
     play_mode: Optional[str] = "gate"
     fade_ms: float = 0.0
-    filters: Optional[dict] = None
     selected_items: Optional[List[Dict[str, Any]]] = None
     playbackMode: Optional[str] = None
     seed: Optional[float] = None
@@ -58,13 +57,16 @@ class AudioNodeModel(BaseModel):
     cents: float = 0.0
     stretch_mode: Optional[str] = "time_stretch"
     stretch_factor: float = 1.0
+    stretch_algorithm: Optional[str] = "rubberband"
     chain: List[FxModuleModel] = []
     modulators: Optional[List[Dict[str, Any]]] = None
     children: List['AudioNodeModel'] = []
 
 
 class PoolResolveRequest(BaseModel):
-    filters: dict = {}
     selected_items: List[Dict[str, Any]] = []
     seed: float = 0.0
     playbackMode: str = "Random"
+    items_resolved: bool = False
+    previous_sample: Optional[str] = None
+    prefer_different: bool = False

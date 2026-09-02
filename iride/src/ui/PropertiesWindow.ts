@@ -150,10 +150,8 @@ export class PropertiesWindow {
             'velocity': ['step_parameters'],
             'probability': [this.node.type === 'Audio/Arrangement' ? 'section_probability' : 'step_parameters'],
             'sample start': ['section_sample_start'],
-            'local quant': ['section_quant'],
-            'local anchor': ['section_quant_anchor'],
-            'global quant': ['quant'],
-            'global anchor': ['quant_anchor'],
+            'quantize': ['section_quant'],
+            'anchor': ['section_quant_anchor'],
             'roll': ['step_parameters'],
             'subdivisions': ['step_parameters'],
             'node color': ['color'],
@@ -216,19 +214,14 @@ export class PropertiesWindow {
         } else if (this.activeTab === 'SEQUENCE') {
             toolbarFields.push({ label: 'Step pattern', fields: ['sequence'], selector: '#sequence-grid' });
         } else if (this.activeTab === 'POOL' || this.activeTab === 'FILTER') {
-            toolbarFields.push(
-                { label: 'Pool filters', fields: ['filters'], selector: '.item-pool-quick-filters' },
-                { label: 'Pool assets', fields: ['selected_items'], selector: '#prop-pool-items' }
-            );
+            toolbarFields.push({ label: 'Pool assets', fields: ['selected_items'], selector: '#prop-pool-items' });
         } else if (this.activeTab === 'ARRANGEMENT') {
             toolbarFields.push(
                 { label: 'Section cuts', fields: ['section_points'], selector: '.arrangement-visualizer' },
-                { label: 'Section state', fields: ['section_enabled'], selector: '.arrangement-section-toggle' },
-                { label: 'Section probability', fields: ['section_probability'], selector: '#prop-sec-prob' },
-                { label: 'Section sample start', fields: ['section_sample_start'], selector: '#sec-sample-start-range' },
+                { label: 'Section probability', fields: ['section_probability'], selector: '#sec-prob-input' },
+                { label: 'Section sample start', fields: ['section_sample_start'], selector: '#sec-sample-start-input' },
                 { label: 'Section quantize', fields: ['section_quant'], selector: '#prop-sec-quant' },
-                { label: 'Section anchor', fields: ['section_quant_anchor'], selector: '.arrangement-section-anchor-control' },
-                { label: 'Global quantize', fields: ['quant'], selector: '#prop-quant' }
+                { label: 'Section anchor', fields: ['section_quant_anchor'], selector: '#prop-sec-quant-anchor' }
             );
         }
 
@@ -259,11 +252,15 @@ export class PropertiesWindow {
     async render() {
         const syncMetadata = (this.node as any).syncMetadataFromLibrary;
         if (typeof syncMetadata === 'function') {
-            try {
-                await syncMetadata.call(this.node);
-            } catch (error) {
-                console.error('Could not refresh asset metadata from GAIA', error);
-            }
+            // Metadata lookup can involve loading the full GAIA library.  Do
+            // not hold the inspector hostage to that request: build the shell
+            // and controls immediately, then refresh them once it completes.
+            void Promise.resolve()
+                .then(() => syncMetadata.call(this.node))
+                .then(metadata => {
+                    if (metadata && !this.disposed) void this.renderTabContent();
+                })
+                .catch(error => console.error('Could not refresh asset metadata from GAIA', error));
         }
         const tabs = this.getTabList();
         if (!tabs.includes(this.activeTab)) {
@@ -305,7 +302,7 @@ export class PropertiesWindow {
 
                 <!-- Tab Content Body -->
                 <div class="td-param-body" id="td-tab-content">
-                    <!-- Dynamic Tab Content Rendered Here -->
+                    <div class="td-section-container td-section-loading">Loading controls…</div>
                 </div>
             </div>
         `;
@@ -361,7 +358,29 @@ export class PropertiesWindow {
             if (tabConfig && tabConfig.sections) {
                 contentContainer.innerHTML = '';
                 for (const section of tabConfig.sections) {
+                    // Waveform decoding is the expensive panel path.  Keep the
+                    // field controls available and show a compact placeholder
+                    // while that one section is prepared in the background.
+                    if (section.type === 'waveform_crop') {
+                        const placeholder = document.createElement('div');
+                        placeholder.className = 'td-section-container td-section-loading';
+                        placeholder.textContent = 'Loading waveform…';
+                        contentContainer.appendChild(placeholder);
+                        void SectionRendererFactory.renderSection(section, this.node as any, this)
+                            .then(el => {
+                                if (token !== this.renderToken || this.disposed) return;
+                                placeholder.replaceWith(el);
+                                finish();
+                            })
+                            .catch(error => {
+                                if (token !== this.renderToken || this.disposed) return;
+                                placeholder.textContent = 'Could not load waveform.';
+                                console.error('Could not render waveform panel', error);
+                            });
+                        continue;
+                    }
                     const el = await SectionRendererFactory.renderSection(section, this.node as any, this);
+                    if (token !== this.renderToken || this.disposed) return;
                     contentContainer.appendChild(el);
                 }
                 finish();

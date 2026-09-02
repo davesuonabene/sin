@@ -60,6 +60,7 @@ Thumbs.db
 
 # Logs & Temp
 *.log
+.runtime/
 tmp/
 *.zip
 *.DS_Store

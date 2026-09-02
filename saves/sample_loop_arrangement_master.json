@@ -1,0 +1,222 @@
+{
+  "version": 2,
+  "savedAt": "2026-08-29T00:00:00.000Z",
+  "graph": {
+    "last_node_id": 3,
+    "last_link_id": 2,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "Audio/Sample",
+        "pos": [80, 180],
+        "size": [44, 44],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [1],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample Loop",
+        "properties": {
+          "node_name": "Sample Loop",
+          "node_type": "sample",
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\500k-loop-kit_73cda8\\BaggydePipey F Minor 102 BPM @simonservidamusic.wav",
+          "sample_type": "loop",
+          "start_beat": 0,
+          "original_bpm": 102,
+          "target_bpm": 102,
+          "bpm": 102,
+          "key": "Fmin",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "chain": [
+            {
+              "id": "pre_gain_example",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5011872336272722,
+                "gain_db": -6
+              }
+            },
+            {
+              "id": "post_gain_example",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "is_main_preview": false,
+          "mix_mode": "sum",
+          "library_item_id": 117,
+          "duration_seconds": null
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 2,
+        "type": "Audio/Arrangement",
+        "pos": [340, 180],
+        "size": [44, 44],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 1
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [2],
+            "slot_index": 0
+          }
+        ],
+        "title": "Arrangement",
+        "properties": {
+          "node_name": "Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 4,
+          "probability": 1,
+          "section_points": [],
+          "section_enabled": [true],
+          "section_probability": [1],
+          "section_sample_start": [0],
+          "section_quant": ["global"],
+          "section_quant_anchor": ["global"],
+          "quant": "none",
+          "quant_anchor": "start",
+          "seed": 42,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "is_main_preview": false,
+          "length_inherited": true,
+          "length_source_id": 3,
+          "mix_mode": "sum",
+          "original_bpm": 102,
+          "target_bpm": 102,
+          "bpm": 102,
+          "key": "Fmin"
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 3,
+        "type": "Audio/Track",
+        "pos": [600, 180],
+        "size": [44, 44],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 2
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": null,
+            "slot_index": 0
+          }
+        ],
+        "title": "Master Track",
+        "properties": {
+          "node_name": "Master Track",
+          "node_type": "track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 102,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "is_main_preview": true,
+          "filepath": "",
+          "original_bpm": 102,
+          "key": "Fmin"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      }
+    ],
+    "links": [
+      [1, 1, 0, 2, 0, "audio"],
+      [2, 2, 0, 3, 0, "audio"]
+    ],
+    "groups": [],
+    "config": {
+      "links_ontop": true
+    },
+    "extra": {
+      "global_parameters": {
+        "bpm": 102,
+        "total_bars": 4,
+        "key": "Fmin"
+      },
+      "main_preview": {
+        "node_id": 3,
+        "mode": "auto"
+      }
+    },
+    "version": 0.4
+  }
+}

@@ -2,6 +2,7 @@ export type AssetFilterSelection = {
     vaultIds?: Iterable<number | string>;
     types?: Iterable<string>;
     tags?: Iterable<string>;
+    onlyFavourites?: boolean;
 };
 
 export type CompatibleAssetFacets = {
@@ -80,7 +81,8 @@ export function assetMatchesFilters(item: any, selection: AssetFilterSelection):
     const hasSelection = Boolean(
         [...(selection.vaultIds || [])].length
         || [...(selection.types || [])].some(value => normalizeFacetValue(value))
-        || [...(selection.tags || [])].some(value => normalizeFacetValue(value)),
+        || [...(selection.tags || [])].some(value => normalizeFacetValue(value))
+        || selection.onlyFavourites,
     );
     // An empty organizer can still be displayed when no asset filter is
     // active, but it cannot satisfy a filter without a contained asset.
@@ -88,6 +90,11 @@ export function assetMatchesFilters(item: any, selection: AssetFilterSelection):
 
     if (isAssetOrganizer(item)) {
         return candidates.some(candidate => assetMatchesFilters(candidate, selection));
+    }
+
+    if (selection.onlyFavourites) {
+        const isFav = Boolean(item?.favourite ?? item?.attributes?.favourite);
+        if (!isFav) return false;
     }
 
     const selectedVaultIds = [...(selection.vaultIds || [])]
@@ -118,10 +125,10 @@ export function getCompatibleAssetFacets(
     const tags = new Map<string, string>();
 
     items.flatMap(getFilterableAssetItems).forEach(item => {
-        if (assetMatchesFilters(item, { types: selection.types, tags: selection.tags })) {
+        if (assetMatchesFilters(item, { types: selection.types, tags: selection.tags, onlyFavourites: selection.onlyFavourites })) {
             getAssetVaultIds(item).forEach(vaultId => vaultIds.add(vaultId));
         }
-        if (assetMatchesFilters(item, { vaultIds: selection.vaultIds, tags: selection.tags })) {
+        if (assetMatchesFilters(item, { vaultIds: selection.vaultIds, tags: selection.tags, onlyFavourites: selection.onlyFavourites })) {
             types.add(getAssetType(item));
         }
         if (assetMatchesFilters(item, selection)) {

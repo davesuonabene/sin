@@ -1,12 +1,12 @@
 import typer
 
-app = typer.Typer(help="Automated Beat Generator CLI")
+app = typer.Typer(help="IRIDE node editor CLI")
 
 
 @app.callback()
 def callback():
     """
-    Automated Beat Generator CLI tool.
+    IRIDE node editor CLI tool.
     """
     pass
 
@@ -19,7 +19,7 @@ def serve(
     debug: bool = typer.Option(True, "--debug/--no-debug", help="Enable debug logging"),
 ):
     """
-    Launch the Beat Generator web server and API with debug terminal output.
+    Launch IRIDE and its audio-rendering API with debug terminal output.
     """
     import uvicorn
     import logging
@@ -30,7 +30,7 @@ def serve(
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         force=True
     )
-    typer.echo(f"Starting Beat Generator server on http://{host}:{port} (log level: {log_level})...")
+    typer.echo(f"Starting IRIDE server on http://{host}:{port} (log level: {log_level})...")
     uvicorn.run("api:app", host=host, port=port, reload=reload, log_level=log_level)
 
 

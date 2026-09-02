@@ -31,7 +31,7 @@ export class FxPopupMenu {
 
     constructor() {
         this.menuElement = document.createElement('div');
-        this.menuElement.className = 'td-node-popup-container fx-popup-container';
+        this.menuElement.className = 'td-node-popup-container fx-popup-container sin-menu-surface';
         this.menuElement.style.display = 'none';
 
         // Header
@@ -44,7 +44,7 @@ export class FxPopupMenu {
 
         const closeBtn = document.createElement('button');
         closeBtn.className = 'td-node-popup-close';
-        closeBtn.innerText = '✕';
+        closeBtn.innerText = 'Close';
         closeBtn.onclick = () => this.hide();
 
         header.appendChild(this.searchInput);
@@ -134,12 +134,10 @@ export class FxPopupMenu {
 
         filtered.forEach(item => {
             const el = document.createElement('div');
-            el.className = 'td-node-popup-item';
+            el.className = 'td-node-popup-item sin-menu-item';
+            el.style.setProperty('--menu-row-accent', item.badgeColor);
 
-            el.innerHTML = `
-                <span class="item-badge" style="background-color: ${item.badgeColor}">${item.badge}</span>
-                <span class="item-label">${item.label}</span>
-            `;
+            el.innerHTML = `<span class="item-label">${item.label}</span>`;
 
             const selectHandler = (e: Event) => {
                 e.stopPropagation();

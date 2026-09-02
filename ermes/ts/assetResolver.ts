@@ -37,6 +37,7 @@ export type AssetRefreshMode = 'local' | 'parent' | 'ancestor' | 'global' | 'off
 export interface AssetResolutionRequest {
     kind: 'preview' | 'render';
     globalPreview?: boolean;
+    libraryFiles?: any[];
 }
 
 export function normalizeAssetRefreshMode(value: unknown): AssetRefreshMode {
@@ -92,17 +93,8 @@ export function shouldRefreshAssetPool(
 }
 
 function poolItemLocator(item: any): any {
-    const filepath = String(item?.absolute_path || item?.filepath || '');
-    const idText = String(item?.id ?? '');
-    const collectionId = item?.collection_id ?? (
-        idText.startsWith('collection:') ? idText.split(':')[1] : undefined
-    );
-    return {
-        id: item?.id ?? null,
-        ...(collectionId != null ? { collection_id: collectionId } : {}),
-        name: filepath.replace(/\\/g, '/').split('/').pop() || item?.name || '',
-        type: item?.type || item?.itemType || 'audio'
-    };
+    if (item?.id != null && String(item.id).trim()) return { id: item.id };
+    throw new Error('Asset Pool item is missing its GAIA id');
 }
 
 function notifyResolvedProperties(node: any): void {
@@ -112,31 +104,51 @@ function notifyResolvedProperties(node: any): void {
     }));
 }
 
+function notifyArrangementSourceChanged(ownerNode: any): void {
+    if (ownerNode?.id == null || typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('arrangement-source-changed', {
+        detail: { nodeId: ownerNode.id }
+    }));
+}
+
 export async function resolveAssetFilterNode(
     modifierNode: any,
     ownerNode?: any,
     preferDifferent: boolean = false,
-    lockedLocator?: any
+    lockedLocator?: any,
+    resolvedLibraryFiles?: any[]
 ): Promise<string> {
     if (!modifierNode?.properties || modifierNode.properties.output_type !== 'asset_path') return '';
+    const log = (window as any).runtimeLog as ((message: string, level?: string) => void) | undefined;
+    const resolutionStartedAt = Date.now();
+    const poolName = modifierNode.properties.node_name || modifierNode.title || `Pool ${modifierNode.id ?? ''}`;
+    log?.(`Resolving ${poolName}`, 'debug');
     const previousPath = modifierNode.properties.output_value || '';
     const acceptedType = modifierNode.properties.accepted_asset_type;
     const fetchLibrary = (window as any).fetchLibrary;
     const findLibraryFileById = (window as any).findLibraryFileById;
     const findLibraryFile = (window as any).findLibraryFile;
     const findLibraryFileForPoolLocator = (window as any).findLibraryFileForPoolLocator;
-    const libraryFiles = typeof fetchLibrary === 'function' ? await fetchLibrary(true, true) : [];
+    const resolveLibraryAssets = (window as any).resolveLibraryAssets;
+    const libraryFiles = resolvedLibraryFiles || (
+        typeof resolveLibraryAssets === 'function'
+            ? await resolveLibraryAssets(modifierNode.properties.selected_items || [])
+            : typeof fetchLibrary === 'function' ? await fetchLibrary(false, true) : []
+    );
     for (const item of modifierNode.properties.selected_items || []) {
+        if (item?.id == null || !String(item.id).trim()) {
+            throw new Error('Asset Pool item is missing its GAIA id');
+        }
         const path = item.absolute_path || item.filepath || '';
-        const hasSyntheticCollectionId = String(item.id ?? '').startsWith('collection:');
         const latest = (typeof findLibraryFileForPoolLocator === 'function'
             ? findLibraryFileForPoolLocator(libraryFiles, item)
             : null)
-            || (typeof findLibraryFile === 'function' && path ? findLibraryFile(libraryFiles, path) : null)
-            || (!hasSyntheticCollectionId && typeof findLibraryFileById === 'function'
-                ? findLibraryFileById(libraryFiles, item.id)
+            || (item.id == null && typeof findLibraryFile === 'function' && path
+                ? findLibraryFile(libraryFiles, path)
                 : null);
-        if (!latest) continue;
+        if (!latest) {
+            throw new Error(`Asset Pool asset is unavailable: ${item?.id ?? item?.name ?? 'unknown asset'}`);
+        }
         item.id = latest.id ?? item.id;
         item.absolute_path = latest.absolute_path || path;
         item.filepath = latest.absolute_path || path;
@@ -160,39 +172,40 @@ export async function resolveAssetFilterNode(
     });
     let requestItems = selectedItems;
     if (lockedLocator) {
-        const lockedName = String(lockedLocator.name || '').trim().toLocaleLowerCase();
-        const lockedCollectionId = String(lockedLocator.collection_id ?? '').trim();
+        const lockedId = lockedLocator?.id;
+        if (lockedId == null || !String(lockedId).trim()) {
+            throw new Error('Locked pool asset is missing its GAIA id');
+        }
         const lockedItem = selectedItems.find((item: any) => {
-            const path = String(item.absolute_path || item.filepath || '');
-            const name = String(path.split(/[\\/]/).pop() || item.name || '').trim().toLocaleLowerCase();
-            const itemCollectionId = String(item.collection_id ?? (
-                String(item.id ?? '').startsWith('collection:') ? String(item.id).split(':')[1] : ''
-            ));
-            const collectionMatches = !lockedCollectionId || itemCollectionId === lockedCollectionId;
-            return collectionMatches && lockedName && name === lockedName;
+            return String(item.id) === String(lockedId);
         });
         if (!lockedItem) {
-            throw new Error(`Locked pool asset is unavailable: ${lockedLocator.name || 'unknown asset'}`);
+            throw new Error(`Locked pool asset is unavailable: ${lockedId}`);
         }
         requestItems = [lockedItem];
     }
-    let result: any = null;
-    for (let attempt = 0; attempt < (preferDifferent ? 6 : 1); attempt++) {
-        const response = await fetch('/api/pool/resolve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                filters: {},
-                selected_items: requestItems,
-                seed: modifierNode.properties.seed || 0,
-                playbackMode: modifierNode.properties.playbackMode || 'Random'
-            })
-        });
-        if (!response.ok) throw new Error('Unable to resolve Asset Filter');
-        result = await response.json();
-        const candidate = typeof result.sample === 'string' ? result.sample : '';
-        if (!preferDifferent || !previousPath || candidate !== previousPath || (result.items || []).length <= 1) break;
-        modifierNode.properties.seed = Math.random();
+    const response = await fetch('/api/pool/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            selected_items: requestItems,
+            seed: modifierNode.properties.seed || 0,
+            playbackMode: modifierNode.properties.playbackMode || 'Random',
+            items_resolved: true,
+            previous_sample: previousPath || null,
+            prefer_different: preferDifferent
+        })
+    });
+    const result: any = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        throw new Error(result.detail || `Unable to resolve Asset Filter (${response.status})`);
+    }
+    const diagnostics = result?.diagnostics;
+    if (diagnostics) {
+        log?.(
+            `Pool request: ${diagnostics.item_count ?? requestItems.length} items, ${diagnostics.metadata_queries ?? 0} metadata queries (${diagnostics.duration_ms ?? '?'} ms)`,
+            'debug'
+        );
     }
     const assetPath = typeof result?.sample === 'string' ? result.sample : '';
     modifierNode.properties.output_value = assetPath;
@@ -201,9 +214,8 @@ export async function resolveAssetFilterNode(
         (item.absolute_path || item.filepath) === assetPath
     );
     const resolvedPoolItem = result?.item || selectedItem;
-    const resolvedHasSyntheticCollectionId = String(resolvedPoolItem?.id ?? '').startsWith('collection:');
     const libraryItem = (typeof findLibraryFile === 'function' ? findLibraryFile(libraryFiles, assetPath) : null)
-        || (!resolvedHasSyntheticCollectionId && typeof findLibraryFileById === 'function'
+        || (resolvedPoolItem?.id != null && typeof findLibraryFileById === 'function'
             ? findLibraryFileById(libraryFiles, resolvedPoolItem?.id)
             : null);
 
@@ -257,6 +269,8 @@ export async function resolveAssetFilterNode(
     }
     notifyResolvedProperties(modifierNode);
     notifyResolvedProperties(ownerNode);
+    notifyArrangementSourceChanged(ownerNode);
+    log?.(`Resolved ${poolName} (${Date.now() - resolutionStartedAt} ms)`, 'common');
     return assetPath;
 }
 
@@ -290,7 +304,13 @@ export async function resolveAssignedAssetFilters(
                 );
                 if (shouldRefresh) advanceAssetPoolSeed(modifier, trackNodes);
                 if (shouldRefresh || !hasResolvedAsset) {
-                    await resolveAssetFilterNode(modifier, node, shouldRefresh, lockedLocator);
+                    await resolveAssetFilterNode(
+                        modifier,
+                        node,
+                        shouldRefresh,
+                        lockedLocator,
+                        request.libraryFiles
+                    );
                 } else if (node?.properties) {
                     const sampleNode = node as any;
                     const assetPath = modifier.properties.output_value;
@@ -302,7 +322,7 @@ export async function resolveAssignedAssetFilters(
                     if (preferredId != null) sampleNode.updateProperty?.('library_item_id', preferredId);
                     const sync = sampleNode.syncMetadataFromLibrary;
                     const syncedItem = typeof sync === 'function'
-                        ? await sync.call(sampleNode, undefined, preferredId)
+                        ? await sync.call(sampleNode, request.libraryFiles, preferredId)
                         : null;
                     if (syncedItem) {
                         modifier.properties.output_bpm = sampleNode.properties.original_bpm;
@@ -319,14 +339,16 @@ export async function resolveAssignedAssetFilters(
                     }
                     notifyResolvedProperties(modifier);
                     notifyResolvedProperties(node);
+                    notifyArrangementSourceChanged(node);
                 }
             }
         }
-        for (const childId of data?.children || []) await visit(childId);
+        const adjacentIds: number[] = [...(data?.children || [])];
         for (const input of node?.inputs || []) {
             const link = input.link != null ? (graph as any).links?.[input.link] : null;
-            if (link?.origin_id != null) await visit(link.origin_id);
+            if (link?.origin_id != null && !adjacentIds.includes(link.origin_id)) adjacentIds.push(link.origin_id);
         }
+        await Promise.all(adjacentIds.map(childId => visit(childId)));
     };
     await visit(rootNodeId);
 }

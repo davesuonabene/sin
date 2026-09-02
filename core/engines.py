@@ -56,7 +56,7 @@ class SequenceRenderer(NodeRenderer):
 class ArrangementRenderer(NodeRenderer):
     """
     Rendering engine specific to Arrangement nodes.
-    Repeats child loops to reach user defined bars, applying probability.
+    Places child audio inside section-specific timing and probability rules.
     """
 
     def render(self, node_data: Any, system: System) -> np.ndarray:
@@ -113,6 +113,7 @@ def build_node_object(node_data: Any) -> AudioObject:
     cents = _get_val(node_data, "cents", 0.0)
     stretch_mode = _get_val(node_data, "stretch_mode", "time_stretch")
     stretch_factor = _get_val(node_data, "stretch_factor", 1.0)
+    stretch_algorithm = _get_val(node_data, "stretch_algorithm", "rubberband")
 
     if node_type == "sequence":
         sequence = _get_val(node_data, "sequence", None) or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
@@ -132,7 +133,12 @@ def build_node_object(node_data: Any) -> AudioObject:
             original_bpm=original_bpm,
             filepath=actual_path,
             chain=chain_list,
-            sample_type=sample_type
+            sample_type=sample_type,
+            transpose=transpose,
+            cents=cents,
+            stretch_mode=stretch_mode,
+            stretch_factor=stretch_factor,
+            stretch_algorithm=stretch_algorithm
         )
 
     elif node_type == "arrangement":
@@ -165,7 +171,6 @@ def build_node_object(node_data: Any) -> AudioObject:
         }:
             obj = ItemPoolObject(
                 name=node_name,
-                filters=_get_val(node_data, "filters", {}) or {},
                 selected_items=selected_items,
                 playback_mode=_get_val(node_data, "playbackMode", "Random"),
                 seed=_get_val(node_data, "seed", None),
@@ -178,7 +183,8 @@ def build_node_object(node_data: Any) -> AudioObject:
                 transpose=transpose,
                 cents=cents,
                 stretch_mode=stretch_mode,
-                stretch_factor=stretch_factor
+                stretch_factor=stretch_factor,
+                stretch_algorithm=stretch_algorithm
             )
         else:
             obj = SampleObject(
@@ -192,7 +198,8 @@ def build_node_object(node_data: Any) -> AudioObject:
                 transpose=transpose,
                 cents=cents,
                 stretch_mode=stretch_mode,
-                stretch_factor=stretch_factor
+                stretch_factor=stretch_factor,
+                stretch_algorithm=stretch_algorithm
             )
     else:
         obj = AudioObject(
@@ -208,7 +215,8 @@ def build_node_object(node_data: Any) -> AudioObject:
             transpose=transpose,
             cents=cents,
             stretch_mode=stretch_mode,
-            stretch_factor=stretch_factor
+            stretch_factor=stretch_factor,
+            stretch_algorithm=stretch_algorithm
         )
 
     children = _get_val(node_data, "children", []) or []

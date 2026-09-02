@@ -5,14 +5,13 @@ import { type NodePanelSchema } from '../fields/NodePanelSchema';
 
 export interface ArrangementSectionStructure {
     points: number[];
-    enabled: boolean[];
     probability: number[];
     sampleStart: number[];
     quant: string[];
     quantAnchor: ArrangementSectionAnchor[];
 }
 
-export type ArrangementSectionAnchor = 'global' | 'start' | 'end';
+export type ArrangementSectionAnchor = 'start' | 'end';
 
 export class ArrangementNode extends BaseNode {
     static panelSchema: NodePanelSchema = {
@@ -22,7 +21,7 @@ export class ArrangementNode extends BaseNode {
                 label: 'Arrangement',
                 sections: [
                     { type: 'arrangement_timeline' },
-                    { type: 'fields', fields: ['total_bars', 'probability', 'quant', 'quant_anchor', 'seed'] }
+                    { type: 'fields', fields: ['total_bars', 'seed'] }
                 ]
             },
             {
@@ -46,12 +45,10 @@ export class ArrangementNode extends BaseNode {
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Arrangement', tab: 'COMMON' },
         { key: 'total_bars', label: 'Total Length', type: 'float', default: 4.0, min: 0.25, max: 128, step: 0.25, unit: 'bars', tab: 'ARRANGEMENT' },
-        { key: 'probability', label: 'Global Prob', type: 'float', default: 1.0, min: 0, max: 1, step: 0.05, tab: 'ARRANGEMENT' },
+        { key: 'section_probability', label: 'Probability', type: 'float', default: 1.0, min: 0, max: 1, step: 0.05, tab: 'ARRANGEMENT', description: 'Playback probability for the selected section.' },
         { key: 'section_sample_start', label: 'Sample Start', type: 'slider', default: 0.0, min: 0, max: 1, step: 0.01, tab: 'ARRANGEMENT', description: 'Normalized source position for the selected section.' },
-        { key: 'section_quant', label: 'Local Quant', type: 'select', default: 'global', options: [{ value: 'global', label: 'Global' }, { value: 'none', label: 'None' }, { value: 'auto', label: 'Source Length' }, { value: 'bar', label: 'Bar' }, { value: '0.5', label: 'Half Bar' }, { value: 'beat', label: 'Beat' }], tab: 'ARRANGEMENT', description: 'Quantization for the selected section. Global inherits Global Quant.' },
-        { key: 'section_quant_anchor', label: 'Local Anchor', type: 'select', default: 'global', options: [{ value: 'global', label: 'Global' }, { value: 'start', label: 'Start' }, { value: 'end', label: 'End' }], tab: 'ARRANGEMENT' },
-        { key: 'quant', label: 'Global Quant', type: 'select', default: 'none', options: [{ value: 'none', label: 'None' }, { value: 'auto', label: 'Source Length' }, { value: 'bar', label: 'Bar' }, { value: '0.5', label: 'Half Bar' }, { value: 'beat', label: 'Beat' }], tab: 'ARRANGEMENT' },
-        { key: 'quant_anchor', label: 'Global Anchor', type: 'select', default: 'start', options: [{ value: 'start', label: 'Start' }, { value: 'end', label: 'End' }], tab: 'ARRANGEMENT' },
+        { key: 'section_quant', label: 'Quantize', type: 'select', default: 'none', options: [{ value: 'none', label: 'Continuous' }, { value: 'auto', label: 'Source Length' }, { value: 'bar', label: 'Bar' }, { value: '0.5', label: 'Half Bar' }, { value: 'beat', label: 'Beat' }], tab: 'ARRANGEMENT', description: 'Retrigger interval for the selected section.' },
+        { key: 'section_quant_anchor', label: 'Anchor', type: 'select', default: 'start', options: [{ value: 'start', label: 'Start' }, { value: 'end', label: 'End' }], tab: 'ARRANGEMENT', description: 'Align each section trigger to the start or end of its quant cell.' },
         { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'ARRANGEMENT' }
     ];
 
@@ -78,15 +75,11 @@ export class ArrangementNode extends BaseNode {
             node_name: "Arrangement",
             node_type: "arrangement",
             total_bars: 4.0,
-            probability: 1.0,
             section_points: [],
-            section_enabled: [true],
             section_probability: [1.0],
             section_sample_start: [0.0],
-            section_quant: ["global"],
-            section_quant_anchor: ["global"],
-            quant: "none",
-            quant_anchor: "start",
+            section_quant: ["none"],
+            section_quant_anchor: ["start"],
             seed: Math.random(),
             start_beat: 0,
             color: "#f59e0b",
@@ -107,32 +100,65 @@ export class ArrangementNode extends BaseNode {
         )].sort((a, b) => a - b);
         const sectionCount = points.length + 1;
 
+        const legacyProbability = this.legacyProbability();
+        const legacyQuant = this.legacyQuant();
+        const legacyAnchor = this.legacyAnchor();
+
+        const legacyEnabled = this.normalizeSectionValues<boolean>('section_enabled', sectionCount, true);
         return {
             points,
-            enabled: this.normalizeSectionValues<boolean>('section_enabled', sectionCount, true),
-            probability: this.normalizeSectionValues<number>('section_probability', sectionCount, 1.0),
+            probability: this.normalizeSectionValues<number>('section_probability', sectionCount, legacyProbability)
+                .map((value, index) => legacyEnabled[index] === false
+                    ? 0
+                    : Math.max(0, Math.min(1, Number(value) || 0))),
             sampleStart: this.normalizeSectionValues<number>('section_sample_start', sectionCount, 0.0)
                 .map(value => Math.max(0, Math.min(1, Number(value) || 0))),
-            quant: this.normalizeSectionValues<string>('section_quant', sectionCount, 'global'),
-            quantAnchor: this.normalizeSectionValues<ArrangementSectionAnchor>('section_quant_anchor', sectionCount, 'global')
-                .map(anchor => anchor === 'start' || anchor === 'end' ? anchor : 'global')
+            quant: this.normalizeSectionValues<string>('section_quant', sectionCount, legacyQuant)
+                .map(quant => this.normalizeQuant(quant, legacyQuant)),
+            quantAnchor: this.normalizeSectionValues<ArrangementSectionAnchor>('section_quant_anchor', sectionCount, legacyAnchor)
+                .map(anchor => anchor === 'end' ? 'end' : anchor === 'start' ? 'start' : legacyAnchor)
         };
+    }
+
+    /**
+     * Saved arrangements before section-only controls used a node-wide
+     * probability, quant and anchor. Resolve those values into each section
+     * once, then remove the retired properties from the editable node state.
+     */
+    migrateLegacySectionSettings(): ArrangementSectionStructure {
+        const structure = this.getSectionStructure();
+        if (!this.hasLegacySectionSettings()) return structure;
+        this.updateSectionStructure(structure);
+        delete this.properties.probability;
+        delete this.properties.quant;
+        delete this.properties.quant_anchor;
+        delete this.properties.section_enabled;
+
+        const cachedNode = (window as any).trackNodes?.get(this.id);
+        if (cachedNode) {
+            delete cachedNode.probability;
+            delete cachedNode.quant;
+            delete cachedNode.quant_anchor;
+            delete cachedNode.section_enabled;
+        }
+        return structure;
     }
 
     updateSectionStructure(structure: ArrangementSectionStructure): void {
         const sectionCount = structure.points.length + 1;
         const normalized: ArrangementSectionStructure = {
             points: [...structure.points],
-            enabled: this.resizeSectionValues(structure.enabled, sectionCount, true),
-            probability: this.resizeSectionValues(structure.probability, sectionCount, 1.0),
+            probability: this.resizeSectionValues(structure.probability, sectionCount, 1.0)
+                .map(value => Math.max(0, Math.min(1, Number(value) || 0))),
             sampleStart: this.resizeSectionValues(structure.sampleStart, sectionCount, 0.0)
                 .map(value => Math.max(0, Math.min(1, Number(value) || 0))),
-            quant: this.resizeSectionValues(structure.quant, sectionCount, 'global'),
-            quantAnchor: this.resizeSectionValues(structure.quantAnchor, sectionCount, 'global')
+            quant: this.resizeSectionValues(structure.quant, sectionCount, 'none')
+                .map(quant => this.normalizeQuant(quant, 'none')),
+            quantAnchor: this.resizeSectionValues(structure.quantAnchor, sectionCount, 'start')
+                .map(anchor => anchor === 'end' ? 'end' : 'start')
         };
 
         this.updateProperty('section_points', normalized.points);
-        this.updateProperty('section_enabled', normalized.enabled);
         this.updateProperty('section_probability', normalized.probability);
         this.updateProperty('section_sample_start', normalized.sampleStart);
         this.updateProperty('section_quant', normalized.quant);
@@ -143,7 +169,6 @@ export class ArrangementNode extends BaseNode {
         const cachedNode = (window as any).trackNodes?.get(this.id);
         if (cachedNode) {
             cachedNode.section_points = [...normalized.points];
-            cachedNode.section_enabled = [...normalized.enabled];
             cachedNode.section_probability = [...normalized.probability];
             cachedNode.section_sample_start = [...normalized.sampleStart];
             cachedNode.section_quant = [...normalized.quant];
@@ -158,17 +183,24 @@ export class ArrangementNode extends BaseNode {
         this.updateSectionStructure(structure);
     }
 
+    updateSectionProbability(sectionIndex: number, value: number): void {
+        const structure = this.getSectionStructure();
+        if (sectionIndex < 0 || sectionIndex >= structure.probability.length) return;
+        structure.probability[sectionIndex] = Math.max(0, Math.min(1, Number(value) || 0));
+        this.updateSectionStructure(structure);
+    }
+
     updateSectionQuant(sectionIndex: number, value: string): void {
         const structure = this.getSectionStructure();
         if (sectionIndex < 0 || sectionIndex >= structure.quant.length) return;
-        structure.quant[sectionIndex] = String(value || 'global').toLowerCase();
+        structure.quant[sectionIndex] = this.normalizeQuant(value, 'none');
         this.updateSectionStructure(structure);
     }
 
     updateSectionQuantAnchor(sectionIndex: number, value: ArrangementSectionAnchor): void {
         const structure = this.getSectionStructure();
         if (sectionIndex < 0 || sectionIndex >= structure.quantAnchor.length) return;
-        structure.quantAnchor[sectionIndex] = value === 'start' || value === 'end' ? value : 'global';
+        structure.quantAnchor[sectionIndex] = value === 'end' ? 'end' : 'start';
         this.updateSectionStructure(structure);
     }
 
@@ -181,7 +213,6 @@ export class ArrangementNode extends BaseNode {
         // left. Keep the expanding section's parameters and discard the old
         // right-hand section's values so every array stays aligned to the range.
         const removedSectionIndex = cutIndex + 1;
-        structure.enabled.splice(removedSectionIndex, 1);
         structure.probability.splice(removedSectionIndex, 1);
         structure.sampleStart.splice(removedSectionIndex, 1);
         structure.quant.splice(removedSectionIndex, 1);
@@ -197,6 +228,51 @@ export class ArrangementNode extends BaseNode {
 
     private resizeSectionValues<T>(values: T[], sectionCount: number, fallback: T): T[] {
         return Array.from({ length: sectionCount }, (_, index) => values[index] ?? fallback);
+    }
+
+    private legacyProbability(): number {
+        const value = Number(this.properties.probability);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1.0;
+    }
+
+    private legacyQuant(): string {
+        return this.normalizeQuant(this.properties.quant, 'none');
+    }
+
+    private legacyAnchor(): ArrangementSectionAnchor {
+        return this.properties.quant_anchor === 'end' ? 'end' : 'start';
+    }
+
+    private normalizeQuant(value: unknown, fallback: string): string {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        if (!normalized || normalized === 'global' || normalized === 'inherit') return fallback;
+        return normalized;
+    }
+
+    private hasLegacySectionSettings(): boolean {
+        if (
+            this.properties.probability !== undefined
+            || this.properties.quant !== undefined
+            || this.properties.quant_anchor !== undefined
+            || this.properties.section_enabled !== undefined
+        ) return true;
+
+        const isInherited = (value: unknown) => ['global', 'inherit'].includes(String(value ?? '').toLowerCase());
+        return (Array.isArray(this.properties.section_quant) && this.properties.section_quant.some(isInherited))
+            || (Array.isArray(this.properties.section_quant_anchor) && this.properties.section_quant_anchor.some(isInherited));
+    }
+
+    override prepareSerializedModel(model: any): any {
+        const structure = this.getSectionStructure();
+        const { probability: _probability, quant: _quant, quant_anchor: _quantAnchor, ...sectionOnlyModel } = model;
+        return {
+            ...sectionOnlyModel,
+            section_points: structure.points,
+            section_probability: structure.probability,
+            section_sample_start: structure.sampleStart,
+            section_quant: structure.quant,
+            section_quant_anchor: structure.quantAnchor
+        };
     }
 }
 

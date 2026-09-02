@@ -75,9 +75,17 @@ export function renderProperties(node: LGraphNode, container: HTMLElement, onClo
 
     const keyInput = container.querySelector('#prop-key') as HTMLInputElement;
     if (keyInput) {
-        keyInput.addEventListener('change', (e) => {
+        keyInput.addEventListener('change', async (e) => {
             const val = (e.target as HTMLInputElement).value;
-            node.properties.key = val;
+            const previousValue = node.properties.key;
+            const editableNode = node as any;
+            if (editableNode.preparePropertyEdit?.('key', val, previousValue) === false) {
+                keyInput.value = previousValue || '';
+                return;
+            }
+            editableNode.updateProperty?.('key', val);
+            if (!editableNode.updateProperty) node.properties.key = val;
+            await editableNode.onPropertyEdited?.('key', val, previousValue);
             updateTrackNode('key', val);
         });
     }
@@ -92,21 +100,12 @@ export function renderProperties(node: LGraphNode, container: HTMLElement, onClo
                 return;
             }
 
-            const confirmed = window.confirm("this will mod the GAIA library item");
-            if (confirmed) {
-                node.properties.original_bpm = newBpm;
+            const editableNode = node as any;
+            if (editableNode.preparePropertyEdit?.('original_bpm', newBpm, oldBpm) !== false) {
+                editableNode.updateProperty?.('original_bpm', newBpm);
+                if (!editableNode.updateProperty) node.properties.original_bpm = newBpm;
                 updateTrackNode('original_bpm', newBpm);
-                if (node.properties.filepath) {
-                    try {
-                        await fetch('/api/library/bpm', {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ filepath: node.properties.filepath, bpm: newBpm })
-                        });
-                    } catch (err) {
-                        console.error('Failed to update GAIA library item BPM:', err);
-                    }
-                }
+                await editableNode.onPropertyEdited?.('original_bpm', newBpm, oldBpm);
             } else {
                 origBpmInput.value = oldBpm.toString();
             }

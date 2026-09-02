@@ -1,4 +1,4 @@
-"""Project workspaces, read-only source links, and project-owned artifacts."""
+"""Project workspaces, generic links, and project-owned files."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from . import (
     integrity,
     midi_parser,
     models,
-    multitrack_analyzer,
     reference_service,
     schemas,
     text_analyzer,
@@ -27,7 +26,6 @@ from . import (
 
 
 PROJECT_FILES_DIRECTORY = "files"
-PROJECT_SOURCES_DIRECTORY = "sources"
 
 
 def _safe_name(value: str, *, field_name: str = "Name") -> str:
@@ -38,6 +36,12 @@ def _safe_name(value: str, *, field_name: str = "Name") -> str:
     if len(name) > 100:
         raise ValueError(f"{field_name} must be 100 characters or fewer")
     return name
+
+
+def project_stage_directory(project: models.ProjectItem, stage_name: str) -> Path:
+    """Return the canonical directory for project-owned generated files."""
+    stage = _safe_name(stage_name, field_name="Stage name")
+    return Path(project.absolute_path).resolve() / PROJECT_FILES_DIRECTORY / stage
 
 
 def _project_schema(project_type: str):
@@ -156,7 +160,12 @@ def _prepare_project(
     return project, destination
 
 
-def _run_transaction(db: Session, operation, created_paths: list[Path] | None = None):
+def _run_transaction(
+    db: Session,
+    operation,
+    created_paths: list[Path] | None = None,
+    rollback_operation=None,
+):
     created = created_paths if created_paths is not None else []
     try:
         result = operation()
@@ -164,6 +173,11 @@ def _run_transaction(db: Session, operation, created_paths: list[Path] | None = 
         return result
     except Exception:
         db.rollback()
+        if rollback_operation is not None:
+            try:
+                rollback_operation()
+            except OSError:
+                pass
         for path in reversed(created):
             if path.is_dir():
                 shutil.rmtree(path, ignore_errors=True)
@@ -187,7 +201,7 @@ def create_project(db: Session, name: str, project_type: str, vault_id: int | No
     project_id = _run_transaction(db, operation, created_paths)
     project = crud.get_item(db, project_id)
     vaults.log_import(db, vault.id, project.absolute_path, "created", "project_created", project.id)
-    regenerate_markdown(db, project.id)
+    sync_project_manifest(db, project.id)
     return project
 
 
@@ -210,7 +224,7 @@ def rename_project(db: Session, project_id: int, name: str):
         project.title = title
         db.commit()
         db.refresh(project)
-        regenerate_markdown(db, project.id)
+        sync_project_manifest(db, project.id)
         return crud.get_item(db, project.id)
     if os.path.normcase(str(source)) != os.path.normcase(str(destination)) and destination.exists():
         raise ValueError(f"A managed project folder named '{title}' already exists")
@@ -239,101 +253,67 @@ def rename_project(db: Session, project_id: int, name: str):
             destination.replace(source)
         raise
 
-    regenerate_markdown(db, project.id)
+    sync_project_manifest(db, project.id)
     return crud.get_item(db, project.id)
 
 
-def regenerate_markdown(db: Session, project_id: int):
-    from . import project_markdown
+def sync_project_manifest(db: Session, project_id: int):
+    """Refresh the one JSON project manifest from canonical graph rows."""
+    from . import project_manifest
 
-    return project_markdown.write_project_context(db, project_id)
-
-
-def _apply_source_profile_defaults(
-    db: Session,
-    project_id: int,
-    source_items: list[models.Item],
-) -> None:
-    """Materialize a matched source profile without adding anything to the source.
-
-    A profile may nominate a default master (the Zoom H4 mixdown, for example).
-    The first matching source receives that default only while the project has
-    no user-selected master; later source links never replace it.
-    """
-    has_master = (
-        db.query(models.ItemReference)
-        .filter(
-            models.ItemReference.context_id == project_id,
-            models.ItemReference.is_master.is_(True),
-        )
-        .first()
-        is not None
-    )
-    for source in source_items:
-        profile_id = source.attributes.get("profile_id")
-        if not profile_id:
-            continue
-        reference_service.apply_profile(
-            db,
-            project_id,
-            source.id,
-            profile_id,
-            mark_suggested_master=not has_master,
-        )
-        has_master = has_master or (
-            db.query(models.ItemReference)
-            .filter(
-                models.ItemReference.context_id == project_id,
-                models.ItemReference.is_master.is_(True),
-            )
-            .first()
-            is not None
-        )
+    return project_manifest.sync_project_manifest(db, project_id)
 
 
 def add_items(db: Session, project_id: int, item_ids: list[int]):
-    """Link existing library items as read-only project sources."""
+    """Link existing library items without moving the underlying assets."""
     project = db.query(models.ProjectItem).filter(models.ProjectItem.id == project_id).first()
     if not project:
         raise ValueError("Project not found")
     unique_ids = list(dict.fromkeys(item_ids))
     if not unique_ids:
-        raise ValueError("Select at least one source item")
+        raise ValueError("Select at least one item")
     items = db.query(models.Item).filter(models.Item.id.in_(unique_ids)).all()
     if len(items) != len(unique_ids):
-        raise ValueError("One or more source items no longer exist")
+        raise ValueError("One or more items no longer exist")
 
-    existing_sources = {
+    existing_links = {
         row.to_item_id
         for row in db.query(models.ItemReference)
         .filter(
             models.ItemReference.context_id == project_id,
-            models.ItemReference.relation_kind == "source",
+            models.ItemReference.from_item_id == project_id,
         )
         .all()
     }
 
     def operation():
         for item in items:
-            if item.id in existing_sources:
+            if item.id in existing_links:
                 continue
-            reference_service.create_source_reference(db, project.id, item.id, commit=False)
+            reference_service.create_reference(
+                db,
+                schemas.ProjectReferenceCreate(
+                    from_item_id=project.id,
+                    to_item_id=item.id,
+                    relation_kind="use",
+                ),
+                context_id=project.id,
+                commit=False,
+            )
         return project.id
 
     _run_transaction(db, operation)
-    _apply_source_profile_defaults(db, project.id, items)
-    regenerate_markdown(db, project.id)
+    sync_project_manifest(db, project.id)
     return crud.get_item(db, project.id)
 
 
-def _source_reference_exists(db: Session, context_id: int, item_id: int) -> bool:
+def _project_link_exists(db: Session, context_id: int, item_id: int) -> bool:
     return (
         db.query(models.ItemReference)
         .filter(
             models.ItemReference.context_id == context_id,
             models.ItemReference.from_item_id == context_id,
             models.ItemReference.to_item_id == item_id,
-            models.ItemReference.relation_kind == "source",
         )
         .first()
         is not None
@@ -357,7 +337,7 @@ def _top_level_selection(items: list[models.Item]) -> list[models.Item]:
 
 
 def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> dict:
-    """Place library items in a folder by physical move or source reference."""
+    """Place library items in a folder by physical move or generic link."""
     target = db.query(models.FolderItem).filter(models.FolderItem.id == target_id).first()
     if not target:
         raise ValueError("Target folder not found")
@@ -378,16 +358,25 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> 
     if mode == "reference":
         def link_operation():
             for item in ordered_items:
-                if not _source_reference_exists(db, target.id, item.id):
-                    reference_service.create_source_reference(db, target.id, item.id, commit=False)
+                if not _project_link_exists(db, target.id, item.id):
+                    reference_service.create_reference(
+                        db,
+                        schemas.ProjectReferenceCreate(
+                            from_item_id=target.id,
+                            to_item_id=item.id,
+                            relation_kind="use",
+                        ),
+                        context_id=target.id,
+                        commit=False,
+                    )
             return target.id
 
         _run_transaction(db, link_operation)
         if isinstance(target, models.ProjectItem):
-            _apply_source_profile_defaults(db, target.id, ordered_items)
-            regenerate_markdown(db, target.id)
+            sync_project_manifest(db, target.id)
         return {
-            "target": crud.get_item(db, target.id),
+            "target": crud.item_summary(target),
+            "target_id": target.id,
             "mode": mode,
             "item_ids": unique_ids,
         }
@@ -402,7 +391,7 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> 
     target_store = vaults.vault_store(target_vault).resolve()
     if not _is_within(target_store, target_root) or not target_root.is_dir():
         raise ValueError("Target folder is missing from its owning vault")
-    destination_root = target_root / PROJECT_SOURCES_DIRECTORY if isinstance(target, models.ProjectItem) else target_root
+    destination_root = target_root
 
     validated: list[tuple[models.Item, Path]] = []
     for item in moved_items:
@@ -436,8 +425,17 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> 
                 current.vault_id = target.vault_id
                 stack.extend(current.children)
             item.parent_id = target.id
-            if not _source_reference_exists(db, target.id, item.id):
-                reference_service.create_source_reference(db, target.id, item.id, commit=False)
+            if isinstance(target, models.ProjectItem) and not _project_link_exists(db, target.id, item.id):
+                reference_service.create_reference(
+                    db,
+                    schemas.ProjectReferenceCreate(
+                        from_item_id=target.id,
+                        to_item_id=item.id,
+                        relation_kind="use",
+                    ),
+                    context_id=target.id,
+                    commit=False,
+                )
 
         db.flush()
         if operations:
@@ -457,10 +455,10 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> 
         raise
 
     if isinstance(target, models.ProjectItem):
-        _apply_source_profile_defaults(db, target.id, moved_items)
-        regenerate_markdown(db, target.id)
+        sync_project_manifest(db, target.id)
     return {
-        "target": crud.get_item(db, target.id),
+        "target": crud.item_summary(target),
+        "target_id": target.id,
         "mode": mode,
         "item_ids": [item.id for item in moved_items],
     }
@@ -513,7 +511,6 @@ def adopt_orphans(db: Session, project_id: int) -> dict:
     if not orphans:
         return {"project": crud.get_item(db, project.id), "adopted": 0, "item_ids": []}
 
-    sources_root = project_root / PROJECT_SOURCES_DIRECTORY
     validated: list[tuple[models.Item, Path]] = []
     for item in orphans:
         source = Path(item.absolute_path).resolve()
@@ -524,14 +521,17 @@ def adopt_orphans(db: Session, project_id: int) -> dict:
         validated.append((item, source))
 
     moves: list[tuple[Path, Path]] = []
-    created_sources_root = not sources_root.exists()
     try:
-        sources_root.mkdir(parents=False, exist_ok=True)
         for item, source in validated:
-            if source.parent == sources_root:
+            destination = project_root / source.name
+            if source.parent == project_root:
+                destination = source
+            elif destination.exists():
+                if destination != source:
+                    destination = _unique_destination(project_root, source.name)
+            if source == destination:
                 destination = source
             else:
-                destination = _unique_destination(sources_root, source.name)
                 source.replace(destination)
                 moves.append((source, destination))
             item.absolute_path = str(destination.resolve())
@@ -543,17 +543,12 @@ def adopt_orphans(db: Session, project_id: int) -> dict:
             if destination.exists() and not source.exists():
                 source.parent.mkdir(parents=True, exist_ok=True)
                 destination.replace(source)
-        if created_sources_root:
-            try:
-                sources_root.rmdir()
-            except OSError:
-                pass
         raise
 
     files_root = store / "files"
     for source, _ in moves:
         _remove_empty_loose_parents(source.parent, files_root)
-    regenerate_markdown(db, project.id)
+    sync_project_manifest(db, project.id)
     return {
         "project": crud.get_item(db, project.id),
         "adopted": len(orphans),
@@ -561,10 +556,10 @@ def adopt_orphans(db: Session, project_id: int) -> dict:
     }
 
 
-def _import_external_file_as_source(db: Session, project: models.ProjectItem, source_path: str) -> models.Item:
+def _import_external_file(db: Session, project: models.ProjectItem, source_path: str) -> models.Item:
     source = Path(collection_importer.canonical_source_path(source_path)).resolve()
     if not source.is_file() or source.suffix.lower() == ".zip":
-        raise ValueError("Project source paths must be regular files already in GAIA or imported separately")
+        raise ValueError("Project paths must be regular files already in GAIA or imported separately")
     existing = crud.get_item_by_path(db, str(source), project.vault_id)
     if existing:
         return existing
@@ -589,28 +584,37 @@ def _import_external_file_as_source(db: Session, project: models.ProjectItem, so
 
 
 def add_paths(db: Session, project_id: int, source_paths: list[str]):
-    """Import external files into GAIA, then link them as read-only sources."""
+    """Import external files into GAIA, then link them to the project."""
     project = db.query(models.ProjectItem).filter(models.ProjectItem.id == project_id).first()
     if not project:
         raise ValueError("Project not found")
     paths = list(dict.fromkeys(path.strip() for path in source_paths if path and path.strip()))
     if not paths:
-        raise ValueError("Choose at least one source file")
+        raise ValueError("Choose at least one file")
 
     def operation():
-        item_ids = [_import_external_file_as_source(db, project, path).id for path in paths]
+        item_ids = [_import_external_file(db, project, path).id for path in paths]
         existing = {
             row.to_item_id
             for row in db.query(models.ItemReference)
             .filter(
                 models.ItemReference.context_id == project.id,
-                models.ItemReference.relation_kind == "source",
+                models.ItemReference.from_item_id == project.id,
             )
             .all()
         }
         for item_id in item_ids:
             if item_id not in existing:
-                reference_service.create_source_reference(db, project.id, item_id, commit=False)
+                reference_service.create_reference(
+                    db,
+                    schemas.ProjectReferenceCreate(
+                        from_item_id=project.id,
+                        to_item_id=item_id,
+                        relation_kind="use",
+                    ),
+                    context_id=project.id,
+                    commit=False,
+                )
         return project.id
 
     _run_transaction(db, operation)
@@ -623,12 +627,11 @@ def add_paths(db: Session, project_id: int, source_paths: list[str]):
         )
         .filter(
             models.ItemReference.context_id == project.id,
-            models.ItemReference.relation_kind == "source",
+            models.ItemReference.from_item_id == project.id,
         )
         .all()
     ]
-    _apply_source_profile_defaults(db, project.id, linked_items)
-    regenerate_markdown(db, project.id)
+    sync_project_manifest(db, project.id)
     return crud.get_item(db, project.id)
 
 
@@ -639,27 +642,96 @@ def create_from_items(
     name: str | None,
     project_type: str,
     vault_id: int | None,
+    move_files: bool = False,
+    move_item_ids: list[int] | None = None,
 ):
     unique_ids = list(dict.fromkeys(item_ids))
     if not unique_ids:
-        raise ValueError("Select at least one source item")
+        raise ValueError("Select at least one item")
     items = db.query(models.Item).filter(models.Item.id.in_(unique_ids)).all()
     by_id = {item.id: item for item in items}
     if len(by_id) != len(unique_ids):
-        raise ValueError("One or more source items no longer exist")
+        raise ValueError("One or more items no longer exist")
     ordered_items = [by_id[item_id] for item_id in unique_ids]
+    move_item_id_set = {int(item_id) for item_id in (move_item_ids or [])}
     vault = vaults.ensure_default_vault(db) if vault_id is None else vaults.get_vault(db, vault_id)
     if not vault:
         raise ValueError("Vault not found")
     if mode not in {"single", "one_per_item"}:
         raise ValueError("Unknown project creation mode")
     if mode == "single" and not (name or "").strip():
-        # The library UI uses the selected source as the natural project
+        # The library UI uses the selected item as the natural project
         # name. Keep the API equally useful for callers that omit the name.
         first_source = ordered_items[0]
         name = getattr(first_source, "title", None) or Path(first_source.absolute_path).name
 
     created_paths: list[Path] = []
+    moved_files: list[tuple[Path, Path]] = []
+
+    def rollback_moved_files():
+        for source, destination in reversed(moved_files):
+            if destination.exists() and not source.exists():
+                source.parent.mkdir(parents=True, exist_ok=True)
+                destination.replace(source)
+
+    def source_project(item: models.Item, target_project: models.ProjectItem) -> models.ProjectItem | None:
+        """Return the project that physically owns a selected file, if any."""
+        current = item.parent
+        seen: set[int] = set()
+        while current is not None and current.id not in seen:
+            if isinstance(current, models.ProjectItem) and current.id != target_project.id:
+                return current
+            seen.add(current.id)
+            current = current.parent
+
+        # Keep legacy rows safe as well: a file can be inside a project folder
+        # even when its parent_id was not persisted during an older migration.
+        item_path = Path(item.absolute_path).resolve()
+        for candidate in db.query(models.ProjectItem).all():
+            if candidate.id == target_project.id:
+                continue
+            project_root = Path(candidate.absolute_path).resolve()
+            if item_path != project_root and _is_within(project_root, item_path):
+                return candidate
+        return None
+
+    def clone_project_file(
+        source: models.Item,
+        source_path: Path,
+        destination: Path,
+        target_project: models.ProjectItem,
+    ) -> models.Item:
+        """Copy a project-owned file and preserve its GAIA metadata."""
+        shutil.copy2(source_path, destination)
+        item_schema, _ = file_schema_for_path(destination, target_project.vault_id, target_project.id)
+        common = item_schema.model_dump() if hasattr(item_schema, "model_dump") else item_schema.dict()
+        common["attributes"] = source.attributes
+        common["type"] = source.type
+        common["file_hash"] = source.file_hash
+        common["size_bytes"] = source.size_bytes
+        common["mime_type"] = source.mime_type
+        if source.type == "sample":
+            item_schema = schemas.SampleItemCreate(
+                **common,
+                key=getattr(source, "key", None),
+                bpm=getattr(source, "bpm", None),
+                is_loop=bool(getattr(source, "is_loop", False)),
+            )
+        elif source.type == "track":
+            item_schema = schemas.TrackItemCreate(**common)
+        elif source.type == "midi":
+            item_schema = schemas.MidiItemCreate(
+                **common,
+                key=getattr(source, "key", None),
+                bpm=getattr(source, "bpm", None),
+            )
+        else:
+            item_schema = schemas.ItemCreate(**common)
+        cloned = crud.create_item(db, item_schema, commit=False)
+        source_tags = [tag.name for tag in source.tags]
+        if source_tags:
+            crud.set_item_tags(db, cloned.id, source_tags, commit=False)
+        return cloned
 
     def operation():
         project_ids: list[int] = []
@@ -673,27 +745,46 @@ def create_from_items(
             created_paths.append(path)
             db.flush()
             for source in sources:
-                reference_service.create_source_reference(db, project.id, source.id, commit=False)
+                linked_item_id = source.id
+                if (move_files or source.id in move_item_id_set) and not isinstance(source, models.FolderItem):
+                    source_path = Path(source.absolute_path).resolve()
+                    if not source_path.is_file():
+                        raise ValueError(f"'{source_path.name}' is missing from disk")
+                    owning_project = source_project(source, project)
+                    if owning_project is not None:
+                        destination = _unique_destination(path, source_path.name)
+                        linked_item_id = clone_project_file(source, source_path, destination, project).id
+                    elif source.parent_id is None:
+                        destination = _unique_destination(path, source_path.name)
+                        source_path.replace(destination)
+                        moved_files.append((source_path, destination))
+                        source.absolute_path = str(destination.resolve())
+                        source.vault_id = project.vault_id
+                        source.parent_id = project.id
+
+                reference_service.create_reference(
+                    db,
+                    schemas.ProjectReferenceCreate(
+                        from_item_id=project.id,
+                        to_item_id=linked_item_id,
+                        relation_kind="use",
+                    ),
+                    context_id=project.id,
+                    commit=False,
+                )
             project_ids.append(project.id)
         return project_ids
 
-    project_ids = _run_transaction(db, operation, created_paths)
+    project_ids = _run_transaction(
+        db,
+        operation,
+        created_paths,
+        rollback_operation=rollback_moved_files,
+    )
     result = [crud.get_item(db, project_id) for project_id in project_ids]
     for project in result:
-        vaults.log_import(db, vault.id, project.absolute_path, "created", "project_created_from_sources", project.id)
-        source_items = [
-            source
-            for source in ordered_items
-            if db.query(models.ItemReference)
-            .filter(
-                models.ItemReference.context_id == project.id,
-                models.ItemReference.to_item_id == source.id,
-                models.ItemReference.relation_kind == "source",
-            )
-            .first()
-        ]
-        _apply_source_profile_defaults(db, project.id, source_items)
-        regenerate_markdown(db, project.id)
+        vaults.log_import(db, vault.id, project.absolute_path, "created", "project_created_from_items", project.id)
+        sync_project_manifest(db, project.id)
     return result
 
 
@@ -735,10 +826,10 @@ def register_derived_path(
     source_path = Path(collection_importer.canonical_source_path(request.source_path)).resolve()
     if not source_path.exists():
         raise ValueError("Derived result is missing on disk")
-    if source_path.is_dir() and request.target_type != "multitrack":
-        raise ValueError("A derived folder must be registered as a multitrack")
-    if source_path.is_file() and request.target_type == "multitrack":
-        raise ValueError("A multitrack result must be a folder")
+    if request.target_type == "multitrack":
+        raise ValueError("Project stages contain generated files; multitrack folders belong in the library")
+    if source_path.is_dir():
+        raise ValueError("Project results must be files")
     if (
         source_path.is_file()
         and request.target_type in {"audio", "track", "sample"}
@@ -746,60 +837,19 @@ def register_derived_path(
     ):
         raise ValueError("Audio, track, and sample results must point to an audio file")
 
-    stage = _safe_name(request.stage_name or "derived", field_name="Stage name")
-    project_root = Path(project.absolute_path).resolve()
-    destination_root = project_root / PROJECT_FILES_DIRECTORY / stage
+    destination_root = project_stage_directory(project, request.stage_name or "derived")
     destination_root.mkdir(parents=True, exist_ok=True)
     destination = _unique_destination(destination_root, source_path.name)
-    if source_path.is_dir():
-        shutil.copytree(source_path, destination)
-    else:
-        shutil.copy2(source_path, destination)
+    shutil.copy2(source_path, destination)
     created_paths = [destination]
 
     def operation():
-        if request.target_type == "multitrack":
-            manifest = collection_importer.build_manifest(destination)
-            analysis = multitrack_analyzer.analyze_multitrack_folder(str(destination), recursive=False)
-            artifact = crud.create_item(
-                db,
-                schemas.MultitrackItemCreate(
-                    absolute_path=str(destination.resolve()),
-                    vault_id=project.vault_id,
-                    parent_id=project.id,
-                    size_bytes=sum(entry.get("size_bytes") or 0 for entry in manifest),
-                    mime_type="inode/directory",
-                    title=destination.name,
-                    source_kind="managed",
-                    source_path=str(destination.resolve()),
-                    contents=manifest,
-                    stems=analysis.get("stems", []),
-                    key=analysis.get("key"),
-                    bpm=analysis.get("bpm"),
-                    is_valid_length=bool(analysis.get("is_valid_length", True)),
-                    length_variance=float(analysis.get("length_variance") or 0.0),
-                    warnings=[],
-                ),
-                commit=False,
-            )
-            for entry in manifest:
-                relative = entry.get("relative_path")
-                if not relative:
-                    continue
-                child_path = destination / relative
-                item_schema, tags = file_schema_for_path(child_path, project.vault_id, artifact.id)
-                child = crud.create_item(db, item_schema, commit=False)
-                if tags:
-                    crud.set_item_tags(db, child.id, tags, commit=False)
-                entry["child_id"] = child.id
-            crud.save_collection_contents(db, artifact, manifest, commit=False)
-        else:
-            item_schema, tags = _artifact_schema_for_type(
-                request.target_type, destination, project.vault_id, project.id
-            )
-            artifact = crud.create_item(db, item_schema, commit=False)
-            if tags:
-                crud.set_item_tags(db, artifact.id, tags, commit=False)
+        item_schema, tags = _artifact_schema_for_type(
+            request.target_type, destination, project.vault_id, project.id
+        )
+        artifact = crud.create_item(db, item_schema, commit=False)
+        if tags:
+            crud.set_item_tags(db, artifact.id, tags, commit=False)
         reference = reference_service.create_reference(
             db,
             schemas.ProjectReferenceCreate(
@@ -817,5 +867,5 @@ def register_derived_path(
 
     artifact_id, reference_id = _run_transaction(db, operation, created_paths)
     reference = db.query(models.ItemReference).filter(models.ItemReference.id == reference_id).first()
-    regenerate_markdown(db, project.id)
+    sync_project_manifest(db, project.id)
     return crud.get_item(db, artifact_id), reference

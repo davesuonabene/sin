@@ -27,11 +27,22 @@ class ItemCreate(ItemBase):
     type: str = "item"
 
 class ItemUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: Optional[str] = None
     title: Optional[str] = None
+    author: Optional[str] = None
+    album: Optional[str] = None
+    album_artist: Optional[str] = None
+    release_year: Optional[int] = None
+    genre: Optional[str] = None
+    track_number: Optional[int] = None
+    disc_number: Optional[int] = None
+    comment: Optional[str] = None
     bpm: Optional[int] = None
     key: Optional[str] = None
     is_loop: Optional[bool] = None
+    favourite: Optional[bool] = None
     attributes: Optional[dict[str, Any]] = None
     tags: Optional[List[str]] = None
 
@@ -44,12 +55,51 @@ class SequenceSaveRequest(BaseModel):
 
 
 class CollectionContentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: Optional[str] = None
+    author: Optional[str] = None
+    album: Optional[str] = None
+    album_artist: Optional[str] = None
+    release_year: Optional[int] = None
+    genre: Optional[str] = None
+    track_number: Optional[int] = None
+    disc_number: Optional[int] = None
+    comment: Optional[str] = None
     type: Optional[str] = None
     bpm: Optional[int] = None
     key: Optional[str] = None
     is_loop: Optional[bool] = None
+    favourite: Optional[bool] = None
     tags: Optional[List[str]] = None
+
+
+ProposalField = Literal["key", "bpm", "favourite"]
+
+
+class SinMetadataProposalCreate(BaseModel):
+    """A library metadata change requested by SIN, pending GAIA review."""
+
+    asset_ref: Optional[str] = None
+    absolute_path: str
+    field: ProposalField
+    proposed_value: Any
+    previous_value: Any = None
+    source_node_id: Optional[int] = None
+
+
+class SinMetadataProposal(BaseModel):
+    id: int
+    asset_ref: str
+    absolute_path: str
+    field: ProposalField
+    proposed_value: Any
+    previous_value: Any = None
+    source_node_id: Optional[int] = None
+    status: Literal["pending", "accepted", "rejected"]
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: Optional[datetime] = None
 
 class StemInfo(BaseModel):
     filename: str
@@ -66,7 +116,17 @@ class CollectionContent(BaseModel):
     index: int
     filename: str
     title: Optional[str] = None
+    author: Optional[str] = None
+    album: Optional[str] = None
+    album_artist: Optional[str] = None
+    release_year: Optional[int] = None
+    genre: Optional[str] = None
+    track_number: Optional[int] = None
+    disc_number: Optional[int] = None
+    comment: Optional[str] = None
+    audio_metadata: dict[str, Any] = Field(default_factory=dict)
     relative_path: str
+    source_path: Optional[str] = None
     type: str = "file"
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
@@ -74,9 +134,53 @@ class CollectionContent(BaseModel):
     bpm: Optional[int] = None
     key: Optional[str] = None
     is_loop: Optional[bool] = None
+    favourite: bool = False
     tags: List[str] = Field(default_factory=list)
     streamable: bool = False
     child_id: Optional[int] = None
+
+
+class CollectionContentPage(BaseModel):
+    contents: List[CollectionContent] = Field(default_factory=list)
+    offset: int = 0
+    limit: int = 0
+    total: int = 0
+    has_more: bool = False
+
+
+class ItemSummary(BaseModel):
+    absolute_path: str
+    size_bytes: Optional[int] = None
+    mime_type: Optional[str] = None
+    vault_id: int
+    parent_id: Optional[int] = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    type: str
+    title: Optional[str] = None
+    author: Optional[str] = None
+    album: Optional[str] = None
+    album_artist: Optional[str] = None
+    release_year: Optional[int] = None
+    genre: Optional[str] = None
+    track_number: Optional[int] = None
+    disc_number: Optional[int] = None
+    comment: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    key: Optional[str] = None
+    bpm: Optional[int] = None
+    is_loop: Optional[bool] = None
+    favourite: bool = False
+    source_kind: Optional[str] = None
+    source_path: Optional[str] = None
+    content_count: Optional[int] = None
+    content_types: List[str] = Field(default_factory=list)
+    content_tags: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+    matches_query: bool = False
+
 
 class Item(ItemBase):
     id: int
@@ -85,9 +189,19 @@ class Item(ItemBase):
     type: str
     parent_id: Optional[int] = None
     title: Optional[str] = None
+    author: Optional[str] = None
+    album: Optional[str] = None
+    album_artist: Optional[str] = None
+    release_year: Optional[int] = None
+    genre: Optional[str] = None
+    track_number: Optional[int] = None
+    disc_number: Optional[int] = None
+    comment: Optional[str] = None
+    audio_metadata: dict[str, Any] = Field(default_factory=dict)
     key: Optional[str] = None
     bpm: Optional[int] = None
     is_loop: Optional[bool] = None
+    favourite: bool = False
     stems: Optional[List[StemInfo]] = None
     is_valid_length: Optional[bool] = None
     length_variance: Optional[float] = None
@@ -111,6 +225,15 @@ class AudioItem(Item):
 
 class TrackItemCreate(AudioItemCreate):
     type: str = "track"
+    title: Optional[str] = None
+    author: Optional[str] = None
+    album: Optional[str] = None
+    album_artist: Optional[str] = None
+    release_year: Optional[int] = None
+    genre: Optional[str] = None
+    track_number: Optional[int] = None
+    disc_number: Optional[int] = None
+    comment: Optional[str] = None
 
 class TrackItem(AudioItem):
     pass
@@ -186,6 +309,8 @@ class ImportJobCreateRequest(BaseModel):
     folder_assignments: dict[str, str] = Field(default_factory=dict)
     item_types: dict[int, str] = Field(default_factory=dict)
     excluded_indexes: List[int] = Field(default_factory=list)
+    excluded_types: List[str] = Field(default_factory=list)
+    excluded_extensions: List[str] = Field(default_factory=list)
     conflict_action: Optional[Literal["skip", "new_snapshot"]] = None
 
 
@@ -208,15 +333,42 @@ class FolderPlacementRequest(BaseModel):
     mode: Literal["move", "reference"]
 
 
+class ItemDeleteLocator(BaseModel):
+    kind: Literal["item"] = "item"
+    item_id: int
+
+
+class CollectionContentDeleteLocator(BaseModel):
+    kind: Literal["content"] = "content"
+    collection_id: int
+    content_index: int
+
+
+class ProjectReferenceDeleteLocator(BaseModel):
+    kind: Literal["reference"] = "reference"
+    project_id: int
+    reference_id: int
+
+
+class LibraryEntriesDeleteRequest(BaseModel):
+    entries: List[
+        ItemDeleteLocator
+        | CollectionContentDeleteLocator
+        | ProjectReferenceDeleteLocator
+    ] = Field(default_factory=list)
+
+
 class ProjectFromItemsRequest(BaseModel):
     item_ids: List[int] = Field(default_factory=list)
     mode: Literal["single", "one_per_item"] = "single"
     name: Optional[str] = None
     project_type: str = "project"
     vault_id: Optional[int] = None
+    move_files: bool = False
+    move_item_ids: List[int] = Field(default_factory=list)
 
 
-ReferenceKind = Literal["source", "component", "use", "derived", "supersedes"]
+ReferenceKind = Literal["component", "use", "derived", "supersedes"]
 
 
 class ItemReferenceCreate(BaseModel):
@@ -227,6 +379,7 @@ class ItemReferenceCreate(BaseModel):
     stage_name: Optional[str] = None
     revision_label: Optional[str] = None
     is_master: bool = False
+    tags: List[str] = Field(default_factory=list)
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -237,11 +390,13 @@ class ProjectReferenceCreate(BaseModel):
     stage_name: Optional[str] = None
     revision_label: Optional[str] = None
     is_master: bool = False
+    tags: List[str] = Field(default_factory=list)
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectReferenceUpdate(BaseModel):
     revision_label: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 class ItemReference(ItemReferenceCreate):
@@ -250,6 +405,19 @@ class ItemReference(ItemReferenceCreate):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectVersion(BaseModel):
+    item: Item
+    reference: ItemReference
+    label: str
+
+
+class ProjectTableRow(BaseModel):
+    item: Item
+    reference: ItemReference
+    version_group: str
+    versions: List[ProjectVersion] = Field(default_factory=list)
 
 
 class ProjectDerivedPathRequest(BaseModel):
@@ -271,6 +439,74 @@ class ProjectProfileApplyRequest(BaseModel):
 class ProjectDerivedPathResult(BaseModel):
     item: Item
     reference: ItemReference
+
+
+class MediaEditSegment(BaseModel):
+    id: str
+    start_frame: int
+    end_frame: int
+    label: Optional[str] = None
+
+
+class MediaEditLayer(BaseModel):
+    item_id: int
+    pre_gain_db: float = 0.0
+    # Post-fader linear multiplier.  Keep ``gain_db`` as a legacy input so
+    # saved editor documents from before the linear fader migration continue
+    # to load and can be converted by the media editor service.
+    volume: Optional[float] = None
+    gain_db: Optional[float] = 0.0
+    muted: bool = False
+
+
+class MediaEditDestination(BaseModel):
+    mode: Literal["project", "override"] = "project"
+    project_id: Optional[int] = None
+    override_item_id: Optional[int] = None
+    revision_label: Optional[str] = None
+    existing_output: Literal["cancel", "override", "new_version"] = "cancel"
+    set_master: bool = True
+    bitrate_kbps: int = 192
+
+
+class MediaEditRequest(BaseModel):
+    source_item_id: int
+    target_id: Optional[str] = None
+    active_layer_ids: List[int] = Field(default_factory=list)
+    main_start_frame: Optional[int] = None
+    main_end_frame: Optional[int] = None
+    segments: List[MediaEditSegment] = Field(default_factory=list)
+    layers: List[MediaEditLayer] = Field(default_factory=list)
+    gain_db: float = 0.0
+    normalize: bool = False
+    target_peak_db: float = -1.0
+    output_format: Literal["wav", "mp3"] = "wav"
+    destination: MediaEditDestination = Field(default_factory=MediaEditDestination)
+
+
+class MediaEditorViewState(BaseModel):
+    selected_layer_id: Optional[int] = None
+    selected_segment_id: Optional[str] = None
+    waveform_zoom: float = 1.0
+    view_start_frame: int = 0
+
+
+class MediaEditorState(BaseModel):
+    """The mutable, project-scoped working document for the media editor."""
+
+    schema_version: Literal[1] = 1
+    source_item_id: int
+    target_id: str
+    active_layer_ids: List[int] = Field(default_factory=list)
+    main_start_frame: Optional[int] = None
+    main_end_frame: Optional[int] = None
+    segments: List[MediaEditSegment] = Field(default_factory=list)
+    layers: List[MediaEditLayer] = Field(default_factory=list)
+    gain_db: float = 0.0
+    normalize: bool = False
+    target_peak_db: float = -1.0
+    output_format: Literal["wav", "mp3"] = "wav"
+    view: MediaEditorViewState = Field(default_factory=MediaEditorViewState)
 
 class ItemTagRequest(BaseModel):
     tag_id: int

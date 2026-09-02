@@ -6,14 +6,16 @@ import uvicorn
 import os
 
 from . import import_jobs, models, database, profiles, vaults
-from .routers import items, tags, projects, vaults as vault_router
+from .routers import items, media_edits, tags, projects, sin_proposals, vaults as vault_router
 
 # Migrate the removed SamplePack subtype before ORM mappings query legacy rows.
 database.migrate_sample_pack_profiles()
+database.migrate_project_links()
 models.Base.metadata.create_all(bind=database.engine)
+database.migrate_performance_indexes()
 with database.SessionLocal() as db:
     vaults.ensure_default_vault(db)
-profiles.ensure_builtin_profile_bundles()
+    profiles.ensure_builtin_profile_bundles()
 import_jobs.cleanup_stale_staging()
 
 app = FastAPI(
@@ -33,8 +35,10 @@ app.add_middleware(
 
 # Include routers
 app.include_router(items.router)
+app.include_router(media_edits.router)
 app.include_router(tags.router)
 app.include_router(projects.router)
+app.include_router(sin_proposals.router)
 app.include_router(vault_router.router)
 
 # Mount static files

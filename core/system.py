@@ -16,11 +16,13 @@ class System:
         self,
         bpm: float = 120.0,
         sample_rate: int = 44100,
-        root_object: Optional[AudioObject] = None
+        root_object: Optional[AudioObject] = None,
+        render_mode: str = "offline",
     ) -> None:
         self.bpm = float(bpm)
         self.sample_rate = int(sample_rate)
         self.root_object = root_object
+        self.render_mode = str(render_mode or "offline").lower()
 
     def beat_to_samples(self, beat: float) -> int:
         """

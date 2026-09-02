@@ -1,0 +1,152 @@
+:root {
+    color-scheme: light;
+
+    /* Shared primitives: GAIA and IRIDE both consume this file. */
+    --palette-white: #ffffff;
+    --palette-slate-50: #f8fafc;
+    --palette-slate-100: #f1f5f9;
+    --palette-slate-200: #e2e8f0;
+    --palette-slate-300: #cbd5e1;
+    --palette-slate-400: #94a3b8;
+    --palette-slate-500: #64748b;
+    --palette-slate-600: #475569;
+    --palette-slate-700: #334155;
+    --palette-slate-800: #1e293b;
+    --palette-slate-900: #0f172a;
+
+    --palette-sky-50: #f0f9ff;
+    --palette-sky-100: #e0f2fe;
+    --palette-sky-200: #bae6fd;
+    --palette-sky-300: #7dd3fc;
+    --palette-sky-400: #38bdf8;
+    --palette-sky-600: #0284c7;
+    --palette-sky-700: #0369a1;
+
+    --palette-emerald-50: #ecfdf5;
+    --palette-emerald-100: #d1fae5;
+    --palette-emerald-500: #10b981;
+    --palette-emerald-600: #059669;
+    --palette-emerald-700: #047857;
+
+    --palette-amber-50: #fffbeb;
+    --palette-amber-100: #fef3c7;
+    --palette-amber-200: #fde68a;
+    --palette-amber-400: #fbbf24;
+    --palette-amber-500: #f59e0b;
+    --palette-amber-600: #d97706;
+    --palette-amber-700: #b45309;
+    --palette-amber-800: #92400e;
+
+    --palette-violet-50: #f5f3ff;
+    --palette-violet-500: #8b5cf6;
+    --palette-violet-600: #7c3aed;
+    --palette-violet-700: #6d28d9;
+
+    --palette-pink-50: #fdf2f8;
+    --palette-pink-500: #ec4899;
+    --palette-pink-600: #db2777;
+
+    --palette-red-50: #fef2f2;
+    --palette-red-100: #fee2e2;
+    --palette-red-200: #fecaca;
+    --palette-red-300: #fca5a5;
+    --palette-red-500: #ef4444;
+    --palette-red-700: #b91c1c;
+
+    --palette-indigo-50: #eef2ff;
+    --palette-indigo-500: #6366f1;
+    --palette-indigo-600: #4f46e5;
+    --palette-indigo-700: #4338ca;
+
+    --palette-purple-500: #a855f7;
+    --palette-purple-600: #9333ea;
+    --palette-cyan-500: #06b6d4;
+    --palette-blue-500: #3b82f6;
+    --palette-lime-500: #84cc16;
+    --palette-teal-500: #14b8a6;
+
+    /* Shared application roles. */
+    --app-page: var(--palette-slate-50);
+    --app-surface: var(--palette-white);
+    --app-surface-subtle: var(--palette-slate-50);
+    --app-surface-raised: var(--palette-white);
+    --app-surface-hover: var(--palette-slate-100);
+    --app-border: var(--palette-slate-200);
+    --app-border-strong: var(--palette-slate-300);
+    --app-text: var(--palette-slate-800);
+    --app-text-strong: var(--palette-slate-900);
+    --app-text-muted: var(--palette-slate-500);
+    --app-text-faint: var(--palette-slate-400);
+    --app-accent: var(--palette-sky-600);
+    --app-accent-hover: var(--palette-sky-700);
+    --app-accent-soft: var(--palette-sky-50);
+    --app-accent-soft-hover: var(--palette-sky-100);
+    --app-accent-border: var(--palette-sky-200);
+    --app-focus: var(--palette-sky-400);
+    --app-on-accent: var(--palette-white);
+    --app-success: var(--palette-emerald-600);
+    --app-success-soft: var(--palette-emerald-50);
+    --app-warning: var(--palette-amber-500);
+    --app-warning-text: var(--palette-amber-700);
+    --app-warning-soft: var(--palette-amber-100);
+    --app-danger: var(--palette-red-700);
+    --app-danger-strong: var(--palette-red-500);
+    --app-danger-soft: var(--palette-red-50);
+    --app-danger-border: var(--palette-red-200);
+
+    --app-accent-a06: rgb(2 132 199 / 6%);
+    --app-accent-a08: rgb(2 132 199 / 8%);
+    --app-accent-a10: rgb(2 132 199 / 10%);
+    --app-accent-a12: rgb(2 132 199 / 12%);
+    --app-accent-a14: rgb(2 132 199 / 14%);
+    --app-accent-a16: rgb(2 132 199 / 16%);
+    --app-accent-a20: rgb(2 132 199 / 20%);
+    --app-accent-a22: rgb(2 132 199 / 22%);
+    --app-accent-a24: rgb(2 132 199 / 24%);
+    --app-accent-a25: rgb(2 132 199 / 25%);
+    --app-accent-a28: rgb(2 132 199 / 28%);
+    --app-accent-a30: rgb(2 132 199 / 30%);
+    --app-accent-a38: rgb(2 132 199 / 38%);
+    --app-accent-a42: rgb(2 132 199 / 42%);
+    --app-accent-a52: rgb(2 132 199 / 52%);
+    --app-accent-a55: rgb(2 132 199 / 55%);
+    --app-accent-a62: rgb(2 132 199 / 62%);
+    --app-accent-a72: rgb(2 132 199 / 72%);
+    --app-accent-a85: rgb(2 132 199 / 85%);
+    --app-accent-a90: rgb(2 132 199 / 90%);
+    --app-shadow-xs: rgb(15 23 42 / 6%);
+    --app-shadow-sm: rgb(15 23 42 / 14%);
+    --app-shadow-md: rgb(15 23 42 / 22%);
+    --app-shadow-lg: rgb(15 23 42 / 35%);
+    --app-backdrop: rgb(15 23 42 / 32%);
+    --app-surface-translucent: rgb(255 255 255 / 96%);
+    --app-surface-translucent-soft: rgb(248 250 252 / 92%);
+
+    /* Asset identities are shared by the GAIA app and IRIDE's GAIA browser. */
+    --asset-audio: var(--palette-emerald-500);
+    --asset-audio-soft: var(--palette-emerald-50);
+    --asset-loop: var(--palette-sky-600);
+    --asset-loop-soft: var(--palette-sky-50);
+    --asset-midi: var(--palette-violet-600);
+    --asset-midi-soft: var(--palette-violet-50);
+    --asset-multitrack: var(--palette-amber-600);
+    --asset-multitrack-soft: var(--palette-amber-50);
+    --asset-pack: var(--palette-pink-500);
+    --asset-pack-soft: var(--palette-pink-50);
+    --asset-neutral: var(--palette-slate-500);
+    --asset-neutral-soft: var(--palette-slate-50);
+
+    /* Compatibility names used throughout GAIA's existing stylesheet. */
+    --page: var(--app-page);
+    --surface: var(--app-surface);
+    --surface-raised: var(--app-surface-raised);
+    --border: var(--app-border);
+    --text: var(--app-text);
+    --muted: var(--app-text-muted);
+    --faint: var(--app-text-faint);
+    --accent: var(--app-accent);
+    --accent-soft: var(--app-accent-soft);
+    --danger: var(--app-danger);
+    --scrollbar-thumb: var(--palette-slate-300);
+    --scrollbar-thumb-hover: var(--palette-slate-400);
+}

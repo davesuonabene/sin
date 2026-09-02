@@ -1,7 +1,9 @@
 import os
 import json
+import hashlib
 import logging
 import re
+from time import perf_counter
 from pathlib import Path
 from fastapi import FastAPI, APIRouter, Request
 from fastapi.staticfiles import StaticFiles
@@ -12,11 +14,17 @@ import soundfile as sf
 import numpy as np
 
 from core.system import System
-from core.audio_object import AudioObject, SampleObject, SequenceObject, ItemPoolObject
-from core.dsp import load_sample
+from core.audio_object import ItemPoolObject
+from core.runtime_trace import collect_runtime_trace, trace_runtime
 
-logger = logging.getLogger("beat_generator.api")
-SAVES_DIR = Path(__file__).resolve().parent / "saves"
+PROJECT_ROOT = Path(__file__).resolve().parent
+STATIC_DIR = PROJECT_ROOT / "static"
+SAVES_DIR = PROJECT_ROOT / "saves"
+# The editor has one continuously saved working stage.  It deliberately lives
+# alongside named workspace presets, but is hidden from the preset list.
+STAGE_SAVE_PATH = SAVES_DIR / ".current-stage.json"
+
+logger = logging.getLogger("iride.api")
 
 
 def workspace_save_path(name: str) -> Path:
@@ -33,19 +41,18 @@ def workspace_save_path(name: str) -> Path:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Initializing Beat Generator server lifespan...")
+    logger.info("Initializing IRIDE server lifespan...")
 
-    # Ensure static directory exists so StaticFiles doesn't crash
-    os.makedirs("static", exist_ok=True)
     SAVES_DIR.mkdir(exist_ok=True)
-    logger.debug("Static directory confirmed.")
+    if not (STATIC_DIR / "index.html").is_file():
+        logger.warning("IRIDE frontend is not built. Run: npm --prefix iride run build")
     yield
-    logger.info("Shutting down Beat Generator server lifespan...")
+    logger.info("Shutting down IRIDE server lifespan...")
 
 
 app = FastAPI(
-    title="Beat Generator API",
-    description="Foundational REST API for Automated Beat Generator",
+    title="IRIDE API",
+    description="Node editor, workspace, and audio-rendering API for IRIDE",
     version="0.1.0",
     lifespan=lifespan
 )
@@ -61,120 +68,12 @@ def health_check():
     logger.debug("Health check requested.")
     return {
         "status": "ok",
-        "service": "beat-generator-api",
+        "service": "iride-api",
         "version": "0.1.0"
     }
 
 
 from ermes import FxModuleModel, AudioNodeModel, PoolResolveRequest
-
-
-def build_audio_object(node_data: AudioNodeModel) -> AudioObject:
-    audio_data = None
-    actual_path = node_data.filepath
-    if actual_path:
-        if not os.path.exists(actual_path):
-            actual_path = os.path.join("assets", actual_path)
-
-        if os.path.exists(actual_path):
-            try:
-                logger.debug(f"[DSP] Loading audio sample from '{actual_path}'...")
-                audio_data, _ = load_sample(actual_path)
-                logger.debug(f"[DSP] Successfully loaded '{actual_path}' ({audio_data.shape[-1]} samples).")
-            except Exception as e:
-                logger.error(f"[DSP Error] Failed to load sample from '{actual_path}': {e}", exc_info=True)
-        else:
-            logger.warning(f"[DSP Warning] File not found: '{actual_path}'")
-
-    if node_data.node_type == "sequence":
-        seq_list = node_data.sequence if node_data.sequence is not None else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
-        step_len = node_data.step_length if node_data.step_length is not None else 0.25
-        play_mode = node_data.play_mode or "gate"
-        obj = SequenceObject(
-            name=node_data.node_name,
-            sequence=seq_list,
-            step_parameters=node_data.step_parameters,
-            step_length=step_len,
-            play_mode=play_mode,
-            fade_ms=node_data.fade_ms,
-            seed=node_data.seed,
-            seed_mode=node_data.seed_mode or "moving",
-            original_bpm=node_data.original_bpm,
-            filepath=actual_path,
-            sample_type=node_data.sample_type or "loop"
-        )
-
-    elif node_data.node_type == "arrangement":
-        from core.audio_object import ArrangementObject
-        t_bars = node_data.total_bars if node_data.total_bars is not None else 4.0
-        prob = node_data.probability if node_data.probability is not None else 1.0
-        obj = ArrangementObject(
-            name=node_data.node_name,
-            total_bars=t_bars,
-            probability=prob,
-            seed=node_data.seed,
-            section_points=node_data.section_points,
-            section_enabled=node_data.section_enabled,
-            section_probability=node_data.section_probability,
-            section_sample_start=node_data.section_sample_start,
-            section_quant=node_data.section_quant,
-            section_quant_anchor=node_data.section_quant_anchor,
-            quant=node_data.quant,
-            quant_anchor=node_data.quant_anchor
-        )
-    elif node_data.node_type == "sample" or (audio_data is not None and node_data.node_type != "track"):
-        refresh_mode = str(node_data.refresh_mode or "off").strip().casefold()
-        if node_data.node_type == "sample" and node_data.selected_items and refresh_mode in {
-            "local", "local_refresh", "self_render",
-            "parent", "parent_refresh", "parent_render"
-        }:
-            obj = ItemPoolObject(
-                name=node_data.node_name,
-                filters=node_data.filters or {},
-                selected_items=node_data.selected_items,
-                playback_mode=node_data.playbackMode or "Random",
-                seed=node_data.seed,
-                refresh_mode=refresh_mode,
-                original_bpm=node_data.original_bpm,
-                crop_start=node_data.crop_start,
-                crop_end=node_data.crop_end,
-                sample_type=node_data.sample_type or "loop",
-                transpose=node_data.transpose,
-                cents=node_data.cents,
-                stretch_mode=node_data.stretch_mode or "time_stretch",
-                stretch_factor=node_data.stretch_factor
-            )
-        else:
-            obj = SampleObject(
-                name=node_data.node_name,
-                filepath=actual_path,
-                original_bpm=node_data.original_bpm,
-                crop_start=node_data.crop_start,
-                crop_end=node_data.crop_end,
-                sample_type=node_data.sample_type or "loop",
-                transpose=node_data.transpose,
-                cents=node_data.cents,
-                stretch_mode=node_data.stretch_mode or "time_stretch",
-                stretch_factor=node_data.stretch_factor
-            )
-    else:
-        obj = AudioObject(
-            name=node_data.node_name,
-            audio_data=audio_data,
-            original_bpm=node_data.original_bpm,
-            filepath=actual_path,
-            crop_start=node_data.crop_start,
-            crop_end=node_data.crop_end,
-            sample_type=node_data.sample_type or "loop",
-            total_bars=node_data.total_bars
-        )
-
-    for child_data in node_data.children:
-        logger.debug(f"[Graph] Adding child '{child_data.node_name}' to parent '{node_data.node_name}' at start_beat={child_data.start_beat}")
-        child_obj = build_audio_object(child_data)
-        obj.add_child(child_obj, child_data.start_beat)
-
-    return obj
 
 
 
@@ -187,30 +86,48 @@ def render_graph(payload: AudioNodeModel):
     from fastapi import HTTPException
     logger.info(f"[API /render] Rendering node '{payload.node_name}' (type: {payload.node_type}) at {payload.bpm} BPM")
     try:
-        sys = System(bpm=payload.bpm)
-        renderer = get_renderer_for_node(payload.node_type)
-        
-        logger.debug(f"[DSP] Using rendering engine '{renderer.__class__.__name__}' for node '{payload.node_name}'...")
-        audio_out = renderer.render(payload, sys)
-        logger.debug(f"[DSP] Render complete. Output length: {audio_out.shape[-1]} samples.")
+        with collect_runtime_trace() as runtime_entries:
+            trace_runtime(f"Render request accepted: {payload.node_name} ({payload.node_type})", "common")
+            sys = System(bpm=payload.bpm)
+            renderer = get_renderer_for_node(payload.node_type)
+            trace_runtime(f"Renderer selected: {renderer.__class__.__name__}")
 
-        from datetime import datetime
-        temp_dir = "temp_renders"
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = payload.filename or "output"
-        out_filename = f"{timestamp}_{base_name}_{payload.node_name}.wav"
-        out_path = os.path.join(temp_dir, out_filename)
+            render_started_at = perf_counter()
+            audio_out = renderer.render(payload, sys)
+            trace_runtime(
+                f"Graph rendered: {audio_out.shape[-1]} samples "
+                f"({(perf_counter() - render_started_at) * 1000.0:.1f} ms)"
+            )
+            logger.debug(f"[DSP] Render complete. Output length: {audio_out.shape[-1]} samples.")
 
-        sf.write(
-            out_path,
-            np.moveaxis(audio_out, -1, 0) if audio_out.ndim > 1 else audio_out,
-            sys.sample_rate,
-        )
-        logger.info(f"[API /render] Rendered audio saved to '{out_path}'")
+            from datetime import datetime
+            temp_dir = "temp_renders"
+            os.makedirs(temp_dir, exist_ok=True)
 
-        return {"status": "success", "file_url": f"/temp_renders/{out_filename}", "filename": out_filename}
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base_name = payload.filename or "output"
+            out_filename = f"{timestamp}_{base_name}_{payload.node_name}.wav"
+            out_path = os.path.join(temp_dir, out_filename)
+
+            write_started_at = perf_counter()
+            sf.write(
+                out_path,
+                np.moveaxis(audio_out, -1, 0) if audio_out.ndim > 1 else audio_out,
+                sys.sample_rate,
+            )
+            trace_runtime(
+                f"Render file written: {out_filename} "
+                f"({(perf_counter() - write_started_at) * 1000.0:.1f} ms)",
+                "common",
+            )
+            logger.info(f"[API /render] Rendered audio saved to '{out_path}'")
+
+            return {
+                "status": "success",
+                "file_url": f"/temp_renders/{out_filename}",
+                "filename": out_filename,
+                "runtime_log": runtime_entries,
+            }
     except Exception as e:
         logger.error(f"[API /render Error] {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -221,41 +138,81 @@ def preview_graph_ram(payload: AudioNodeModel):
     from fastapi import HTTPException
     logger.info(f"[API /preview] Rendering RAM preview for node '{payload.node_name}' (type: {payload.node_type}) at {payload.bpm} BPM")
     try:
-        sys = System(bpm=payload.bpm)
-        renderer = get_renderer_for_node(payload.node_type)
-        audio_out = renderer.render(payload, sys)
-        # Keep an intentionally silent/disconnected graph preview decodable by browsers.
-        if audio_out.shape[-1] == 0:
-            audio_out = np.zeros(max(1, sys.sample_rate // 10), dtype=np.float32)
+        with collect_runtime_trace() as runtime_entries:
+            trace_runtime(f"Preview request accepted: {payload.node_name} ({payload.node_type})", "common")
+            payload_snapshot = (
+                payload.model_dump(mode="json")
+                if hasattr(payload, "model_dump")
+                else payload.dict()
+            )
+            payload_fingerprint = hashlib.sha1(
+                json.dumps(payload_snapshot, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()[:16]
+            base_name = payload.filename or "preview"
+            node_key = payload.filename or payload.node_name
+            out_filename = f"{base_name}_{payload.node_name}.wav"
+            cached_preview = RAM_PREVIEW_STORE.get(node_key)
+            if cached_preview and cached_preview.get("payload_fingerprint") == payload_fingerprint:
+                trace_runtime(
+                    f"Preview cache hit: {node_key} ({len(cached_preview['wav_bytes'])} bytes)",
+                    "common",
+                )
+                return {
+                    "status": "success",
+                    "preview_id": node_key,
+                    "audio_url": f"/api/preview/stream/{node_key}?v={payload_fingerprint}",
+                    "filename": cached_preview["filename"],
+                    "runtime_log": runtime_entries,
+                    "cached": True,
+                }
 
-        buf = io.BytesIO()
-        sf.write(
-            buf,
-            np.moveaxis(audio_out, -1, 0) if audio_out.ndim > 1 else audio_out,
-            sys.sample_rate,
-            format='WAV',
-        )
-        bytes_data = buf.getvalue()
+            sys = System(bpm=payload.bpm, render_mode="preview")
+            renderer = get_renderer_for_node(payload.node_type)
+            trace_runtime(f"Renderer selected: {renderer.__class__.__name__}")
+            render_started_at = perf_counter()
+            audio_out = renderer.render(payload, sys)
+            trace_runtime(
+                f"Graph rendered: {audio_out.shape[-1]} samples "
+                f"({(perf_counter() - render_started_at) * 1000.0:.1f} ms)"
+            )
+            # Keep an intentionally silent/disconnected graph preview decodable by browsers.
+            if audio_out.shape[-1] == 0:
+                audio_out = np.zeros(max(1, sys.sample_rate // 10), dtype=np.float32)
+                trace_runtime("Empty graph output replaced with a 100 ms silent preview", "warning")
 
-        base_name = payload.filename or "preview"
-        node_key = payload.filename or payload.node_name
-        out_filename = f"{base_name}_{payload.node_name}.wav"
+            encode_started_at = perf_counter()
+            buf = io.BytesIO()
+            sf.write(
+                buf,
+                np.moveaxis(audio_out, -1, 0) if audio_out.ndim > 1 else audio_out,
+                sys.sample_rate,
+                format='WAV',
+            )
+            bytes_data = buf.getvalue()
+            trace_runtime(
+                f"Preview WAV encoded: {len(bytes_data)} bytes "
+                f"({(perf_counter() - encode_started_at) * 1000.0:.1f} ms)"
+            )
 
-        RAM_PREVIEW_STORE[node_key] = {
-            "wav_bytes": bytes_data,
-            "filename": out_filename,
-            "node_name": payload.node_name,
-            "sample_rate": sys.sample_rate,
-            "payload": payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
-        }
+            RAM_PREVIEW_STORE[node_key] = {
+                "wav_bytes": bytes_data,
+                "filename": out_filename,
+                "node_name": payload.node_name,
+                "sample_rate": sys.sample_rate,
+                "payload": payload_snapshot,
+                "payload_fingerprint": payload_fingerprint,
+            }
+            trace_runtime(f"RAM preview stored: {node_key}", "common")
 
-        logger.info(f"[API /preview] Stored RAM preview for key '{node_key}' ({len(bytes_data)} bytes)")
-        return {
-            "status": "success",
-            "preview_id": node_key,
-            "audio_url": f"/api/preview/stream/{node_key}",
-            "filename": out_filename
-        }
+            logger.info(f"[API /preview] Stored RAM preview for key '{node_key}' ({len(bytes_data)} bytes)")
+            return {
+                "status": "success",
+                "preview_id": node_key,
+                "audio_url": f"/api/preview/stream/{node_key}?v={payload_fingerprint}",
+                "filename": out_filename,
+                "runtime_log": runtime_entries,
+                "cached": False,
+            }
     except Exception as e:
         logger.error(f"[API /preview Error] {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -270,10 +227,18 @@ def stream_ram_preview(node_id: str, request: Request):
     wav_bytes = data["wav_bytes"]
     total_size = len(wav_bytes)
     range_header = request.headers.get("range")
+    etag = f'"{data.get("payload_fingerprint", node_id)}"'
     common_headers = {
         "Accept-Ranges": "bytes",
-        "Cache-Control": "no-store",
+        # Each payload version has its own query-string URL. Let the audio
+        # element and waveform decoder share the browser cache instead of
+        # transferring the same in-memory WAV twice.
+        "Cache-Control": "private, max-age=300, immutable",
+        "ETag": etag,
     }
+
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=common_headers)
 
     if not range_header:
         return Response(
@@ -360,10 +325,52 @@ class WorkspacePresetRequest(BaseModel):
     preset: Dict[str, Any]
 
 
+class StageSaveRequest(BaseModel):
+    stage: Dict[str, Any]
+
+
+@api_router.get("/stage", tags=["Stage"])
+def load_current_stage():
+    """Load the sole auto-saved editor stage, if one has been created."""
+    if not STAGE_SAVE_PATH.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="No current stage has been saved")
+    try:
+        with STAGE_SAVE_PATH.open("r", encoding="utf-8") as handle:
+            stage = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.exception("Could not read the current editor stage")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail="The current stage could not be read") from exc
+    return {"stage": stage}
+
+
+@api_router.put("/stage", tags=["Stage"])
+@api_router.post("/stage", tags=["Stage"])
+def save_current_stage(payload: StageSaveRequest):
+    """Atomically replace the sole auto-saved editor stage."""
+    SAVES_DIR.mkdir(exist_ok=True)
+    temporary_path = STAGE_SAVE_PATH.with_suffix(".tmp")
+    try:
+        with temporary_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload.stage, handle, ensure_ascii=False, separators=(",", ":"))
+        os.replace(temporary_path, STAGE_SAVE_PATH)
+    except (OSError, TypeError) as exc:
+        logger.exception("Could not save the current editor stage")
+        temporary_path.unlink(missing_ok=True)
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail="The current stage could not be saved") from exc
+    return {"status": "saved"}
+
+
 @api_router.get("/workspaces", tags=["Workspaces"])
 def list_workspace_presets():
     SAVES_DIR.mkdir(exist_ok=True)
-    files = sorted(SAVES_DIR.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    files = sorted(
+        (path for path in SAVES_DIR.glob("*.json") if path != STAGE_SAVE_PATH),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
     return {
         "workspaces": [
             {"name": path.stem, "updated_at": path.stat().st_mtime}
@@ -498,45 +505,276 @@ def _get_gaia_bpm(filepath: str) -> Optional[float]:
     bpm = _get_gaia_metadata(filepath).get("bpm")
     return float(bpm) if bpm is not None else None
 
+
+class LibraryResolveRequest(BaseModel):
+    references: List[Dict[str, Any]] = []
+
+
+def _resolve_library_references(references: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """Read the small set of GAIA rows referenced by an editor graph.
+
+    Preview and render paths should never hydrate the complete multi-vault
+    library. IDs remain authoritative; an exact path is accepted only for
+    legacy direct-asset nodes that do not yet carry an ID.
+    """
+    import sqlite3
+
+    started_at = perf_counter()
+    requested = [ref for ref in (references or []) if isinstance(ref, dict)]
+
+    def diagnostics(query_count: int, resolved_count: int) -> Dict[str, Any]:
+        return {
+            "request_count": len(requested),
+            "resolved_count": resolved_count,
+            "query_count": query_count,
+            "duration_ms": round((perf_counter() - started_at) * 1000.0, 2),
+        }
+    numeric_ids: list[int] = []
+    exact_paths: list[str] = []
+    for ref in requested:
+        raw_id = ref.get("id")
+        try:
+            if raw_id is not None and str(raw_id).strip().isdigit():
+                numeric_ids.append(int(raw_id))
+                continue
+        except (TypeError, ValueError):
+            pass
+        raw_path = ref.get("absolute_path") or ref.get("filepath") or ref.get("path")
+        if raw_path:
+            exact_paths.extend([str(raw_path), os.path.abspath(str(raw_path))])
+
+    db_path = "gaia.db" if os.path.exists("gaia.db") else os.path.join("gaia", "gaia.db")
+    if not os.path.exists(db_path):
+        return {"files": [], "missing": requested, "diagnostics": diagnostics(0, 0)}
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    unique_ids = list(dict.fromkeys(numeric_ids))
+    unique_paths = list(dict.fromkeys(exact_paths))
+    if unique_ids:
+        clauses.append(f"i.id IN ({','.join('?' for _ in unique_ids)})")
+        params.extend(unique_ids)
+    if unique_paths:
+        clauses.append(f"i.absolute_path IN ({','.join('?' for _ in unique_paths)})")
+        params.extend(unique_paths)
+    if not clauses:
+        return {"files": [], "missing": requested, "diagnostics": diagnostics(0, 0)}
+
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(f"""
+            SELECT i.id, i.absolute_path, i.type, i.vault_id, i.parent_id, i.metadata_json,
+                   COALESCE(s.key, m.key, mt.key) AS key,
+                   COALESCE(s.bpm, m.bpm, mt.bpm) AS bpm
+            FROM items i
+            LEFT JOIN sample_items s ON i.id = s.id
+            LEFT JOIN midi_items m ON i.id = m.id
+            LEFT JOIN multitrack_items mt ON i.id = mt.id
+            WHERE {' OR '.join(clauses)}
+        """, params).fetchall()
+    finally:
+        connection.close()
+
+    by_id: dict[str, dict[str, Any]] = {}
+    by_path: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        try:
+            attributes = json.loads(row["metadata_json"] or "{}")
+        except (TypeError, ValueError):
+            attributes = {}
+        analysis = attributes.get("analysis") if isinstance(attributes, dict) else {}
+        analysis = analysis if isinstance(analysis, dict) else {}
+        filepath = row["absolute_path"] or ""
+        record = {
+            "id": row["id"],
+            "vault_id": row["vault_id"],
+            "collection_id": row["parent_id"],
+            "absolute_path": filepath,
+            "name": os.path.basename(filepath),
+            "type": row["type"] or "asset",
+            "key": row["key"] if row["key"] is not None else analysis.get("key"),
+            "bpm": row["bpm"] if row["bpm"] is not None else analysis.get("bpm"),
+            "duration_seconds": analysis.get("duration_seconds"),
+        }
+        by_id[str(record["id"])] = record
+        by_path[os.path.normcase(os.path.abspath(filepath))] = record
+
+    ordered: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    emitted: set[str] = set()
+    for ref in requested:
+        raw_id = ref.get("id")
+        raw_path = ref.get("absolute_path") or ref.get("filepath") or ref.get("path")
+        record = by_id.get(str(raw_id)) if raw_id is not None else None
+        if record is None and raw_id is None and raw_path:
+            record = by_path.get(os.path.normcase(os.path.abspath(str(raw_path))))
+        if record is None:
+            missing.append(ref)
+            continue
+        record_key = str(record["id"])
+        if record_key not in emitted:
+            emitted.add(record_key)
+            ordered.append(record)
+    return {"files": ordered, "missing": missing, "diagnostics": diagnostics(1, len(ordered))}
+
+
+@api_router.post("/library/resolve", tags=["System"])
+def resolve_library_references(payload: LibraryResolveRequest):
+    return _resolve_library_references(payload.references)
+
+
+def _resolve_pool_asset_keys(selected_items: Optional[List[Dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Resolve GAIA pool keys to the current exact asset records.
+
+    Asset Pool membership is an ordered list, not a library query. A GAIA ID
+    is authoritative: if it cannot be found, fail instead of falling back to
+    a stale path, name, collection, or filter.
+    """
+    raw_items = selected_items or []
+    keyed_items = [item for item in raw_items if isinstance(item, dict) and item.get("id") is not None]
+    by_id: dict[str, dict[str, Any]] = {}
+
+    if keyed_items:
+        library = get_library().get("files", [])
+
+        def visit(entries: list[dict[str, Any]]) -> None:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("id") is not None:
+                    by_id[str(entry["id"])] = entry
+                contents = entry.get("contents")
+                if isinstance(contents, list):
+                    visit(contents)
+
+        visit(library if isinstance(library, list) else [])
+
+    resolved: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            missing.append("invalid reference")
+            continue
+
+        item_id = raw_item.get("id")
+        if item_id is not None:
+            current = by_id.get(str(item_id))
+            if current is None:
+                missing.append(str(item_id))
+                continue
+            filepath = current.get("absolute_path") or current.get("filepath") or current.get("path")
+            if not filepath:
+                missing.append(str(item_id))
+                continue
+            resolved.append({
+                **raw_item,
+                "id": current.get("id", item_id),
+                "absolute_path": filepath,
+                "filepath": filepath,
+                "name": current.get("name") or current.get("filename") or raw_item.get("name"),
+                "type": current.get("type") or raw_item.get("type", "asset"),
+                "key": current.get("key", raw_item.get("key")),
+                "bpm": current.get("bpm", raw_item.get("bpm")),
+                "original_bpm": current.get("bpm", raw_item.get("original_bpm")),
+                "duration_seconds": current.get("duration_seconds", raw_item.get("duration_seconds")),
+                "vault_id": current.get("vault_id", raw_item.get("vault_id")),
+                "collection_id": current.get("collection_id", raw_item.get("collection_id")),
+                "content_index": current.get("content_index", raw_item.get("content_index")),
+            })
+            continue
+
+        missing.append("missing GAIA id")
+
+    if missing:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=422,
+            detail=f"Asset Pool reference unavailable: {', '.join(missing)}."
+        )
+    return resolved
+
+
+def _validate_resolved_pool_items(selected_items: Optional[List[Dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Validate the current GAIA snapshot already resolved by this API."""
+    from fastapi import HTTPException
+
+    resolved: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for index, raw_item in enumerate(selected_items or []):
+        if not isinstance(raw_item, dict) or raw_item.get("id") is None:
+            missing.append(f"item {index}")
+            continue
+        filepath = raw_item.get("absolute_path") or raw_item.get("filepath") or raw_item.get("path")
+        if not filepath:
+            missing.append(str(raw_item.get("id")))
+            continue
+        resolved.append({**raw_item, "absolute_path": filepath, "filepath": filepath})
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Asset Pool reference unavailable: {', '.join(missing)}."
+        )
+    return resolved
+
+
 @api_router.post("/pool/resolve", tags=["System"])
 def resolve_pool(payload: PoolResolveRequest):
+    started_at = perf_counter()
+    metadata_queries = 0
+    resolved_items = (
+        _validate_resolved_pool_items(payload.selected_items)
+        if payload.items_resolved
+        else _resolve_pool_asset_keys(payload.selected_items)
+    )
     pool_obj = ItemPoolObject(
-        filters=payload.filters,
-        selected_items=payload.selected_items,
+        selected_items=resolved_items,
         seed=payload.seed,
         playback_mode=payload.playbackMode
     )
     sample = pool_obj.getNextSample()
+    if (
+        payload.prefer_different
+        and payload.previous_sample
+        and sample == payload.previous_sample
+        and len(pool_obj.current_pool) > 1
+    ):
+        # Resolve the no-immediate-repeat rule in the same request. The client
+        # previously retried up to six complete HTTP requests with new seeds.
+        pool_obj.last_played_index = (pool_obj.last_played_index + 1) % len(pool_obj.current_pool)
+        sample = pool_obj.current_pool[pool_obj.last_played_index]["absolute_path"]
     chosen_item = None
     if pool_obj.last_played_index >= 0 and pool_obj.last_played_index < len(pool_obj.current_pool):
         chosen_item = pool_obj.current_pool[pool_obj.last_played_index]
 
-    gaia_metadata = _get_gaia_metadata(sample) if sample else {"bpm": None, "key": None}
-    bpm = gaia_metadata.get("bpm")
-    key = gaia_metadata.get("key")
-    if bpm is None and chosen_item:
-        bpm = chosen_item.get("bpm") or chosen_item.get("original_bpm")
-    if key is None and chosen_item:
-        key = chosen_item.get("key")
+    bpm = (chosen_item.get("bpm") or chosen_item.get("original_bpm")) if chosen_item else None
+    key = chosen_item.get("key") if chosen_item else None
+    # ``items_resolved`` snapshots came from the exact GAIA query immediately
+    # before pool selection. A stored null is authoritative; querying the same
+    # row again cannot add information and used to add one DB round-trip/pool.
+    if sample and not payload.items_resolved and (bpm is None or key is None):
+        metadata_queries += 1
+        gaia_metadata = _get_gaia_metadata(sample)
+        if bpm is None:
+            bpm = gaia_metadata.get("bpm")
+        if key is None:
+            key = gaia_metadata.get("key")
 
     if bpm is None and sample:
         from core.analyzers import BPMAnalyzer
         bpm = BPMAnalyzer.from_filename(sample)
-        if bpm is None and os.path.exists(sample):
-            try:
-                from core.dsp import load_sample
-                audio, duration = load_sample(sample)
-                if audio.shape[-1] > 0:
-                    bpm = BPMAnalyzer.from_duration(duration)
-            except Exception:
-                pass
 
     return {
         "sample": sample,
         "bpm": bpm,
         "key": key,
         "item": chosen_item,
-        "items": pool_obj.current_pool
+        "items": pool_obj.current_pool,
+        "diagnostics": {
+            "item_count": len(resolved_items),
+            "metadata_queries": metadata_queries,
+            "duration_ms": round((perf_counter() - started_at) * 1000.0, 2),
+        },
     }
 
 
@@ -545,12 +783,11 @@ def resolve_pool(payload: PoolResolveRequest):
 def get_library(vault_id: Optional[int] = None):
     """
     Fetch library from Gaia API, or fallback to Gaia SQLite db if offline.
-    Includes extracted key and bpm metadata, as well as multitrack stem information.
+    GAIA owns analysis; IRIDE only returns already-indexed metadata.
     """
     import urllib.request
     import json
     import sqlite3
-    from gaia import text_analyzer
 
     files = []
     files_by_key = {}
@@ -589,11 +826,6 @@ def get_library(vault_id: Optional[int] = None):
             if item_type in organizer_types:
                 root = item.get("absolute_path") or ""
                 contents = item.get("contents") or []
-                if not contents and root and os.path.isdir(root):
-                    try:
-                        contents = collection_importer.build_manifest(Path(root))
-                    except Exception:
-                        contents = []
 
                 prepared_contents = []
                 for content in contents:
@@ -618,6 +850,7 @@ def get_library(vault_id: Optional[int] = None):
                         "key": content.get("key"),
                         "bpm": content.get("bpm"),
                         "duration_seconds": content.get("duration_seconds"),
+                        "favourite": bool(content.get("favourite") or (content.get("attributes") or {}).get("favourite", False)),
                         "stream_url": f"/api/library/stream/{content_id}" if content_id is not None else None,
                     })
                 item["contents"] = prepared_contents
@@ -635,29 +868,23 @@ def get_library(vault_id: Optional[int] = None):
         requested_vault_ids = [vault_id] if vault_id is not None else []
         if not requested_vault_ids:
             vault_req = urllib.request.Request("http://127.0.0.1:8001/vaults/", headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(vault_req, timeout=1.0) as response:
+            with urllib.request.urlopen(vault_req, timeout=5.0) as response:
                 if response.status == 200:
                     requested_vault_ids = [vault.get("id") for vault in json.loads(response.read().decode('utf-8'))]
 
         for requested_vault_id in requested_vault_ids:
             query = f"?vault_id={requested_vault_id}&limit=10000"
             req = urllib.request.Request(f"http://127.0.0.1:8001/items/{query}", headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, timeout=2.0) as response:
+            # Large vaults can take more than a couple of seconds to serialize.
+            # A premature timeout triggers the much slower SQLite/analyzer fallback.
+            with urllib.request.urlopen(req, timeout=15.0) as response:
                 if response.status != 200:
                     continue
                 for f in json.loads(response.read().decode('utf-8')):
                     abs_path = f.get("absolute_path") or ""
                     key = f.get("key")
                     bpm = f.get("bpm")
-                    if abs_path and (key is None or bpm is None) and f.get("type") != "multitrack":
-                        analysis = text_analyzer.analyze_path(abs_path)
-                        if key is None:
-                            key = analysis.get("key")
-                        if bpm is None and analysis.get("bpm"):
-                            try:
-                                bpm = float(analysis.get("bpm"))
-                            except (ValueError, TypeError):
-                                pass
+                    favourite = bool(f.get("favourite") or (f.get("attributes") or {}).get("favourite", False))
                     raw_items.append({
                         "id": f.get("id"),
                         "vault_id": f.get("vault_id"),
@@ -672,6 +899,8 @@ def get_library(vault_id: Optional[int] = None):
                         "is_valid_length": f.get("is_valid_length"),
                         "length_variance": f.get("length_variance"),
                         "contents": f.get("contents", []),
+                        "favourite": favourite,
+                        "attributes": f.get("attributes", {}),
                     })
         files = prepare_and_filter_library(raw_items)
         logger.debug(f"[API /library] Fetched {len(files)} files from Gaia API.")
@@ -691,7 +920,7 @@ def get_library(vault_id: Optional[int] = None):
             cursor = conn.cursor()
             query = """
                 SELECT i.id, i.absolute_path, i.type,
-                       i.vault_id,
+                       i.vault_id, i.metadata_json,
                        COALESCE(s.key, m.key, mt.key) as key,
                        COALESCE(s.bpm, m.bpm, mt.bpm) as bpm,
                        mt.stems_json, mt.is_valid_length, mt.length_variance,
@@ -708,29 +937,24 @@ def get_library(vault_id: Optional[int] = None):
                 params.append(vault_id)
             cursor.execute(query, params)
             rows = cursor.fetchall()
+            cursor.execute("""
+                SELECT it.item_id, t.id, t.name
+                FROM item_tags it
+                JOIN tags t ON t.id = it.tag_id
+            """)
+            tags_by_item: dict[int, list[dict[str, Any]]] = {}
+            for tag_row in cursor.fetchall():
+                tags_by_item.setdefault(tag_row["item_id"], []).append({
+                    "id": tag_row["id"],
+                    "name": tag_row["name"],
+                })
             for row in rows:
                 item_id = row["id"]
-                cursor.execute("""
-                    SELECT t.id, t.name
-                    FROM tags t
-                    JOIN item_tags it ON t.id = it.tag_id
-                    WHERE it.item_id = ?
-                """, (item_id,))
-                tag_rows = cursor.fetchall()
-                tags = [{"id": tr["id"], "name": tr["name"]} for tr in tag_rows]
+                tags = tags_by_item.get(item_id, [])
 
                 abs_path = row["absolute_path"] or ""
                 key = row["key"]
                 bpm = row["bpm"]
-                if abs_path and (key is None or bpm is None) and row["type"] != "multitrack":
-                    analysis = text_analyzer.analyze_path(abs_path)
-                    if key is None:
-                        key = analysis.get("key")
-                    if bpm is None and analysis.get("bpm"):
-                        try:
-                            bpm = float(analysis.get("bpm"))
-                        except (ValueError, TypeError):
-                            pass
 
                 stems_list = None
                 if row["stems_json"]:
@@ -745,6 +969,16 @@ def get_library(vault_id: Optional[int] = None):
                         contents = json.loads(row["manifest_json"])
                     except Exception:
                         contents = []
+
+                metadata_json = row["metadata_json"]
+                attributes = {}
+                if metadata_json:
+                    try:
+                        attributes = json.loads(metadata_json)
+                    except Exception:
+                        attributes = {}
+                favourite = bool(attributes.get("favourite", False))
+
                 raw_items.append({
                     "id": item_id,
                     "vault_id": row["vault_id"],
@@ -758,6 +992,8 @@ def get_library(vault_id: Optional[int] = None):
                     "is_valid_length": bool(row["is_valid_length"]) if row["is_valid_length"] is not None else None,
                     "length_variance": row["length_variance"],
                     "contents": contents,
+                    "favourite": favourite,
+                    "attributes": attributes,
                 })
             conn.close()
             files = prepare_and_filter_library(raw_items)
@@ -785,7 +1021,7 @@ def get_vaults():
     import json
     import urllib.request
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8001/vaults/", timeout=1.0) as response:
+        with urllib.request.urlopen("http://127.0.0.1:8001/vaults/", timeout=5.0) as response:
             if response.status == 200:
                 return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
@@ -929,6 +1165,70 @@ def update_library_file_type(file_id: int, req: TypeUpdateRequest):
         logger.error(f"[API /library] Failed to update type in Gaia: {e}")
         raise HTTPException(status_code=500, detail="Gaia API unreachable")
 
+class LibraryMetadataProposalRequest(BaseModel):
+    """A SIN-side request to stage, never apply, GAIA metadata."""
+
+    filepath: str
+    file_id: Optional[Union[str, int]] = None
+    field: Literal["key", "bpm", "favourite"]
+    value: Any
+    previous_value: Any = None
+    source_node_id: Optional[int] = None
+
+
+@api_router.post("/library/metadata-proposals", tags=["System"])
+def submit_library_metadata_proposal(req: LibraryMetadataProposalRequest):
+    """Delegate a staged SIN edit to GAIA without changing an asset in SIN."""
+    import urllib.error
+    import urllib.request
+    from fastapi import HTTPException
+
+    payload = {
+        "asset_ref": str(req.file_id) if req.file_id is not None else None,
+        "absolute_path": req.filepath,
+        "field": req.field,
+        "proposed_value": req.value,
+        "previous_value": req.previous_value,
+        "source_node_id": req.source_node_id,
+    }
+    request = urllib.request.Request(
+        "http://127.0.0.1:8001/sin-proposals/",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5.0) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(detail).get("detail", detail)
+        except json.JSONDecodeError:
+            pass
+        raise HTTPException(status_code=exc.code, detail=detail) from exc
+    except OSError:
+        # The companion server may be offline while its local GAIA database is
+        # still available. Calling its proposal service keeps ownership in
+        # GAIA; SIN itself never updates an asset row.
+        from gaia import database, schemas as gaia_schemas
+        from gaia.routers import sin_proposals
+
+        db = database.SessionLocal()
+        try:
+            return sin_proposals.create_metadata_proposal(
+                gaia_schemas.SinMetadataProposalCreate(**payload),
+                db,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("[API /library/metadata-proposals] GAIA proposal service unavailable: %s", exc)
+            raise HTTPException(status_code=503, detail="GAIA proposal queue is unavailable") from exc
+        finally:
+            db.close()
+
+
 class LibraryBpmUpdateRequest(BaseModel):
     filepath: Optional[str] = None
     file_id: Optional[Union[str, int]] = None
@@ -936,6 +1236,17 @@ class LibraryBpmUpdateRequest(BaseModel):
 
 @api_router.patch("/library/bpm", tags=["System"])
 def update_library_bpm(req: LibraryBpmUpdateRequest):
+    # Kept as a compatibility route for already-open SIN windows. It now
+    # stages the requested BPM instead of applying a GAIA library mutation.
+    return submit_library_metadata_proposal(
+        LibraryMetadataProposalRequest(
+            filepath=req.filepath or "",
+            file_id=req.file_id,
+            field="bpm",
+            value=req.bpm,
+        )
+    )
+
     import urllib.request
     import json
     from fastapi import HTTPException
@@ -1066,6 +1377,154 @@ def update_library_bpm(req: LibraryBpmUpdateRequest):
             db.close()
 
     return {"status": "success", "bpm": bpm_val, "updated": gaia_updated}
+
+
+class LibraryFavouriteUpdateRequest(BaseModel):
+    filepath: Optional[str] = None
+    file_id: Optional[Union[str, int]] = None
+    favourite: bool
+
+
+@api_router.patch("/library/favourite", tags=["System"])
+def update_library_favourite(req: LibraryFavouriteUpdateRequest):
+    # See update_library_bpm: library changes made from SIN are proposals.
+    return submit_library_metadata_proposal(
+        LibraryMetadataProposalRequest(
+            filepath=req.filepath or "",
+            file_id=req.file_id,
+            field="favourite",
+            value=req.favourite,
+        )
+    )
+
+    import urllib.request
+    import json
+    from fastapi import HTTPException
+
+    gaia_updated = False
+
+    # 1. Try GAIA HTTP API first
+    try:
+        file_id_str = str(req.file_id) if req.file_id is not None else ""
+        if file_id_str.startswith("collection:"):
+            parts = file_id_str.split(":")
+            if len(parts) == 3:
+                coll_id, content_idx = parts[1], parts[2]
+                url = f"http://127.0.0.1:8001/items/{coll_id}/contents/{content_idx}"
+                data = json.dumps({"favourite": req.favourite}).encode('utf-8')
+                request = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
+                with urllib.request.urlopen(request, timeout=2.0) as response:
+                    if response.status in (200, 201):
+                        gaia_updated = True
+        elif file_id_str.isdigit():
+            item_id = int(file_id_str)
+            url = f"http://127.0.0.1:8001/items/{item_id}"
+            data = json.dumps({"favourite": req.favourite}).encode('utf-8')
+            request = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
+            with urllib.request.urlopen(request, timeout=2.0) as response:
+                if response.status in (200, 201):
+                    gaia_updated = True
+        elif req.filepath:
+            search_url = "http://127.0.0.1:8001/items/?limit=10000"
+            request = urllib.request.Request(search_url, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(request, timeout=2.0) as response:
+                if response.status == 200:
+                    items = json.loads(response.read().decode('utf-8'))
+                    target_abs_path = os.path.abspath(req.filepath)
+                    for item in items:
+                        item_abs = item.get("absolute_path")
+                        if item_abs and os.path.abspath(item_abs) == target_abs_path:
+                            item_id = item["id"]
+                            url = f"http://127.0.0.1:8001/items/{item_id}"
+                            data = json.dumps({"favourite": req.favourite}).encode('utf-8')
+                            patch_req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
+                            with urllib.request.urlopen(patch_req, timeout=2.0) as patch_resp:
+                                if patch_resp.status in (200, 201):
+                                    gaia_updated = True
+                            break
+                        elif item.get("contents"):
+                            coll_id = item["id"]
+                            root = item.get("absolute_path") or ""
+                            for content in item.get("contents") or []:
+                                rel = content.get("relative_path") or ""
+                                candidate = os.path.abspath(os.path.join(root, rel))
+                                if candidate == target_abs_path:
+                                    c_idx = content.get("index")
+                                    url = f"http://127.0.0.1:8001/items/{coll_id}/contents/{c_idx}"
+                                    data = json.dumps({"favourite": req.favourite}).encode('utf-8')
+                                    patch_req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
+                                    with urllib.request.urlopen(patch_req, timeout=2.0) as patch_resp:
+                                        if patch_resp.status in (200, 201):
+                                            gaia_updated = True
+                                    break
+                            if gaia_updated:
+                                break
+    except Exception as e:
+        logger.warning(f"[API /library/favourite] Gaia HTTP request failed/skipped: {e}")
+
+    # 2. In-process fallback
+    if not gaia_updated:
+        from gaia import crud, database, models, schemas
+        from gaia.routers import items as gaia_items
+
+        db = database.SessionLocal()
+        try:
+            file_id_str = str(req.file_id) if req.file_id is not None else ""
+            if file_id_str.startswith("collection:"):
+                parts = file_id_str.split(":")
+                if len(parts) == 3:
+                    gaia_items.update_collection_content(
+                        int(parts[1]),
+                        int(parts[2]),
+                        schemas.CollectionContentUpdate(favourite=req.favourite),
+                        db,
+                    )
+                    gaia_updated = True
+            elif file_id_str.isdigit():
+                gaia_items.update_item(
+                    int(file_id_str),
+                    schemas.ItemUpdate(favourite=req.favourite),
+                    db,
+                )
+                gaia_updated = True
+            elif req.filepath:
+                target_abs = os.path.abspath(req.filepath)
+                item = crud.get_item_by_path(db, target_abs)
+                if item and not isinstance(item, models.FolderItem):
+                    gaia_items.update_item(
+                        item.id,
+                        schemas.ItemUpdate(favourite=req.favourite),
+                        db,
+                    )
+                    gaia_updated = True
+                else:
+                    for folder in db.query(models.FolderItem).all():
+                        folder = crud._populate_item_fields(folder)
+                        for content in folder.contents or []:
+                            candidate = os.path.abspath(
+                                os.path.join(folder.absolute_path, content.get("relative_path") or "")
+                            )
+                            if candidate == target_abs:
+                                gaia_items.update_collection_content(
+                                    folder.id,
+                                    int(content["index"]),
+                                    schemas.CollectionContentUpdate(favourite=req.favourite),
+                                    db,
+                                )
+                                gaia_updated = True
+                                break
+                        if gaia_updated:
+                            break
+        except Exception as e:
+            logger.error(f"[API /library/favourite] In-process update failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        finally:
+            db.close()
+
+    if not gaia_updated:
+        raise HTTPException(status_code=404, detail="Item not found to update favourite")
+
+    return {"status": "success", "favourite": req.favourite, "updated": gaia_updated}
 
 @api_router.get("/library/stream/{file_id}")
 def stream_library_file(file_id: str):
@@ -1211,8 +1670,8 @@ app.mount(
     name="temp_renders",
 )
 
-# Mount the static folder at the root to serve the Vite frontend
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# IRIDE is built into static/ and served with the API on the same port.
+app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True, check_dir=False), name="iride")
 
 if __name__ == "__main__":
     import uvicorn

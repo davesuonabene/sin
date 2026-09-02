@@ -157,7 +157,7 @@ Upon receiving an `AudioNodeModel` payload from ERMES, GAIA converts graph dicti
 
 ## 5. GAIA Asset Hierarchy and Managed Imports
 
-GAIA stores each library entry in one polymorphic Asset hierarchy. `audio` is the concrete raw-audio type; `track` and `sample` inherit from it. `sample.is_loop` is metadata, so loop and one-shot are not library types. MIDI, sequences, and generic files stay separate. Folder items keep their imported child rows and manifest projection; `ProjectItem` is the folder subtype used for project-owned Markdown and derived material.
+GAIA stores each library entry in one polymorphic Asset hierarchy. `audio` is the concrete raw-audio type; `track` and `sample` inherit from it. `sample.is_loop` is metadata, so loop and one-shot are not library types. MIDI, sequences, and generic files stay separate. Folder items keep their imported child rows and manifest projection; `ProjectItem` is the folder subtype used for project-owned files and the project state manifest.
 
 Folder types are generic collections, sample packs, multitracks, and managed Projects. `multitrack` is a folder interpretation: its children remain generic audio files. A device profile, such as Zoom H4, is a shareable JSON bundle in `.gaia/profiles/`; it supplies labels and a default preview without creating a database subtype.
 
@@ -165,7 +165,7 @@ Folder types are generic collections, sample packs, multitracks, and managed Pro
 
 Projects are the sole owners of logical relationship contexts. `item_references` is a generic directed graph table: any item can be an endpoint, while `context_id` must be a Project. Creating a project from a file, folder, multitrack, sample pack, or another project leaves the source untouched and creates a read-only `source` reference. Stages, revisions, derived results, master selection, and profile interpretations are references in that project context. Derived outputs are copied into `projects/<name>/files/<stage>/`; sources are never moved there.
 
-Each project regenerates `PROJECT_CONTEXT.md`, `SOURCES.md`, and stage/version Markdown projections. The SQLite graph remains canonical; Markdown is a safe human- and agent-readable view.
+Each project keeps one `files/edit/current.json` document. It carries the editor state and a compact snapshot of project reference rows and paths. The SQLite graph remains canonical; `current.json` is an atomic, human-readable filesystem view, not a second relationship authority. GAIA creates no Markdown reference placeholders or stage/version documents.
 
 ---
 

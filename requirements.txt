@@ -2,5 +2,7 @@ fastapi
 uvicorn
 librosa~=0.11.0
 soundfile
+pyrubberband==0.4.0
+mutagen~=1.47.0
 typer
 sqlalchemy

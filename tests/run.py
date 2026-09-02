@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import site
 import subprocess
 import sys
 import tempfile
@@ -40,19 +39,6 @@ def main() -> int:
                     )
                 except OSError:
                     pass
-
-    # Fall back to the local packages if a platform prevents re-execution.
-    local_site_packages = [
-        PROJECT_ROOT / ".venv" / "Lib" / "site-packages",
-        PROJECT_ROOT
-        / ".venv"
-        / "lib"
-        / f"python{sys.version_info.major}.{sys.version_info.minor}"
-        / "site-packages",
-    ]
-    for candidate in local_site_packages:
-        if candidate.is_dir() and str(candidate) not in sys.path:
-            site.addsitedir(str(candidate))
 
     previous_cwd = Path.cwd()
     with tempfile.TemporaryDirectory(prefix="sin-test-run-") as runtime_directory:

@@ -22,6 +22,22 @@ interface NodeClipboardSnapshot {
     links: ClipboardLink[];
 }
 
+interface CanvasPointerPosition {
+    x: number;
+    y: number;
+}
+
+const POINTER_POSITION_KEY = '__sinLastGraphPointerPosition';
+
+function getPastePosition(canvas: any): CanvasPointerPosition | null {
+    const tracked = canvas?.[POINTER_POSITION_KEY] as CanvasPointerPosition | undefined;
+    if (tracked && Number.isFinite(tracked.x) && Number.isFinite(tracked.y)) return tracked;
+
+    const mouseX = Number(canvas?.graph_mouse?.[0]);
+    const mouseY = Number(canvas?.graph_mouse?.[1]);
+    return Number.isFinite(mouseX) && Number.isFinite(mouseY) ? { x: mouseX, y: mouseY } : null;
+}
+
 function clonePlain<T>(value: T): T {
     return JSON.parse(JSON.stringify(value));
 }
@@ -99,10 +115,9 @@ export function pasteNodeClipboardSnapshot(canvas: any, snapshot: NodeClipboardS
     const positions = snapshot.nodes.map(entry => entry.data?.pos).filter(Array.isArray);
     const minX = positions.length ? Math.min(...positions.map(pos => Number(pos[0]) || 0)) : 0;
     const minY = positions.length ? Math.min(...positions.map(pos => Number(pos[1]) || 0)) : 0;
-    const mouseX = Number(canvas.graph_mouse?.[0]);
-    const mouseY = Number(canvas.graph_mouse?.[1]);
-    const offsetX = Number.isFinite(mouseX) ? mouseX - minX : 32;
-    const offsetY = Number.isFinite(mouseY) ? mouseY - minY : 32;
+    const mousePosition = getPastePosition(canvas);
+    const offsetX = mousePosition ? mousePosition.x - minX : 32;
+    const offsetY = mousePosition ? mousePosition.y - minY : 32;
 
     graph.beforeChange?.();
     const pasted: LGraphNode[] = [];
@@ -142,6 +157,19 @@ export function pasteNodeClipboardSnapshot(canvas: any, snapshot: NodeClipboardS
 
 export function installSeparatedNodeClipboard(onPaste: (nodes: LGraphNode[]) => void) {
     const prototype = (LiteGraph as any).LGraphCanvas.prototype;
+
+    if (!prototype.__sinClipboardPointerTrackingInstalled) {
+        const originalProcessMouseMove = prototype.processMouseMove;
+        prototype.processMouseMove = function (event: MouseEvent) {
+            const result = originalProcessMouseMove.call(this, event);
+            const position = this.convertEventToCanvasOffset?.(event);
+            if (Number.isFinite(position?.[0]) && Number.isFinite(position?.[1])) {
+                this[POINTER_POSITION_KEY] = { x: position[0], y: position[1] };
+            }
+            return result;
+        };
+        prototype.__sinClipboardPointerTrackingInstalled = true;
+    }
 
     prototype.copyToClipboard = function () {
         const snapshot = createNodeClipboardSnapshot(this);

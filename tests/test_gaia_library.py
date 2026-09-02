@@ -1,23 +1,82 @@
 from __future__ import annotations
 
+import asyncio
 import struct
 import datetime as dt
+import threading
 import unittest
 import urllib.request
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
+from mutagen.id3 import TALB, TCON, TIT2, TPE1, TRCK
+from mutagen.wave import WAVE
+from sqlalchemy import event
 
-from api import LibraryBpmUpdateRequest, update_library_bpm
-from gaia import crud, midi_parser, models, profiles, schemas, text_analyzer, vaults
+from api import (
+    LibraryBpmUpdateRequest,
+    LibraryFavouriteUpdateRequest,
+    update_library_bpm,
+    update_library_favourite,
+)
+from gaia import collection_importer, crud, import_jobs as import_jobs_module, midi_parser, models, profiles, schemas, text_analyzer, vaults
 from gaia.import_jobs import ImportPreviewError, import_job_manager
-from gaia.routers import items as items_router
+from gaia.routers import items as items_router, sin_proposals as sin_proposals_router
 from tests.support import GaiaTestCase
 
 
 class TestGaiaLibrary(GaiaTestCase):
+    def test_sin_metadata_proposal_is_staged_until_gaia_accepts_it(self):
+        audio_path = self.write_audio(vaults.vault_store(self.vault) / "library", "StagedLoop.wav")
+        sample = crud.create_item(
+            self.db,
+            schemas.SampleItemCreate(
+                absolute_path=str(audio_path.resolve()),
+                vault_id=self.vault.id,
+                type="sample",
+                bpm=120,
+                key="C",
+                is_loop=True,
+            ),
+        )
+
+        first = sin_proposals_router.create_metadata_proposal(
+            schemas.SinMetadataProposalCreate(
+                asset_ref=str(sample.id),
+                absolute_path=sample.absolute_path,
+                field="bpm",
+                proposed_value=128,
+                previous_value=120,
+                source_node_id=9,
+            ),
+            self.db,
+        )
+        replacement = sin_proposals_router.create_metadata_proposal(
+            schemas.SinMetadataProposalCreate(
+                asset_ref=str(sample.id),
+                absolute_path=sample.absolute_path,
+                field="bpm",
+                proposed_value=130,
+                previous_value=128,
+                source_node_id=9,
+            ),
+            self.db,
+        )
+
+        self.assertEqual(first["id"], replacement["id"])
+        self.assertEqual(replacement["status"], "pending")
+        self.assertEqual(replacement["proposed_value"], 130)
+        self.db.expire_all()
+        self.assertEqual(crud.get_item(self.db, sample.id).bpm, 120)
+
+        accepted = sin_proposals_router.accept_metadata_proposal(replacement["id"], self.db)
+        self.assertEqual(accepted["status"], "accepted")
+        self.db.expire_all()
+        self.assertEqual(crud.get_item(self.db, sample.id).bpm, 130)
+
     def test_import_source_browser_lists_folders_and_files(self):
         source = self.temp_path / "source-browser"
         source.mkdir()
@@ -64,6 +123,48 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertIsNone(vaults.get_vault(self.db, renamed.id))
         with self.assertRaisesRegex(ValueError, "last vault"):
             vaults.delete_vault(self.db, self.vault.id)
+
+    def test_vault_delete_can_atomically_purge_more_than_one_thousand_items(self):
+        doomed = vaults.create_vault(self.db, "Large disposable vault", None)
+        store = vaults.vault_store(doomed)
+        physical_file = store / "files" / "present.wav"
+        physical_file.parent.mkdir(parents=True)
+        physical_file.write_bytes(b"test")
+        crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(physical_file.resolve()),
+                vault_id=doomed.id,
+                size_bytes=physical_file.stat().st_size,
+                mime_type="audio/wav",
+            ),
+        )
+        self.db.bulk_insert_mappings(
+            models.Item,
+            [
+                {
+                    "absolute_path": str(
+                        (store / "files" / f"asset-{index}.wav").resolve()
+                    ),
+                    "vault_id": doomed.id,
+                    "type": "item",
+                    "metadata_json": "{}",
+                }
+                for index in range(1001)
+            ],
+        )
+        self.db.commit()
+
+        vaults.delete_vault(self.db, doomed.id, delete_contents=True)
+
+        self.assertIsNone(
+            self.db.query(models.Vault).filter(models.Vault.id == doomed.id).first()
+        )
+        self.assertEqual(
+            self.db.query(models.Item).filter(models.Item.vault_id == doomed.id).count(),
+            0,
+        )
+        self.assertFalse(store.exists())
 
     def test_text_analysis_midi_parsing_and_typed_crud(self):
         expectations = [
@@ -164,6 +265,614 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertFalse(snapshot_path.exists())
         self.assertTrue(source.exists())
         self.assertTrue((source / "readme.txt").exists())
+
+    def test_import_preserves_original_sources(self):
+        source = self.temp_path / "nested-source-pack"
+        original = self.write_audio(source / "Drums" / "Kicks", "Kick.wav")
+
+        collection_job = self.start_import(
+            self.preview_import(source),
+            folder_assignments={".": "profile:sample_pack"},
+        )
+        self.assertEqual(collection_job["status"], "completed")
+        collection = crud.get_item(self.db, collection_job["result_items"][0]["id"])
+        content = collection.contents[0]
+        child = crud.get_item(self.db, content["child_id"])
+
+        self.assertEqual(content["source_path"], str(original.resolve()))
+        self.assertEqual(child.attributes["import"]["source_path"], str(original.resolve()))
+        self.assertNotEqual(Path(child.absolute_path), original.resolve())
+
+        loose_source = self.temp_path / "normal-folder"
+        loose_original = self.write_audio(loose_source / "Percussion" / "Closed Hats", "Hat.wav")
+        loose_job = self.start_import(self.preview_import(loose_source), folder_assignments={})
+        loose = crud.get_item(self.db, loose_job["result_items"][0]["id"])
+
+        self.assertEqual(loose.source_path, str(loose_original.resolve()))
+        self.assertEqual(crud.item_summary(loose)["source_path"], str(loose_original.resolve()))
+        self.assertNotEqual(Path(loose.absolute_path), loose_original.resolve())
+
+        with self.assertRaises(ValueError):
+            schemas.ItemUpdate.model_validate({"source_path": "changed"})
+        with self.assertRaises(ValueError):
+            schemas.CollectionContentUpdate.model_validate({"source_path": "changed"})
+        with self.assertRaises(HTTPException) as immutable:
+            items_router.update_item(
+                loose.id,
+                schemas.ItemUpdate(attributes={"import": {"source_path": "changed"}}),
+                self.db,
+            )
+        self.assertEqual(immutable.exception.detail, "An imported asset's source is immutable")
+        updated = items_router.update_item(
+            loose.id,
+            schemas.ItemUpdate(attributes={"custom": "value"}),
+            self.db,
+        )
+        self.assertEqual(updated.attributes["import"]["source_path"], str(loose_original.resolve()))
+
+    def test_large_folder_import_batches_post_copy_work(self):
+        source = self.temp_path / "large-folder"
+        for index in range(1001):
+            path = source / f"Group {index % 10}" / f"asset-{index:04d}.txt"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(index), encoding="utf-8")
+
+        def analyzed(_root, entry):
+            return {
+                **entry,
+                "title": Path(entry["filename"]).stem,
+                "type": "file",
+                "tags": [],
+                "streamable": False,
+            }
+
+        with (
+            patch("gaia.collection_importer.analyze_manifest_entry", side_effect=analyzed),
+            patch("gaia.integrity.calculate_file_hash", return_value="test-hash"),
+        ):
+            preview = self.preview_import(source)
+            queued = import_job_manager.create_job(
+                schemas.ImportJobCreateRequest(preview_id=preview["preview_id"])
+            )
+            job = self.wait_for_import(queued["job_id"], timeout=15.0)
+
+        self.assertEqual((job["status"], job["completed"], job["total"]), ("completed", 1001, 1001))
+        self.assertEqual(self.db.query(models.Item).count(), 1001)
+        self.assertEqual(self.db.query(models.VaultImportLog).count(), 1001)
+        imported = self.db.query(models.Item).filter(models.Item.absolute_path.like("%asset-0000.txt")).one()
+        self.assertEqual(imported.attributes["import"]["source_path"], str((source / "Group 0" / "asset-0000.txt").resolve()))
+
+    def test_import_reports_staging_then_processing_progress(self):
+        source = self.temp_path / "two-phase-progress"
+        (source / "first").mkdir(parents=True)
+        (source / "first" / "one.txt").write_text("one", encoding="utf-8")
+        (source / "second").mkdir()
+        (source / "second" / "two.txt").write_text("two", encoding="utf-8")
+        preview = self.preview_import(source)
+
+        original_copy = import_jobs_module._copy_file_to_staging
+        original_analyze = collection_importer.analyze_manifest_entry
+        second_copy_started = threading.Event()
+        release_copy = threading.Event()
+        analysis_started = threading.Event()
+        release_analysis = threading.Event()
+        copy_lock = threading.Lock()
+        copy_count = 0
+
+        def controlled_copy(source_path, destination_path, progress):
+            nonlocal copy_count
+            with copy_lock:
+                copy_count += 1
+                current = copy_count
+            if current == 2:
+                second_copy_started.set()
+                release_copy.wait(3.0)
+            return original_copy(source_path, destination_path, progress)
+
+        def controlled_analysis(root, entry):
+            analysis_started.set()
+            release_analysis.wait(3.0)
+            return original_analyze(root, entry)
+
+        try:
+            with (
+                patch("gaia.import_jobs._copy_file_to_staging", side_effect=controlled_copy),
+                patch("gaia.collection_importer.analyze_manifest_entry", side_effect=controlled_analysis),
+            ):
+                queued = import_job_manager.create_job(
+                    schemas.ImportJobCreateRequest(preview_id=preview["preview_id"])
+                )
+                self.assertTrue(second_copy_started.wait(3.0))
+                staging = import_job_manager.get_job(queued["job_id"])
+                self.assertEqual((staging["phase"], staging["staging_completed"]), ("staging", 1))
+                self.assertEqual(staging["processing_completed"], 0)
+                self.assertGreater(staging["staging_bytes_completed"], 0)
+                self.assertLess(staging["staging_bytes_completed"], staging["staging_bytes_total"])
+
+                release_copy.set()
+                self.assertTrue(analysis_started.wait(3.0))
+                processing = import_job_manager.get_job(queued["job_id"])
+                self.assertEqual(processing["phase"], "processing")
+                self.assertEqual(processing["staging_completed"], processing["staging_total"])
+                self.assertEqual(processing["processing_completed"], 0)
+
+                release_analysis.set()
+                completed = self.wait_for_import(queued["job_id"])
+        finally:
+            release_copy.set()
+            release_analysis.set()
+
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["staging_completed"], completed["staging_total"])
+        self.assertEqual(completed["processing_completed"], completed["processing_total"])
+
+    def test_automatic_analysis_failure_does_not_fail_or_lose_import(self):
+        source = self.temp_path / "analysis-fallback"
+        original = self.write_audio(source / "Nested", "Keep.wav")
+
+        with patch(
+            "gaia.collection_importer.analyze_manifest_entry",
+            side_effect=RuntimeError("analysis service unavailable"),
+        ):
+            job = self.start_import(self.preview_import(source), folder_assignments={})
+
+        self.assertEqual((job["status"], job["failed"], job["completed"]), ("completed", 0, 1))
+        self.assertTrue(any("can be analyzed later" in warning for warning in job["warnings"]))
+        imported = crud.get_item(self.db, job["result_items"][0]["id"])
+        self.assertTrue(Path(imported.absolute_path).is_file())
+        self.assertNotEqual(Path(imported.absolute_path), original.resolve())
+        self.assertEqual(imported.attributes["import"]["source_path"], str(original.resolve()))
+        self.assertFalse(any(vaults.vault_store(self.vault).glob(".gaia-import-*.staging")))
+
+    def test_manifest_only_collection_content_can_be_deleted(self):
+        root = vaults.vault_store(self.vault) / "legacy-project"
+        root.mkdir(parents=True)
+        stale_file = root / "old-state.json"
+        stale_file.write_text('{"obsolete": true}', encoding="utf-8")
+        collection = crud.create_item(
+            self.db,
+            schemas.CollectionItemCreate(
+                absolute_path=str(root.resolve()),
+                vault_id=self.vault.id,
+                title="Legacy project",
+                source_kind="managed",
+                source_path=str(root.resolve()),
+                contents=[
+                    schemas.CollectionContent(
+                        index=7,
+                        filename=stale_file.name,
+                        relative_path=stale_file.name,
+                        type="item",
+                        size_bytes=stale_file.stat().st_size,
+                        mime_type="application/json",
+                    )
+                ],
+            ),
+        )
+
+        background_tasks = BackgroundTasks()
+        result = items_router.delete_collection_content(
+            collection.id, 7, background_tasks, self.db
+        )
+        asyncio.run(background_tasks())
+
+        self.assertEqual(result["status"], "success")
+        self.assertFalse(stale_file.exists())
+        refreshed = crud.get_item(self.db, collection.id)
+        self.assertEqual(refreshed.contents, [])
+
+    def test_import_can_exclude_file_types_and_extensions_before_copying(self):
+        source = self.temp_path / "internet-archive-download"
+        self.write_audio(source, "Concert.wav")
+        (source / "README.txt").write_text("notes", encoding="utf-8")
+
+        preview = self.preview_import(source)
+        self.assertEqual(
+            {option["value"] for option in preview["filter_options"]["types"]},
+            {"audio", "file"},
+        )
+        self.assertIn(
+            {"value": ".txt", "label": ".txt", "count": 1},
+            preview["filter_options"]["extensions"],
+        )
+
+        job = self.start_import(preview, excluded_types=["file"], excluded_extensions=[".txt"])
+        self.assertEqual((job["status"], job["imported"], job["excluded"]), ("completed", 1, 1))
+        imported = crud.get_item(self.db, job["result_items"][0]["id"])
+        self.assertEqual(Path(imported.absolute_path).name, "Concert.wav")
+
+    def test_track_import_preserves_optional_embedded_audio_metadata(self):
+        class TaggedAudio:
+            tags = {
+                "title": ["Live at the Forum"],
+                "artist": ["The Example Band"],
+                "album": ["Archive Session"],
+                "date": ["1997-04-12"],
+                "tracknumber": ["3/9"],
+            }
+
+        source = self.temp_path / "tagged-track"
+        self.write_audio(source, "downloaded-file.wav")
+        with patch("gaia.collection_importer.MutagenFile", return_value=TaggedAudio()):
+            preview = self.preview_import(source)
+            job = self.start_import(preview, item_types={0: "track"})
+
+        track = crud.get_item(self.db, job["result_items"][0]["id"])
+        self.assertEqual(track.type, "track")
+        self.assertEqual(
+            (track.title, track.author, track.album, track.release_year, track.track_number),
+            ("Live at the Forum", "The Example Band", "Archive Session", 1997, 3),
+        )
+        self.assertEqual(track.attributes["audio_metadata"]["title"], "Live at the Forum")
+
+        analyzed = items_router.analyze_item(track.id, self.db)
+        self.assertEqual(analyzed.type, "track")
+        self.assertEqual(analyzed.attributes["audio_metadata"]["author"], "The Example Band")
+        self.assertIn("analysis", analyzed.attributes)
+
+        edited = items_router.update_item(
+            track.id,
+            schemas.ItemUpdate(release_year=2001, album_artist="Catalog Curator"),
+            self.db,
+        )
+        self.assertEqual((edited.release_year, edited.album_artist), (2001, "Catalog Curator"))
+
+    def test_wav_riff_info_metadata_is_loaded_by_manifest_and_analysis(self):
+        source = vaults.vault_store(self.vault) / "files" / "riff-tagged-track"
+        wav_path = self.write_audio(source, "unlabelled.wav")
+
+        def info_field(field: bytes, value: str) -> bytes:
+            payload = value.encode("utf-8") + b"\x00"
+            return field + struct.pack("<I", len(payload)) + payload + (b"\x00" if len(payload) & 1 else b"")
+
+        info_payload = b"INFO" + b"".join(
+            (
+                info_field(b"INAM", "The RIFF Title"),
+                info_field(b"IART", "The RIFF Artist"),
+                info_field(b"IPRD", "The RIFF Album"),
+                info_field(b"ICRD", "2004-09-18"),
+                info_field(b"ITRK", "7/12"),
+                info_field(b"IGNR", "Field Recording"),
+            )
+        )
+        list_chunk = b"LIST" + struct.pack("<I", len(info_payload)) + info_payload
+        wav_bytes = bytearray(wav_path.read_bytes())
+        wav_bytes.extend(list_chunk)
+        struct.pack_into("<I", wav_bytes, 4, len(wav_bytes) - 8)
+        wav_path.write_bytes(wav_bytes)
+
+        with patch("gaia.collection_importer.MutagenFile", None):
+            manifest = collection_importer.build_manifest(source)
+
+        self.assertEqual(manifest[0]["type"], "track")
+        self.assertEqual(
+            (
+                manifest[0]["title"],
+                manifest[0]["author"],
+                manifest[0]["album"],
+                manifest[0]["release_year"],
+                manifest[0]["track_number"],
+                manifest[0]["genre"],
+            ),
+            ("The RIFF Title", "The RIFF Artist", "The RIFF Album", 2004, 7, "Field Recording"),
+        )
+
+        track = crud.create_item(
+            self.db,
+            schemas.TrackItemCreate(
+                absolute_path=str(wav_path),
+                vault_id=self.vault.id,
+                size_bytes=wav_path.stat().st_size,
+                mime_type="audio/wav",
+                attributes={"audio_metadata": {"title": "Stale title", "release_year": 1900}},
+            ),
+        )
+        with patch("gaia.collection_importer.MutagenFile", None):
+            analyzed = items_router.analyze_item(track.id, self.db)
+        self.assertEqual((analyzed.title, analyzed.release_year), ("The RIFF Title", 2004))
+
+    def test_wav_id3_frame_names_are_normalized(self):
+        class Frame:
+            def __init__(self, *values):
+                self.text = list(values)
+
+        class Id3Tags(dict):
+            def getall(self, name):
+                return [Frame("A frame comment")] if name == "COMM" else []
+
+        class TaggedWav:
+            tags = Id3Tags(
+                TIT2=Frame("Frame Title"),
+                TPE1=Frame("Frame Artist"),
+                TALB=Frame("Frame Album"),
+                TDRC=Frame("1988-06-01"),
+                TRCK=Frame("2/10"),
+            )
+
+        wav_path = self.write_audio(self.temp_path / "id3-tags", "frames.wav")
+        with patch("gaia.collection_importer.MutagenFile", return_value=TaggedWav()):
+            metadata = collection_importer._read_audio_tags(wav_path)
+        self.assertEqual(
+            metadata,
+            {
+                "title": "Frame Title",
+                "author": "Frame Artist",
+                "album": "Frame Album",
+                "comment": "A frame comment",
+                "release_year": 1988,
+                "track_number": 2,
+            },
+        )
+
+    def test_collection_analysis_resolves_legacy_extracted_prefix(self):
+        collection_root = vaults.vault_store(self.vault) / "files" / "legacy-pack"
+        audio_path = self.write_audio(collection_root, "song.wav")
+
+        class TaggedAudio:
+            tags = {"title": ["Recovered song"], "artist": ["Archive artist"], "date": ["1940"]}
+
+        content = {
+            "index": 0,
+            "filename": audio_path.name,
+            "relative_path": "extracted/archive/song.wav",
+            "type": "audio",
+            "duration_seconds": None,
+            "tags": [],
+        }
+        with patch("gaia.collection_importer.MutagenFile", return_value=TaggedAudio()):
+            analyzed = items_router._analyze_collection_content(
+                SimpleNamespace(absolute_path=str(collection_root)),
+                content,
+            )
+
+        self.assertEqual(analyzed["relative_path"], "extracted/archive/song.wav")
+        self.assertEqual((analyzed["title"], analyzed["author"], analyzed["release_year"]), ("Recovered song", "Archive artist", 1940))
+
+    def test_single_item_vorbis_analysis_skips_rejected_aliases_and_persists_metadata(self):
+        class StrictVorbisTags(dict):
+            def get(self, key, default=None):
+                if not key.isascii():
+                    raise ValueError("invalid Vorbis comment key")
+                return super().get(key.casefold(), default)
+
+        class TaggedFlac:
+            tags = StrictVorbisTags(
+                title=["St. Louis blues"],
+                artist=["Bessie Smith"],
+                album=["Great blues singers"],
+                date=["1929"],
+                genre=["Blues"],
+                tracknumber=["1"],
+            )
+
+        wav_fixture = self.write_audio(vaults.vault_store(self.vault) / "files", "bessie.wav")
+        flac_path = wav_fixture.with_suffix(".flac")
+        wav_fixture.replace(flac_path)
+        track = crud.create_item(
+            self.db,
+            schemas.TrackItemCreate(
+                absolute_path=str(flac_path),
+                vault_id=self.vault.id,
+                size_bytes=flac_path.stat().st_size,
+                mime_type="audio/flac",
+            ),
+        )
+        with patch("gaia.collection_importer.MutagenFile", return_value=TaggedFlac()):
+            metadata = collection_importer._read_audio_tags(flac_path)
+            analyzed = items_router.analyze_item(track.id, self.db)
+        self.assertEqual(
+            metadata,
+            {
+                "title": "St. Louis blues",
+                "author": "Bessie Smith",
+                "album": "Great blues singers",
+                "release_year": 1929,
+                "genre": "Blues",
+                "track_number": 1,
+            },
+        )
+        self.assertEqual(
+            (analyzed.title, analyzed.author, analyzed.album, analyzed.release_year, analyzed.genre, analyzed.track_number),
+            ("St. Louis blues", "Bessie Smith", "Great blues singers", 1929, "Blues", 1),
+        )
+
+    def test_audio_analysis_promotes_likely_full_recording_to_track(self):
+        source = self.temp_path / "untyped-recording"
+        self.write_audio(source, "archive-recording.wav")
+        item_job = self.start_import(self.preview_import(source))
+        audio = crud.get_item(self.db, item_job["result_items"][0]["id"])
+        self.assertEqual(audio.type, "audio")
+
+        with patch(
+            "gaia.collection_importer._audio_metadata",
+            return_value={
+                "duration_seconds": 142.0,
+                "audio_metadata": {
+                    "title": "Archive Recording",
+                    "author": "The Example Band",
+                    "release_year": 1997,
+                },
+            },
+        ):
+            analyzed = items_router.analyze_item(audio.id, self.db)
+
+        self.assertEqual(analyzed.type, "track")
+        self.assertEqual(
+            (analyzed.title, analyzed.author, analyzed.release_year),
+            ("Archive Recording", "The Example Band", 1997),
+        )
+        self.assertIn("analysis", analyzed.attributes)
+
+    def test_single_and_batch_audio_analysis_persist_all_embedded_fields(self):
+        class TaggedAudio:
+            tags = {
+                "title": ["Catalog title"],
+                "artist": ["Catalog artist"],
+                "album": ["Catalog album"],
+                "albumartist": ["Catalog album artist"],
+                "date": ["1941-07-02"],
+                "genre": ["Blues"],
+                "tracknumber": ["3/10"],
+                "discnumber": ["2/2"],
+                "comment": ["Catalog comment"],
+            }
+
+        files_root = vaults.vault_store(self.vault) / "files"
+        paths = [self.write_audio(files_root, name) for name in ("catalog-one.wav", "catalog-two.wav")]
+        tracks = [
+            crud.create_item(
+                self.db,
+                schemas.TrackItemCreate(
+                    absolute_path=str(path),
+                    vault_id=self.vault.id,
+                    size_bytes=path.stat().st_size,
+                    mime_type="audio/wav",
+                ),
+            )
+            for path in paths
+        ]
+        sample_path = self.write_audio(files_root, "catalog-sample.wav")
+        sample = crud.create_item(
+            self.db,
+            schemas.SampleItemCreate(
+                absolute_path=str(sample_path),
+                vault_id=self.vault.id,
+                size_bytes=sample_path.stat().st_size,
+                mime_type="audio/wav",
+            ),
+        )
+
+        with patch("gaia.collection_importer.MutagenFile", return_value=TaggedAudio()):
+            single = items_router.analyze_item(sample.id, self.db)
+            batch = items_router.start_batch_analysis(
+                schemas.BatchAnalysisRequest(item_ids=[track.id for track in tracks]),
+                self.db,
+            )
+            status = self.wait_for_batch(batch["task_id"])
+
+        self.assertEqual(
+            (single.title, single.author, single.release_year, single.track_number),
+            ("Catalog title", "Catalog artist", 1941, 3),
+        )
+        self.assertEqual(single.attributes["audio_metadata"]["album_artist"], "Catalog album artist")
+        # Generic audio-family items retain embedded tags and expose the same
+        # editable metadata fields as promoted track items.
+        updated_sample = items_router.update_item(
+            sample.id,
+            schemas.ItemUpdate(author="Edited sample artist", release_year=1942),
+            self.db,
+        )
+        self.assertEqual((updated_sample.author, updated_sample.release_year), ("Edited sample artist", 1942))
+        self.assertEqual((status["completed"], status["failed"]), (2, 0))
+        for update in status["updated_items"]:
+            payload = update["item"]
+            self.assertEqual(
+                (payload["title"], payload["author"], payload["release_year"], payload["track_number"]),
+                ("Catalog title", "Catalog artist", 1941, 3),
+            )
+
+    def test_real_tag_reader_batch_persists_metadata_visible_after_reload(self):
+        """Exercise the installed tag reader instead of a mock of its API."""
+        path = self.write_audio(vaults.vault_store(self.vault) / "files", "real-tags.wav")
+        tagged = WAVE(str(path))
+        tagged.add_tags()
+        tagged.tags.add(TIT2(encoding=3, text=["Persistent title"]))
+        tagged.tags.add(TPE1(encoding=3, text=["Persistent artist"]))
+        tagged.tags.add(TALB(encoding=3, text=["Persistent album"]))
+        tagged.tags.add(TCON(encoding=3, text=["Jazz"]))
+        tagged.tags.add(TRCK(encoding=3, text=["4/12"]))
+        tagged.save()
+
+        track = crud.create_item(
+            self.db,
+            schemas.TrackItemCreate(
+                absolute_path=str(path),
+                vault_id=self.vault.id,
+                size_bytes=path.stat().st_size,
+                mime_type="audio/wav",
+            ),
+        )
+        batch = items_router.start_batch_analysis(
+            schemas.BatchAnalysisRequest(item_ids=[track.id]),
+            self.db,
+        )
+        status = self.wait_for_batch(batch["task_id"])
+
+        self.assertEqual((status["status"], status["completed"], status["failed"]), ("completed", 1, 0))
+        self.db.expire_all()
+        persisted = crud.get_item(self.db, track.id)
+        self.assertEqual(
+            (persisted.title, persisted.author, persisted.album, persisted.genre, persisted.track_number),
+            ("Persistent title", "Persistent artist", "Persistent album", "Jazz", 4),
+        )
+        self.assertGreater(persisted.attributes["analysis"]["duration_seconds"], 0)
+        summary = next(item for item in crud.get_item_summaries(self.db) if item["id"] == track.id)
+        self.assertEqual((summary["title"], summary["author"], summary["track_number"]), ("Persistent title", "Persistent artist", 4))
+        self.assertGreater(summary["duration_seconds"], 0)
+        self.assertEqual(status["updated_items"][0]["item"]["author"], "Persistent artist")
+
+    def test_batch_analysis_reports_all_target_failures_as_failed(self):
+        missing = crud.create_item(
+            self.db,
+            schemas.TrackItemCreate(
+                absolute_path=str(vaults.vault_store(self.vault) / "files" / "missing.wav"),
+                vault_id=self.vault.id,
+                mime_type="audio/wav",
+            ),
+        )
+        batch = items_router.start_batch_analysis(
+            schemas.BatchAnalysisRequest(item_ids=[missing.id]),
+            self.db,
+        )
+        status = self.wait_for_batch(batch["task_id"])
+
+        self.assertEqual((status["status"], status["completed"], status["failed"]), ("failed", 1, 1))
+        self.assertEqual(status["errors"][0]["error"], "Asset is missing on disk")
+
+    def test_compact_root_summaries_and_paginated_collection_contents(self):
+        source = self.temp_path / "summary_pack"
+        self.write_audio(source, "Kick.wav")
+        self.write_audio(source, "Snare.wav")
+        job = self.start_import(
+            self.preview_import(source),
+            folder_assignments={".": "profile:sample_pack"},
+        )
+        collection = crud.get_item(self.db, job["result_items"][0]["id"])
+
+        summaries = items_router.read_item_summaries(db=self.db)
+        summary = next(item for item in summaries if item["id"] == collection.id)
+        self.assertNotIn("contents", summary)
+        self.assertEqual(summary["content_count"], 2)
+        self.assertIn("audio", summary["content_types"])
+        self.assertEqual(
+            [item["id"] for item in items_router.read_item_summaries(query="Kick", db=self.db)],
+            [collection.id],
+        )
+        self.assertIn(
+            collection.id,
+            [item["id"] for item in items_router.read_item_summaries(query="audio", db=self.db)],
+        )
+        crud.set_item_tags(self.db, collection.id, ["root-favorite"])
+        self.assertEqual(
+            [item["id"] for item in items_router.read_item_summaries(query="root-favorite", db=self.db)],
+            [collection.id],
+        )
+
+        statements: list[str] = []
+        listener = lambda _connection, _cursor, statement, _parameters, _context, _many: statements.append(statement)
+        event.listen(self.engine, "before_cursor_execute", listener)
+        try:
+            page = items_router.get_collection_contents_page(collection.id, limit=1, db=self.db)
+        finally:
+            event.remove(self.engine, "before_cursor_execute", listener)
+        self.assertEqual((page["total"], len(page["contents"]), page["offset"]), (2, 1, 0))
+        self.assertTrue(page["has_more"])
+        self.assertTrue(
+            any("FROM items" in statement and "LIMIT" in statement.upper() for statement in statements),
+            "canonical collection children should be limited by SQL",
+        )
+        next_page = items_router.get_collection_contents_page(collection.id, offset=1, limit=1, db=self.db)
+        self.assertEqual((len(next_page["contents"]), next_page["offset"], next_page["has_more"]), (1, 1, False))
 
     def test_zip_and_multitrack_import_variants(self):
         archive_source = self.temp_path / "zip_source"
@@ -414,7 +1123,7 @@ class TestGaiaLibrary(GaiaTestCase):
                 )
             )
 
-    def test_bpm_update_uses_gaia_service_without_network_or_legacy_files(self):
+    def test_bpm_update_is_staged_without_network_or_legacy_files(self):
         audio_path = self.write_audio(vaults.vault_store(self.vault) / "library", "Loop.wav")
         sample = crud.create_item(
             self.db,
@@ -431,13 +1140,64 @@ class TestGaiaLibrary(GaiaTestCase):
             response = update_library_bpm(
                 LibraryBpmUpdateRequest(file_id=sample.id, bpm=135.0)
             )
-        self.assertEqual(response, {"status": "success", "bpm": 135.0, "updated": True})
+        self.assertEqual(response["status"], "pending")
+        self.assertEqual(response["field"], "bpm")
+        self.assertEqual(response["proposed_value"], 135)
+        self.db.expire_all()
+        self.assertEqual(crud.get_item(self.db, sample.id).bpm, 120)
+
+        sin_proposals_router.accept_metadata_proposal(response["id"], self.db)
         self.db.expire_all()
         self.assertEqual(crud.get_item(self.db, sample.id).bpm, 135)
 
         for invalid in (10, 500):
             with self.subTest(bpm=invalid), self.assertRaises(HTTPException):
                 update_library_bpm(LibraryBpmUpdateRequest(file_id=sample.id, bpm=invalid))
+
+    def test_favourite_toggle_and_serialization(self):
+        audio_path = self.write_audio(vaults.vault_store(self.vault) / "library", "FavSample.wav")
+        sample = crud.create_item(
+            self.db,
+            schemas.SampleItemCreate(
+                absolute_path=str(audio_path.resolve()),
+                vault_id=self.vault.id,
+                type="sample",
+                bpm=128,
+                is_loop=True,
+            ),
+        )
+
+        # Initially favourite is False
+        summary = crud.item_summary(sample)
+        self.assertFalse(summary["favourite"])
+        hydrated = crud.get_item(self.db, sample.id)
+        self.assertFalse(hydrated.favourite)
+
+        # Update favourite to True via items_router
+        updated = items_router.update_item(sample.id, schemas.ItemUpdate(favourite=True), self.db)
+        self.assertTrue(updated.favourite)
+
+        self.db.expire_all()
+        summary = crud.item_summary(crud.get_item(self.db, sample.id))
+        self.assertTrue(summary["favourite"])
+
+        # Update favourite via SIN backend API endpoint (with mock offline HTTP fallback)
+        with patch.object(urllib.request, "urlopen", side_effect=OSError("offline")):
+            resp = update_library_favourite(
+                LibraryFavouriteUpdateRequest(file_id=sample.id, favourite=False)
+            )
+        self.assertEqual(resp["status"], "pending")
+        self.assertEqual(resp["field"], "favourite")
+        self.assertFalse(resp["proposed_value"])
+
+        self.db.expire_all()
+        hydrated = crud.get_item(self.db, sample.id)
+        self.assertTrue(hydrated.favourite)
+
+        sin_proposals_router.accept_metadata_proposal(resp["id"], self.db)
+        self.db.expire_all()
+        hydrated = crud.get_item(self.db, sample.id)
+        self.assertFalse(hydrated.favourite)
 
 
 if __name__ == "__main__":

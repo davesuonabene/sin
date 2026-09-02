@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Launcher script for Beat Generator application.
-Runs the FastAPI server with live reload and debug logging enabled by default.
-"""
+"""Launch IRIDE and its FastAPI backend."""
 
 import sys
 import argparse
@@ -12,7 +9,7 @@ import uvicorn
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Launch the Beat Generator server with terminal debug output."
+        description="Launch IRIDE and its audio-rendering API."
     )
     parser.add_argument(
         "--host",
@@ -47,9 +44,9 @@ def main():
         force=True
     )
 
-    logger = logging.getLogger("beat_generator")
+    logger = logging.getLogger("iride")
     logger.info("==================================================")
-    logger.info(f" Starting Beat Generator Server")
+    logger.info(" Starting IRIDE Server")
     logger.info(f" Server URL: http://{args.host}:{args.port}")
     logger.info(f" Debug Logging: ACTIVE (level={args.log_level.upper()})")
     logger.info("==================================================")

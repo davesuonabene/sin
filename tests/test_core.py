@@ -3,23 +3,30 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import soundfile as sf
+from fastapi import HTTPException
 from starlette.requests import Request
+import api as iride_api
 
 from api import (
     AudioNodeModel,
     RAM_PREVIEW_STORE,
+    StageSaveRequest,
     export_ram_preview,
+    load_current_stage,
     preview_graph_ram,
     render_graph,
     resolve_pool,
+    save_current_stage,
     stream_ram_preview,
 )
 from core.analyzers import BPMAnalyzer
 from core.audio_object import AudioObject, ArrangementObject, ItemPoolObject, SequenceObject
 from core.dsp import load_sample, process_sample_transform
+from core.runtime_trace import collect_runtime_trace
 from core.engines import (
     ArrangementRenderer,
     SampleRenderer,
@@ -64,7 +71,8 @@ class TestSamplePipeline(AudioFixtureTestCase):
         self.assertIsNone(BPMAnalyzer.from_filename("drums.wav"))
         self.assertAlmostEqual(BPMAnalyzer.from_duration(8.0), 120.0)
 
-        stereo, duration = load_sample(self.stereo_path, target_sr=self.sample_rate)
+        with patch("core.dsp.librosa.load", side_effect=AssertionError("WAV used slow loader")):
+            stereo, duration = load_sample(self.stereo_path, target_sr=self.sample_rate)
         self.assertEqual(stereo.shape, (2, 800))
         self.assertAlmostEqual(duration, 0.1)
         np.testing.assert_allclose(stereo[0], 0.25)
@@ -97,6 +105,16 @@ class TestSamplePipeline(AudioFixtureTestCase):
         system = System(bpm=240.0, sample_rate=self.sample_rate)
         self.assertAlmostEqual(SampleRenderer().render(loop_model, system).shape[-1], 2_000, delta=4)
         self.assertEqual(SampleRenderer().render(one_shot_model, system).shape[-1], 4_000)
+
+    def test_render_trace_uses_request_local_file_cache(self):
+        with collect_runtime_trace() as trace:
+            first, _ = load_sample(self.stereo_path, target_sr=self.sample_rate)
+            second, _ = load_sample(self.stereo_path, target_sr=self.sample_rate)
+
+        self.assertIs(first, second)
+        messages = [entry["message"] for entry in trace]
+        self.assertTrue(any(message.startswith("File loaded via SoundFile") for message in messages))
+        self.assertTrue(any(message.startswith("File cache hit") for message in messages))
 
     def test_transform_modes_preserve_channels_and_expected_duration(self):
         phase = np.linspace(0.0, 8.0 * np.pi, 4_096, dtype=np.float32)
@@ -311,13 +329,14 @@ class TestGraphRendering(AudioFixtureTestCase):
         parent_pool = CountingPoolSample("parent")
         parent_sequence = SequenceObject(sequence=[1, 1, 1, 1], step_length=0.25)
         parent_sequence.add_child(parent_pool, 0.0)
-        arrangement = ArrangementObject(total_bars=1.0, seed=4, quant="auto")
+        arrangement = ArrangementObject(total_bars=1.0, seed=4, section_quant=["auto"])
         arrangement.add_child(parent_sequence, 0.0)
         arrangement.render(system)
         self.assertEqual(parent_pool.render_count, 4)
 
         pool = ItemPoolObject(
-            selected_items=[{"absolute_path": f"{name}.wav"} for name in ("one", "two", "three")],
+            selected_items=[{"id": index, "absolute_path": f"{name}.wav"}
+                            for index, name in enumerate(("one", "two", "three"), start=1)],
             playback_mode="Sequential",
             refresh_mode="local",
         )
@@ -325,13 +344,70 @@ class TestGraphRendering(AudioFixtureTestCase):
             [pool.getNextSample(advance=True) for _ in range(3)],
             ["one.wav", "two.wav", "three.wav"],
         )
-        resolved = resolve_pool(
-            PoolResolveRequest(
-                selected_items=[{"absolute_path": "loop.wav", "bpm": 140.0}],
-                playbackMode="Sequential",
-            )
+        explicit_pool = ItemPoolObject(
+            selected_items=[
+                {"id": 10, "absolute_path": "kick-one.wav", "type": "sample"},
+                {"id": 11, "absolute_path": "kick-two.wav", "type": "sample"},
+            ],
+            playback_mode="Sequential",
+            refresh_mode="local",
         )
+        self.assertEqual(
+            [item["absolute_path"] for item in explicit_pool.current_pool],
+            ["kick-one.wav", "kick-two.wav"],
+        )
+        with patch.object(iride_api, "get_library", return_value={
+            "files": [{
+                "id": 352,
+                "absolute_path": "gaia-kick.wav",
+                "name": "Kick 01.wav",
+                "type": "sample",
+                "bpm": 120.0,
+            }]
+        }):
+            resolved_key = resolve_pool(PoolResolveRequest(
+                selected_items=[{"id": 352, "absolute_path": "stale-wrong-file.wav"}],
+                playbackMode="Sequential",
+            ))
+            self.assertEqual(resolved_key["sample"], "gaia-kick.wav")
+            self.assertEqual(resolved_key["items"][0]["id"], 352)
+            with self.assertRaises(HTTPException):
+                resolve_pool(PoolResolveRequest(
+                    selected_items=[{"id": 999999, "absolute_path": "stale-wrong-file.wav"}],
+                    playbackMode="Sequential",
+                ))
+        with patch.object(iride_api, "get_library", return_value={
+            "files": [{"id": 41, "absolute_path": "loop.wav", "bpm": 140.0}]
+        }):
+            resolved = resolve_pool(
+                PoolResolveRequest(
+                    selected_items=[{"id": 41, "bpm": 140.0}],
+                    playbackMode="Sequential",
+                )
+            )
         self.assertEqual((resolved["sample"], resolved["bpm"]), ("loop.wav", 140.0))
+
+        # The editor has already refreshed these exact IDs in one batch. Pool
+        # selection must not rebuild the full library or decode audio metadata.
+        with patch.object(iride_api, "get_library", side_effect=AssertionError("full library loaded")):
+            resolved_snapshot = resolve_pool(PoolResolveRequest(
+                selected_items=[{"id": 41, "absolute_path": "already-resolved.wav"}],
+                playbackMode="Sequential",
+                items_resolved=True,
+            ))
+        self.assertEqual(resolved_snapshot["sample"], "already-resolved.wav")
+
+        different_snapshot = resolve_pool(PoolResolveRequest(
+            selected_items=[
+                {"id": 41, "absolute_path": "first.wav"},
+                {"id": 42, "absolute_path": "second.wav"},
+            ],
+            playbackMode="Sequential",
+            items_resolved=True,
+            previous_sample="first.wav",
+            prefer_different=True,
+        ))
+        self.assertEqual(different_snapshot["sample"], "second.wav")
 
     def test_arrangement_sections_quantization_and_timeline(self):
         system = System(bpm=120.0, sample_rate=100)
@@ -343,7 +419,6 @@ class TestGraphRendering(AudioFixtureTestCase):
         arrangement = ArrangementObject(
             total_bars=2.0,
             section_points=[1.0],
-            section_enabled=[True, True],
             section_probability=[1.0, 1.0],
             section_sample_start=[0.0, 0.5],
             section_quant=["none", "0.5"],
@@ -360,20 +435,37 @@ class TestGraphRendering(AudioFixtureTestCase):
         self.assertTrue(np.all(output[300:350] == 0.0))
         np.testing.assert_array_equal(output[350:400], np.arange(50, 100, dtype=np.float32))
 
-        disabled = ArrangementObject(
+        probability_zero = ArrangementObject(
             total_bars=2.0,
             section_points=[1.0],
-            section_enabled=[True, False],
-            quant="none",
+            section_probability=[1.0, 0.0],
+            section_quant=["none", "none"],
         )
-        disabled.add_child(AudioObject(
+        probability_zero.add_child(AudioObject(
             audio_data=np.ones(50, dtype=np.float32),
             sample_type="one_shot",
             stretch_mode="off",
         ), 0.0)
-        disabled_output = disabled.render(system)
-        self.assertTrue(np.all(disabled_output[:50] == 1.0))
-        self.assertTrue(np.all(disabled_output[50:] == 0.0))
+        probability_zero_output = probability_zero.render(system)
+        self.assertTrue(np.all(probability_zero_output[:50] == 1.0))
+        self.assertTrue(np.all(probability_zero_output[50:] == 0.0))
+
+        # Legacy node-wide settings are folded into every local section at the
+        # API boundary, so old work remains faithful without runtime globals.
+        legacy = ArrangementObject(
+            total_bars=1.0,
+            probability=0.4,
+            quant="auto",
+            quant_anchor="end",
+            section_quant=["global"],
+            section_quant_anchor=["global"],
+        )
+        self.assertEqual(legacy.get_section_quant(0), "auto")
+        self.assertEqual(legacy.get_section_quant_anchor(0), "end")
+        self.assertEqual(legacy.get_section_probability(0), 0.4)
+
+        legacy_disabled = ArrangementObject(section_enabled=[False])
+        self.assertEqual(legacy_disabled.get_section_probability(0), 0.0)
 
 
 class TestApiAudioFlow(AudioFixtureTestCase):
@@ -401,6 +493,17 @@ class TestApiAudioFlow(AudioFixtureTestCase):
         with tempfile.TemporaryDirectory(prefix="sin-api-test-") as directory:
             with working_directory(Path(directory)):
                 preview_response = preview_graph_ram(payload)
+                self.assertTrue(preview_response["runtime_log"])
+                self.assertTrue(any(
+                    "File loaded via SoundFile" in entry["message"]
+                    for entry in preview_response["runtime_log"]
+                ))
+                cached_response = preview_graph_ram(payload)
+                self.assertTrue(cached_response["cached"])
+                self.assertTrue(any(
+                    "Preview cache hit" in entry["message"]
+                    for entry in cached_response["runtime_log"]
+                ))
                 preview_id = preview_response["preview_id"]
                 self.addCleanup(RAM_PREVIEW_STORE.pop, preview_id, None)
 
@@ -413,6 +516,7 @@ class TestApiAudioFlow(AudioFixtureTestCase):
                 full_response = stream_ram_preview(preview_id, full_request)
                 self.assertEqual(full_response.media_type, "audio/wav")
                 self.assertEqual(full_response.headers["accept-ranges"], "bytes")
+                self.assertIn("max-age=300", full_response.headers["cache-control"])
 
                 range_request = Request({
                     "type": "http",
@@ -433,6 +537,29 @@ class TestApiAudioFlow(AudioFixtureTestCase):
 
                 render_response = render_graph(payload)
                 self.assertTrue((Path("temp_renders") / render_response["filename"]).is_file())
+
+
+class TestCurrentStagePersistence(unittest.TestCase):
+    def test_current_stage_is_replaced_atomically_and_can_be_loaded(self):
+        original_saves_dir = iride_api.SAVES_DIR
+        original_stage_path = iride_api.STAGE_SAVE_PATH
+        with tempfile.TemporaryDirectory(prefix="sin-current-stage-") as directory:
+            stage_dir = Path(directory) / "saves"
+            iride_api.SAVES_DIR = stage_dir
+            iride_api.STAGE_SAVE_PATH = stage_dir / ".current-stage.json"
+            try:
+                first_stage = {"version": 2, "graph": {"nodes": [], "links": []}}
+                second_stage = {"version": 2, "graph": {"nodes": [{"id": 7}], "links": []}}
+
+                self.assertEqual(save_current_stage(StageSaveRequest(stage=first_stage))["status"], "saved")
+                self.assertEqual(load_current_stage()["stage"], first_stage)
+
+                self.assertEqual(save_current_stage(StageSaveRequest(stage=second_stage))["status"], "saved")
+                self.assertEqual(load_current_stage()["stage"], second_stage)
+                self.assertFalse((stage_dir / ".current-stage.tmp").exists())
+            finally:
+                iride_api.SAVES_DIR = original_saves_dir
+                iride_api.STAGE_SAVE_PATH = original_stage_path
 
 
 if __name__ == "__main__":

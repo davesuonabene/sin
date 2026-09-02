@@ -48,6 +48,12 @@ _CAMELOT_TO_KEY = {
     "5B": "D#maj", "6B": "A#maj", "7B": "Fmaj", "8B": "Cmaj",
     "9B": "Gmaj", "10B": "Dmaj", "11B": "Amaj", "12B": "Emaj",
 }
+_AUDIO_FILE_EXTENSIONS = {
+    ".wav", ".wave", ".flac", ".mp3", ".ogg", ".oga", ".aif", ".aiff", ".aifc",
+    ".m4a", ".m4b", ".m4p", ".mp4", ".aac", ".adts", ".opus", ".spx",
+    ".webm", ".mka", ".ape", ".wv", ".mpc", ".mp+", ".tta", ".wma", ".asf",
+    ".caf", ".amr", ".au", ".snd", ".voc", ".shn", ".ac3", ".eac3",
+}
 
 
 def _searchable(text: str) -> str:
@@ -207,7 +213,7 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
     if role == "single_note" and "Single note" not in tags:
         tags.append("Single note")
 
-    if duration_seconds is None and path.is_file() and path.suffix.lower() in {".wav", ".flac", ".mp3", ".ogg", ".aif", ".aiff"}:
+    if duration_seconds is None and path.is_file() and path.suffix.lower() in _AUDIO_FILE_EXTENSIONS:
         try:
             import soundfile as sf
             info = sf.info(str(path))
@@ -222,7 +228,7 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
         bpm = round(inferred) if inferred is not None else None
 
     key = extract_key(metadata_text, allow_bare_note=role == "single_note")
-    if key is None and role != "none" and path.is_file() and path.suffix.lower() in {".wav", ".flac", ".mp3", ".ogg", ".aif", ".aiff"}:
+    if key is None and role != "none" and path.is_file() and path.suffix.lower() in _AUDIO_FILE_EXTENSIONS:
         from core.analyzers import KeyAnalyzer
         key = KeyAnalyzer.from_audio_file(str(path), pitch_only=role == "single_note")
     key = normalize_key_for_role(key, role)

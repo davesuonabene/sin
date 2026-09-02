@@ -1,9 +1,9 @@
 {
-  "name": "beat-generator",
+  "name": "sin",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Automated Beat Generator Application",
+  "description": "IRIDE node editor and GAIA asset manager",
   "scripts": {
     "start": "python run.py",
     "dev": "python run.py",

@@ -1,0 +1,1671 @@
+{
+  "version": 2,
+  "savedAt": "2026-08-29T10:50:59.700Z",
+  "graph": {
+    "last_node_id": 15,
+    "last_link_id": 11,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1120,
+          "1": 390,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 14,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 2
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 4
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 7
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 10
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": null,
+            "slot_index": 0
+          }
+        ],
+        "title": "Master Track",
+        "properties": {
+          "node_name": "Master Track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 102,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "node_type": "track",
+          "is_main_preview": true,
+          "filepath": "",
+          "original_bpm": 102,
+          "key": "Fmin"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 9,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 560,
+          "1": 510,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 9,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 8
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              6
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Snare Sequence",
+        "properties": {
+          "node_name": "Snare Sequence",
+          "node_type": "sequence",
+          "sequence": [
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "fade_ms": 1,
+          "selected_step": 0,
+          "seed": 102,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "is_main_preview": false,
+          "target_bpm": 102,
+          "bpm": 102
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 10,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 300,
+          "1": 510,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              8
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Snare One-shot",
+        "properties": {
+          "node_name": "Snare One-shot",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": 102,
+          "bpm": 102,
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "off",
+          "stretch_factor": 1,
+          "chain": [
+            {
+              "id": "pre_gain_qab3b7",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5011872336272722,
+                "gain_db": -6
+              }
+            },
+            {
+              "id": "post_gain_h4bz6h",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 11,
+          "key_match_target": ""
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 12,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 820,
+          "1": 690,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 13,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 9
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              10
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Hi-hat Arrangement",
+        "properties": {
+          "node_name": "Hi-hat Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 8,
+          "probability": 1,
+          "section_points": [],
+          "section_enabled": [
+            true
+          ],
+          "section_probability": [
+            1
+          ],
+          "section_sample_start": [
+            0
+          ],
+          "section_quant": [
+            "global"
+          ],
+          "section_quant_anchor": [
+            "global"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "seed": 45,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "is_main_preview": false,
+          "length_inherited": true,
+          "length_source_id": 1,
+          "target_bpm": 102,
+          "bpm": 102
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 13,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 560,
+          "1": 690,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 10,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 11
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              9
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Hi-hat Sequence",
+        "properties": {
+          "node_name": "Hi-hat Sequence",
+          "node_type": "sequence",
+          "sequence": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "fade_ms": 1,
+          "selected_step": 0,
+          "seed": 103,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "is_main_preview": false,
+          "target_bpm": 102,
+          "bpm": 102
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 14,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 300,
+          "1": 690,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              11
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Hi-hat One-shot",
+        "properties": {
+          "node_name": "Hi-hat One-shot",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": 102,
+          "bpm": 102,
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "off",
+          "stretch_factor": 1,
+          "chain": [
+            {
+              "id": "pre_gain_way2k4",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5011872336272722,
+                "gain_db": -6
+              }
+            },
+            {
+              "id": "post_gain_b1punl",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 15,
+          "key_match_target": ""
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 15,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 300,
+          "1": 790,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Hi-hat Pool",
+        "properties": {
+          "node_name": "Hi-hat Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 260
+            },
+            {
+              "id": 261
+            },
+            {
+              "id": 262
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "local",
+          "seed": 0.2261130987069292,
+          "color": "#7c3aed",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "accepted_asset_type": "audio",
+          "parentId": 14,
+          "fixed_item": null,
+          "target_bpm": 102,
+          "bpm": 102
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#6d28d9",
+        "shape": 4
+      },
+      {
+        "id": 5,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 560,
+          "1": 330,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 5
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              3
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Kick Sequence",
+        "properties": {
+          "node_name": "Kick Sequence",
+          "node_type": "sequence",
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "fade_ms": 1,
+          "selected_step": 0,
+          "seed": 101,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "is_main_preview": false,
+          "target_bpm": 102,
+          "bpm": 102
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 6,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 300,
+          "1": 330,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              5
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Kick One-shot",
+        "properties": {
+          "node_name": "Kick One-shot",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": 102,
+          "bpm": 102,
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "off",
+          "stretch_factor": 1,
+          "chain": [
+            {
+              "id": "pre_gain_7nrvaa",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5011872336272722,
+                "gain_db": -6
+              }
+            },
+            {
+              "id": "post_gain_bsjp4k",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 7,
+          "key_match_target": ""
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 7,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 300,
+          "1": 430,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Kick Pool",
+        "properties": {
+          "node_name": "Kick Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 352
+            },
+            {
+              "id": 353
+            },
+            {
+              "id": 354
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.7527088240298005,
+          "color": "#7c3aed",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "accepted_asset_type": "audio",
+          "parentId": 6,
+          "fixed_item": null,
+          "target_bpm": 102,
+          "bpm": 102
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#6d28d9",
+        "shape": 4
+      },
+      {
+        "id": 11,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 300,
+          "1": 610,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Snare Pool",
+        "properties": {
+          "node_name": "Snare Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 1083
+            },
+            {
+              "id": 1084
+            },
+            {
+              "id": 1085
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.7119846390663412,
+          "color": "#7c3aed",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "accepted_asset_type": "audio",
+          "parentId": 10,
+          "fixed_item": null,
+          "target_bpm": 102,
+          "bpm": 102
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#6d28d9",
+        "shape": 4
+      },
+      {
+        "id": 3,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 559,
+          "1": 150,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              1
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Base Loop",
+        "properties": {
+          "node_name": "Base Loop",
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\500k-loop-kit_73cda8\\BaggydePipey F Minor 102 BPM @simonservidamusic.wav",
+          "sample_type": "loop",
+          "start_beat": 0,
+          "original_bpm": 102,
+          "target_bpm": 102,
+          "bpm": 102,
+          "key": "Fmin",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "chain": [],
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "is_main_preview": false,
+          "node_type": "sample",
+          "library_item_id": 117,
+          "key_match_target": "",
+          "duration_seconds": 61.1765
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 2,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 821,
+          "1": 149,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 1
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              2
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Base Loop Arrangement",
+        "properties": {
+          "node_name": "Base Loop Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 8,
+          "probability": 1,
+          "section_points": [],
+          "section_enabled": [
+            true
+          ],
+          "section_probability": [
+            1
+          ],
+          "section_sample_start": [
+            0
+          ],
+          "section_quant": [
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "global"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "seed": 42,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "is_main_preview": false,
+          "length_inherited": true,
+          "length_source_id": 1,
+          "mix_mode": "sum",
+          "original_bpm": 102,
+          "target_bpm": 102,
+          "bpm": 102,
+          "key": "Fmin"
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 4,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 820,
+          "1": 330,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 11,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 3
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              4
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Kick Arrangement",
+        "properties": {
+          "node_name": "Kick Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 8,
+          "probability": 1,
+          "section_points": [],
+          "section_enabled": [
+            true
+          ],
+          "section_probability": [
+            1
+          ],
+          "section_sample_start": [
+            0
+          ],
+          "section_quant": [
+            "global"
+          ],
+          "section_quant_anchor": [
+            "global"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "seed": 43,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "is_main_preview": false,
+          "length_inherited": true,
+          "length_source_id": 1,
+          "target_bpm": 102,
+          "bpm": 102
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 8,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 820,
+          "1": 511,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 12,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 6
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              7
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Snare Arrangement",
+        "properties": {
+          "node_name": "Snare Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 8,
+          "probability": 1,
+          "section_points": [],
+          "section_enabled": [
+            true
+          ],
+          "section_probability": [
+            1
+          ],
+          "section_sample_start": [
+            0
+          ],
+          "section_quant": [
+            "global"
+          ],
+          "section_quant_anchor": [
+            "global"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "seed": 44,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "is_main_preview": false,
+          "length_inherited": true,
+          "length_source_id": 1,
+          "target_bpm": 102,
+          "bpm": 102
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      }
+    ],
+    "links": [
+      [
+        1,
+        3,
+        0,
+        2,
+        0,
+        "audio"
+      ],
+      [
+        2,
+        2,
+        0,
+        1,
+        0,
+        "audio"
+      ],
+      [
+        3,
+        5,
+        0,
+        4,
+        0,
+        "audio"
+      ],
+      [
+        4,
+        4,
+        0,
+        1,
+        1,
+        "audio"
+      ],
+      [
+        5,
+        6,
+        0,
+        5,
+        0,
+        "audio"
+      ],
+      [
+        6,
+        9,
+        0,
+        8,
+        0,
+        "audio"
+      ],
+      [
+        7,
+        8,
+        0,
+        1,
+        2,
+        "audio"
+      ],
+      [
+        8,
+        10,
+        0,
+        9,
+        0,
+        "audio"
+      ],
+      [
+        9,
+        13,
+        0,
+        12,
+        0,
+        "audio"
+      ],
+      [
+        10,
+        12,
+        0,
+        1,
+        3,
+        "audio"
+      ],
+      [
+        11,
+        14,
+        0,
+        13,
+        0,
+        "audio"
+      ]
+    ],
+    "groups": [],
+    "config": {
+      "links_ontop": true
+    },
+    "extra": {
+      "global_parameters": {
+        "bpm": 102,
+        "total_bars": 8,
+        "key": "Fmin"
+      },
+      "main_preview": {
+        "node_id": 1,
+        "mode": "auto"
+      }
+    },
+    "version": 0.4
+  }
+}

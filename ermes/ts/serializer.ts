@@ -16,6 +16,13 @@ export function serializeNodeSubtree(
     const trackNodes = trackNodesMap || (window as any).trackNodes || new Map();
     const includeDynamicPools = options.includeDynamicPools !== false;
     const globalParameters = graph?.extra?.global_parameters || { bpm: 120, total_bars: 4, key: 'C' };
+    const modulatorsByParent = new Map<number, Array<[number, any]>>();
+    for (const [modifierId, modifierData] of trackNodes.entries()) {
+        if (modifierData?.type !== 'modulator' || modifierData.parentId == null) continue;
+        const siblings = modulatorsByParent.get(modifierData.parentId) || [];
+        siblings.push([modifierId, modifierData]);
+        modulatorsByParent.set(modifierData.parentId, siblings);
+    }
     const resolveGlobalNumber = (value: any, key: 'bpm' | 'total_bars', fallback: number) => {
         const candidate = String(value).toLowerCase() === 'global' ? globalParameters[key] : value;
         const numeric = Number(candidate);
@@ -65,18 +72,12 @@ export function serializeNodeSubtree(
         const total_bars = rawTotalBars == null
             ? (nodeType === "arrangement" ? 4.0 : undefined)
             : resolveGlobalNumber(rawTotalBars, 'total_bars', 4.0);
-        const probability = nodeObj?.properties?.probability ?? data?.probability ?? (nodeType === "arrangement" ? 1.0 : undefined);
         const section_points = nodeObj?.properties?.section_points ?? data?.section_points ?? (nodeType === "arrangement" ? [] : undefined);
-        const section_enabled = nodeObj?.properties?.section_enabled ?? data?.section_enabled ?? (nodeType === "arrangement" ? [true] : undefined);
         const section_probability = nodeObj?.properties?.section_probability ?? data?.section_probability ?? (nodeType === "arrangement" ? [1.0] : undefined);
         const section_sample_start = nodeObj?.properties?.section_sample_start ?? data?.section_sample_start ?? (nodeType === "arrangement" ? [0.0] : undefined);
-        const section_quant = nodeObj?.properties?.section_quant ?? data?.section_quant ?? (nodeType === "arrangement" ? ["global"] : undefined);
-        const section_quant_anchor = nodeObj?.properties?.section_quant_anchor ?? data?.section_quant_anchor ?? (nodeType === "arrangement" ? ["global"] : undefined);
-        const quant = nodeObj?.properties?.quant ?? data?.quant ?? (nodeType === "arrangement" ? "none" : undefined);
-        const quant_anchor = nodeObj?.properties?.quant_anchor ?? data?.quant_anchor ?? (nodeType === "arrangement" ? "start" : undefined);
+        const section_quant = nodeObj?.properties?.section_quant ?? data?.section_quant ?? (nodeType === "arrangement" ? ["none"] : undefined);
+        const section_quant_anchor = nodeObj?.properties?.section_quant_anchor ?? data?.section_quant_anchor ?? (nodeType === "arrangement" ? ["start"] : undefined);
 
-        const rawFilters = data?.filters || nodeObj?.properties?.filters || {};
-        const filters = rawFilters;
         const poolProperties = assignedModifier?.properties;
         const selected_items = includeDynamicPools
             ? (poolProperties?.selected_items || data?.selected_items || nodeObj?.properties?.selected_items || [])
@@ -117,15 +118,13 @@ export function serializeNodeSubtree(
         const chain = nodeObj?.properties?.chain || data?.chain || [];
 
         const modulatorModels: any[] = [];
-        for (const [mid, mdata] of trackNodes.entries()) {
-            if (mdata.type === "modulator" && mdata.parentId === nodeId) {
-                const mNodeObj = graph.getNodeById(mid);
-                modulatorModels.push({
-                    id: mid,
-                    node_name: mdata.name || mNodeObj?.title || "Modulator",
-                    chain: mNodeObj?.properties?.chain || mdata.chain || []
-                });
-            }
+        for (const [mid, mdata] of modulatorsByParent.get(nodeId) || []) {
+            const mNodeObj = graph.getNodeById(mid);
+            modulatorModels.push({
+                id: mid,
+                node_name: mdata.name || mNodeObj?.title || "Modulator",
+                chain: mNodeObj?.properties?.chain || mdata.chain || []
+            });
         }
 
         const sample_type = data?.sample_type || nodeObj?.properties?.sample_type || "loop";
@@ -135,6 +134,7 @@ export function serializeNodeSubtree(
         const cents = data?.cents ?? nodeObj?.properties?.cents ?? 0.0;
         const stretch_mode = data?.stretch_mode || nodeObj?.properties?.stretch_mode || "time_stretch";
         const stretch_factor = data?.stretch_factor ?? nodeObj?.properties?.stretch_factor ?? 1.0;
+        const stretch_algorithm = data?.stretch_algorithm || nodeObj?.properties?.stretch_algorithm || "rubberband";
 
         const model = {
             node_name: name,
@@ -153,22 +153,18 @@ export function serializeNodeSubtree(
             cents: cents,
             stretch_mode: stretch_mode,
             stretch_factor: stretch_factor,
+            stretch_algorithm: stretch_algorithm,
             sequence: sequence,
             step_parameters: stepParameters,
             step_length: stepLength,
             play_mode: nodeObj?.properties?.play_mode ?? data?.play_mode ?? (nodeType === "sequence" ? "gate" : undefined),
             fade_ms: fadeMs,
             total_bars: total_bars,
-            probability: probability,
             section_points: section_points,
-            section_enabled: section_enabled,
             section_probability: section_probability,
             section_sample_start: section_sample_start,
             section_quant: section_quant,
             section_quant_anchor: section_quant_anchor,
-            quant: quant,
-            quant_anchor: quant_anchor,
-            filters: filters,
             selected_items: selected_items,
             playbackMode: playbackMode,
             seed: seed,

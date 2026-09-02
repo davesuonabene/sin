@@ -183,6 +183,14 @@ export abstract class BaseNode extends LGraphNode {
         // Subclasses may persist or coordinate field-specific edits.
     }
 
+    /**
+     * Gives a node a chance to confirm or reject an inspector edit before the
+     * shared widget writes to its serialized properties.
+     */
+    preparePropertyEdit(_key: string, _value: any, _previousValue: any): boolean {
+        return true;
+    }
+
     onGlobalParametersChanged(_parameters: Record<string, any>): void {
         // Subclasses may react to graph-wide parameter changes.
     }

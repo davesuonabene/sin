@@ -1,4 +1,5 @@
 import { type FieldSchema } from '../../fields/FieldSchema';
+import { getParameterWheelStep, registerParameterWheelControl } from '../ParameterWheelMenu';
 
 interface NumericStepValueOptions {
     field: FieldSchema<number>;
@@ -70,12 +71,13 @@ export class StepValueControl {
             onChange(nextValue);
         });
 
+        registerParameterWheelControl(this.input);
         this.input.addEventListener('wheel', event => {
             event.preventDefault();
+            if (event.altKey) return;
             const direction = event.deltaY < 0 ? 1 : -1;
-            const multiplier = event.shiftKey ? 10 : 1;
-            const increment = Number(field.step ?? (field.type === 'int' ? 1 : 0.01));
-            const nextValue = this.normalizeValue(this.value + increment * direction * multiplier);
+            const increment = getParameterWheelStep(field.type === 'int');
+            const nextValue = this.normalizeValue(this.value + increment * direction);
             this.setValue(nextValue);
             onChange(nextValue);
         }, { passive: false });

@@ -1,7 +1,9 @@
 import { type FieldSchema } from '../fields/FieldSchema';
 import { type BaseNode } from '../nodes/BaseNode';
 import { fetchLibrary } from '../api';
+import { groupFileVersions } from '../libraryVersioning';
 import { RadioGroup } from './components/RadioGroup';
+import { getParameterWheelStep, registerParameterWheelControl } from './ParameterWheelMenu';
 
 function formatDb(db: number): string {
     if (db <= -35.9) return "-inf dB";
@@ -41,6 +43,11 @@ export class WidgetFactory {
         return validatedVal;
     }
 
+    private static mayEditField<T = any>(node: BaseNode, field: FieldSchema<T>, value: T): boolean {
+        const previousValue = this.getFieldValue(node, field);
+        return node.preparePropertyEdit(field.key, value, previousValue) !== false;
+    }
+
     static createRow(
         field: FieldSchema,
         node: BaseNode,
@@ -53,6 +60,7 @@ export class WidgetFactory {
         labelEl.className = 'td-param-label';
         labelEl.textContent = field.label + (field.unit ? ` (${field.unit})` : '');
         row.appendChild(labelEl);
+        if (field.description) row.title = field.description;
 
         const controlEl = document.createElement('div');
         controlEl.className = 'td-param-control';
@@ -132,7 +140,7 @@ export class WidgetFactory {
         wrapper.style.width = '100%';
 
         const select = document.createElement('select');
-        select.className = 'td-param-select';
+        select.className = 'td-param-select sin-select';
         select.style.flex = '1';
 
         const assignedModifierId = node.properties?.asset_modifier_id;
@@ -151,7 +159,7 @@ export class WidgetFactory {
             emptyOpt.textContent = '-- Select Asset --';
             select.appendChild(emptyOpt);
 
-            fetchLibrary(true, true).then(files => {
+            fetchLibrary().then(files => {
                 const acceptedType = field.key === 'midi_filepath' ? 'midi' : 'audio';
                 const filtered = files.filter(f => {
                     const isMidi = f.type === 'midi' || f.name.endsWith('.mid') || f.name.endsWith('.midi');
@@ -164,12 +172,33 @@ export class WidgetFactory {
                 placeholder.textContent = '-- Select Asset --';
                 select.appendChild(placeholder);
 
-                for (const f of filtered) {
-                    const opt = document.createElement('option');
-                    opt.value = f.absolute_path;
-                    opt.textContent = `${f.name}${f.bpm ? ` (${f.bpm} BPM)` : ''}`;
-                    if (f.absolute_path === currentPath) opt.selected = true;
-                    select.appendChild(opt);
+                const grouped = groupFileVersions(filtered, {
+                    pathFor: file => file.absolute_path,
+                    idFor: file => file.id ?? file.absolute_path,
+                    scope: `property:${field.key}`,
+                });
+                for (const group of grouped) {
+                    if (group.fileVersions && group.fileVersionDisplayName) {
+                        const optionGroup = document.createElement('optgroup');
+                        optionGroup.label = group.fileVersionDisplayName;
+                        for (const version of group.fileVersions) {
+                            const file = version.record;
+                            const option = document.createElement('option');
+                            option.value = file.absolute_path;
+                            option.textContent = `${version.label}${file.bpm ? ` (${file.bpm} BPM)` : ''}`;
+                            if (file.absolute_path === currentPath) option.selected = true;
+                            optionGroup.appendChild(option);
+                        }
+                        select.appendChild(optionGroup);
+                        continue;
+                    }
+
+                    const file = group.record;
+                    const option = document.createElement('option');
+                    option.value = file.absolute_path;
+                    option.textContent = `${file.name}${file.bpm ? ` (${file.bpm} BPM)` : ''}`;
+                    if (file.absolute_path === currentPath) option.selected = true;
+                    select.appendChild(option);
                 }
             }).catch(err => {
                 console.error("Failed to populate filepath dropdown", err);
@@ -247,6 +276,14 @@ export class WidgetFactory {
         range.addEventListener('input', () => {
             update(parseFloat(range.value));
         });
+        registerParameterWheelControl(range);
+        range.addEventListener('wheel', event => {
+            event.preventDefault();
+            if (event.altKey) return;
+            const direction = event.deltaY < 0 ? 1 : -1;
+            const currentValue = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
+            update(currentValue + direction * getParameterWheelStep(field.type === 'int'));
+        }, { passive: false });
 
         wrapper.appendChild(range);
         wrapper.appendChild(valDisplay);
@@ -266,6 +303,10 @@ export class WidgetFactory {
 
         input.addEventListener('change', () => {
             const previousValue = this.getFieldValue(node, field);
+            if (!this.mayEditField(node, field, input.value)) {
+                input.value = String(previousValue ?? '');
+                return;
+            }
             const updated = this.setFieldValue(node, field, input.value);
             onChange(field.key, updated, previousValue);
         });
@@ -291,6 +332,10 @@ export class WidgetFactory {
         const commit = () => {
             const previousValue = this.getFieldValue(node, field);
             const raw = field.type === 'int' ? parseInt(input.value, 10) : parseFloat(input.value);
+            if (!this.mayEditField(node, field, raw)) {
+                input.value = String(previousValue);
+                return;
+            }
             const updated = this.setFieldValue(node, field, raw);
             input.value = String(updated);
             if (!Object.is(updated, previousValue)) {
@@ -305,6 +350,22 @@ export class WidgetFactory {
             commit();
             input.blur();
         });
+        registerParameterWheelControl(input);
+        input.addEventListener('wheel', event => {
+            event.preventDefault();
+            if (event.altKey) return;
+            const currentValue = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
+            const direction = event.deltaY < 0 ? 1 : -1;
+            const previousValue = this.getFieldValue(node, field);
+            const nextValue = currentValue + direction * getParameterWheelStep(field.type === 'int');
+            if (!this.mayEditField(node, field, nextValue)) {
+                input.value = String(previousValue);
+                return;
+            }
+            const updated = this.setFieldValue(node, field, nextValue);
+            input.value = String(updated);
+            if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+        }, { passive: false });
         return input;
     }
 
@@ -372,6 +433,17 @@ export class WidgetFactory {
             commit();
             input.blur();
         });
+        registerParameterWheelControl(input);
+        input.addEventListener('wheel', event => {
+            event.preventDefault();
+            if (event.altKey || input.disabled) return;
+            const currentValue = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
+            const direction = event.deltaY < 0 ? 1 : -1;
+            const previousValue = this.getFieldValue(node, field);
+            const updated = this.setFieldValue(node, field, currentValue + direction * getParameterWheelStep());
+            refresh();
+            if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+        }, { passive: false });
         const handleGlobalChange = () => {
             if (!wrapper.isConnected) {
                 window.removeEventListener('global-parameters-changed', handleGlobalChange);
@@ -392,7 +464,7 @@ export class WidgetFactory {
         onChange: (key: string, val: any, previousValue: any) => void
     ): HTMLSelectElement {
         const select = document.createElement('select');
-        select.className = 'td-param-select';
+        select.className = 'td-param-select sin-select';
 
         const currentValue = this.getFieldValue(node, field);
 
@@ -518,6 +590,17 @@ export class WidgetFactory {
         container.addEventListener('pointerup', stopDrag);
         container.addEventListener('pointercancel', stopDrag);
 
+        registerParameterWheelControl(container);
+        container.addEventListener('wheel', event => {
+            event.preventDefault();
+            if (event.altKey) return;
+            const previousValue = this.getFieldValue(node, field);
+            const direction = event.deltaY < 0 ? 1 : -1;
+            updateUI(activeDb + direction * getParameterWheelStep());
+            const updated = this.setFieldValue(node, field, activeDb);
+            if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+        }, { passive: false });
+
         container.addEventListener('dblclick', (e) => {
             e.stopPropagation();
             const input = document.createElement('input');
@@ -600,6 +683,13 @@ export class WidgetFactory {
         input.addEventListener('change', () => {
             commitValue(Number(input.value) || 0);
         });
+        registerParameterWheelControl(input);
+        input.addEventListener('wheel', event => {
+            event.preventDefault();
+            if (event.altKey) return;
+            const direction = event.deltaY < 0 ? 1 : -1;
+            commitValue(Number(input.value) + direction * getParameterWheelStep(true));
+        }, { passive: false });
 
         diceBtn.addEventListener('click', () => {
             const newSeed = Math.floor(Math.random() * 10000);

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -25,10 +25,20 @@ def update_vault(vault_id: int, request: schemas.VaultUpdate, db: Session = Depe
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @router.delete("/{vault_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_vault(vault_id: int, db: Session = Depends(database.get_db)):
+def delete_vault(
+    vault_id: int,
+    background_tasks: BackgroundTasks,
+    delete_contents: bool = False,
+    db: Session = Depends(database.get_db),
+):
     try:
-        vaults.delete_vault(db, vault_id)
-    except ValueError as exc:
+        vaults.delete_vault(
+            db,
+            vault_id,
+            delete_contents=delete_contents,
+            background_tasks=background_tasks,
+        )
+    except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

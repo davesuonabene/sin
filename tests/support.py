@@ -142,6 +142,8 @@ class GaiaTestCase(unittest.TestCase):
         folder_assignments: dict[str, str] | None = None,
         item_types: dict[int, str] | None = None,
         excluded_indexes: list[int] | None = None,
+        excluded_types: list[str] | None = None,
+        excluded_extensions: list[str] | None = None,
         conflict_action: str | None = None,
     ) -> dict:
         """Queue a background import and wait only for its terminal test state."""
@@ -159,6 +161,8 @@ class GaiaTestCase(unittest.TestCase):
                 folder_assignments=detected_assignments if folder_assignments is None else folder_assignments,
                 item_types=item_types or {},
                 excluded_indexes=excluded_indexes or [],
+                excluded_types=excluded_types or [],
+                excluded_extensions=excluded_extensions or [],
                 conflict_action=conflict_action,
             )
         )

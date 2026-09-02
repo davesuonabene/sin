@@ -1,4 +1,5 @@
 import './style.css';
+import '../../gaia/static/menu-system.css';
 import { DockviewComponent, type IDockviewPanel } from 'dockview-core';
 import { LGraph, LGraphCanvas, LiteGraph } from 'litegraph.js';
 import './nodes/TrackNode';
@@ -11,11 +12,14 @@ import './nodes/DisabledNode';
 import { PropertiesWindow } from './ui/PropertiesWindow';
 import { NodePopupMenu } from './ui/NodePopupMenu';
 import { NodeContextMenu } from './ui/NodeContextMenu';
-import { LibraryPanel } from './ui/LibraryPanel';
+import { isLibraryPreviewEnabled, LibraryPanel, setLibraryPreviewEnabled } from './ui/LibraryPanel';
 import { MasterWaveform } from './ui/MasterWaveform';
+import { RuntimeLogPanel } from './ui/RuntimeLogPanel';
+import { getParameterWheelStep, registerParameterWheelControl } from './ui/ParameterWheelMenu';
+import { appendServerRuntimeLog, installFetchLogging, loggedTask, runtimeLog } from './runtimeLog';
 import { attachGhostProperties, createGhostNode, detachGhostDependents, isGhostNode, syncGhostTrackData } from './ghosts';
 import { installSeparatedNodeClipboard } from './nodeClipboard';
-import { fetchLibrary, findLibraryFile, findLibraryFileById, findLibraryFileForPoolLocator, refreshLibraryAssetSnapshot, type LibraryFile } from './api';
+import { fetchLibrary, findLibraryFile, findLibraryFileById, findLibraryFileForPoolLocator, refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from './api';
 import { serializeNodeSubtree } from '../../ermes/ts/serializer';
 import { advanceAssetPoolSeed, normalizeAssetRefreshMode, resolveAssetFilterNode, resolveAssignedAssetFilters } from '../../ermes/ts/assetResolver';
 
@@ -23,6 +27,7 @@ const appElement = document.getElementById('app');
 if (!appElement) throw new Error('Could not find #app element');
 
 appElement.className = 'dockview-theme-light';
+installFetchLogging();
 
 // Instantiate Node Type Popup Menu & Node Context Menu
 const popupMenu = new NodePopupMenu();
@@ -36,63 +41,39 @@ topHeader.innerHTML = `
         <div class="header-menus">
             <details class="header-menu" id="file-menu">
                 <summary>File</summary>
-                <div class="header-menu-popover">
+                <div class="header-menu-popover sin-menu-surface">
+                    <button id="new-stage-btn" class="header-menu-action sin-menu-item">New</button>
+                    <div class="header-menu-separator sin-menu-divider"></div>
                     <label class="header-menu-label" for="workspace-preset-select">Workspace</label>
-                    <select id="workspace-preset-select" class="header-select workspace-preset-select" aria-label="Workspace preset">
+                    <select id="workspace-preset-select" class="header-select workspace-preset-select sin-select" aria-label="Workspace preset">
                         <option value="">No saved workspaces</option>
                     </select>
                     <div class="header-menu-row">
-                        <button id="save-workspace-as-btn" class="header-btn secondary-tool-btn">Save As</button>
-                        <button id="save-workspace-btn" class="header-btn secondary-tool-btn" disabled>Save</button>
+                        <button id="save-workspace-as-btn" class="header-btn secondary-tool-btn sin-menu-item">Save workspace as</button>
+                        <button id="save-workspace-btn" class="header-btn secondary-tool-btn sin-menu-item" disabled>Save workspace</button>
                     </div>
                     <div class="header-menu-row">
-                        <button id="load-workspace-btn" class="header-btn secondary-tool-btn" disabled>Load</button>
-                        <button id="delete-workspace-btn" class="header-btn secondary-tool-btn" disabled>Delete</button>
+                        <button id="load-workspace-btn" class="header-btn secondary-tool-btn sin-menu-item" disabled>Load workspace</button>
+                        <button id="delete-workspace-btn" class="header-btn secondary-tool-btn sin-menu-item" disabled>Delete workspace</button>
                     </div>
-                    <div class="header-menu-separator"></div>
-                    <button id="export-btn" class="header-menu-action">Download selected audio</button>
+                    <div class="header-menu-separator sin-menu-divider"></div>
+                    <button id="export-btn" class="header-menu-action sin-menu-item">Download selected audio</button>
                 </div>
             </details>
             <details class="header-menu" id="library-menu">
                 <summary>Library</summary>
-                <div class="header-menu-popover">
-                    <button id="toggle-library-btn" class="header-menu-action">Open Library</button>
+                <div class="header-menu-popover sin-menu-surface">
+                    <button id="toggle-library-btn" class="header-menu-action sin-menu-item">Open Library</button>
+                    <button id="toggle-library-preview-btn" class="header-menu-action sin-menu-item" aria-pressed="true">Auto-preview: On</button>
                     <div class="header-menu-hint">Library management stays in GAIA.</div>
                 </div>
             </details>
         </div>
-        <div class="panel-toggles">
-            <button id="header-toggle-library" class="header-btn secondary-tool-btn icon-header-btn" title="Toggle Library Panel (Shortcut: L)" aria-label="Toggle Library Panel">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10h-17z"/></svg>
-            </button>
-            <button id="header-toggle-properties" class="header-btn secondary-tool-btn icon-header-btn" title="Toggle Properties / Inspector (Shortcut: P)" aria-label="Toggle Properties / Inspector">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6"/><circle cx="14" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
-            </button>
-        </div>
+        <button id="header-toggle-library" class="header-btn secondary-tool-btn icon-header-btn" title="Toggle Library Panel (Shortcut: L)" aria-label="Toggle Library Panel">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10h-17z"/></svg>
+        </button>
     </div>
     <div class="top-header-center">
-        <div class="playback-toolbar">
-            <div class="render-select-wrapper">
-                <select id="temp-files-select" class="header-select">
-                    <option value="" disabled selected>No renders available</option>
-                </select>
-            </div>
-            <div class="master-player-wrapper">
-                <audio id="master-player" preload="metadata"></audio>
-                <button id="master-play-btn" class="master-control-btn" type="button" aria-label="Play" title="Play" disabled>
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>
-                </button>
-            </div>
-            <div id="master-waveform" class="master-waveform" title="Click or drag to seek"></div>
-            <div class="master-volume-control">
-                <button id="master-mute-btn" class="master-control-btn master-volume-btn" type="button" aria-label="Mute" title="Mute">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5-.5v7a4 4 0 0 0 0-7z"/></svg>
-                </button>
-                <input id="master-volume" class="master-volume-slider" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume">
-            </div>
-        </div>
-    </div>
-    <div class="top-header-right">
         <div class="global-parameter-fields" aria-label="Global track parameters">
             <label class="global-parameter-field">BPM
                 <input id="global-bpm-input" type="number" min="20" max="300" step="1" value="120" aria-label="Global BPM">
@@ -111,6 +92,37 @@ topHeader.innerHTML = `
             <span class="btn-icon" aria-hidden="true">↻</span>
         </button>
     </div>
+    <div class="top-header-right">
+        <button id="header-toggle-properties" class="header-btn secondary-tool-btn icon-header-btn" title="Toggle Properties / Inspector (Shortcut: P)" aria-label="Toggle Properties / Inspector">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6"/><circle cx="14" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+        </button>
+    </div>
+`;
+
+const playbackFooter = document.createElement('footer');
+playbackFooter.className = 'playback-footer';
+playbackFooter.setAttribute('aria-label', 'Playback transport');
+playbackFooter.innerHTML = `
+    <div class="playback-toolbar">
+        <div class="render-select-wrapper">
+            <select id="temp-files-select" class="playback-track-select sin-select" aria-label="Playback track">
+                <option value="" disabled selected>No renders available</option>
+            </select>
+        </div>
+        <div class="master-player-wrapper">
+            <audio id="master-player" preload="metadata"></audio>
+            <button id="master-play-btn" class="master-control-btn" type="button" aria-label="Play" title="Play" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>
+            </button>
+        </div>
+        <div id="master-waveform" class="master-waveform" title="Click or drag to seek"></div>
+        <div class="master-volume-control">
+            <button id="master-mute-btn" class="master-control-btn master-volume-btn" type="button" aria-label="Mute" title="Mute">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5-.5v7a4 4 0 0 0 0-7z"/></svg>
+            </button>
+            <input id="master-volume" class="master-volume-slider" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume">
+        </div>
+    </div>
 `;
 
 const dockviewContainer = document.createElement('div');
@@ -118,6 +130,7 @@ dockviewContainer.className = 'dockview-container';
 
 appElement.appendChild(topHeader);
 appElement.appendChild(dockviewContainer);
+appElement.appendChild(playbackFooter);
 
 // Strictly prevent floating panels from being dragged or positioned higher than y = 0 (under or past the header)
 const clampFloatingPanels = () => {
@@ -150,20 +163,22 @@ floatingObserver.observe(dockviewContainer, {
 
 window.addEventListener('pointermove', scheduleFloatingPanelClamp, { passive: true });
 
-const tempFilesSelect = topHeader.querySelector('#temp-files-select') as HTMLSelectElement;
-const masterPlayer = topHeader.querySelector('#master-player') as HTMLAudioElement;
-const masterPlayBtn = topHeader.querySelector('#master-play-btn') as HTMLButtonElement;
-const masterMuteBtn = topHeader.querySelector('#master-mute-btn') as HTMLButtonElement;
-const masterVolume = topHeader.querySelector('#master-volume') as HTMLInputElement;
+const tempFilesSelect = playbackFooter.querySelector('#temp-files-select') as HTMLSelectElement;
+const masterPlayer = playbackFooter.querySelector('#master-player') as HTMLAudioElement;
+const masterPlayBtn = playbackFooter.querySelector('#master-play-btn') as HTMLButtonElement;
+const masterMuteBtn = playbackFooter.querySelector('#master-mute-btn') as HTMLButtonElement;
+const masterVolume = playbackFooter.querySelector('#master-volume') as HTMLInputElement;
 const exportBtn = topHeader.querySelector('#export-btn') as HTMLButtonElement;
 const globalPreviewBtn = topHeader.querySelector('#global-preview-btn') as HTMLButtonElement;
 const previewRecalculateBtn = topHeader.querySelector('#preview-recalculate-btn') as HTMLButtonElement;
 const toggleLibraryBtn = topHeader.querySelector('#toggle-library-btn') as HTMLButtonElement;
+const toggleLibraryPreviewBtn = topHeader.querySelector('#toggle-library-preview-btn') as HTMLButtonElement;
 const headerToggleLibrary = topHeader.querySelector('#header-toggle-library') as HTMLButtonElement;
 const headerToggleProperties = topHeader.querySelector('#header-toggle-properties') as HTMLButtonElement;
 const fileMenu = topHeader.querySelector('#file-menu') as HTMLDetailsElement;
 const libraryMenu = topHeader.querySelector('#library-menu') as HTMLDetailsElement;
-const masterWaveformElement = topHeader.querySelector('#master-waveform') as HTMLDivElement;
+const newStageBtn = topHeader.querySelector('#new-stage-btn') as HTMLButtonElement;
+const masterWaveformElement = playbackFooter.querySelector('#master-waveform') as HTMLDivElement;
 const workspacePresetSelect = topHeader.querySelector('#workspace-preset-select') as HTMLSelectElement;
 const saveWorkspaceAsBtn = topHeader.querySelector('#save-workspace-as-btn') as HTMLButtonElement;
 const saveWorkspaceBtn = topHeader.querySelector('#save-workspace-btn') as HTMLButtonElement;
@@ -230,19 +245,21 @@ globalKeyInput.addEventListener('change', () => setGlobalParameters({ key: globa
 function bindGlobalParameterWheel(
     input: HTMLInputElement,
     key: 'bpm' | 'total_bars',
-    step: number
+    isInteger = false
 ) {
+    registerParameterWheelControl(input);
     input.addEventListener('wheel', event => {
         event.preventDefault();
+        if (event.altKey) return;
         const direction = event.deltaY < 0 ? 1 : -1;
         const current = globalParameters[key];
-        const next = Math.round((current + direction * step) * 100) / 100;
+        const next = Math.round((current + direction * getParameterWheelStep(isInteger)) * 100) / 100;
         setGlobalParameters({ [key]: next });
     }, { passive: false });
 }
 
-bindGlobalParameterWheel(globalBpmInput, 'bpm', 1);
-bindGlobalParameterWheel(globalTotalBarsInput, 'total_bars', 0.25);
+bindGlobalParameterWheel(globalBpmInput, 'bpm', true);
+bindGlobalParameterWheel(globalTotalBarsInput, 'total_bars');
 
 const playIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>';
 const pauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>';
@@ -258,6 +275,10 @@ function updatePlaybackControls() {
     masterMuteBtn.innerHTML = isMuted ? mutedIcon : volumeIcon;
     masterMuteBtn.setAttribute('aria-label', isMuted ? 'Unmute' : 'Mute');
     masterMuteBtn.title = isMuted ? 'Unmute' : 'Mute';
+}
+
+function updatePlaybackTrackPresentation() {
+    tempFilesSelect.classList.toggle('is-ram-preview', tempFilesSelect.value === 'RAM_PREVIEW');
 }
 
 let pendingMasterSeek: number | null = null;
@@ -281,7 +302,11 @@ const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
 function setMasterPlayerSource(source: string, autoplay: boolean = false) {
     pendingMasterSeek = null;
     masterPlayer.removeAttribute('aria-disabled');
-    masterPlayer.src = `${source}${source.includes('?') ? '&' : '?'}t=${Date.now()}`;
+    // Render filenames and RAM-preview URLs are content-versioned by the
+    // backend. Preserving that URL lets the player and waveform request share
+    // the browser cache; a timestamp here forced two full transfers.
+    masterPlayer.src = source;
+    runtimeLog(`Audio stream assigned: ${source}`, 'debug');
     masterPlayBtn.disabled = false;
     masterPlayer.load();
     void masterWaveform.load(masterPlayer.src);
@@ -311,6 +336,7 @@ masterPlayer.addEventListener('timeupdate', () => {
     }
 });
 masterPlayer.addEventListener('loadedmetadata', () => {
+    runtimeLog(`Audio stream metadata loaded (${masterPlayer.duration.toFixed(3)} s)`, 'debug');
     if (pendingMasterSeek !== null) {
         const targetTime = Math.min(pendingMasterSeek, masterPlayer.duration);
         masterPlayer.currentTime = targetTime;
@@ -318,6 +344,10 @@ masterPlayer.addEventListener('loadedmetadata', () => {
     } else {
         masterWaveform.setPlayback(masterPlayer.currentTime, masterPlayer.duration);
     }
+});
+masterPlayer.addEventListener('error', () => {
+    const code = masterPlayer.error?.code;
+    runtimeLog(`Audio stream failed${code ? ` (media error ${code})` : ''}`, 'error');
 });
 masterPlayer.addEventListener('seeked', () => {
     pendingMasterSeek = null;
@@ -378,18 +408,8 @@ function makeDisabledNodeInfo(nodeInfo: any, reason: string) {
 }
 
 function poolAssetLocator(item: any) {
-    const filepath = String(item?.absolute_path || item?.filepath || '');
-    const pathName = filepath.replace(/\\/g, '/').split('/').pop() || '';
-    const idText = String(item?.id ?? '');
-    const collectionId = item?.collection_id ?? (
-        idText.startsWith('collection:') ? idText.split(':')[1] : undefined
-    );
-    return {
-        id: item?.id ?? null,
-        ...(collectionId != null ? { collection_id: collectionId } : {}),
-        name: pathName || item?.name || '',
-        type: item?.type || item?.itemType || 'audio'
-    };
+    if (item?.id != null && String(item.id).trim()) return { id: item.id };
+    throw new Error('Asset Pool item is missing its GAIA id');
 }
 
 function stripResolvedPoolState(graphInfo: any) {
@@ -440,21 +460,26 @@ function stripResolvedPoolState(graphInfo: any) {
         properties.selected_items = Array.isArray(properties.selected_items)
             ? properties.selected_items.map(poolAssetLocator)
             : [];
-        properties.output_value = '';
-        properties.output_item_id = null;
-        properties.output_bpm = null;
-        properties.output_key = '';
-        properties.sequence_index = -1;
+        delete properties.filters;
+        // Persist only the pool recipe and lightweight locators. These values
+        // are resolved again from GAIA when the workspace is loaded/rendered.
+        delete properties.output_value;
+        delete properties.output_item_id;
+        delete properties.output_bpm;
+        delete properties.output_key;
+        delete properties.sequence_index;
     }
 
     for (const nodeInfo of graphInfo.nodes) {
         const properties = nodeInfo?.properties || {};
         if (!poolsById.has(properties.asset_modifier_id)) continue;
-        properties.filepath = '';
-        properties.library_item_id = null;
-        properties.duration_seconds = null;
-        properties.original_bpm = 120;
-        properties.key = '';
+        // A pooled owner does not author a concrete asset. The Sample or
+        // Sequence node receives the resolved path/metadata at runtime.
+        delete properties.filepath;
+        delete properties.library_item_id;
+        delete properties.duration_seconds;
+        delete properties.original_bpm;
+        delete properties.key;
     }
     return graphInfo;
 }
@@ -513,17 +538,12 @@ function rebuildTrackNodesFromGraph(graph: LGraph) {
             play_mode: p.play_mode,
             fade_ms: p.fade_ms,
             total_bars: p.total_bars ?? (type === 'track' || type === 'arrangement' ? 4 : undefined),
-            probability: p.probability,
             section_points: p.section_points,
-            section_enabled: p.section_enabled,
             section_probability: p.section_probability,
             section_sample_start: p.section_sample_start,
             section_quant: p.section_quant,
             section_quant_anchor: p.section_quant_anchor,
-            quant: p.quant,
-            quant_anchor: p.quant_anchor,
             duration_seconds: p.duration_seconds,
-            filters: p.filters,
             selected_items: p.selected_items,
             playbackMode: p.playbackMode,
             seed: p.seed,
@@ -539,9 +559,57 @@ function rebuildTrackNodesFromGraph(graph: LGraph) {
     syncGraphHierarchy(graph);
 }
 
-async function syncGraphSampleMetadataFromLibrary(graph: LGraph, includeDynamicAssets = true) {
-    const files: LibraryFile[] = await fetchLibrary(true, true);
-    const nodes = ((graph as any)._nodes || []) as any[];
+function graphResolutionNodes(graph: LGraph, rootNodeId?: number): any[] {
+    const allNodes = ((graph as any)._nodes || []) as any[];
+    if (rootNodeId == null) return allNodes;
+
+    const nodes: any[] = [];
+    const visited = new Set<number>();
+    const pending = [rootNodeId];
+    while (pending.length > 0) {
+        const nodeId = pending.pop();
+        if (nodeId == null || visited.has(nodeId)) continue;
+        visited.add(nodeId);
+        const node = graph.getNodeById(nodeId) as any;
+        if (!node) continue;
+        nodes.push(node);
+
+        const modifierId = node.properties?.asset_modifier_id;
+        if (modifierId != null) pending.push(modifierId);
+        const data = trackNodes.get(nodeId);
+        for (const childId of data?.children || []) pending.push(childId);
+        for (const input of node.inputs || []) {
+            const link = input.link != null ? (graph as any).links?.[input.link] : null;
+            if (link?.origin_id != null) pending.push(link.origin_id);
+        }
+    }
+    return nodes;
+}
+
+async function syncGraphSampleMetadataFromLibrary(
+    graph: LGraph,
+    includeDynamicAssets = true,
+    rootNodeId?: number
+) {
+    // Preview/render only needs the serialized subtree. Resolving every pool
+    // and sample in the open workspace made a small preview scale with the
+    // size of unrelated work elsewhere on the canvas.
+    const nodes = graphResolutionNodes(graph, rootNodeId);
+    const references: any[] = [];
+    for (const node of nodes) {
+        const isAssetPool = node?.type === 'Audio/AssetFilter'
+            || node?.properties?.node_type === 'asset_filter'
+            || node?.properties?.output_type === 'asset_path';
+        if (isAssetPool) {
+            if (includeDynamicAssets) references.push(...(node.properties?.selected_items || []));
+            continue;
+        }
+        if (!includeDynamicAssets && node?.properties?.asset_modifier_id != null) continue;
+        const filepath = String(node?.properties?.filepath || '');
+        const id = node?.properties?.library_item_id;
+        if (id != null || filepath) references.push({ id, absolute_path: filepath });
+    }
+    const files: LibraryFile[] = await resolveLibraryAssets(references);
 
     // Pool entries are serialized snapshots. Refresh every entry first so the
     // next selection (and moved assets located by stable ID) uses current GAIA data.
@@ -611,6 +679,7 @@ async function syncGraphSampleMetadataFromLibrary(graph: LGraph, includeDynamicA
             return true;
         });
     }));
+    return files;
 }
 
 function setWorkspaceControlsEnabled() {
@@ -645,12 +714,16 @@ async function refreshWorkspacePresets(selectedName?: string) {
     setWorkspaceControlsEnabled();
 }
 
-function createWorkspacePreset(graph: LGraph) {
+function serializeWorkspaceGraph(graph: LGraph) {
     writeGlobalParametersToGraph(graph);
+    return stripResolvedPoolState(graph.serialize());
+}
+
+function createWorkspacePreset(graph: LGraph) {
     return {
         version: WORKSPACE_PRESET_VERSION,
         savedAt: new Date().toISOString(),
-        graph: stripResolvedPoolState(graph.serialize())
+        graph: serializeWorkspaceGraph(graph)
     };
 }
 
@@ -678,6 +751,25 @@ async function saveWorkspacePreset(name: string) {
 
 workspacePresetSelect.addEventListener('change', setWorkspaceControlsEnabled);
 
+newStageBtn.addEventListener('click', () => {
+    const graph = (window as any).editorGraph as LGraph;
+    const canvas = (window as any).editorCanvas as LGraphCanvas;
+    if (!graph) return;
+
+    closeAllParamWindows();
+    activeParamNodeId = null;
+    graph.clear();
+    trackNodes.clear();
+    setGlobalParameters(DEFAULT_GLOBAL_PARAMETERS, graph);
+    updateGraphNodeCollapsing();
+    canvas?.setDirty(true, true);
+    fileMenu.open = false;
+    // A blank stage is a deliberate new document, even if no previous stage
+    // exists (or it was already blank), so force a fresh persisted snapshot.
+    lastSavedStageFingerprint = null;
+    scheduleStageSave(0);
+});
+
 saveWorkspaceAsBtn.addEventListener('click', async () => {
     const name = window.prompt('Workspace preset name:');
     if (!name?.trim()) return;
@@ -693,6 +785,10 @@ loadWorkspaceBtn.addEventListener('click', async () => {
     const canvas = (window as any).editorCanvas as LGraphCanvas;
     if (!graph) return;
     try {
+        cancelScheduledStageSave();
+        if (stageSaveInFlight && stageSaveCompletion) await stageSaveCompletion;
+        stageHydrating = true;
+        setStageSaveState('loading', 'Loading workspace preset');
         const response = await fetch(`/api/workspaces/${encodeURIComponent(workspacePresetSelect.value)}`);
         if (!response.ok) {
             const data = await response.json().catch(() => ({}));
@@ -706,14 +802,31 @@ loadWorkspaceBtn.addEventListener('click', async () => {
         closeAllParamWindows();
         activeParamNodeId = null;
         graph.configure(prepareWorkspaceGraph(preset.graph));
+        // Apply saved transport settings immediately. Library metadata refresh
+        // may take a moment and should not leave the editor showing defaults
+        // while the graph is already loaded.
+        if (preset.graph?.extra?.global_parameters) {
+            setGlobalParameters(preset.graph.extra.global_parameters, graph);
+        }
+        // The graph is now the user's selected preset. Persist this snapshot
+        // before the slower GAIA metadata refresh so a fast page refresh still
+        // restores the preset rather than the previous unsaved stage.
+        stageHydrating = false;
+        await saveCurrentStage();
         await syncGraphSampleMetadataFromLibrary(graph, false);
         rebuildTrackNodesFromGraph(graph);
         loadGlobalParametersFromGraph(graph);
         updateGraphNodeCollapsing();
         canvas?.setDirty(true, true);
+        // Metadata may have changed serialized properties. Coalesce any event
+        // saves and replace the stage once more with the final loaded graph.
+        cancelScheduledStageSave();
+        if (stageSaveInFlight && stageSaveCompletion) await stageSaveCompletion;
+        await saveCurrentStage();
         fileMenu.open = false;
         setWorkspaceButtonMessage(loadWorkspaceBtn, 'Loaded', 'Load');
     } catch (error) {
+        stageHydrating = false;
         console.error('Could not load workspace preset', error);
         setWorkspaceButtonMessage(loadWorkspaceBtn, 'Load failed', 'Load');
     }
@@ -752,13 +865,19 @@ toggleLibraryBtn.addEventListener('click', () => {
     libraryMenu.open = false;
 });
 
-window.addEventListener('toggle-library-dock', () => {
-    toggleLibraryDockMode();
+function updateLibraryPreviewMenuItem() {
+    const enabled = isLibraryPreviewEnabled();
+    toggleLibraryPreviewBtn.textContent = `Auto-preview: ${enabled ? 'On' : 'Off'}`;
+    toggleLibraryPreviewBtn.setAttribute('aria-pressed', String(enabled));
+}
+
+toggleLibraryPreviewBtn.addEventListener('click', () => {
+    setLibraryPreviewEnabled(!isLibraryPreviewEnabled());
+    updateLibraryPreviewMenuItem();
+    libraryMenu.open = false;
 });
 
-window.addEventListener('close-library-panel', () => {
-    toggleLibraryPanel('close');
-});
+updateLibraryPreviewMenuItem();
 
 window.addEventListener('toggle-properties-dock', (e: Event) => {
     const nodeId = (e as CustomEvent).detail?.nodeId;
@@ -813,6 +932,7 @@ previewRecalculateBtn.addEventListener('click', async () => {
 
 tempFilesSelect.addEventListener('change', (e) => {
     const val = (e.target as HTMLSelectElement).value;
+    updatePlaybackTrackPresentation();
     if (val === 'RAM_PREVIEW') {
         masterPlayer.play().catch(error => console.error('Play failed', error));
     } else if (val) {
@@ -915,6 +1035,7 @@ async function updateTempRendersList(selectFilename?: string) {
             if (selectedOpt) {
                 setMasterPlayerSource(selectedOpt.value);
             }
+            updatePlaybackTrackPresentation();
         } else {
             // No files left
             tempFilesSelect.innerHTML = '<option value="" disabled selected>No renders available</option>';
@@ -924,6 +1045,7 @@ async function updateTempRendersList(selectFilename?: string) {
             masterPlayBtn.disabled = true;
             masterWaveform.clear('Ready to render');
             updatePlaybackControls();
+            updatePlaybackTrackPresentation();
         }
     } catch (err) {
         console.error("Failed to update temp renders list", err);
@@ -1296,6 +1418,7 @@ export interface TrackNodeData {
     cents?: number;
     stretch_mode?: string;
     stretch_factor?: number;
+    stretch_algorithm?: string;
     sequence?: number[];
     step_parameters?: Array<{
         offset: number;
@@ -1308,17 +1431,12 @@ export interface TrackNodeData {
     play_mode?: string;
     fade_ms?: number;
     total_bars?: number | 'global';
-    probability?: number;
     section_points?: number[];
-    section_enabled?: boolean[];
     section_probability?: number[];
     section_sample_start?: number[];
     section_quant?: string[];
     section_quant_anchor?: string[];
-    quant?: string;
-    quant_anchor?: "start" | "end";
     duration_seconds?: number;
-    filters?: any;
     selected_items?: any[];
     playbackMode?: string;
     seed?: number;
@@ -1390,6 +1508,8 @@ export function extractMetadataFromPath(filepath: string): { bpm: number | null;
 const trackNodes = new Map<number, TrackNodeData>();
 (window as any).trackNodes = trackNodes;
 (window as any).fetchLibrary = fetchLibrary;
+(window as any).resolveLibraryAssets = resolveLibraryAssets;
+(window as any).runtimeLog = runtimeLog;
 (window as any).findLibraryFile = findLibraryFile;
 (window as any).findLibraryFileById = findLibraryFileById;
 (window as any).findLibraryFileForPoolLocator = findLibraryFileForPoolLocator;
@@ -1507,6 +1627,11 @@ window.addEventListener('node-property-changed', (event: Event) => {
     // re-run the same propagation pass used after connection changes.
     if (key === 'bpm' || key === 'target_bpm' || key === 'total_bars') {
         syncGraphHierarchy();
+    }
+    if (key === 'total_bars') {
+        window.dispatchEvent(new CustomEvent('arrangement-length-changed', {
+            detail: { nodeId }
+        }));
     }
 });
 
@@ -1691,7 +1816,7 @@ function updateGraphNodeCollapsing() {
                 (lgraphNode as any).collapsedDotMode = true;
 
                 if (activeParamNodeId === nodeId) {
-                    closeAllParamWindows();
+                    dockedPropertyPanels().forEach(panel => panel.api.close());
                 }
             }
         } else if (data.parentId === null) {
@@ -1716,8 +1841,22 @@ function updateGraphNodeCollapsing() {
     }
 }
 
-let libraryPreferredLocation: 'left' | 'floating' = 'left';
-let propertiesPreferredLocation: 'right' | 'floating' = 'right';
+function isFloatingPanel(panel: IDockviewPanel | undefined): boolean {
+    return panel?.group?.api?.location?.type === 'floating';
+}
+
+function propertyPanels(): IDockviewPanel[] {
+    const dv = (window as any).dockview;
+    return Array.from(dv?.panels || []).filter((panel: any) =>
+        panel.id?.startsWith('properties_')
+    ) as IDockviewPanel[];
+}
+
+function dockedPropertyPanels(exceptPanelId?: string): IDockviewPanel[] {
+    return propertyPanels().filter(panel =>
+        panel.id !== exceptPanelId && !isFloatingPanel(panel)
+    );
+}
 
 function updatePanelToggleButtons() {
     const dv = (window as any).dockview;
@@ -1734,11 +1873,7 @@ function updatePanelToggleButtons() {
     }
 
     if (dv && propBtn) {
-        let hasProp = false;
-        if (activeParamNodeId != null) {
-            const p = dv.getGroupPanel(`properties_${activeParamNodeId}`);
-            if (p) hasProp = true;
-        }
+        const hasProp = dockedPropertyPanels().length > 0;
         if (hasProp) {
             propBtn.classList.add('active');
         } else {
@@ -1766,48 +1901,23 @@ function toggleLibraryPanel(action: 'toggle' | 'open' | 'close' = 'toggle') {
     if (action === 'close') return;
 
     const graphPanel = dv.getGroupPanel('graph_panel');
-    if (libraryPreferredLocation === 'floating' || !graphPanel) {
-        const libPanel = dv.addPanel({
-            id: 'library_panel',
-            component: 'library-panel',
-            title: 'Library'
-        });
-        dv.addFloatingGroup(libPanel, {
-            x: 20,
-            y: 50,
-            width: 210,
-            height: 500
-        });
-    } else {
-        dv.addPanel({
-            id: 'library_panel',
-            component: 'library-panel',
-            title: 'Library',
-            position: {
-                referencePanel: 'graph_panel',
-                direction: 'left'
-            },
-            initialWidth: 210,
-            minimumWidth: 150,
-            maximumWidth: 315
-        });
-    }
+    if (!graphPanel) return;
+    dv.addPanel({
+        id: 'library_panel',
+        component: 'library-panel',
+        title: 'Library',
+        position: {
+            referencePanel: 'graph_panel',
+            direction: 'left'
+        },
+        initialWidth: 210,
+        minimumWidth: 150,
+        maximumWidth: 315
+    });
     updatePanelToggleButtons();
 }
 
-function toggleLibraryDockMode() {
-    const dv = (window as any).dockview;
-    if (!dv) return;
-    const p = dv.getGroupPanel('library_panel');
-    const isFloating = p?.group?.api?.location?.type === 'floating';
-
-    if (p) p.api.close();
-
-    libraryPreferredLocation = isFloating ? 'left' : 'floating';
-    toggleLibraryPanel('open');
-}
-
-function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: boolean }) {
+function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: boolean; location?: 'right' | 'floating' }) {
     if (!node || node.id == null) return;
     if (node.type !== "Audio/Track" && node.type !== "Audio/Sample" && node.type !== "Audio/Sequence" && node.type !== "Audio/Arrangement" && node.type !== "Audio/Modulator" && node.type !== "Audio/AssetFilter") return;
 
@@ -1816,10 +1926,8 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
 
     const panelId = `properties_${node.id}`;
     let panel = dv.getGroupPanel(panelId) as IDockviewPanel | undefined;
-    const previousPanels = Array.from(dv.panels || []).filter((candidate: any) =>
-        candidate.id?.startsWith('properties_') && candidate.id !== panelId
-    ) as IDockviewPanel[];
-    const previousPanel = previousPanels[0];
+    const previousDockedPanels = dockedPropertyPanels(panelId);
+    const previousDockedPanel = previousDockedPanels[0];
 
     if (options?.toggle && panel) {
         panel.api.close();
@@ -1828,10 +1936,11 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
     }
 
     (window as any)._currentlySelectedNode = node;
-    activeParamNodeId = node.id;
-
     if (panel) {
-        previousPanels.forEach(previous => previous.api.close());
+        if (!isFloatingPanel(panel)) {
+            previousDockedPanels.forEach(previous => previous.api.close());
+            activeParamNodeId = node.id;
+        }
         panel.api.setActive();
         updateGraphNodeCollapsing();
         updatePanelToggleButtons();
@@ -1841,7 +1950,8 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
     const width = 380;
     const graphPanel = dv.getGroupPanel('graph_panel');
 
-    if (propertiesPreferredLocation === 'floating' || !graphPanel) {
+    const location = options?.location || 'right';
+    if (location === 'floating' || !graphPanel) {
         panel = dv.addPanel({
             id: panelId,
             component: 'properties-panel',
@@ -1858,6 +1968,7 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
             height: 480
         });
     } else {
+        activeParamNodeId = node.id;
         panel = dv.addPanel({
             id: panelId,
             component: 'properties-panel',
@@ -1866,8 +1977,8 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
                 nodeId: node.id
             },
             position: {
-                referencePanel: previousPanel?.id || 'graph_panel',
-                direction: previousPanel ? 'within' : 'right'
+                referencePanel: previousDockedPanel?.id || 'graph_panel',
+                direction: previousDockedPanel ? 'within' : 'right'
             },
             initialWidth: width,
             minimumWidth: 260,
@@ -1876,7 +1987,7 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
     }
     // Close the old properties panel only after its replacement exists. This
     // keeps the dock group dimensions stable and avoids a full-canvas flash.
-    previousPanels.forEach(previous => previous.api.close());
+    if (location === 'right') previousDockedPanels.forEach(previous => previous.api.close());
     panel?.api.setActive();
     updateGraphNodeCollapsing();
     updatePanelToggleButtons();
@@ -1895,25 +2006,23 @@ function togglePropertiesDockMode(nodeId?: number) {
 
     const panelId = `properties_${targetId}`;
     const p = dv.getGroupPanel(panelId);
-    const isFloating = p?.group?.api?.location?.type === 'floating';
+    const isFloating = isFloatingPanel(p);
 
-    if (p) p.api.close();
-
-    propertiesPreferredLocation = isFloating ? 'right' : 'floating';
-    openParamWindow(node, { forceOpen: true });
+    if (!p) return;
+    if (isFloating) dockedPropertyPanels(panelId).forEach(panel => panel.api.close());
+    p.api.close();
+    openParamWindow(node, { forceOpen: true, location: isFloating ? 'right' : 'floating' });
 }
 
 function togglePropertiesPanel() {
     const dv = (window as any).dockview;
     if (!dv) return;
 
-    if (activeParamNodeId != null) {
-        const p = dv.getGroupPanel(`properties_${activeParamNodeId}`);
-        if (p) {
-            p.api.close();
-            updatePanelToggleButtons();
-            return;
-        }
+    const dockedPanel = dockedPropertyPanels()[0];
+    if (dockedPanel) {
+        dockedPanel.api.close();
+        updatePanelToggleButtons();
+        return;
     }
 
     const graph = (window as any).editorGraph;
@@ -2172,15 +2281,11 @@ function addChildNode(
         childNode.properties.fade_ms = 0;
     } else if (nodeType === "arrangement") {
         childNode.properties.total_bars = 4.0;
-        childNode.properties.probability = 1.0;
         childNode.properties.section_points = [];
-        childNode.properties.section_enabled = [true];
         childNode.properties.section_probability = [1.0];
         childNode.properties.section_sample_start = [0.0];
-        childNode.properties.section_quant = ["global"];
-        childNode.properties.section_quant_anchor = ["global"];
-        childNode.properties.quant = "none";
-        childNode.properties.quant_anchor = "start";
+        childNode.properties.section_quant = ["none"];
+        childNode.properties.section_quant_anchor = ["start"];
     } else if (nodeType === "track") {
         childNode.properties.bpm = 'global';
         childNode.properties.total_bars = 'global';
@@ -2261,15 +2366,11 @@ function addChildNode(
         bpm: nodeType === 'track' ? 'global' : undefined,
         target_bpm: nodeType === 'track' ? globalParameters.bpm : undefined,
         total_bars: nodeType === "arrangement" ? 4.0 : nodeType === 'track' ? 'global' : undefined,
-        probability: nodeType === "arrangement" ? 1.0 : undefined,
         section_points: nodeType === "arrangement" ? [] : undefined,
-        section_enabled: nodeType === "arrangement" ? [true] : undefined,
         section_probability: nodeType === "arrangement" ? [1.0] : undefined,
         section_sample_start: nodeType === "arrangement" ? [0.0] : undefined,
-        section_quant: nodeType === "arrangement" ? ["global"] : undefined,
-        section_quant_anchor: nodeType === "arrangement" ? ["global"] : undefined,
-        quant: nodeType === "arrangement" ? "none" : undefined,
-        quant_anchor: nodeType === "arrangement" ? "start" : undefined,
+        section_quant: nodeType === "arrangement" ? ["none"] : undefined,
+        section_quant_anchor: nodeType === "arrangement" ? ["start"] : undefined,
         parentId: parentId,
         children: []
     });
@@ -2427,15 +2528,11 @@ function addRootNode(
         rootNode.properties.fade_ms = 0;
     } else if (nodeType === "arrangement") {
         rootNode.properties.total_bars = 4.0;
-        rootNode.properties.probability = 1.0;
         rootNode.properties.section_points = [];
-        rootNode.properties.section_enabled = [true];
         rootNode.properties.section_probability = [1.0];
         rootNode.properties.section_sample_start = [0.0];
-        rootNode.properties.section_quant = ["global"];
-        rootNode.properties.section_quant_anchor = ["global"];
-        rootNode.properties.quant = "none";
-        rootNode.properties.quant_anchor = "start";
+        rootNode.properties.section_quant = ["none"];
+        rootNode.properties.section_quant_anchor = ["start"];
     } else if (nodeType === "track") {
         rootNode.properties.total_bars = 'global';
     }
@@ -2483,15 +2580,11 @@ function addRootNode(
         step_length: nodeType === "sequence" ? 0.25 : undefined,
         fade_ms: nodeType === "sequence" ? 0 : undefined,
         total_bars: nodeType === "arrangement" ? 4.0 : nodeType === 'track' ? 'global' : undefined,
-        probability: nodeType === "arrangement" ? 1.0 : undefined,
         section_points: nodeType === "arrangement" ? [] : undefined,
-        section_enabled: nodeType === "arrangement" ? [true] : undefined,
         section_probability: nodeType === "arrangement" ? [1.0] : undefined,
         section_sample_start: nodeType === "arrangement" ? [0.0] : undefined,
-        section_quant: nodeType === "arrangement" ? ["global"] : undefined,
-        section_quant_anchor: nodeType === "arrangement" ? ["global"] : undefined,
-        quant: nodeType === "arrangement" ? "none" : undefined,
-        quant_anchor: nodeType === "arrangement" ? "start" : undefined,
+        section_quant: nodeType === "arrangement" ? ["none"] : undefined,
+        section_quant_anchor: nodeType === "arrangement" ? ["start"] : undefined,
         parentId: null,
         children: []
     });
@@ -2507,7 +2600,7 @@ function addRootNode(
 async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
     if (!node?.properties || isMidiLibraryItem(item)) return false;
 
-    const files = await fetchLibrary(true, true);
+    const files = await resolveLibraryAssets([item]);
     const latest = refreshLibraryAssetSnapshot(item, files);
 
     const metadata = extractMetadataFromPath(item.filepath);
@@ -2629,6 +2722,9 @@ function addLibraryItemsToPool(node: any, items: LibraryDragItem[]) {
         if (key) byKey.set(key, item);
     }
     for (const item of items) {
+        if (item.id == null || !String(item.id).trim()) {
+            throw new Error('Cannot add a library item without its GAIA id to an Asset Pool');
+        }
         const poolItem = {
             id: item.id,
             absolute_path: item.filepath,
@@ -2742,6 +2838,207 @@ async function addLibraryItemsToCanvas(items: LibraryDragItem[], canvasPos?: [nu
     }
 }
 
+type StageSaveState = 'loading' | 'saved' | 'saving' | 'unsaved' | 'error';
+
+let stageSaveStatus: HTMLElement | null = null;
+let stageSaveTimer: number | null = null;
+let stageSaveInFlight = false;
+let stageSaveCompletion: Promise<void> | null = null;
+let resolveStageSaveCompletion: (() => void) | null = null;
+let stageSaveQueued = false;
+let stageHydrating = false;
+let stageReady = false;
+let lastSavedStageFingerprint: string | null = null;
+
+function setStageSaveState(state: StageSaveState, title?: string) {
+    if (!stageSaveStatus) return;
+    const labels: Record<StageSaveState, string> = {
+        loading: 'Loading last stage',
+        saved: 'All changes saved',
+        saving: 'Saving current stage',
+        unsaved: 'Changes waiting to be saved',
+        error: 'Could not save current stage'
+    };
+    const label = title || labels[state];
+    stageSaveStatus.dataset.state = state;
+    stageSaveStatus.title = label;
+    stageSaveStatus.setAttribute('aria-label', label);
+}
+
+function createCurrentStage(graph: LGraph) {
+    const graphData = serializeWorkspaceGraph(graph);
+    return {
+        fingerprint: JSON.stringify(graphData),
+        stage: {
+            version: WORKSPACE_PRESET_VERSION,
+            savedAt: new Date().toISOString(),
+            graph: graphData
+        }
+    };
+}
+
+function cancelScheduledStageSave() {
+    if (stageSaveTimer !== null) {
+        window.clearTimeout(stageSaveTimer);
+        stageSaveTimer = null;
+    }
+    stageSaveQueued = false;
+}
+
+function scheduleStageSave(delay = 650) {
+    if (!stageReady || stageHydrating) return;
+    const graph = (window as any).editorGraph as LGraph;
+    if (!graph) return;
+
+    const current = createCurrentStage(graph);
+    if (current.fingerprint === lastSavedStageFingerprint) {
+        if (!stageSaveInFlight) setStageSaveState('saved');
+        return;
+    }
+
+    setStageSaveState('unsaved');
+    if (stageSaveTimer !== null) window.clearTimeout(stageSaveTimer);
+    stageSaveTimer = window.setTimeout(() => {
+        stageSaveTimer = null;
+        void saveCurrentStage();
+    }, delay);
+}
+
+async function saveCurrentStage() {
+    if (!stageReady || stageHydrating) return;
+    const graph = (window as any).editorGraph as LGraph;
+    if (!graph) return;
+    if (stageSaveInFlight) {
+        stageSaveQueued = true;
+        return;
+    }
+
+    const current = createCurrentStage(graph);
+    if (current.fingerprint === lastSavedStageFingerprint) {
+        setStageSaveState('saved');
+        return;
+    }
+
+    stageSaveInFlight = true;
+    stageSaveCompletion = new Promise<void>(resolve => { resolveStageSaveCompletion = resolve; });
+    setStageSaveState('saving');
+    const saveStartedAt = performance.now();
+    runtimeLog('Saving current stage started', 'debug');
+    try {
+        const response = await fetch('/api/stage', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            keepalive: true,
+            body: JSON.stringify({ stage: current.stage })
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.detail || `Could not save current stage (${response.status})`);
+        }
+        lastSavedStageFingerprint = current.fingerprint;
+        const latest = createCurrentStage(graph).fingerprint;
+        setStageSaveState(latest === lastSavedStageFingerprint ? 'saved' : 'unsaved');
+        runtimeLog(`Saving current stage complete (${Math.round(performance.now() - saveStartedAt)} ms)`, 'debug');
+    } catch (error) {
+        console.error('Could not auto-save current stage', error);
+        setStageSaveState('error');
+        runtimeLog(`Saving current stage failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    } finally {
+        stageSaveInFlight = false;
+        const resolveCompletion = resolveStageSaveCompletion;
+        resolveStageSaveCompletion = null;
+        stageSaveCompletion = null;
+        resolveCompletion?.();
+        if (stageSaveQueued) {
+            stageSaveQueued = false;
+            scheduleStageSave(0);
+        }
+    }
+}
+
+async function restoreCurrentStage(graph: LGraph, canvas: LGraphCanvas): Promise<boolean> {
+    setStageSaveState('loading');
+    stageHydrating = true;
+    const restoreStartedAt = performance.now();
+    runtimeLog('Restoring current stage started', 'debug');
+    try {
+        const response = await fetch('/api/stage');
+        if (response.status === 404) {
+            lastSavedStageFingerprint = createCurrentStage(graph).fingerprint;
+            setStageSaveState('saved', 'No saved work yet');
+            runtimeLog(`No saved stage found (${Math.round(performance.now() - restoreStartedAt)} ms)`, 'common');
+            return false;
+        }
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.detail || `Could not load current stage (${response.status})`);
+        }
+
+        const data = await response.json();
+        const stage = data.stage;
+        if (!stage?.graph) throw new Error('The saved stage does not contain a graph.');
+
+        closeAllParamWindows();
+        activeParamNodeId = null;
+        graph.configure(prepareWorkspaceGraph(stage.graph));
+        rebuildTrackNodesFromGraph(graph);
+        loadGlobalParametersFromGraph(graph);
+        updateGraphNodeCollapsing();
+        canvas.setDirty(true, true);
+        lastSavedStageFingerprint = JSON.stringify(stage.graph);
+        setStageSaveState('saved');
+        runtimeLog(`Restoring current stage complete (${Math.round(performance.now() - restoreStartedAt)} ms)`, 'common');
+        return true;
+    } catch (error) {
+        console.error('Could not restore current stage', error);
+        setStageSaveState('error', 'Could not load last stage');
+        runtimeLog(`Restoring current stage failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+        return false;
+    } finally {
+        stageHydrating = false;
+        stageReady = true;
+    }
+}
+
+function installStageAutosave(graph: LGraph, canvas: HTMLCanvasElement) {
+    const graphWithCallbacks = graph as any;
+    const previousAfterChange = graphWithCallbacks.onAfterChange;
+    graphWithCallbacks.onAfterChange = (...args: any[]) => {
+        previousAfterChange?.apply(graph, args);
+        scheduleStageSave();
+    };
+
+    const previousNodeAdded = graphWithCallbacks.onNodeAdded;
+    graphWithCallbacks.onNodeAdded = (node: any) => {
+        previousNodeAdded?.call(graph, node);
+        scheduleStageSave();
+    };
+
+    const previousNodeRemoved = graphWithCallbacks.onNodeRemoved;
+    graphWithCallbacks.onNodeRemoved = (node: any) => {
+        previousNodeRemoved?.call(graph, node);
+        scheduleStageSave();
+    };
+
+    // LiteGraph finalizes node dragging on mouseup.  The fingerprint check in
+    // scheduleStageSave keeps ordinary clicks from producing network writes.
+    canvas.addEventListener('mouseup', () => scheduleStageSave());
+}
+
+window.addEventListener('node-property-changed', () => scheduleStageSave());
+window.addEventListener('graph-connections-changed', () => scheduleStageSave());
+window.addEventListener('global-parameters-changed', () => scheduleStageSave());
+window.addEventListener('set-main-preview-node', () => scheduleStageSave());
+window.addEventListener('pagehide', () => {
+    if (!stageReady || stageHydrating) return;
+    const graph = (window as any).editorGraph as LGraph;
+    if (!graph) return;
+    const current = createCurrentStage(graph);
+    if (current.fingerprint === lastSavedStageFingerprint) return;
+    const body = new Blob([JSON.stringify({ stage: current.stage })], { type: 'application/json' });
+    if (!navigator.sendBeacon('/api/stage', body)) void saveCurrentStage();
+});
+
 const dockview = new DockviewComponent(dockviewContainer, {
     createComponent: (options: any) => {
         const element = document.createElement('div');
@@ -2760,7 +3057,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                 canvas.style.backgroundColor = '#ffffff';
                 element.appendChild(canvas);
 
-                requestAnimationFrame(() => {
+                requestAnimationFrame(async () => {
                     const graph = new LGraph();
                     (window as any).editorGraph = graph;
                     loadGlobalParametersFromGraph(graph);
@@ -3101,10 +3398,9 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     });
                     resizeObserver.observe(element);
 
+                    await restoreCurrentStage(graph, graphCanvas);
+                    installStageAutosave(graph, canvas);
                     graph.start();
-
-                    // Add initial Master Track root node
-                    addRootNode("track");
 
                     graphCanvas.onSelectionChange = function () {
                         updateGraphNodeCollapsing();
@@ -3183,7 +3479,8 @@ const dockview = new DockviewComponent(dockviewContainer, {
                 break;
             }
             case 'library-panel': {
-                new LibraryPanel(element);
+                const panel = new LibraryPanel(element);
+                disposeComponent = () => panel.dispose();
                 break;
             }
         }
@@ -3197,6 +3494,14 @@ const dockview = new DockviewComponent(dockviewContainer, {
     }
 });
 (window as any).dockview = dockview;
+
+stageSaveStatus = document.createElement('div');
+stageSaveStatus.className = 'stage-save-status';
+stageSaveStatus.setAttribute('role', 'status');
+stageSaveStatus.setAttribute('aria-live', 'polite');
+dockviewContainer.appendChild(stageSaveStatus);
+setStageSaveState('loading');
+new RuntimeLogPanel(dockviewContainer);
 
 dockview.onDidAddPanel(() => updatePanelToggleButtons());
 dockview.onDidRemovePanel((panel: any) => {
@@ -3263,16 +3568,26 @@ async function renderNode(nodeId: number) {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
 
+    const renderStartedAt = performance.now();
+    runtimeLog(`Disk render requested for node ${nodeId}`, 'common');
+    let libraryFiles: LibraryFile[];
     try {
-        await syncGraphSampleMetadataFromLibrary(graph);
-        await resolveAssignedAssetFilters(graph, nodeId, { kind: 'render' });
+        libraryFiles = await loggedTask('Resolve graph asset metadata', () =>
+            syncGraphSampleMetadataFromLibrary(graph, true, nodeId)
+        );
+        await loggedTask('Resolve render asset pools', () =>
+            resolveAssignedAssetFilters(graph, nodeId, { kind: 'render', libraryFiles })
+        );
     } catch (error) {
         console.error('Asset Filter resolution failed', error);
-        alert('Could not resolve the assigned Asset Filter.');
+        const message = error instanceof Error ? error.message : String(error);
+        runtimeLog(`Disk render stopped: ${message}`, 'error');
+        alert(`Could not resolve the assigned Asset Filter: ${message}`);
         return;
     }
-    const payload = serializeNodeSubtree(graph, nodeId);
+    const payload = await loggedTask('Serialize render graph', () => serializeNodeSubtree(graph, nodeId));
     if (!payload) {
+        runtimeLog('Disk render stopped: graph serialization returned no payload', 'error');
         alert("Could not serialize node for rendering.");
         return;
     }
@@ -3280,11 +3595,13 @@ async function renderNode(nodeId: number) {
     payload.filename = `export_${nodeId}`;
 
     try {
-        const res = await fetch('/api/render', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        const res = await loggedTask('Render audio on server', () =>
+            fetch('/api/render', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+        );
         if (!res.ok) {
             let errorDetail = `Status code ${res.status}`;
             try {
@@ -3297,16 +3614,19 @@ async function renderNode(nodeId: number) {
             throw new Error(`Render failed: ${errorDetail}`);
         }
         const data = await res.json();
+        appendServerRuntimeLog(data.runtime_log);
 
         if (data.status === 'success' && data.filename) {
             await updateTempRendersList(data.filename);
             masterPlayer.play().catch(e => console.error(e));
+            runtimeLog(`Disk render complete (${Math.round(performance.now() - renderStartedAt)} ms)`, 'common');
         } else {
             console.error("Render failed:", data);
             alert("Render failed, check console.");
         }
     } catch (err) {
         console.error("Error during render:", err);
+        runtimeLog(`Disk render failed: ${(err as Error).message || String(err)}`, 'error');
         alert(`Error during render: ${(err as Error).message || err}`);
     }
 }
@@ -3331,23 +3651,33 @@ async function calculatePreview(
 ) {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) throw new Error('Graph is unavailable.');
-
-
+    const previewStartedAt = performance.now();
 
     try {
-        await syncGraphSampleMetadataFromLibrary(graph);
+        const libraryFiles = await loggedTask('Resolve graph asset metadata', () =>
+            syncGraphSampleMetadataFromLibrary(graph, true, nodeId)
+        );
         if (refreshModifiers) {
-            await resolveAssignedAssetFilters(graph, nodeId, { kind: 'preview', globalPreview });
+            await loggedTask('Resolve preview asset pools', () =>
+                resolveAssignedAssetFilters(graph, nodeId, {
+                    kind: 'preview',
+                    globalPreview,
+                    libraryFiles
+                })
+            );
         }
     } catch (error) {
         console.error('Asset Filter resolution failed', error);
-        throw new Error('Could not resolve the assigned Asset Filter.');
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Could not resolve the assigned Asset Filter: ${message}`);
     }
-    const payload = serializeNodeSubtree(
-        graph,
-        nodeId,
-        undefined,
-        { includeDynamicPools: refreshModifiers }
+    const payload = await loggedTask('Serialize preview graph', () =>
+        serializeNodeSubtree(
+            graph,
+            nodeId,
+            undefined,
+            { includeDynamicPools: refreshModifiers }
+        )
     );
     if (!payload) {
         throw new Error("Could not serialize node for preview.");
@@ -3357,11 +3687,13 @@ async function calculatePreview(
     payload.filename = keyName;
 
     try {
-        const res = await fetch('/api/preview', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        const res = await loggedTask('Render preview audio on server', () =>
+            fetch('/api/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+        );
 
         if (!res.ok) {
             let errorDetail = `Status code ${res.status}`;
@@ -3376,9 +3708,13 @@ async function calculatePreview(
         }
 
         const data = await res.json();
+        appendServerRuntimeLog(data.runtime_log);
 
         if (data.status === 'success' && data.audio_url) {
-            if (requestVersion !== previewRequestVersion) return;
+            if (requestVersion !== previewRequestVersion) {
+                runtimeLog(`Discarded superseded preview for node ${nodeId}`, 'warning');
+                return;
+            }
             activeRamPreviewNodeId = nodeId;
             activeRamPreviewPayload = payload;
             previewRecalculateBtn.disabled = false;
@@ -3390,17 +3726,24 @@ async function calculatePreview(
             if (!ramOpt) {
                 ramOpt = document.createElement('option');
                 ramOpt.value = 'RAM_PREVIEW';
-                ramOpt.textContent = `⚡ [RAM Preview] ${payload.node_name}`;
+                ramOpt.className = 'ram-preview-option';
+                ramOpt.textContent = `RAM · ${payload.node_name}`;
                 tempFilesSelect.insertBefore(ramOpt, tempFilesSelect.firstChild);
             } else {
-                ramOpt.textContent = `⚡ [RAM Preview] ${payload.node_name}`;
+                ramOpt.className = 'ram-preview-option';
+                ramOpt.textContent = `RAM · ${payload.node_name}`;
             }
             tempFilesSelect.value = 'RAM_PREVIEW';
+            updatePlaybackTrackPresentation();
+            runtimeLog(`Preview ready for node ${nodeId} (${Math.round(performance.now() - previewStartedAt)} ms)`, 'common');
         } else {
             throw new Error(data.detail || "RAM preview calculation failed.");
         }
     } catch (err) {
         console.error("Error during RAM preview:", err);
+        if (requestVersion === previewRequestVersion) {
+            runtimeLog(`Preview failed for node ${nodeId}: ${(err as Error).message || String(err)}`, 'error');
+        }
         if (requestVersion === previewRequestVersion) throw err;
     }
 }
@@ -3439,8 +3782,12 @@ function previewNode(
     globalPreview: boolean = false,
     refreshModifiers: boolean = true
 ): Promise<void> {
+    if (pendingPreviewRequest) {
+        runtimeLog(`Replaced queued preview for node ${pendingPreviewRequest.nodeId}`, 'warning');
+    }
     pendingPreviewRequest = { nodeId, autoplay, globalPreview, refreshModifiers };
     previewRequestVersion++;
+    runtimeLog(`Preview queued for node ${nodeId}`, 'common');
     setPreviewCalculatingState();
     if (!previewWorker) previewWorker = runPreviewQueue();
     return previewWorker;

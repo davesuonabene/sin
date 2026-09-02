@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import unittest
 from pathlib import Path
 import shutil
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 from gaia import crud, models, profiles, project_service, reference_service, schemas, vaults
 from gaia.routers import items as items_router, projects as projects_router
@@ -26,6 +28,11 @@ class TestGaiaProjects(GaiaTestCase):
             ),
         )
 
+    @staticmethod
+    def project_manifest(project):
+        path = Path(project.absolute_path) / "files" / "edit" / "current.json"
+        return path, json.loads(path.read_text(encoding="utf-8"))
+
     def test_sources_stay_read_only_while_projects_own_relationships(self):
         external_path = self.write_audio(self.temp_path / "external", "Board Mix.wav")
         managed_path = self.write_audio(self.asset_store / "loose", "Recorder.wav")
@@ -44,9 +51,13 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertIsNone(crud.get_item(self.db, managed.id).parent_id)
         self.assertEqual(
             {(row.from_item_id, row.to_item_id, row.relation_kind) for row in reference_service.list_references(self.db, project.id)},
-            {(project.id, external.id, "source"), (project.id, managed.id, "source")},
+            {(project.id, external.id, "use"), (project.id, managed.id, "use")},
         )
-        self.assertIn(f"gaia:item:{external.id}", (Path(project.absolute_path) / "SOURCES.md").read_text(encoding="utf-8"))
+        manifest_path, manifest = self.project_manifest(project)
+        self.assertTrue(manifest_path.is_file())
+        self.assertEqual(manifest["schema"], "gaia-project-state")
+        self.assertEqual({entry["item"]["id"] for entry in manifest["references"]}, {external.id, managed.id})
+        self.assertFalse(any(Path(project.absolute_path).glob("*.md")))
         self.assertFalse(any(child.parent_id == project.id for child in self.db.query(models.Item).all()))
 
     def test_project_delete_removes_its_context_edges_before_item_delete(self):
@@ -69,6 +80,45 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertFalse(project_path.exists())
         self.assertTrue(self.db.query(models.ItemReference).count() == 0)
         self.assertIsNotNone(crud.get_item(self.db, source.id))
+
+    def test_project_owned_file_can_be_deleted_from_nested_contents(self):
+        source = self.register_audio(self.write_audio(self.temp_path / "sources", "Take.wav"))
+        project = project_service.create_project(self.db, "Cleanup edit", "project", self.vault.id)
+        state_path = project_service.project_stage_directory(project, "working") / "old-state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text('{"version": 1}', encoding="utf-8")
+        item_schema, tags = project_service.file_schema_for_path(
+            state_path, self.vault.id, project.id
+        )
+        artifact = crud.create_item(self.db, item_schema)
+        if tags:
+            crud.set_item_tags(self.db, artifact.id, tags)
+        reference_service.create_reference(
+            self.db,
+            schemas.ProjectReferenceCreate(
+                from_item_id=source.id,
+                to_item_id=artifact.id,
+                relation_kind="derived",
+            ),
+            context_id=project.id,
+        )
+        content = next(
+            entry for entry in crud.get_item(self.db, project.id).contents
+            if entry["child_id"] == artifact.id
+        )
+
+        background_tasks = BackgroundTasks()
+        result = items_router.delete_collection_content(
+            project.id, content["index"], background_tasks, self.db
+        )
+        asyncio.run(background_tasks())
+
+        self.assertEqual(result["status"], "success")
+        self.assertIsNone(crud.get_item(self.db, artifact.id))
+        self.assertFalse(state_path.exists())
+        self.assertFalse(reference_service.list_references(self.db, project.id))
+        refreshed = crud.get_item(self.db, project.id)
+        self.assertFalse(any(entry.get("child_id") == artifact.id for entry in refreshed.contents))
 
     def test_project_references_are_listed_and_project_preview_resolves(self):
         first = self.register_audio(self.write_audio(self.temp_path / "sources", "First.wav"))
@@ -138,7 +188,7 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertEqual(result["adopted"], 2)
         adopted = [crud.get_item(self.db, item_id) for item_id in (first.id, second.id)]
         self.assertTrue(all(item.parent_id == project.id for item in adopted))
-        self.assertTrue(all(Path(item.absolute_path).parent == Path(project.absolute_path) / "sources" for item in adopted))
+        self.assertTrue(all(Path(item.absolute_path).parent == Path(project.absolute_path) for item in adopted))
         self.assertEqual({Path(item.absolute_path).name for item in adopted}, {"Take.wav", "Take_2.wav"})
         self.assertFalse(first_path.parent.exists())
         self.assertFalse(second_path.parent.exists())
@@ -150,7 +200,7 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertEqual(
             {(row.id, row.from_item_id, row.to_item_id, row.relation_kind) for row in reference_service.list_references(self.db, project.id)},
             {
-                (source_reference.id, project.id, first.id, "source"),
+                (source_reference.id, project.id, first.id, "use"),
                 (component_reference.id, first.id, second.id, "component"),
             },
         )
@@ -185,7 +235,10 @@ class TestGaiaProjects(GaiaTestCase):
             (new_root / "files" / "mixdown" / "Mix.wav").resolve(),
         )
         self.assertEqual(Path(crud.get_item(self.db, project.id).source_path), new_root.resolve())
-        self.assertIn("New project", (new_root / "PROJECT_CONTEXT.md").read_text(encoding="utf-8"))
+        manifest_path, manifest = self.project_manifest(renamed)
+        self.assertTrue(manifest_path.is_file())
+        self.assertEqual(manifest["project_id"], project.id)
+        self.assertFalse((new_root / "PROJECT_CONTEXT.md").exists())
 
     def test_folder_drop_can_reference_then_fully_move_an_item(self):
         store = vaults.vault_store(self.vault)
@@ -212,7 +265,7 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertTrue(source_path.exists())
         self.assertIsNone(crud.get_item(self.db, source.id).parent_id)
         reference = reference_service.list_references(self.db, target.id)[0]
-        self.assertEqual((reference.from_item_id, reference.to_item_id, reference.relation_kind), (target.id, source.id, "source"))
+        self.assertEqual((reference.from_item_id, reference.to_item_id, reference.relation_kind), (target.id, source.id, "use"))
 
         moved = project_service.place_items(self.db, target.id, [source.id], "move")
         self.assertEqual(moved["mode"], "move")
@@ -231,10 +284,10 @@ class TestGaiaProjects(GaiaTestCase):
 
         self.assertEqual(result["item_ids"], [source.id])
         moved = crud.get_item(self.db, source.id)
-        expected_path = Path(project.absolute_path) / "sources" / "Board Mix.wav"
+        expected_path = Path(project.absolute_path) / "Board Mix.wav"
         self.assertEqual((moved.vault_id, moved.parent_id, Path(moved.absolute_path)), (destination_vault.id, project.id, expected_path.resolve()))
         reference = reference_service.list_references(self.db, project.id)[0]
-        self.assertEqual(reference.relation_kind, "source")
+        self.assertEqual(reference.relation_kind, "use")
 
         updated = projects_router.update_project_reference(
             project.id,
@@ -243,7 +296,89 @@ class TestGaiaProjects(GaiaTestCase):
             self.db,
         )
         self.assertEqual(updated.revision_label, "mixdown")
-        self.assertIn("revision=mixdown", (Path(project.absolute_path) / "PROJECT_CONTEXT.md").read_text(encoding="utf-8"))
+        _, manifest = self.project_manifest(project)
+        entry = next(entry for entry in manifest["references"] if entry["reference_id"] == reference.id)
+        self.assertEqual(entry["revision_label"], "mixdown")
+
+    def test_project_creation_move_files_moves_orphan_files_into_new_project(self):
+        source = self.register_audio(self.write_audio(self.temp_path / "sources", "Orphan.wav"))
+        original_path = Path(source.absolute_path)
+
+        project = project_service.create_from_items(
+            self.db,
+            [source.id],
+            "single",
+            "Moved files",
+            "project",
+            self.vault.id,
+            move_files=True,
+        )[0]
+
+        moved = crud.get_item(self.db, source.id)
+        moved_path = Path(moved.absolute_path)
+        self.assertFalse(original_path.exists())
+        self.assertTrue(moved_path.is_file())
+        self.assertEqual(moved.parent_id, project.id)
+        self.assertEqual(moved_path.parent, Path(project.absolute_path))
+        self.assertEqual(
+            [(row.from_item_id, row.to_item_id, row.relation_kind) for row in reference_service.list_references(self.db, project.id)],
+            [(project.id, source.id, "use")],
+        )
+
+    def test_project_creation_move_files_copies_files_owned_by_another_project(self):
+        source = self.register_audio(self.write_audio(self.temp_path / "sources", "Owned.wav"))
+        source_project = project_service.create_project(self.db, "Source project", "project", self.vault.id)
+        project_service.place_items(self.db, source_project.id, [source.id], "move")
+        original_path = Path(crud.get_item(self.db, source.id).absolute_path)
+
+        target_project = project_service.create_from_items(
+            self.db,
+            [source.id],
+            "single",
+            "Copied files",
+            "project",
+            self.vault.id,
+            move_files=True,
+        )[0]
+
+        original = crud.get_item(self.db, source.id)
+        target_reference = reference_service.list_references(self.db, target_project.id)[0]
+        copied = crud.get_item(self.db, target_reference.to_item_id)
+        self.assertNotEqual(copied.id, original.id)
+        self.assertTrue(original_path.is_file())
+        self.assertTrue(Path(copied.absolute_path).is_file())
+        self.assertEqual(original.parent_id, source_project.id)
+        self.assertEqual(copied.parent_id, target_project.id)
+        self.assertEqual(Path(copied.absolute_path).parent, Path(target_project.absolute_path))
+        self.assertEqual(copied.file_hash, original.file_hash)
+
+    def test_project_creation_can_mix_linked_and_moved_files(self):
+        moved_source = self.register_audio(self.write_audio(self.temp_path / "sources", "Move.wav"))
+        linked_source = self.register_audio(self.write_audio(self.temp_path / "sources", "Link.wav"))
+        original_moved_path = Path(moved_source.absolute_path)
+        original_linked_path = Path(linked_source.absolute_path)
+
+        project = project_service.create_from_items(
+            self.db,
+            [moved_source.id, linked_source.id],
+            "single",
+            "Mixed files",
+            "project",
+            self.vault.id,
+            move_item_ids=[moved_source.id],
+        )[0]
+
+        moved = crud.get_item(self.db, moved_source.id)
+        linked = crud.get_item(self.db, linked_source.id)
+        self.assertFalse(original_moved_path.exists())
+        self.assertTrue(Path(moved.absolute_path).is_file())
+        self.assertEqual(moved.parent_id, project.id)
+        self.assertTrue(original_linked_path.is_file())
+        self.assertIsNone(linked.parent_id)
+        self.assertEqual(
+            {row.to_item_id for row in reference_service.list_references(self.db, project.id)},
+            {moved_source.id, linked_source.id},
+        )
 
     def test_zoom_h4_profile_creates_project_scoped_components_and_master(self):
         h4_folder = self.temp_path / "H4-session"
@@ -266,6 +401,14 @@ class TestGaiaProjects(GaiaTestCase):
         project = project_service.create_from_items(
             self.db, [h4.id], "single", "H4 edit", "project", self.vault.id
         )[0]
+        reference_service.apply_profile(
+            self.db,
+            project.id,
+            h4.id,
+            "zoom_h4",
+            mark_suggested_master=True,
+        )
+        project_service.sync_project_manifest(self.db, project.id)
         references = reference_service.list_references(self.db, project.id)
         components = [row for row in references if row.from_item_id == h4.id]
         self.assertEqual(len(components), 3)
@@ -306,15 +449,49 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertTrue(external_result.exists())
         self.assertEqual((reference.relation_kind, reference.revision_label, reference.is_master), ("derived", "02", True))
         self.assertEqual(reference_service.resolve_master(self.db, project.id)["resolved_item_id"], artifact.id)
-        self.assertIn("gaia:reference", (Path(project.absolute_path) / "PROJECT_CONTEXT.md").read_text(encoding="utf-8"))
-        self.assertTrue((Path(project.absolute_path) / "stages" / "edit" / "VERSION_02.md").is_file())
+        _, manifest = self.project_manifest(project)
+        entry = next(entry for entry in manifest["references"] if entry["reference_id"] == reference.id)
+        self.assertEqual((entry["relation_kind"], entry["revision_label"], entry["is_master"]), ("derived", "02", True))
+        self.assertFalse((Path(project.absolute_path) / "stages").exists())
+
+    def test_manifest_migrates_generated_markdown_without_touching_user_notes(self):
+        source = self.register_audio(self.write_audio(self.temp_path / "sources", "Take.wav"))
+        project = project_service.create_from_items(
+            self.db, [source.id], "single", "Manifest migration", "project", self.vault.id
+        )[0]
+        root = Path(project.absolute_path)
+        placeholder = root / "Take.wav.md"
+        placeholder.write_text(
+            f"# GAIA linked asset\n\ngaia:item:{source.id}\n",
+            encoding="utf-8",
+        )
+        context = root / "PROJECT_CONTEXT.md"
+        context.write_text(
+            "This file is generated by GAIA. The SQLite reference graph is canonical.\n",
+            encoding="utf-8",
+        )
+        generated_version = root / "stages" / "edit" / "VERSION_01.md"
+        generated_version.parent.mkdir(parents=True)
+        generated_version.write_text('```json\n{"reference_id": 1}\n```\n', encoding="utf-8")
+        note = root / "README.md"
+        note.write_text("Keep this user note.\n", encoding="utf-8")
+
+        result = project_service.sync_project_manifest(self.db, project.id)
+
+        manifest_path, manifest = self.project_manifest(project)
+        self.assertEqual(result["manifest"], str(manifest_path))
+        self.assertFalse(placeholder.exists())
+        self.assertFalse(context.exists())
+        self.assertFalse(generated_version.exists())
+        self.assertTrue(note.is_file())
+        self.assertEqual([entry["item"]["id"] for entry in manifest["references"]], [source.id])
 
     def test_nested_project_masters_resolve_and_cycles_are_reported(self):
         source = self.register_audio(self.write_audio(self.temp_path / "sources", "Take.wav"))
         first = project_service.create_from_items(
             self.db, [source.id], "single", "First", "project", self.vault.id
         )[0]
-        first_source = next(row for row in reference_service.list_references(self.db, first.id) if row.relation_kind == "source")
+        first_source = next(row for row in reference_service.list_references(self.db, first.id) if row.to_item_id == source.id)
         reference_service.set_master(self.db, first.id, first_source.id)
 
         second = project_service.create_project(self.db, "Second", "project", self.vault.id)

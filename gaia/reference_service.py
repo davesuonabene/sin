@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from sqlalchemy.orm import Session
 
 from . import integrity, models, profiles, schemas
 
 
-RELATION_KINDS = frozenset({"source", "component", "use", "derived", "supersedes"})
+RELATION_KINDS = frozenset({"component", "use", "derived", "supersedes"})
+
+_VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.+)\.(?P<revision>\d{2})(?P<extension>\.[^.]+)$", re.IGNORECASE)
 
 
 class ReferenceError(ValueError):
@@ -48,6 +51,39 @@ def _clean_optional_label(value: str | None, field_name: str) -> str | None:
     return cleaned
 
 
+def _clean_tags(values) -> list[str]:
+    if isinstance(values, str):
+        values = [values]
+    cleaned: list[str] = []
+    for value in values or []:
+        tag = str(value).strip()
+        if not tag or tag in cleaned:
+            continue
+        if len(tag) > 120:
+            raise ReferenceError("Relationship tags must be 120 characters or fewer")
+        cleaned.append(tag)
+    return cleaned
+
+
+def relation_tags(reference: models.ItemReference) -> list[str]:
+    values = reference.attributes.get("tags", [])
+    return _clean_tags(values)
+
+
+def file_version_info(path_or_name: str | Path) -> dict[str, str | None]:
+    """Return the filename group and two-digit revision encoded by ``.nn``."""
+    name = Path(path_or_name).name
+    match = _VERSION_SUFFIX_RE.match(name)
+    if not match:
+        return {"group": name.casefold(), "revision": None, "base_name": name}
+    base_name = f"{match.group('base')}{match.group('extension')}"
+    return {
+        "group": base_name.casefold(),
+        "revision": match.group("revision"),
+        "base_name": base_name,
+    }
+
+
 def _reference_payload(reference: models.ItemReference) -> dict:
     return {
         "id": reference.id,
@@ -58,6 +94,7 @@ def _reference_payload(reference: models.ItemReference) -> dict:
         "stage_name": reference.stage_name,
         "revision_label": reference.revision_label,
         "is_master": bool(reference.is_master),
+        "tags": relation_tags(reference),
         "attributes": reference.attributes,
         "created_at": reference.created_at,
         "updated_at": reference.updated_at,
@@ -116,8 +153,19 @@ def create_reference(
     if data.from_item_id == data.to_item_id:
         raise ReferenceError("A relationship cannot point to the same item")
 
-    stage_name = _clean_optional_label(data.stage_name, "Stage name")
+    # Stage metadata is retained only for reading legacy rows. New project
+    # links keep the same context as a generic relation tag.
+    stage_tag = _clean_optional_label(data.stage_name, "Stage name")
+    stage_name = None
     revision_label = _clean_optional_label(data.revision_label, "Revision label")
+    attributes = dict(getattr(data, "attributes", {}) or {})
+    explicit_tags = getattr(data, "tags", None) or []
+    stored_tags = attributes.get("tags", [])
+    if isinstance(stored_tags, str):
+        stored_tags = [stored_tags]
+    if stage_tag:
+        stored_tags = [*stored_tags, stage_tag]
+    attributes["tags"] = _clean_tags([*stored_tags, *explicit_tags])
     if data.is_master:
         _project(db, project_id)
         if _would_create_master_cycle(db, project_id, data.to_item_id):
@@ -132,7 +180,7 @@ def create_reference(
         stage_name=stage_name,
         revision_label=revision_label,
         is_master=bool(data.is_master),
-        attributes=getattr(data, "attributes", {}) or {},
+        attributes=attributes,
     )
     db.add(reference)
     if commit:
@@ -150,12 +198,14 @@ def create_source_reference(
     *,
     commit: bool = True,
 ) -> models.ItemReference:
+    # Kept as a compatibility shim for older callers. Projects now store a
+    # generic link rather than a source relationship.
     return create_reference(
         db,
         schemas.ProjectReferenceCreate(
             from_item_id=project_id,
             to_item_id=source_item_id,
-            relation_kind="source",
+            relation_kind="use",
         ),
         context_id=project_id,
         commit=commit,
@@ -170,6 +220,47 @@ def list_references(db: Session, project_id: int) -> list[models.ItemReference]:
         .order_by(models.ItemReference.created_at, models.ItemReference.id)
         .all()
     )
+
+
+def project_table(db: Session, project_id: int) -> list[dict]:
+    """Return one visible row per filename revision group.
+
+    The individual assets and reference rows remain intact. This projection is
+    only for consumers that want a compact project table with a version
+    selector.
+    """
+    from . import crud
+
+    references = list_references(db, project_id)
+    groups: dict[str, list[tuple[models.ItemReference, models.Item, dict]]] = {}
+    for reference in references:
+        item = _item(db, reference.to_item_id)
+        info = file_version_info(item.absolute_path)
+        groups.setdefault(str(info["group"]), []).append((reference, item, info))
+
+    rows: list[dict] = []
+    for group, entries in groups.items():
+        def sort_key(entry):
+            revision = entry[2].get("revision")
+            return (revision is not None, int(revision or 0), entry[1].absolute_path.casefold())
+
+        ordered = sorted(entries, key=sort_key)
+        selected = ordered[-1]
+        versions = []
+        for reference, item, info in ordered:
+            label = reference.revision_label or info.get("revision") or "base"
+            versions.append({
+                "item": crud.get_item(db, item.id),
+                "reference": _reference_payload(reference),
+                "label": str(label),
+            })
+        rows.append({
+            "item": crud.get_item(db, selected[1].id),
+            "reference": _reference_payload(selected[0]),
+            "version_group": group,
+            "versions": versions,
+        })
+    return rows
 
 
 def update_reference(
@@ -190,6 +281,10 @@ def update_reference(
     if not reference:
         raise ReferenceError("Reference not found")
     reference.revision_label = _clean_optional_label(data.revision_label, "Revision label")
+    if data.tags is not None:
+        attributes = dict(reference.attributes)
+        attributes["tags"] = _clean_tags(data.tags)
+        reference.attributes = attributes
     db.commit()
     db.refresh(reference)
     return reference
@@ -414,12 +509,12 @@ def apply_profile(
             models.ItemReference.context_id == project_id,
             models.ItemReference.from_item_id == project_id,
             models.ItemReference.to_item_id == source_item_id,
-            models.ItemReference.relation_kind == "source",
+            models.ItemReference.relation_kind == "use",
         )
         .first()
     )
     if not source_reference:
-        raise ReferenceError("Link the folder as a project source before applying a profile")
+        raise ReferenceError("Link the folder to the project before applying a profile")
     if not isinstance(source, models.FolderItem):
         raise ReferenceError("Profiles can only interpret folder-like source items")
     profile = profiles.get_profile(profile_id)

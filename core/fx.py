@@ -4,7 +4,9 @@ from typing import List, Dict, Any
 
 def apply_gain(audio: np.ndarray, params: Dict[str, Any]) -> np.ndarray:
     gain = float(params.get("gain", 1.0))
-    return (audio * gain).astype(np.float32)
+    if gain == 1.0:
+        return audio
+    return (audio * gain).astype(np.float32, copy=False)
 
 
 def apply_eq(audio: np.ndarray, params: Dict[str, Any], sr: int = 44100) -> np.ndarray:
@@ -207,7 +209,10 @@ def process_chain(audio_data: np.ndarray, chain_config: List[Dict[str, Any]], sa
     if audio_data.shape[-1] == 0 or not chain_config:
         return audio_data
 
-    buffer = np.copy(audio_data).astype(np.float32)
+    # Processors allocate their outputs when they change audio. Starting with
+    # an unconditional copy made even a disabled/unity chain traverse the full
+    # buffer for no audible effect.
+    buffer = np.asarray(audio_data, dtype=np.float32)
 
     for module in chain_config:
         if not module.get("enabled", True):
@@ -227,4 +232,4 @@ def process_chain(audio_data: np.ndarray, chain_config: List[Dict[str, Any]], sa
                 import logging
                 logging.getLogger("beat_generator.dsp").error(f"Error processing FX module {mod_type}: {e}")
 
-    return buffer.astype(np.float32)
+    return buffer.astype(np.float32, copy=False)

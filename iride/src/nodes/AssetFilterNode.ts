@@ -2,7 +2,7 @@ import { LiteGraph } from 'litegraph.js';
 import { ModulatorNode } from './ModulatorNode';
 import { type FieldSchema } from '../fields/FieldSchema';
 import { type NodePanelSchema } from '../fields/NodePanelSchema';
-import { fetchLibrary, refreshLibraryAssetSnapshot, type LibraryFile } from '../api';
+import { refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from '../api';
 
 /**
  * A typed modifier that selects one item from an explicit ordered asset pool.
@@ -89,8 +89,8 @@ export class AssetFilterNode extends ModulatorNode {
     }
 
     async syncMetadataFromLibrary(files?: LibraryFile[]): Promise<void> {
-        const libraryFiles = files || await fetchLibrary(true, true);
         const items = Array.isArray(this.properties?.selected_items) ? this.properties.selected_items : [];
+        const libraryFiles = files || await resolveLibraryAssets(items);
         const outputId = this.properties?.output_item_id;
         const outputPath = String(this.properties?.output_value || '');
         const outputItem = items.find((item: any) =>

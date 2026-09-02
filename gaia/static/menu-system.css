@@ -1,0 +1,132 @@
+/* Shared compact menu language for GAIA and SIN.
+   Keep behavior app-local; surfaces, rows, and native select presentation live here. */
+:root {
+    --sin-menu-surface: #111820;
+    --sin-menu-surface-hover: #183447;
+    --sin-menu-surface-active: #0b4d6b;
+    --sin-menu-border: #405363;
+    --sin-menu-divider: #2a3946;
+    --sin-menu-text: #dce6ed;
+    --sin-menu-muted: #8ea1af;
+    --sin-menu-accent: #38bdf8;
+    --sin-menu-danger: #fca5a5;
+}
+
+.sin-menu-surface {
+    box-sizing: border-box;
+    padding: 2px;
+    color: var(--sin-menu-text);
+    background: var(--sin-menu-surface);
+    border: 1px solid var(--sin-menu-border);
+    border-radius: 1px;
+    box-shadow: 0 4px 0 rgb(15 23 42 / 24%);
+}
+
+.sin-menu-item {
+    display: flex;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 24px;
+    align-items: center;
+    padding: 3px 7px;
+    color: var(--sin-menu-text);
+    background: transparent;
+    border: 0;
+    border-left: 2px solid transparent;
+    border-radius: 0;
+    font-size: 10.5px;
+    line-height: 1.2;
+    text-align: left;
+}
+
+.sin-menu-item:hover,
+.sin-menu-item:focus-visible {
+    color: #ffffff;
+    background: var(--sin-menu-surface-hover);
+    border-left-color: var(--sin-menu-accent);
+    outline: none;
+}
+
+.sin-menu-item.active,
+.sin-menu-item.is-active,
+.sin-menu-item[aria-selected='true'] {
+    color: #ffffff;
+    background: var(--sin-menu-surface-active);
+    border-left-color: var(--sin-menu-accent);
+}
+
+.sin-menu-item:disabled,
+.sin-menu-item[aria-disabled='true'] {
+    color: #5f707c;
+    cursor: not-allowed;
+}
+
+.sin-menu-item:disabled:hover,
+.sin-menu-item[aria-disabled='true']:hover {
+    background: transparent;
+    border-left-color: transparent;
+}
+
+.sin-menu-item.danger,
+.sin-menu-item.danger-menu-item {
+    color: var(--sin-menu-danger);
+}
+
+.sin-menu-item.danger:hover,
+.sin-menu-item.danger-menu-item:hover {
+    color: #fee2e2;
+    background: #4b2027;
+    border-left-color: #ef4444;
+}
+
+.sin-menu-divider {
+    height: 1px;
+    margin: 2px 4px;
+    background: var(--sin-menu-divider);
+}
+
+.sin-menu-heading {
+    padding: 4px 7px;
+    color: var(--sin-menu-muted);
+    border-bottom: 1px solid var(--sin-menu-divider);
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+}
+
+select.sin-select {
+    box-sizing: border-box;
+    min-height: 24px;
+    padding: 2px 20px 2px 6px;
+    appearance: none;
+    color: var(--sin-menu-text);
+    color-scheme: dark;
+    background-color: var(--sin-menu-surface);
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--sin-menu-muted) 50%),
+        linear-gradient(135deg, var(--sin-menu-muted) 50%, transparent 50%);
+    background-position:
+        calc(100% - 9px) 50%,
+        calc(100% - 5px) 50%;
+    background-repeat: no-repeat;
+    background-size: 4px 4px, 4px 4px;
+    border: 1px solid var(--sin-menu-border);
+    border-radius: 1px;
+    outline: none;
+    font-size: 10.5px;
+}
+
+select.sin-select:hover,
+select.sin-select:focus-visible {
+    color: #ffffff;
+    background-color: #17232d;
+    border-color: var(--sin-menu-accent);
+    outline: none;
+}
+
+select.sin-select option,
+select.sin-select optgroup {
+    color: var(--sin-menu-text);
+    background: var(--sin-menu-surface);
+}

@@ -156,7 +156,7 @@ export class SectionRendererFactory {
             if (currentColorIndicator) control.appendChild(currentColorIndicator);
 
             const select = document.createElement('select');
-            select.className = 'td-param-select td-appearance-select';
+            select.className = 'td-param-select td-appearance-select sin-select';
             select.setAttribute('aria-label', label);
             for (const optionConfig of options) {
                 const option = document.createElement('option');

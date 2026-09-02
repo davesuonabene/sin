@@ -9,7 +9,7 @@
       "description": "Zoom H4 folder layout with recorder channels and a rendered mixdown.",
       "container_type": "multitrack",
       "match": {
-        "filename_patterns": ["*Tr1.wav", "*TrMic.wav"]
+        "filename_patterns": ["Tr?.wav", "TrLR*.wav"]
       },
       "components": [
         {

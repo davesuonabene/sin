@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed, ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any, Callable, Iterable
 
@@ -38,6 +38,8 @@ from . import (
 PREVIEW_TTL_SECONDS = 60 * 60
 JOB_RETENTION_SECONDS = 24 * 60 * 60
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "stale"}
+ANALYSIS_WORKERS = max(2, min(8, os.cpu_count() or 2))
+COPY_PROGRESS_CHUNK_BYTES = 8 * 1024 * 1024
 FOLDER_TYPE_ASSIGNMENTS = {"type:multitrack": ("multitrack", None)}
 FILE_FAMILY_TYPES = {
     "audio": ("audio", "track", "sample"),
@@ -75,17 +77,22 @@ def _unique_directory(parent: Path, title: str) -> Path:
     return candidate if not candidate.exists() else parent / f"{_safe_name(title)}_{uuid.uuid4().hex[:8]}"
 
 
-def _unique_file_destination(parent: Path, filename: str) -> Path:
+def _unique_file_destination(parent: Path, filename: str, reserved: set[str] | None = None) -> Path:
     """Return a collision-free path without wrapping a loose file in another folder."""
+    reserved = reserved if reserved is not None else set()
     candidate = parent / Path(filename).name
-    if not candidate.exists():
+    candidate_key = str(candidate).casefold()
+    if not candidate.exists() and candidate_key not in reserved:
+        reserved.add(candidate_key)
         return candidate
     stem = Path(filename).stem or "asset"
     suffix = Path(filename).suffix
     counter = 2
     while True:
         candidate = parent / f"{stem}_{counter}{suffix}"
-        if not candidate.exists():
+        candidate_key = str(candidate).casefold()
+        if not candidate.exists() and candidate_key not in reserved:
+            reserved.add(candidate_key)
             return candidate
         counter += 1
 
@@ -137,6 +144,7 @@ def _artifact_reason(relative_path: str) -> str | None:
 def _file_entry(relative_path: str, size: int, modified_ns: int, index: int, signature: str | None = None) -> dict[str, Any]:
     relative = PurePosixPath(relative_path).as_posix()
     family, item_type = _file_family(relative)
+    extension = Path(relative).suffix.casefold()
     artifact_reason = _artifact_reason(relative)
     return {
         "index": index,
@@ -144,6 +152,7 @@ def _file_entry(relative_path: str, size: int, modified_ns: int, index: int, sig
         "kind": "file",
         "filename": PurePosixPath(relative).name,
         "relative_path": relative,
+        "extension": extension,
         "parent_path": PurePosixPath(relative).parent.as_posix() if PurePosixPath(relative).parent.as_posix() != "." else ".",
         "depth": len(PurePosixPath(relative).parts),
         "family": family,
@@ -381,6 +390,14 @@ def create_preview(source_path: str, vault_id: int | None, db: Session) -> dict[
     entries, nodes = _scan_source(source, source_kind)
     _classify_folders(nodes, entries)
     profile_options = _available_profiles()
+    type_counts: dict[str, int] = {}
+    extension_counts: dict[str, int] = {}
+    for entry in entries:
+        family = entry.get("family", "file")
+        type_counts[family] = type_counts.get(family, 0) + 1
+        extension = entry.get("extension", "")
+        extension_counts[extension] = extension_counts.get(extension, 0) + 1
+    type_labels = {"audio": "Audio", "midi": "MIDI", "sequence": "Sequence", "file": "Other files"}
     return {
         "preview_id": uuid.uuid4().hex,
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -397,6 +414,16 @@ def create_preview(source_path: str, vault_id: int | None, db: Session) -> dict[
         "inspection_ms": round((time.perf_counter() - started) * 1000),
         "profiles": profile_options,
         "folder_type_options": [{"value": "type:multitrack", "label": "Multitrack"}],
+        "filter_options": {
+            "types": [
+                {"value": value, "label": type_labels.get(value, value.title()), "count": count}
+                for value, count in sorted(type_counts.items(), key=lambda pair: pair[0])
+            ],
+            "extensions": [
+                {"value": value, "label": value or "(no extension)", "count": count}
+                for value, count in sorted(extension_counts.items(), key=lambda pair: (pair[0] == "", pair[0]))
+            ],
+        },
         "conflicts": _find_conflicts(db, vault, source, source_kind),
         "warnings": [],
     }
@@ -446,7 +473,7 @@ def _copy_entries(
     entries: Iterable[dict[str, Any]],
     prefix: str,
     cancelled: Callable[[], bool],
-    progress: Callable[[str], None],
+    progress: Callable[[str, int, bool], None],
 ) -> None:
     prefix_path = PurePosixPath() if prefix == "." else PurePosixPath(prefix)
     for entry in entries:
@@ -457,8 +484,102 @@ def _copy_entries(
         source_file = root.joinpath(*relative.parts)
         target_file = destination.joinpath(*rebased.parts)
         target_file.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_file, target_file)
-        progress(entry["filename"])
+        _copy_file_to_staging(source_file, target_file, lambda copied: progress(entry["filename"], copied, False))
+        progress(entry["filename"], 0, True)
+
+
+def _copy_file_to_staging(source: Path, destination: Path, progress: Callable[[int], None]) -> None:
+    """Copy one file with byte-level progress, then preserve its filesystem metadata."""
+    with source.open("rb") as source_handle, destination.open("wb") as destination_handle:
+        while True:
+            chunk = source_handle.read(COPY_PROGRESS_CHUNK_BYTES)
+            if not chunk:
+                break
+            destination_handle.write(chunk)
+            progress(len(chunk))
+    shutil.copystat(source, destination)
+
+
+def _original_source_path(preview: dict[str, Any], relative_path: str) -> str:
+    if preview["source_kind"] == "file":
+        return preview["source_path"]
+    if preview["source_kind"] == "zip":
+        return f"{preview['source_path']}::{relative_path}"
+    relative = PurePosixPath(relative_path)
+    return str(Path(preview["source_path"]).joinpath(*relative.parts))
+
+
+def _manifest_seed(preview: dict[str, Any], entry: dict[str, Any], relative_path: str, index: int) -> dict[str, Any]:
+    return {
+        "index": index,
+        "filename": entry["filename"],
+        "relative_path": relative_path,
+        "source_path": _original_source_path(preview, entry["relative_path"]),
+        "type": entry.get("type", "item"),
+        "mime_type": entry.get("mime_type"),
+        "size_bytes": entry.get("size_bytes"),
+        "duration_seconds": None,
+        "bpm": None,
+        "key": None,
+        "is_loop": False,
+        "tags": [],
+        "streamable": False,
+    }
+
+
+def _process_staged_entries(
+    staging_root: Path,
+    entries: list[dict[str, Any]],
+    destinations: list[Path],
+    cancelled: Callable[[], bool],
+    progress: Callable[[str], None],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Best-effort analyze staged files, then move each one into its managed path."""
+    if not entries:
+        return [], []
+    if len(entries) != len(destinations):
+        raise ValueError("Every staged import entry requires one managed destination")
+
+    def analyze(entry: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        source_path = staging_root / Path(entry["relative_path"])
+        entry_warnings: list[str] = []
+        try:
+            analyzed = collection_importer.analyze_manifest_entry(staging_root, dict(entry))
+        except Exception as exc:
+            analyzed = {
+                **entry,
+                "title": Path(entry["filename"]).stem,
+                "streamable": entry.get("type") in {"audio", "track", "sample"},
+            }
+            entry_warnings.append(
+                f"Automatic analysis failed for {entry['source_path']}: {exc}. "
+                "The file was imported with basic metadata and can be analyzed later."
+            )
+        try:
+            analyzed["file_hash"] = integrity.calculate_file_hash(str(source_path))
+        except Exception as exc:
+            analyzed["file_hash"] = ""
+            entry_warnings.append(f"Could not hash {entry['source_path']}: {exc}.")
+        return analyzed, entry_warnings
+
+    results: list[dict[str, Any] | None] = [None] * len(entries)
+    warnings: list[str] = []
+    with ThreadPoolExecutor(max_workers=min(ANALYSIS_WORKERS, len(entries)), thread_name_prefix="gaia-analysis") as executor:
+        futures = {executor.submit(analyze, entry): index for index, entry in enumerate(entries)}
+        for future in as_completed(futures):
+            if cancelled():
+                for pending in futures:
+                    pending.cancel()
+                raise ImportCancelled()
+            index = futures[future]
+            analyzed, entry_warnings = future.result()
+            destination = destinations[index]
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(staging_root / Path(entries[index]["relative_path"]), destination)
+            results[index] = analyzed
+            warnings.extend(entry_warnings)
+            progress(entries[index]["filename"])
+    return [entry for entry in results if entry is not None], warnings
 
 
 def _collection_tags(contents: list[dict[str, Any]]) -> list[str]:
@@ -487,16 +608,46 @@ def _item_schema_for_manifest(entry: dict[str, Any], absolute_path: Path, vault_
         "absolute_path": str(absolute_path.resolve()),
         "vault_id": vault_id,
         "parent_id": parent_id,
-        "file_hash": integrity.calculate_file_hash(str(absolute_path)),
+        "file_hash": entry["file_hash"] if "file_hash" in entry else integrity.calculate_file_hash(str(absolute_path)),
         "size_bytes": entry.get("size_bytes"),
         "mime_type": entry.get("mime_type"),
     }
+    audio_metadata = dict(entry.get("audio_metadata") or {})
+    if not audio_metadata:
+        audio_metadata = {
+            field: entry.get(field)
+            for field in collection_importer.AUDIO_METADATA_FIELDS
+            if entry.get(field) is not None
+        }
     if forced_type == "sample":
-        return schemas.SampleItemCreate(**common, bpm=entry.get("bpm"), key=entry.get("key"), is_loop=bool(entry.get("is_loop")))
+        return schemas.SampleItemCreate(
+            **common,
+            bpm=entry.get("bpm"),
+            key=entry.get("key"),
+            is_loop=bool(entry.get("is_loop")),
+            attributes={"audio_metadata": audio_metadata} if audio_metadata else {},
+        )
     if forced_type == "track":
-        return schemas.TrackItemCreate(**common)
+        return schemas.TrackItemCreate(
+            **common,
+            title=audio_metadata.get("title"),
+            author=entry.get("author"),
+            album=entry.get("album"),
+            album_artist=entry.get("album_artist"),
+            release_year=entry.get("release_year"),
+            genre=entry.get("genre"),
+            track_number=entry.get("track_number"),
+            disc_number=entry.get("disc_number"),
+            comment=entry.get("comment"),
+            attributes={"audio_metadata": audio_metadata} if audio_metadata else {},
+        )
     if forced_type == "audio":
-        return schemas.AudioItemCreate(**common, attributes={"analysis": {"is_loop": bool(entry.get("is_loop")), "bpm": entry.get("bpm"), "key": entry.get("key")}})
+        attributes = {
+            "analysis": {"is_loop": bool(entry.get("is_loop")), "bpm": entry.get("bpm"), "key": entry.get("key")}
+        }
+        if audio_metadata:
+            attributes["audio_metadata"] = audio_metadata
+        return schemas.AudioItemCreate(**common, attributes=attributes)
     if forced_type == "midi":
         return schemas.MidiItemCreate(**common, bpm=entry.get("bpm"), key=entry.get("key"))
     return schemas.ItemCreate(**common, type=forced_type if forced_type in {"sequence", "item"} else "item")
@@ -504,6 +655,7 @@ def _item_schema_for_manifest(entry: dict[str, Any], absolute_path: Path, vault_
 
 def _index_children(db: Session, snapshot: dict[str, Any], vault_id: int, parent_id: int, job: dict[str, Any], prefix: str) -> None:
     root = Path(snapshot["absolute_path"])
+    pending: list[tuple[models.Item, dict[str, Any], dict[str, Any] | None]] = []
     for entry in snapshot["contents"]:
         original = entry["relative_path"] if prefix == "." else (PurePosixPath(prefix) / entry["relative_path"]).as_posix()
         forced_type = _forced_item_type(original, entry, job)
@@ -516,25 +668,45 @@ def _index_children(db: Session, snapshot: dict[str, Any], vault_id: int, parent
                 profile_role_reason=preview_entry.get("profile_role_reason"),
             )
             item_schema.attributes = attributes
+        attributes = dict(item_schema.attributes or {})
+        attributes["import"] = {
+            "job_id": job["job_id"],
+            "source_path": entry["source_path"],
+            "imported_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+        item_schema.attributes = attributes
         child = crud.create_item(
             db,
             item_schema,
             commit=False,
+            flush=False,
         )
-        if entry.get("tags"):
-            crud.set_item_tags(db, child.id, entry["tags"], commit=False)
-        entry["child_id"] = child.id
         entry["type"] = forced_type
         if preview_entry and preview_entry.get("profile_role"):
             entry["profile_role"] = preview_entry["profile_role"]
+        pending.append((child, entry, preview_entry))
+    crud.set_items_tags(db, [(child, entry.get("tags", [])) for child, entry, _ in pending])
+    for child, entry, _ in pending:
+        entry["child_id"] = child.id
 
 
-def _container_snapshot(preview: dict[str, Any], staging: Path, destination: Path, target: dict[str, Any]) -> dict[str, Any]:
-    contents = collection_importer.build_manifest(staging)
+def _container_snapshot(
+    preview: dict[str, Any],
+    destination: Path,
+    target: dict[str, Any],
+    contents: list[dict[str, Any]],
+    import_warnings: list[str],
+) -> dict[str, Any]:
     analysis: dict[str, Any] = {}
-    warnings: list[str] = []
+    warnings = list(import_warnings)
     if target["container_type"] == "multitrack":
-        analysis = multitrack_analyzer.analyze_multitrack_folder(str(staging), recursive=False)
+        try:
+            analysis = multitrack_analyzer.analyze_multitrack_folder(str(destination), recursive=False)
+        except Exception as exc:
+            warnings.append(
+                f"Automatic multitrack analysis failed for {target['title']}: {exc}. "
+                "The files were imported and can be analyzed later."
+            )
         stems = analysis.get("stems", []) or []
         if stems and not analysis.get("is_valid_length"):
             warnings.append(f"Stem lengths differ by {float(analysis.get('length_variance') or 0):.4f} seconds.")
@@ -595,21 +767,32 @@ def _create_container(db: Session, snapshot: dict[str, Any], vault: models.Vault
         schema = schemas.CollectionItemCreate(**common)
     result = crud.create_item(db, schema, commit=False)
     _index_children(db, snapshot, vault.id, result.id, job, target["relative_path"])
-    crud.save_collection_contents(db, result, snapshot["contents"], commit=False)
+    crud.save_collection_contents(db, result, snapshot["contents"], commit=False, flush=False)
     tags = _collection_tags(snapshot["contents"])
     if tags:
-        crud.set_item_tags(db, result.id, tags, commit=False)
+        crud.set_items_tags(db, [(result, tags)])
     return result
 
 
 def _item_payload(item: models.Item) -> dict[str, Any]:
+    audio_metadata = dict((getattr(item, "attributes", {}) or {}).get("audio_metadata") or {})
     return {
         "id": item.id,
         "type": item.type,
         "display_type": item.attributes.get("profile_label") or item.type,
         "title": getattr(item, "title", None) or Path(item.absolute_path).name,
         "absolute_path": item.absolute_path,
+        "source_path": crud._source_path(item),
         "size_bytes": item.size_bytes,
+        "author": audio_metadata.get("author"),
+        "release_year": audio_metadata.get("release_year"),
+        "album": audio_metadata.get("album"),
+        "album_artist": audio_metadata.get("album_artist"),
+        "genre": audio_metadata.get("genre"),
+        "track_number": audio_metadata.get("track_number"),
+        "disc_number": audio_metadata.get("disc_number"),
+        "comment": audio_metadata.get("comment"),
+        "audio_metadata": audio_metadata,
     }
 
 
@@ -682,6 +865,19 @@ class ImportJobManager:
         excluded_indexes = set(request.excluded_indexes)
         if not excluded_indexes.issubset(valid_indexes):
             raise ImportPreviewError("An excluded file no longer belongs to this preview")
+        valid_filter_types = {entry.get("family") for entry in preview["entries"]}
+        requested_types = {str(value).casefold() for value in request.excluded_types}
+        if not requested_types.issubset(valid_filter_types):
+            raise ImportPreviewError("An excluded file type no longer belongs to this preview")
+        valid_extensions = {entry.get("extension", "") for entry in preview["entries"]}
+        requested_extensions = {str(value).casefold() for value in request.excluded_extensions}
+        if not requested_extensions.issubset(valid_extensions):
+            raise ImportPreviewError("An excluded file extension no longer belongs to this preview")
+        excluded_indexes.update(
+            entry["index"]
+            for entry in preview["entries"]
+            if entry.get("family") in requested_types or entry.get("extension", "") in requested_extensions
+        )
         item_types = {str(index): value for index, value in request.item_types.items()}
         for entry in preview["entries"]:
             selected = item_types.get(str(entry["index"]), entry["type"])
@@ -691,6 +887,10 @@ class ImportJobManager:
         included_entries = [entry for entry in preview["entries"] if entry["index"] not in excluded_indexes]
         if not included_entries:
             raise ImportPreviewError("Keep at least one file in the import")
+        targets = [
+            target for target in targets
+            if any(_relative_is_within(entry["relative_path"], target["relative_path"]) for entry in included_entries)
+        ]
         if preview["conflicts"] and request.conflict_action is None:
             raise ImportPreviewError("Choose how to handle the conflict shown in the preview")
         covered = {entry["index"] for entry in included_entries if any(_relative_is_within(entry["relative_path"], target["relative_path"]) for target in targets)}
@@ -699,6 +899,10 @@ class ImportJobManager:
         task = {
             "job_id": job_id, "status": "queued", "phase": "queued", "current_title": "",
             "total": len(included_entries), "completed": 0, "imported": 0, "skipped": 0,
+            "staging_total": len(included_entries), "staging_completed": 0,
+            "staging_bytes_total": sum(int(entry.get("size_bytes") or 0) for entry in included_entries),
+            "staging_bytes_completed": 0,
+            "processing_total": len(included_entries), "processing_completed": 0,
             "excluded": len(excluded_indexes), "failed": 0, "warnings": [], "error": None, "result_items": [],
             "log_path": str(self._log_path(job_id)), "created_epoch": time.time(), "cancel_requested": False,
             "preview": preview, "targets": targets, "loose_indexes": loose,
@@ -755,6 +959,7 @@ class ImportJobManager:
         task = self._jobs[job_id]
         preview = task["preview"]
         db = database.SessionLocal()
+        db.expire_on_commit = False
         staging_paths: list[Path] = []
         destinations: list[Path] = []
         results: list[models.Item] = []
@@ -766,67 +971,122 @@ class ImportJobManager:
                 self._append_log(task, "preview_invalidated", error=task["error"])
                 return
             if preview["conflicts"] and task["conflict_action"] == "skip":
-                self._update(task, status="completed", phase="completed", skipped=task["total"])
+                self._update(
+                    task,
+                    status="completed",
+                    phase="completed",
+                    completed=task["total"],
+                    staging_completed=task["staging_total"],
+                    staging_bytes_completed=task["staging_bytes_total"],
+                    processing_completed=task["processing_total"],
+                    skipped=task["total"],
+                )
                 self._append_log(task, "completed", reason="source_conflict_skipped")
                 return
             vault = _vault_for_request(db, preview["vault_id"])
             store = vaults.vault_store(vault).resolve()
 
-            def copied(title: str) -> None:
+            def copied(title: str, copied_bytes: int, file_completed: bool) -> None:
                 if self._cancelled(task):
                     raise ImportCancelled()
                 with self._lock:
-                    task["completed"] += 1
+                    task["staging_bytes_completed"] += copied_bytes
+                    if file_completed:
+                        task["staging_completed"] += 1
+                    task["completed"] = task["staging_completed"]
+                    task["current_title"] = title
+
+            def processed(title: str) -> None:
+                if self._cancelled(task):
+                    raise ImportCancelled()
+                with self._lock:
+                    task["processing_completed"] += 1
+                    task["completed"] = task["processing_completed"]
                     task["current_title"] = title
 
             with _materialized_root(preview) as root:
-                for target_number, target in enumerate(task["targets"]):
+                included_entries = [
+                    entry for entry in preview["entries"]
+                    if entry["index"] not in task["excluded_indexes"]
+                ]
+                staging = store / f".gaia-import-{job_id}.staging"
+                staging.mkdir(parents=True, exist_ok=False)
+                staging_paths.append(staging)
+                self._update(task, phase="staging", current_title="")
+                _copy_entries(root, staging, included_entries, ".", lambda: self._cancelled(task), copied)
+
+                self._update(task, phase="processing", completed=0, current_title="")
+                for target in task["targets"]:
                     entries = [
-                        entry for entry in preview["entries"]
-                        if entry["index"] not in task["excluded_indexes"]
-                        and _relative_is_within(entry["relative_path"], target["relative_path"])
+                        entry for entry in included_entries
+                        if _relative_is_within(entry["relative_path"], target["relative_path"])
                     ]
-                    staging = store / f".gaia-import-{job_id}-{target_number}.staging"
-                    staging.mkdir(parents=True, exist_ok=False)
-                    staging_paths.append(staging)
-                    self._update(task, phase="staging", current_title=target["title"])
-                    _copy_entries(root, staging, entries, target["relative_path"], lambda: self._cancelled(task), copied)
                     destination = _unique_directory(store, target["title"])
-                    self._update(task, phase="analyzing", current_title=target["title"])
-                    snapshot = _container_snapshot(preview, staging, destination, target)
-                    os.replace(staging, destination)
-                    staging_paths.remove(staging)
+                    destination.mkdir(parents=True, exist_ok=False)
                     destinations.append(destination)
+                    prefix = PurePosixPath() if target["relative_path"] == "." else PurePosixPath(target["relative_path"])
+                    target_staging = staging if target["relative_path"] == "." else staging.joinpath(*prefix.parts)
+                    seeds = []
+                    managed_paths = []
+                    for index, entry in enumerate(entries):
+                        relative = PurePosixPath(entry["relative_path"])
+                        rebased = relative if target["relative_path"] == "." else relative.relative_to(prefix)
+                        seeds.append(_manifest_seed(preview, entry, rebased.as_posix(), index))
+                        managed_paths.append(destination.joinpath(*rebased.parts))
+                    contents, warnings = _process_staged_entries(
+                        target_staging,
+                        seeds,
+                        managed_paths,
+                        lambda: self._cancelled(task),
+                        processed,
+                    )
+                    if warnings:
+                        with self._lock:
+                            task["warnings"].extend(warnings)
+                    snapshot = _container_snapshot(preview, destination, target, contents, warnings)
                     results.append(_create_container(db, snapshot, vault, task, target))
 
-                loose = [entry for entry in preview["entries"] if entry["index"] in task["loose_indexes"]]
+                loose = [entry for entry in included_entries if entry["index"] in task["loose_indexes"]]
                 if loose:
                     files_root = store / "files"
                     files_root.mkdir(parents=True, exist_ok=True)
-                    staging = store / f".gaia-import-{job_id}-files.staging"
-                    staging.mkdir(parents=True, exist_ok=False)
-                    staging_paths.append(staging)
-                    _copy_entries(root, staging, loose, ".", lambda: self._cancelled(task), copied)
-                    for entry in loose:
+                    seeds = [
+                        _manifest_seed(preview, entry, entry["relative_path"], index)
+                        for index, entry in enumerate(loose)
+                    ]
+                    reserved: set[str] = set()
+                    managed_paths = [
+                        _unique_file_destination(files_root, entry["filename"], reserved)
+                        for entry in loose
+                    ]
+                    destinations.extend(managed_paths)
+                    analyzed_entries, warnings = _process_staged_entries(
+                        staging,
+                        seeds,
+                        managed_paths,
+                        lambda: self._cancelled(task),
+                        processed,
+                    )
+                    if warnings:
+                        with self._lock:
+                            task["warnings"].extend(warnings)
+                    loose_items: list[tuple[models.Item, list[str]]] = []
+                    for entry, analyzed_entry, target_path in zip(loose, analyzed_entries, managed_paths):
                         forced_type = task["item_types"][str(entry["index"])]
-                        analyzed_entry = collection_importer.analyze_manifest_entry(staging, dict(entry))
-                        staged_file = staging / Path(analyzed_entry["relative_path"])
-                        target_path = _unique_file_destination(files_root, analyzed_entry["filename"])
-                        os.replace(staged_file, target_path)
-                        destinations.append(target_path)
                         item = _item_schema_for_manifest(analyzed_entry, target_path, vault.id, None, forced_type)
                         attributes = dict(item.attributes or {})
-                        if preview["source_kind"] == "file":
-                            original_source = preview["source_path"]
-                        elif preview["source_kind"] == "zip":
-                            original_source = f"{preview['source_path']}::{entry['relative_path']}"
-                        else:
-                            original_source = str(Path(preview["source_path"]) / Path(entry["relative_path"]))
-                        attributes["import"] = {"job_id": job_id, "source_path": original_source, "imported_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+                        attributes["import"] = {
+                            "job_id": job_id,
+                            "source_path": analyzed_entry["source_path"],
+                            "imported_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        }
                         item.attributes = attributes
-                        results.append(crud.create_item(db, item, commit=False))
-                    shutil.rmtree(staging, ignore_errors=True)
-                    staging_paths.remove(staging)
+                        created = crud.create_item(db, item, commit=False, flush=False)
+                        results.append(created)
+                        loose_items.append((created, analyzed_entry.get("tags", [])))
+                    crud.set_items_tags(db, loose_items)
+                shutil.rmtree(staging, ignore_errors=True)
+                staging_paths.remove(staging)
             if self._cancelled(task):
                 raise ImportCancelled()
             self._update(task, phase="finalizing", current_title="")
@@ -840,12 +1100,20 @@ class ImportJobManager:
                     item.id,
                     detail=job_id,
                     commit=False,
+                    flush=False,
                 )
             db.commit()
-            for item in results:
-                db.refresh(item)
-                crud._populate_item_fields(item)
-            self._update(task, status="completed", phase="completed", imported=len(results), result_items=[_item_payload(item) for item in results])
+            self._update(
+                task,
+                status="completed",
+                phase="completed",
+                completed=task["total"],
+                staging_completed=task["staging_total"],
+                staging_bytes_completed=task["staging_bytes_total"],
+                processing_completed=task["processing_total"],
+                imported=len(results),
+                result_items=[_item_payload(item) for item in results],
+            )
             self._append_log(task, "completed", imported=len(results), skipped=task["skipped"])
         except ImportCancelled:
             db.rollback()

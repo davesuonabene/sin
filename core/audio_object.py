@@ -6,6 +6,7 @@ import numpy as np
 from core.base_object import BaseObject
 from core.analyzers import BPMAnalyzer
 from core.dsp import stretch_audio, load_sample, process_sample_transform
+from core.runtime_trace import get_runtime_cache, set_runtime_cache, trace_runtime
 
 if TYPE_CHECKING:
     from core.system import System
@@ -37,7 +38,8 @@ class AudioObject(BaseObject):
         transpose: float = 0.0,
         cents: float = 0.0,
         stretch_mode: str = "time_stretch",
-        stretch_factor: float = 1.0
+        stretch_factor: float = 1.0,
+        stretch_algorithm: str = "rubberband"
     ) -> None:
         super().__init__(name=name, data=data)
         self.audio_data = audio_data if audio_data is not None else None
@@ -60,6 +62,7 @@ class AudioObject(BaseObject):
         self.cents: float = float(cents or 0.0)
         self.stretch_mode: str = str(stretch_mode or "time_stretch")
         self.stretch_factor: float = float(stretch_factor or 1.0)
+        self.stretch_algorithm: str = str(stretch_algorithm or "rubberband")
 
         # Children stored as list of (start_beat: float, child_object: AudioObject) tuples
         self.children: List[Tuple[float, AudioObject]] = []
@@ -71,7 +74,9 @@ class AudioObject(BaseObject):
         if self.chain:
             from core.fx import process_chain
             buffer = process_chain(buffer, self.chain, sample_rate=sr)
-        return (buffer * self.volume).astype(np.float32)
+        if self.volume == 1.0:
+            return buffer.astype(np.float32, copy=False)
+        return (buffer * self.volume).astype(np.float32, copy=False)
 
         # Calculate original_bpm if not explicitly provided
         if self._original_bpm is None:
@@ -151,7 +156,9 @@ class AudioObject(BaseObject):
                 cents=self.cents,
                 stretch_mode=self.stretch_mode,
                 stretch_factor=self.stretch_factor,
-                sample_type=self.sample_type
+                stretch_algorithm=self.stretch_algorithm,
+                sample_type=self.sample_type,
+                fast_preview=system is not None and system.render_mode == "preview",
             )
 
             return self.apply_chain(data_to_render, system)
@@ -262,7 +269,8 @@ class SampleObject(AudioObject):
         transpose: float = 0.0,
         cents: float = 0.0,
         stretch_mode: str = "time_stretch",
-        stretch_factor: float = 1.0
+        stretch_factor: float = 1.0,
+        stretch_algorithm: str = "rubberband"
     ) -> None:
         super().__init__(
             name=name,
@@ -278,7 +286,8 @@ class SampleObject(AudioObject):
             transpose=transpose,
             cents=cents,
             stretch_mode=stretch_mode,
-            stretch_factor=stretch_factor
+            stretch_factor=stretch_factor,
+            stretch_algorithm=stretch_algorithm
         )
 
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
@@ -323,7 +332,9 @@ class SampleObject(AudioObject):
                 cents=self.cents,
                 stretch_mode=self.stretch_mode,
                 stretch_factor=self.stretch_factor,
-                sample_type=self.sample_type
+                stretch_algorithm=self.stretch_algorithm,
+                sample_type=self.sample_type,
+                fast_preview=system is not None and system.render_mode == "preview",
             )
         except Exception as e:
             import logging
@@ -360,7 +371,8 @@ class SequenceObject(AudioObject):
         transpose: float = 0.0,
         cents: float = 0.0,
         stretch_mode: str = "time_stretch",
-        stretch_factor: float = 1.0
+        stretch_factor: float = 1.0,
+        stretch_algorithm: str = "rubberband"
     ) -> None:
         super().__init__(
             name=name,
@@ -376,7 +388,8 @@ class SequenceObject(AudioObject):
             transpose=transpose,
             cents=cents,
             stretch_mode=stretch_mode,
-            stretch_factor=stretch_factor
+            stretch_factor=stretch_factor,
+            stretch_algorithm=stretch_algorithm
         )
         self.sequence: List[int] = sequence if sequence is not None else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
         self.step_length: float = float(step_length)
@@ -565,7 +578,6 @@ class SequenceObject(AudioObject):
         return self.apply_chain(master_buffer, system)
 
 
-import sqlite3
 import random
 import os
 
@@ -573,7 +585,6 @@ class ItemPoolObject(AudioObject):
     def __init__(
         self,
         name: str = "ItemPoolObject",
-        filters: Optional[dict] = None,
         selected_items: Optional[List[Dict[str, Any]]] = None,
         playback_mode: str = "Random",
         seed: Optional[float] = None,
@@ -589,7 +600,8 @@ class ItemPoolObject(AudioObject):
         transpose: float = 0.0,
         cents: float = 0.0,
         stretch_mode: str = "time_stretch",
-        stretch_factor: float = 1.0
+        stretch_factor: float = 1.0,
+        stretch_algorithm: str = "rubberband"
     ) -> None:
         super().__init__(
             name=name,
@@ -604,11 +616,9 @@ class ItemPoolObject(AudioObject):
             transpose=transpose,
             cents=cents,
             stretch_mode=stretch_mode,
-            stretch_factor=stretch_factor
+            stretch_factor=stretch_factor,
+            stretch_algorithm=stretch_algorithm
         )
-        self.filters = filters or {}
-        # Explicit items are selected in SIN's read-only GAIA browser.  Keep the
-        # snapshot so collection contents (whose IDs are synthetic) also work.
         self.selected_items = selected_items or []
         self.playback_mode = playback_mode or "Random"
         self.seed = seed if seed is not None else random.random()
@@ -620,173 +630,26 @@ class ItemPoolObject(AudioObject):
         self.updatePool()
         
     def updatePool(self):
-        import json
+        """Build the runtime pool from the explicit, already-resolved keys.
 
+        Library filtering happens before an item is added in the SIN library
+        panel. This layer must only choose among those exact references.
+        """
         self.current_pool = []
-        excluded_titles = {
-            str(title).strip().casefold()
-            for title in self.filters.get("_excluded_titles", [])
-            if str(title).strip()
-        }
-        db_path = "gaia.db"
-        if not os.path.exists(db_path):
-            db_path = os.path.join("gaia", "gaia.db")
-        if not os.path.exists(db_path):
-            self.current_pool = [
-                {
-                    **item,
-                    "absolute_path": item.get("absolute_path") or item.get("filepath"),
-                    "type": item.get("type", "asset"),
-                    "bpm": item.get("bpm") or item.get("original_bpm"),
-                }
-                for item in self.selected_items
-                if (item.get("absolute_path") or item.get("filepath"))
-                and os.path.basename(item.get("absolute_path") or item.get("filepath")).casefold() not in excluded_titles
-            ]
-            return
-            
-        try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            
-            query = """
-                SELECT i.id, i.absolute_path, i.type, i.vault_id,
-                       COALESCE(s.bpm, m.bpm, mt.bpm) AS bpm,
-                       ci.manifest_json,
-                       GROUP_CONCAT(DISTINCT t.name) AS tag_names
-                FROM items i
-                LEFT JOIN sample_items s ON i.id = s.id
-                LEFT JOIN midi_items m ON i.id = m.id
-                LEFT JOIN multitrack_items mt ON i.id = mt.id
-                LEFT JOIN collection_items ci ON i.id = ci.id
-                LEFT JOIN item_tags it ON i.id = it.item_id
-                LEFT JOIN tags t ON it.tag_id = t.id
-            """
-            conditions = []
-            params = []
-            
-            tags = self.filters.get("tags") or []
-            if isinstance(tags, str):
-                tags = [tag.strip().casefold() for tag in tags.split(",") if tag.strip()]
-            else:
-                tags = [str(tag).strip().casefold() for tag in tags if str(tag).strip()]
-                    
-            item_types = self.filters.get("types", self.filters.get("type")) or []
-            if isinstance(item_types, str):
-                item_types = [item_types]
-            item_types = {str(item_type).strip().casefold() for item_type in item_types if str(item_type).strip()}
-
-            vault_ids = self.filters.get("vault_ids", self.filters.get("vault_id")) or []
-            if not isinstance(vault_ids, list):
-                vault_ids = [vault_ids]
-            if vault_ids:
-                placeholders = ",".join(["?"] * len(vault_ids))
-                conditions.append(f"i.vault_id IN ({placeholders})")
-                params.extend(vault_ids)
-                
-            bpm_min = self.filters.get("bpm_min")
-            bpm_max = self.filters.get("bpm_max")
-            
-            if conditions:
-                query += " WHERE " + " AND ".join(conditions)
-                
-            query += " GROUP BY i.id"
-            
-            # A library-backed pool is explicitly scoped by vault. This keeps a new
-            # or cleared pool empty while still allowing selected_items below.
-            if vault_ids:
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-            else:
-                rows = []
-
-            def matches_tags(item_tags):
-                normalized_tags = {
-                    str(tag).strip().casefold()
-                    for tag in item_tags
-                    if str(tag).strip()
-                }
-                return all(any(
-                    item_tag == selected_tag
-                    or item_tag.startswith(selected_tag + "/")
-                    or item_tag.startswith(selected_tag + ":")
-                    for item_tag in normalized_tags
-                ) for selected_tag in tags)
-
-            def matches_item_filters(item_type, bpm, item_tags):
-                if item_types and str(item_type).strip().casefold() not in item_types:
-                    return False
-                if tags and not matches_tags(item_tags):
-                    return False
-                if bpm_min is not None and (bpm is None or bpm < bpm_min):
-                    return False
-                if bpm_max is not None and (bpm is None or bpm > bpm_max):
-                    return False
-                return True
-
-            for row in rows:
-                parent_tags = (row["tag_names"] or "").split(",")
-                if row["type"] in {"collection", "sample_pack"}:
-                    try:
-                        contents = json.loads(row["manifest_json"] or "[]")
-                    except (TypeError, ValueError):
-                        contents = []
-                    collection_root = os.path.abspath(row["absolute_path"] or "")
-                    for content in contents:
-                        content_type = content.get("type")
-                        if content_type not in {"audio", "sample", "track", "midi"}:
-                            continue
-                        content_bpm = content.get("bpm")
-                        # Collections are organizers only; filter the actual
-                        # contained asset metadata, not tags assigned to the
-                        # container itself.
-                        content_tags = content.get("tags") or []
-                        if not matches_item_filters(content_type, content_bpm, content_tags):
-                            continue
-                        content_path = os.path.abspath(os.path.join(collection_root, content.get("relative_path") or ""))
-                        if not collection_root or os.path.commonpath([collection_root, content_path]) != collection_root:
-                            continue
-                        self.current_pool.append({
-                            "id": f"collection:{row['id']}:{content.get('index')}",
-                            "absolute_path": content_path,
-                            "type": content_type,
-                            "vault_id": row["vault_id"],
-                            "bpm": content_bpm,
-                        })
-                    continue
-
-                if matches_item_filters(row["type"], row["bpm"], parent_tags):
-                    self.current_pool.append({
-                        "id": row["id"],
-                        "absolute_path": row["absolute_path"],
-                        "type": row["type"],
-                        "vault_id": row["vault_id"],
-                        "bpm": row["bpm"],
-                    })
-
-            known_paths = {item.get("absolute_path") for item in self.current_pool}
-            for item in self.selected_items:
-                path = item.get("absolute_path") or item.get("filepath")
-                if path and path not in known_paths:
-                    self.current_pool.append({
-                        "id": item.get("id"),
-                        "absolute_path": path,
-                        "type": item.get("type", "asset"),
-                        "bpm": item.get("bpm") or item.get("original_bpm")
-                    })
-                    known_paths.add(path)
-
-            if excluded_titles:
-                self.current_pool = [
-                    item for item in self.current_pool
-                    if os.path.basename(item.get("absolute_path") or "").casefold() not in excluded_titles
-                ]
-                
-            conn.close()
-        except Exception as e:
-            import logging
-            logging.getLogger("beat_generator.core").error(f"Failed to update ItemPool: {e}")
+        for index, item in enumerate(self.selected_items):
+            if not isinstance(item, dict):
+                raise ValueError(f"Asset Pool item {index} is not an asset reference")
+            if item.get("id") is None:
+                raise ValueError(f"Asset Pool item {index} is missing its GAIA id")
+            filepath = item.get("absolute_path") or item.get("filepath") or item.get("path")
+            if not filepath:
+                raise ValueError(f"Asset Pool item {index} has no resolved asset path")
+            self.current_pool.append({
+                **item,
+                "absolute_path": filepath,
+                "type": item.get("type", "asset"),
+                "bpm": item.get("bpm") or item.get("original_bpm"),
+            })
 
     def getNextSample(self, advance: bool = False) -> Optional[str]:
         if not self.current_pool:
@@ -829,6 +692,8 @@ class ItemPoolObject(AudioObject):
             alt_path = os.path.join("assets", filepath)
             if os.path.exists(alt_path):
                 filepath = alt_path
+            else:
+                raise FileNotFoundError(f"Asset Pool asset is unavailable: {filepath}")
         
         try:
             audio_array, _ = load_sample(filepath, target_sr=sr)
@@ -858,17 +723,46 @@ class ItemPoolObject(AudioObject):
             return np.zeros(0, dtype=np.float32)
 
         target_bpm = system.bpm if system is not None else 120.0
-        data_to_render = process_sample_transform(
-            audio_data=audio_array,
-            sr=sr,
-            original_bpm=original_bpm,
-            target_bpm=target_bpm,
-            transpose=self.transpose,
-            cents=self.cents,
-            stretch_mode=self.stretch_mode,
-            stretch_factor=self.stretch_factor,
-            sample_type=self.sample_type
+        # A dynamic pool can revisit the same asset many times during one
+        # arrangement/sequence render. Decoding was cached per request, but the
+        # expensive Rubber Band transform was repeated for every occurrence.
+        transform_cache_key = (
+            "pool_transform",
+            os.path.normcase(os.path.abspath(filepath)),
+            int(sr),
+            float(original_bpm) if original_bpm is not None else None,
+            float(target_bpm),
+            float(self.crop_start),
+            float(self.crop_end),
+            float(self.transpose),
+            float(self.cents),
+            str(self.stretch_mode),
+            float(self.stretch_factor),
+            str(self.stretch_algorithm),
+            str(self.sample_type),
+            str(system.render_mode) if system is not None else "offline",
         )
+        data_to_render = get_runtime_cache(transform_cache_key)
+        if data_to_render is None:
+            data_to_render = process_sample_transform(
+                audio_data=audio_array,
+                sr=sr,
+                original_bpm=original_bpm,
+                target_bpm=target_bpm,
+                transpose=self.transpose,
+                cents=self.cents,
+                stretch_mode=self.stretch_mode,
+                stretch_factor=self.stretch_factor,
+                stretch_algorithm=self.stretch_algorithm,
+                sample_type=self.sample_type,
+                fast_preview=system is not None and system.render_mode == "preview",
+            )
+            set_runtime_cache(transform_cache_key, data_to_render)
+        else:
+            trace_marker = ("pool_transform_hit_logged", transform_cache_key)
+            if get_runtime_cache(trace_marker) is None:
+                trace_runtime(f"DSP transform cache hit: {os.path.basename(filepath)}")
+                set_runtime_cache(trace_marker, True)
             
         return self.apply_chain(data_to_render, system)
 
@@ -879,7 +773,7 @@ class ArrangementObject(AudioObject):
     """
     Arrangement node that takes one or more child audio objects (loops) with a predefined length
     and repeats them to fill a user defined time length (`total_bars`).
-    Each iteration evaluates `probability` (0.0 - 1.0) to see if it should play or be bypassed (silenced).
+    Each section owns its playback probability, source offset, quantization and anchor.
     If multiple children are provided, one is picked at random for each active iteration.
     """
     def __init__(
@@ -913,7 +807,6 @@ class ArrangementObject(AudioObject):
             sample_type=sample_type
         )
         self.total_bars = float(total_bars)
-        self.probability = float(probability)
         self.seed = seed if seed is not None else random.random()
         self.section_points = sorted({
             float(point) for point in (section_points or [])
@@ -921,16 +814,61 @@ class ArrangementObject(AudioObject):
         })
         num_sections = len(self.section_points) + 1
         raw_section_enabled = section_enabled or []
-        self.section_enabled = [
-            raw_section_enabled[index] is not False if index < len(raw_section_enabled) else True
+        # Retired arrangement controls are accepted only at this boundary so
+        # old work remains audible. They are folded into local arrays: a legacy
+        # disabled section becomes a zero-probability section.
+        try:
+            legacy_probability = max(0.0, min(1.0, float(probability)))
+        except (TypeError, ValueError):
+            legacy_probability = 1.0
+        legacy_quant = "none" if quant is None else str(quant).lower()
+        if legacy_quant in ("", "global", "inherit"):
+            legacy_quant = "none"
+        legacy_anchor = "end" if quant_anchor == "end" else "start"
+
+        raw_probability = list(section_probability) if section_probability is not None else []
+        raw_sample_start = list(section_sample_start) if section_sample_start is not None else []
+        raw_quant = list(section_quant) if section_quant is not None else []
+        raw_anchor = list(section_quant_anchor) if section_quant_anchor is not None else []
+        self.section_probability = [
+            0.0 if index < len(raw_section_enabled) and raw_section_enabled[index] is False else
+            self._valid_probability(raw_probability[index], legacy_probability)
+            if index < len(raw_probability) else legacy_probability
             for index in range(num_sections)
         ]
-        self.section_probability = list(section_probability) if section_probability is not None else []
-        self.section_sample_start = list(section_sample_start) if section_sample_start is not None else []
-        self.section_quant = list(section_quant) if section_quant is not None else []
-        self.section_quant_anchor = list(section_quant_anchor) if section_quant_anchor is not None else []
-        self.quant = "none" if quant is None else str(quant).lower()
-        self.quant_anchor = "end" if quant_anchor == "end" else "start"
+        self.section_sample_start = [
+            self._valid_sample_start(raw_sample_start[index]) if index < len(raw_sample_start) else 0.0
+            for index in range(num_sections)
+        ]
+        self.section_quant = [
+            self._valid_quant(raw_quant[index], legacy_quant) if index < len(raw_quant) else legacy_quant
+            for index in range(num_sections)
+        ]
+        self.section_quant_anchor = [
+            "end" if index < len(raw_anchor) and raw_anchor[index] == "end" else
+            "start" if index < len(raw_anchor) and raw_anchor[index] == "start" else
+            legacy_anchor
+            for index in range(num_sections)
+        ]
+
+    @staticmethod
+    def _valid_probability(value: Any, fallback: float) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _valid_sample_start(value: Any) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _valid_quant(value: Any, fallback: str) -> str:
+        normalized = str(value or "").lower()
+        return fallback if normalized in ("", "global", "inherit") else normalized
 
     def get_section_boundaries(self) -> List[float]:
         """Return validated section boundaries including the timeline edges."""
@@ -942,30 +880,18 @@ class ArrangementObject(AudioObject):
 
     def get_section_probability(self, section_index: int) -> float:
         if 0 <= section_index < len(self.section_probability):
-            val = self.section_probability[section_index]
-            if val is not None:
-                try:
-                    fval = float(val)
-                    if 0.0 <= fval <= 1.0:
-                        return fval
-                except (TypeError, ValueError):
-                    pass
-        return self.probability
+            return self._valid_probability(self.section_probability[section_index], 1.0)
+        return 1.0
 
     def get_section_quant(self, section_index: int) -> str:
         if 0 <= section_index < len(self.section_quant):
-            val = self.section_quant[section_index]
-            if val is not None and str(val).lower() not in ("", "global", "inherit"):
-                return str(val).lower()
-        return self.quant
+            return self._valid_quant(self.section_quant[section_index], "none")
+        return "none"
 
     def get_section_sample_start(self, section_index: int) -> float:
         """Return the section's normalized source offset, clamped to 0..1."""
         if 0 <= section_index < len(self.section_sample_start):
-            try:
-                return max(0.0, min(1.0, float(self.section_sample_start[section_index])))
-            except (TypeError, ValueError):
-                pass
+            return self._valid_sample_start(self.section_sample_start[section_index])
         return 0.0
 
     def get_section_quant_anchor(self, section_index: int) -> str:
@@ -973,7 +899,7 @@ class ArrangementObject(AudioObject):
             val = self.section_quant_anchor[section_index]
             if val in ("start", "end"):
                 return str(val)
-        return self.quant_anchor
+        return "start"
 
     def get_section_quant_samples(self, section_index: int, child: AudioObject, audio: np.ndarray, system: System) -> Optional[int]:
         s_quant = self.get_section_quant(section_index)
@@ -994,7 +920,7 @@ class ArrangementObject(AudioObject):
         return system.beat_to_samples(quant_bars * 4.0)
 
     def get_quant_samples(self, child: AudioObject, audio: np.ndarray, system: System) -> Optional[int]:
-        """Resolve the requested global quant interval. None means one event per section."""
+        """Compatibility helper for callers without a section index."""
         return self.get_section_quant_samples(-1, child, audio, system)
 
     def get_child_loop_samples(self, child: AudioObject, audio: np.ndarray, system: System) -> int:
@@ -1061,8 +987,6 @@ class ArrangementObject(AudioObject):
         iteration_count = 0
         boundaries = self.get_section_boundaries()
         for section_index in range(len(boundaries) - 1):
-            if section_index < len(self.section_enabled) and not self.section_enabled[section_index]:
-                continue
             section_start = system.beat_to_samples(boundaries[section_index] * 4.0)
             section_end = system.beat_to_samples(boundaries[section_index + 1] * 4.0)
             cell_start = section_start
