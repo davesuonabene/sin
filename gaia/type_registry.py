@@ -45,10 +45,10 @@ ASSET_TYPES = (
     AssetTypeDefinition("folder", "Folder", "asset", abstract=True, container=True),
     AssetTypeDefinition(
         "collection",
-        "Unclassified folder",
+        "Folder",
         "folder",
         container=True,
-        description="Inspection-only folder until a concrete type or profile is assigned.",
+        description="Folder collection.",
     ),
     AssetTypeDefinition(
         "multitrack",

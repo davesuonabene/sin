@@ -12,7 +12,7 @@ from . import integrity, models, profiles, schemas
 
 RELATION_KINDS = frozenset({"component", "use", "derived", "supersedes"})
 
-_VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.+)\.(?P<revision>\d{2})(?P<extension>\.[^.]+)$", re.IGNORECASE)
+_VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.+)\.(?P<revision>\d+)(?P<extension>\.[^.]+)$", re.IGNORECASE)
 
 
 class ReferenceError(ValueError):
@@ -222,18 +222,89 @@ def list_references(db: Session, project_id: int) -> list[models.ItemReference]:
     )
 
 
+def _find_item_version_siblings(db: Session, item: models.Item) -> list[models.Item]:
+    info = file_version_info(item.absolute_path)
+    target_group = info.get("group")
+    if not target_group:
+        return [item]
+    item_dir = str(Path(item.absolute_path).parent).replace("\\", "/")
+    candidates = (
+        db.query(models.Item)
+        .filter(
+            models.Item.vault_id == item.vault_id,
+            models.Item.parent_id == item.parent_id,
+        )
+        .all()
+    )
+    candidate_ids = {c.id for c in candidates}
+    if item.id not in candidate_ids:
+        candidates.append(item)
+
+    siblings: list[models.Item] = []
+    for candidate in candidates:
+        cand_dir = str(Path(candidate.absolute_path).parent).replace("\\", "/")
+        if cand_dir.casefold() == item_dir.casefold():
+            cand_info = file_version_info(candidate.absolute_path)
+            if cand_info.get("group") == target_group:
+                siblings.append(candidate)
+    return siblings or [item]
+
+
 def project_table(db: Session, project_id: int) -> list[dict]:
     """Return one visible row per filename revision group.
 
     The individual assets and reference rows remain intact. This projection is
     only for consumers that want a compact project table with a version
-    selector.
+    selector. References automatically inherit newly created sibling versions.
     """
     from . import crud
 
     references = list_references(db, project_id)
-    groups: dict[str, list[tuple[models.ItemReference, models.Item, dict]]] = {}
+    referenced_map = {ref.to_item_id: ref for ref in references}
+    new_refs_created = False
+
+    expanded_refs: list[models.ItemReference] = []
+    seen_ref_ids: set[int] = set()
+
     for reference in references:
+        if reference.id in seen_ref_ids:
+            continue
+        seen_ref_ids.add(reference.id)
+        expanded_refs.append(reference)
+
+        item = _item(db, reference.to_item_id)
+        siblings = _find_item_version_siblings(db, item)
+        for sibling in siblings:
+            if sibling.id in referenced_map:
+                sib_ref = referenced_map[sibling.id]
+                if sib_ref.id not in seen_ref_ids:
+                    seen_ref_ids.add(sib_ref.id)
+                    expanded_refs.append(sib_ref)
+            else:
+                sib_ref = create_reference(
+                    db,
+                    schemas.ProjectReferenceCreate(
+                        from_item_id=project_id,
+                        to_item_id=sibling.id,
+                        relation_kind=reference.relation_kind,
+                        stage_name=reference.stage_name,
+                        revision_label=reference.revision_label,
+                        tags=relation_tags(reference),
+                        attributes=dict(reference.attributes),
+                    ),
+                    context_id=project_id,
+                    commit=False,
+                )
+                referenced_map[sibling.id] = sib_ref
+                seen_ref_ids.add(sib_ref.id)
+                expanded_refs.append(sib_ref)
+                new_refs_created = True
+
+    if new_refs_created:
+        db.commit()
+
+    groups: dict[str, list[tuple[models.ItemReference, models.Item, dict]]] = {}
+    for reference in expanded_refs:
         item = _item(db, reference.to_item_id)
         info = file_version_info(item.absolute_path)
         groups.setdefault(str(info["group"]), []).append((reference, item, info))
@@ -248,7 +319,17 @@ def project_table(db: Session, project_id: int) -> list[dict]:
         selected = ordered[-1]
         versions = []
         for reference, item, info in ordered:
-            label = reference.revision_label or info.get("revision") or "base"
+            rev = info.get("revision")
+            base_label = reference.revision_label
+            if base_label:
+                if rev and not base_label.endswith(f".{rev}"):
+                    label = f"{base_label} .{rev}"
+                else:
+                    label = base_label
+            elif rev:
+                label = f".{rev}"
+            else:
+                label = "Original"
             versions.append({
                 "item": crud.get_item(db, item.id),
                 "reference": _reference_payload(reference),

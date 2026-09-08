@@ -521,19 +521,421 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertTrue(nested.is_master)
         self.assertEqual(reference_service.resolve_master(self.db, second.id)["resolved_item_id"], source.id)
 
-    def test_references_require_a_folder_context(self):
-        source = self.register_audio(self.write_audio(self.temp_path / "sources", "Take.wav"))
-        with self.assertRaisesRegex(reference_service.ReferenceError, "Folder context not found"):
-            reference_service.create_reference(
-                self.db,
-                schemas.ItemReferenceCreate(
-                    context_id=source.id,
-                    from_item_id=source.id,
-                    to_item_id=source.id + 1,
-                    relation_kind="use",
-                ),
-            )
+    def test_project_table_dynamic_version_inheritance(self):
+        source = self.register_audio(self.write_audio(self.temp_path / "sources", "Vocal.wav"))
+        project = project_service.create_project(self.db, "Song Session", "project", self.vault.id)
+        project_service.place_items(self.db, project.id, [source.id], mode="reference")
+
+        # Before sibling exists
+        table = reference_service.project_table(self.db, project.id)
+        self.assertEqual(len(table), 1)
+        self.assertEqual(len(table[0]["versions"]), 1)
+        self.assertEqual(table[0]["versions"][0]["label"], "Original")
+
+        # Now create a sibling version at the original location
+        source_dir = Path(source.absolute_path).parent
+        v2_path = source_dir / "Vocal.2.wav"
+        shutil.copy2(source.absolute_path, v2_path)
+        v2_item = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(v2_path.resolve()),
+                vault_id=source.vault_id,
+                parent_id=source.parent_id,
+                file_hash="fixture-v2-hash",
+                size_bytes=v2_path.stat().st_size,
+                mime_type="audio/wav",
+            ),
+        )
+
+        # Re-fetching project_table dynamically discovers and links Vocal.2.wav
+        updated_table = reference_service.project_table(self.db, project.id)
+        self.assertEqual(len(updated_table), 1)
+        self.assertEqual(len(updated_table[0]["versions"]), 2)
+        version_labels = [v["label"] for v in updated_table[0]["versions"]]
+        self.assertEqual(version_labels, ["Original", ".2"])
+        # Verify the active item is the latest version
+        self.assertEqual(updated_table[0]["item"].id, v2_item.id)
+
+    def test_project_place_items_copy_mode(self):
+        source = self.register_audio(self.write_audio(self.temp_path / "sources", "Loop.wav"))
+        project = project_service.create_project(self.db, "Beat Session", "project", self.vault.id)
+
+        result = project_service.place_items(self.db, project.id, [source.id], mode="copy")
+        self.assertEqual(result["mode"], "copy")
+        cloned_id = result["item_ids"][0]
+        cloned_item = crud.get_item(self.db, cloned_id)
+        self.assertEqual(cloned_item.parent_id, project.id)
+        self.assertTrue(Path(cloned_item.absolute_path).is_file())
+        self.assertTrue(Path(cloned_item.absolute_path).is_relative_to(Path(project.absolute_path)))
+        # Verify ItemReference edge was created for the copy
+        refs = reference_service.list_references(self.db, project.id)
+        self.assertTrue(any(r.to_item_id == cloned_id for r in refs))
+
+    def test_vault_place_items_copy_and_reference(self):
+        source = self.register_audio(self.write_audio(self.temp_path / "sources", "Sample.wav"))
+        # Test copy mode into vault
+        copy_result = vaults.place_items_in_vault(self.db, self.vault.id, [source.id], mode="copy")
+        self.assertEqual(copy_result["mode"], "copy")
+        self.assertEqual(len(copy_result["item_ids"]), 1)
+        cloned_id = copy_result["item_ids"][0]
+        self.assertNotEqual(cloned_id, source.id)
+        cloned = crud.get_item(self.db, cloned_id)
+        self.assertEqual(cloned.vault_id, self.vault.id)
+        self.assertIsNone(cloned.parent_id)
+        self.assertTrue(Path(cloned.absolute_path).exists())
+
+        # Test reference mode into vault with external file
+        ext_file = self.write_audio(self.temp_path / "external", "ExternalTrack.wav")
+        ext_source = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(ext_file.resolve()),
+                vault_id=self.vault.id,
+                file_hash="ext-hash",
+                size_bytes=ext_file.stat().st_size,
+                mime_type="audio/wav",
+                storage_mode="external_reference",
+            ),
+        )
+        # Create a second vault to test referencing across vaults
+        second_vault = vaults.create_vault(self.db, "Second Vault", None, None, "quick")
+        ref_result = vaults.place_items_in_vault(self.db, second_vault.id, [ext_source.id], mode="reference")
+        self.assertEqual(ref_result["mode"], "reference")
+        second_items = self.db.query(models.Item).filter(models.Item.vault_id == second_vault.id).all()
+        self.assertEqual(len(second_items), 1)
+        self.assertEqual(second_items[0].storage_mode, "external_reference")
+        self.assertEqual(second_items[0].absolute_path, str(ext_file.resolve()))
+
+    def test_create_folder_in_vault(self):
+        folder = project_service.create_folder(self.db, "Drums", vault_id=self.vault.id)
+        self.assertIsInstance(folder, models.CollectionItem)
+        self.assertEqual(folder.title, "Drums")
+        self.assertEqual(folder.vault_id, self.vault.id)
+        folder_disk = Path(folder.absolute_path)
+        self.assertTrue(folder_disk.is_dir())
+        self.assertEqual(folder_disk.parent, vaults.vault_store(self.vault))
+        self.assertTrue(folder.attributes.get("is_folder"))
+
+    def test_create_folder_and_move_managed_and_external_items(self):
+        managed_file = self.write_audio(self.asset_store / "loose", "Kick.wav")
+        managed = self.register_audio(managed_file)
+
+        ext_dir = self.temp_path / "ext_drive"
+        ext_dir.mkdir(parents=True, exist_ok=True)
+        ext_file = self.write_audio(ext_dir, "SnareRef.wav")
+        external = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(ext_file.resolve()),
+                vault_id=self.vault.id,
+                file_hash="snare-hash",
+                size_bytes=ext_file.stat().st_size,
+                mime_type="audio/wav",
+                storage_mode="external_reference",
+            ),
+        )
+
+        folder = project_service.create_folder(
+            self.db,
+            "Kit",
+            vault_id=self.vault.id,
+            item_ids=[managed.id, external.id],
+        )
+        self.assertEqual(folder.content_count, 2)
+
+        # Managed file must be moved physically into the folder
+        reloaded_managed = crud.get_item(self.db, managed.id)
+        self.assertEqual(reloaded_managed.parent_id, folder.id)
+        self.assertEqual(Path(reloaded_managed.absolute_path).parent, Path(folder.absolute_path))
+        self.assertTrue(Path(reloaded_managed.absolute_path).is_file())
+
+        # External file must NOT be moved on disk, but its folder parameter tracks the folder
+        reloaded_ext = crud.get_item(self.db, external.id)
+        self.assertEqual(reloaded_ext.parent_id, folder.id)
+        self.assertEqual(reloaded_ext.absolute_path, str(ext_file.resolve()))
+        self.assertTrue(ext_file.is_file())
+        self.assertEqual(reloaded_ext.attributes.get("folder"), "Kit")
+
+    def test_create_folder_api_endpoint(self):
+        req = schemas.FolderCreateRequest(
+            name="Samples",
+            vault_id=self.vault.id,
+        )
+        created = items_router.create_folder(req, db=self.db)
+        self.assertEqual(created.title, "Samples")
+        self.assertEqual(created.vault_id, self.vault.id)
+        self.assertTrue(Path(created.absolute_path).is_dir())
+
+    def test_create_folder_in_project_with_references_preserves_files_on_disk(self):
+        project = project_service.create_project(self.db, "Song Alpha", "project", self.vault.id)
+
+        # 1. External reference
+        ext_dir = self.temp_path / "outside_audio"
+        ext_dir.mkdir(parents=True, exist_ok=True)
+        ext_file = self.write_audio(ext_dir, "ExternalLead.wav")
+        ext_original_path = str(ext_file.resolve())
+        external_item = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=ext_original_path,
+                vault_id=self.vault.id,
+                file_hash="ext-lead-hash",
+                size_bytes=ext_file.stat().st_size,
+                mime_type="audio/wav",
+                storage_mode="external_reference",
+            ),
+        )
+
+        # 2. Managed library item
+        lib_file = self.write_audio(self.asset_store / "library_loose", "VocalLoop.wav")
+        managed_item = self.register_audio(lib_file)
+        managed_original_path = managed_item.absolute_path
+
+        # Link both items into the project as references
+        ref_ext = reference_service.create_reference(
+            self.db,
+            schemas.ProjectReferenceCreate(
+                from_item_id=project.id,
+                to_item_id=external_item.id,
+                relation_kind="use",
+            ),
+            context_id=project.id,
+        )
+        ref_managed = reference_service.create_reference(
+            self.db,
+            schemas.ProjectReferenceCreate(
+                from_item_id=project.id,
+                to_item_id=managed_item.id,
+                relation_kind="use",
+            ),
+            context_id=project.id,
+        )
+
+        # Create folder "Vocals" inside the project using reference_ids
+        folder = project_service.create_folder(
+            self.db,
+            "Vocals",
+            parent_id=project.id,
+            reference_ids=[ref_ext.id, ref_managed.id],
+        )
+
+        self.assertEqual(folder.title, "Vocals")
+        self.assertEqual(folder.parent_id, project.id)
+        self.assertEqual(folder.content_count, 2)
+
+        # Verify reference attributes updated to folder
+        reloaded_ref_ext = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref_ext.id).first()
+        self.assertEqual(reloaded_ref_ext.attributes.get("folder"), "Vocals")
+        reloaded_ref_managed = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref_managed.id).first()
+        self.assertEqual(reloaded_ref_managed.attributes.get("folder"), "Vocals")
+
+        # CRITICAL: Files on disk must NOT have moved!
+        self.assertEqual(external_item.absolute_path, ext_original_path)
+        self.assertTrue(ext_file.is_file())
+        reloaded_managed = crud.get_item(self.db, managed_item.id)
+        self.assertEqual(reloaded_managed.absolute_path, managed_original_path)
+        self.assertTrue(Path(managed_original_path).is_file())
+
+        # CRITICAL: Managed library item's parent_id must NOT be altered
+        self.assertNotEqual(reloaded_managed.parent_id, folder.id)
+
+        # Verify folder label in crud summary
+        folder_summary = crud.item_summary(folder)
+        self.assertEqual(folder_summary.get("attributes", {}).get("profile_label"), "Folder")
+
+    def test_place_items_inside_project_folder_does_not_move_project_references(self):
+        project = project_service.create_project(self.db, "Song Beta", "project", self.vault.id)
+        lib_file = self.write_audio(self.asset_store / "loose_samples", "Guitar.wav")
+        managed_item = self.register_audio(lib_file)
+        managed_original_path = managed_item.absolute_path
+
+        ref = reference_service.create_reference(
+            self.db,
+            schemas.ProjectReferenceCreate(
+                from_item_id=project.id,
+                to_item_id=managed_item.id,
+                relation_kind="use",
+            ),
+            context_id=project.id,
+        )
+
+        folder = project_service.create_folder(self.db, "Instruments", parent_id=project.id)
+
+        # Place the item into the folder via item_ids
+        project_service.place_items(self.db, folder.id, [managed_item.id], mode="move")
+
+        # The file on disk must NOT be moved because it's a project reference
+        self.assertTrue(Path(managed_original_path).is_file())
+        reloaded_item = crud.get_item(self.db, managed_item.id)
+        self.assertEqual(reloaded_item.absolute_path, managed_original_path)
+        self.assertNotEqual(reloaded_item.parent_id, folder.id)
+
+        # The project reference attributes must have the folder
+        reloaded_ref = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref.id).first()
+        self.assertEqual(reloaded_ref.attributes.get("folder"), "Instruments")
+
+        # Now move the item back to the root of the project (out of the folder)
+        project_service.place_items(self.db, project.id, [managed_item.id], mode="move")
+
+        # The project reference attributes must NO LONGER have the folder attribute, and must NOT be "."
+        reloaded_ref_root = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref.id).first()
+        self.assertNotIn("folder", reloaded_ref_root.attributes or {})
+
+    def test_delete_project_folder_cleans_reference_folder_attributes_and_keeps_files(self):
+        project = project_service.create_project(self.db, "Song Gamma", "project", self.vault.id)
+        lib_file = self.write_audio(self.asset_store / "loose_samples", "Vocal.wav")
+        managed_item = self.register_audio(lib_file)
+        managed_original_path = managed_item.absolute_path
+
+        ref = reference_service.create_reference(
+            self.db,
+            schemas.ProjectReferenceCreate(
+                from_item_id=project.id,
+                to_item_id=managed_item.id,
+                relation_kind="use",
+            ),
+            context_id=project.id,
+        )
+
+        folder = project_service.create_folder(self.db, "Vocals", parent_id=project.id)
+        project_service.place_items(self.db, folder.id, [managed_item.id], mode="move")
+
+        reloaded_ref = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref.id).first()
+        self.assertEqual(reloaded_ref.attributes.get("folder"), "Vocals")
+
+        # Now delete the folder item via items_router.delete_item
+        background_tasks = BackgroundTasks()
+        result = items_router.delete_item(folder.id, self.db, background_tasks)
+        self.assertEqual(result["status"], "success")
+
+        # The folder item is deleted
+        self.assertIsNone(crud.get_item(self.db, folder.id))
+
+        # The referenced file on disk must NOT be touched
+        self.assertTrue(Path(managed_original_path).is_file())
+
+        # The reference must still exist in the project, but without the "folder" attribute
+        reloaded_ref_after = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref.id).first()
+        self.assertIsNotNone(reloaded_ref_after)
+        self.assertNotIn("folder", reloaded_ref_after.attributes or {})
+
+        # The project manifest must be synced and present
+        manifest_path, manifest = self.project_manifest(project)
+        self.assertTrue(manifest_path.is_file())
+        ref_in_manifest = next(r for r in manifest["references"] if r["item"]["id"] == managed_item.id)
+        self.assertNotIn("folder", (ref_in_manifest.get("attributes") or {}))
+
+    def test_delete_folder_with_externally_referenced_descendants_succeeds_and_preserves_items(self):
+        project1 = project_service.create_project(self.db, "Project One", "project", self.vault.id)
+        project2 = project_service.create_project(self.db, "Project Two", "project", self.vault.id)
+
+        folder = project_service.create_folder(self.db, "subfolder", parent_id=project2.id)
+
+        cut_file = self.write_audio(Path(folder.absolute_path), "cut.wav")
+        cut_item = self.register_audio(cut_file)
+        cut_item.parent_id = folder.id
+        self.db.commit()
+
+        # project1 references cut_item (external to project2)
+        ref_proj1 = reference_service.create_reference(
+            self.db,
+            schemas.ProjectReferenceCreate(
+                from_item_id=project1.id,
+                to_item_id=cut_item.id,
+                relation_kind="derived",
+            ),
+            context_id=project1.id,
+        )
+
+        # project2 also references cut_item
+        ref_proj2 = reference_service.create_reference(
+            self.db,
+            schemas.ProjectReferenceCreate(
+                from_item_id=project2.id,
+                to_item_id=cut_item.id,
+                relation_kind="use",
+            ),
+            context_id=project2.id,
+        )
+
+        # Deleting folder must succeed and must NOT throw 'Item is referenced by a project'
+        background_tasks = BackgroundTasks()
+        result = items_router.delete_item(folder.id, self.db, background_tasks)
+        self.assertEqual(result["status"], "success")
+
+        # Folder is deleted
+        self.assertIsNone(crud.get_item(self.db, folder.id))
+
+        # cut_item is preserved, reparented to project2.id
+        reloaded_cut = crud.get_item(self.db, cut_item.id)
+        self.assertIsNotNone(reloaded_cut)
+        self.assertEqual(reloaded_cut.parent_id, project2.id)
+
+        # Reference in project1 remains intact
+        reloaded_ref1 = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref_proj1.id).first()
+        self.assertIsNotNone(reloaded_ref1)
+
+        # Attempting to delete cut_item directly fails because project1 references it
+        with self.assertRaises(HTTPException) as ctx:
+            items_router.delete_item(cut_item.id, self.db)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Item is referenced by a project", ctx.exception.detail)
+
+    def test_place_items_virtual_bins_reference_mode_and_folder_parameter(self):
+        project = project_service.create_project(self.db, "Virtual Bin Test", "project", self.vault.id)
+        lib_file = self.write_audio(self.asset_store / "loose_samples", "Clap.wav")
+        managed_item = self.register_audio(lib_file)
+        original_path = managed_item.absolute_path
+
+        # 1. Place unreferenced item into virtual folder "Percussion" via reference mode with folder param
+        result = project_service.place_items(
+            self.db, project.id, [managed_item.id], mode="reference", folder="Percussion"
+        )
+        self.assertEqual(result["mode"], "reference")
+        # File on disk must NOT be moved
+        self.assertTrue(Path(original_path).is_file())
+        reloaded_item = crud.get_item(self.db, managed_item.id)
+        self.assertEqual(reloaded_item.absolute_path, original_path)
+
+        # Reference must exist and have folder attribute
+        ref = self.db.query(models.ItemReference).filter(
+            models.ItemReference.context_id == project.id,
+            models.ItemReference.to_item_id == managed_item.id,
+        ).first()
+        self.assertIsNotNone(ref)
+        self.assertEqual(ref.attributes.get("folder"), "Percussion")
+
+        # 2. Move existing reference to a nested folder "Percussion/Claps"
+        project_service.place_items(
+            self.db, project.id, [managed_item.id], mode="reference", folder="Percussion/Claps"
+        )
+        self.assertTrue(Path(original_path).is_file())
+        reloaded_ref = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref.id).first()
+        self.assertEqual(reloaded_ref.attributes.get("folder"), "Percussion/Claps")
+
+        # 3. Move back to root by passing folder=""
+        project_service.place_items(
+            self.db, project.id, [managed_item.id], mode="reference", folder=""
+        )
+        self.assertTrue(Path(original_path).is_file())
+        reloaded_ref_root = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref.id).first()
+        self.assertNotIn("folder", reloaded_ref_root.attributes or {})
+
+        # 4. Move via HTTP router endpoint items_router.place_items_in_folder
+        req = schemas.FolderPlacementRequest(
+            item_ids=[managed_item.id],
+            mode="reference",
+            folder="Final",
+        )
+        http_result = items_router.place_items_in_folder(project.id, req, self.db)
+        self.assertEqual(http_result["mode"], "reference")
+        reloaded_ref_http = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref.id).first()
+        self.assertEqual(reloaded_ref_http.attributes.get("folder"), "Final")
+        self.assertTrue(Path(original_path).is_file())
 
 
 if __name__ == "__main__":
     unittest.main()
+
+

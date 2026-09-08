@@ -862,12 +862,12 @@ def get_library(vault_id: Optional[int] = None):
 
         return final_files
 
-    # Try fetching from Gaia API first. GAIA defaults an omitted vault_id to
-    # the default vault, so explicitly enumerate vaults when SIN asks for all.
+    # Try fetching from Gaia API first. SIN exposes only quick-preview vaults;
+    # lazy and hidden vaults are loaded solely when opened in GAIA.
     try:
         requested_vault_ids = [vault_id] if vault_id is not None else []
         if not requested_vault_ids:
-            vault_req = urllib.request.Request("http://127.0.0.1:8001/vaults/", headers={'Accept': 'application/json'})
+            vault_req = urllib.request.Request("http://127.0.0.1:8001/vaults/?preview=quick", headers={'Accept': 'application/json'})
             with urllib.request.urlopen(vault_req, timeout=5.0) as response:
                 if response.status == 200:
                     requested_vault_ids = [vault.get("id") for vault in json.loads(response.read().decode('utf-8'))]
@@ -935,6 +935,12 @@ def get_library(vault_id: Optional[int] = None):
             if vault_id is not None:
                 query += " WHERE i.vault_id = ?"
                 params.append(vault_id)
+            else:
+                vault_columns = {
+                    column[1] for column in cursor.execute("PRAGMA table_info(vaults)").fetchall()
+                }
+                if "preview" in vault_columns:
+                    query += " WHERE i.vault_id IN (SELECT id FROM vaults WHERE preview = 'quick')"
             cursor.execute(query, params)
             rows = cursor.fetchall()
             cursor.execute("""
@@ -1011,7 +1017,7 @@ def _get_gaia_vaults():
     from gaia import database, vaults
     db = database.SessionLocal()
     try:
-        return vaults.get_vaults(db)
+        return [vault for vault in vaults.get_vaults(db) if vault.preview == "quick"]
     finally:
         db.close()
 
@@ -1021,7 +1027,7 @@ def get_vaults():
     import json
     import urllib.request
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8001/vaults/", timeout=5.0) as response:
+        with urllib.request.urlopen("http://127.0.0.1:8001/vaults/?preview=quick", timeout=5.0) as response:
             if response.status == 200:
                 return json.loads(response.read().decode("utf-8"))
     except Exception as exc:

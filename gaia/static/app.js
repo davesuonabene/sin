@@ -85,6 +85,9 @@ function initializeGaiaLibrary() {
         selectedTags: new Set(),
         query: '',
         expandedCollections: new Set(),
+        expandedSubfolders: new Set(),
+        subfolderEntries: new Map(),
+        pendingFolderCreation: null,
         selectedEntryIds: new Set(),
         selectionAnchorId: null,
         audio: null,
@@ -96,14 +99,20 @@ function initializeGaiaLibrary() {
         importFolderAssignments: new Map(),
         importItemTypes: new Map(),
         importExcludedIndexes: new Set(),
+        importTransferMode: 'copy',
+        skipTrackAnalysis: false,
         importCollapsedFolders: new Set(),
         importConflictAction: null,
         importJobId: null,
         importLastJob: null,
+        importRegisteredJobId: null,
         sourcePickerDirectory: null,
         sourcePickerParent: null,
         sourcePickerSelection: null,
+        vaultPathPickerMode: null,
         contextEntry: null,
+        clipboard: null,
+        isDraggingItem: false,
         projectReferencedItems: new Map(),
         projectReferencesLoading: new Set(),
         projectReferenceControllers: new Map(),
@@ -148,6 +157,11 @@ function initializeGaiaLibrary() {
     const vaultDialogCancel = document.getElementById('vault-dialog-cancel');
     const vaultDialogSubmit = document.getElementById('vault-dialog-submit');
     const vaultNameInput = document.getElementById('vault-name-input');
+    const vaultPathLabel = document.getElementById('vault-path-label');
+    const vaultPathInput = document.getElementById('vault-path-input');
+    const vaultPathAction = document.getElementById('vault-path-action');
+    const vaultPathHelp = document.getElementById('vault-path-help');
+    const vaultPreviewSelect = document.getElementById('vault-preview-select');
     const vaultDialogResult = document.getElementById('vault-dialog-result');
     const searchInput = document.getElementById('search-input');
     const filterControls = document.getElementById('filter-controls');
@@ -162,6 +176,8 @@ function initializeGaiaLibrary() {
     const sourcePath = document.getElementById('source-path');
     const chooseSourcePath = document.getElementById('choose-source-path');
     const sourcePickerDialog = document.getElementById('source-picker-dialog');
+    const sourcePickerTitle = document.getElementById('source-picker-title');
+    const sourcePickerSubtitle = document.getElementById('source-picker-subtitle');
     const sourcePickerClose = document.getElementById('source-picker-close');
     const sourcePickerCancel = document.getElementById('source-picker-cancel');
     const sourcePickerUp = document.getElementById('source-picker-up');
@@ -179,6 +195,19 @@ function initializeGaiaLibrary() {
     const listHeader = document.getElementById('list-header');
     const columnMenu = document.getElementById('column-menu');
     const contextMenu = document.getElementById('context-menu');
+    const copyEntryMenu = document.getElementById('copy-entry-menu');
+    const pasteEntryMenu = document.getElementById('paste-entry-menu');
+    const contextNewFolderButton = document.getElementById('context-new-folder');
+    const contextMakeFolderMoveButton = document.getElementById('context-make-folder-move');
+    const folderDialog = document.getElementById('folder-dialog');
+    const folderForm = document.getElementById('folder-form');
+    const folderNameInput = document.getElementById('folder-name-input');
+    const folderDialogTitle = document.getElementById('folder-dialog-title');
+    const folderDialogHelp = document.getElementById('folder-dialog-help');
+    const folderDialogResult = document.getElementById('folder-dialog-result');
+    const folderDialogClose = document.getElementById('folder-dialog-close');
+    const folderDialogCancel = document.getElementById('folder-dialog-cancel');
+    const folderDialogSubmit = document.getElementById('folder-dialog-submit');
     const analyzeEntryButton = document.getElementById('analyze-entry');
     const deleteEntryMenuButton = document.getElementById('delete-entry-menu');
     const moveBar = document.getElementById('move-bar');
@@ -208,6 +237,9 @@ function initializeGaiaLibrary() {
     const importProgressDetail = document.getElementById('import-progress-detail');
     const importProgressFill = document.getElementById('import-progress-fill');
     const importProgressCount = document.getElementById('import-progress-count');
+    const importRegistrationStage = document.getElementById('import-registration-stage');
+    const importRegistrationFill = document.getElementById('import-registration-fill');
+    const importRegistrationCount = document.getElementById('import-registration-count');
     const importStagingStage = document.getElementById('import-staging-stage');
     const importProcessingStage = document.getElementById('import-processing-stage');
     const importProcessingFill = document.getElementById('import-processing-fill');
@@ -473,7 +505,7 @@ function initializeGaiaLibrary() {
     }
 
     function collectionRowLayout(collection) {
-        return isSamplePackCollection(collection) ? ROW_LAYOUTS.samplePack : ROW_LAYOUTS.collection;
+        return isSamplePackCollection(collection) ? ROW_LAYOUTS.samplePack : mainRowLayout();
     }
 
     function rowLayoutFor(entry, { nested = false } = {}) {
@@ -483,14 +515,17 @@ function initializeGaiaLibrary() {
     function renderRowHeader(header, layout, className) {
         header.className = `row-header ${className}`;
         header.style.setProperty('--row-columns', layout.columns);
-        if (className === 'main-row-header') header.style.setProperty('--main-table-width', `${mainColumnMinimumWidth()}px`);
+        if (layout.id === 'main' || className === 'main-row-header') {
+            header.style.setProperty('--main-table-width', `${mainColumnMinimumWidth()}px`);
+        }
         header.replaceChildren();
+        const isMainLayout = layout.id === 'main';
         layout.fields.forEach(field => {
-            const cell = document.createElement(className === 'main-row-header' ? 'div' : 'span');
-            if (className === 'main-row-header') {
+            const cell = document.createElement(isMainLayout ? 'div' : 'span');
+            if (isMainLayout) {
                 cell.className = 'row-header-cell';
                 cell.dataset.column = field;
-                cell.draggable = true;
+                cell.draggable = (className === 'main-row-header');
                 cell.title = 'Drag to move this column · right-click for columns';
                 const label = document.createElement('span');
                 label.className = 'column-header-label';
@@ -503,10 +538,26 @@ function initializeGaiaLibrary() {
                 resizer.setAttribute('aria-label', `Resize ${label.textContent} column`);
                 resizer.title = 'Drag to resize';
                 cell.appendChild(resizer);
+            } else {
+                cell.textContent = ROW_HEADER_LABELS[field] || field;
             }
-            if (className !== 'main-row-header') cell.textContent = ROW_HEADER_LABELS[field];
             header.appendChild(cell);
         });
+
+        const settingToggle = document.createElement('button');
+        settingToggle.type = 'button';
+        settingToggle.className = 'header-settings-toggle';
+        settingToggle.setAttribute('aria-label', 'Parameter selector');
+        settingToggle.title = 'Customize columns';
+        settingToggle.textContent = '⚙';
+        settingToggle.addEventListener('click', event => {
+            event.stopPropagation();
+            event.preventDefault();
+            const rect = settingToggle.getBoundingClientRect();
+            openColumnMenu(rect.left - 180, rect.bottom + 4);
+        });
+        header.appendChild(settingToggle);
+
         return header;
     }
 
@@ -522,11 +573,11 @@ function initializeGaiaLibrary() {
             listHeader.style.setProperty('--row-columns', layout.columns);
             listHeader.style.setProperty('--main-table-width', tableWidth);
         }
-        assetList?.querySelectorAll('.main-row').forEach(row => {
+        assetList?.querySelectorAll('.main-row, .nested-row, .collection-row-header').forEach(row => {
             row.style.setProperty('--row-columns', layout.columns);
             row.style.setProperty('--main-table-width', tableWidth);
         });
-        assetList?.querySelectorAll(':scope > .asset-entry').forEach(entry => {
+        assetList?.querySelectorAll(':scope > .asset-entry, .collection-contents > .asset-entry').forEach(entry => {
             entry.style.setProperty('--main-table-width', tableWidth);
         });
     }
@@ -610,6 +661,31 @@ function initializeGaiaLibrary() {
     function createCollectionHeader(collection) {
         const header = document.createElement('div');
         renderRowHeader(header, collectionRowLayout(collection), 'collection-row-header');
+        header.addEventListener('dragover', event => {
+            if (!Array.from(event.dataTransfer?.types || []).includes('application/x-gaia-item-ids')) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = 'move';
+            header.classList.add('drop-target');
+        });
+        header.addEventListener('dragleave', event => {
+            if (!header.contains(event.relatedTarget)) header.classList.remove('drop-target');
+        });
+        header.addEventListener('drop', event => {
+            header.classList.remove('drop-target');
+            const rawIds = event.dataTransfer?.getData('application/x-gaia-item-ids');
+            if (!rawIds) return;
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+                const itemIds = JSON.parse(rawIds).map(Number).filter(id => Number.isFinite(id) && id !== Number(collection.id));
+                if (itemIds.length) {
+                    placeItemsDirectly({ item: collection, collection: collection, title: collection.title || collection.name }, [...new Set(itemIds)], { folder: '' });
+                }
+            } catch (_error) {
+                window.alert('GAIA could not read the dragged items.');
+            }
+        });
         return header;
     }
 
@@ -744,6 +820,9 @@ function initializeGaiaLibrary() {
         state.items.filter(item => typeIsContainer(item.type)).forEach(collection => {
             entries.push(...collectionContentEntries(collection));
         });
+        if (state.subfolderEntries?.size) {
+            entries.push(...state.subfolderEntries.values());
+        }
         return entries;
     }
 
@@ -766,18 +845,38 @@ function initializeGaiaLibrary() {
 
     function projectReferenceEntries(project) {
         if (!typeIsContainer(project?.type)) return [];
-        return (state.projectReferencedItems.get(Number(project.id)) || []).map(record => ({
-            kind: 'reference',
-            id: `${project.id}:reference:${record.reference.id}`,
-            type: record.item.type,
-            title: record.item.title || filename(record.item.absolute_path),
-            path: record.item.absolute_path,
-            item: record.item,
-            reference: record.reference,
-            versions: record.versions || [],
-            versionGroup: record.version_group || null,
-            collection: project,
-        }));
+        return (state.projectReferencedItems.get(Number(project.id)) || []).map(record => {
+            const groupKey = record.version_group ? `project:${project.id}:${record.version_group}` : null;
+            const chosenId = groupKey ? state.versionSelections.get(groupKey) : null;
+            const hasVersions = Array.isArray(record.versions) && record.versions.length > 1;
+            const selectedVersion = hasVersions && chosenId
+                ? (record.versions.find(v => String(v.item.id) === String(chosenId)) || record.versions.at(-1))
+                : null;
+            const activeItem = selectedVersion ? selectedVersion.item : record.item;
+            const activeReference = selectedVersion ? selectedVersion.reference : record.reference;
+            const fileVersions = hasVersions
+                ? record.versions.map(v => ({
+                    id: String(v.item.id),
+                    label: v.label,
+                    record: v.item,
+                }))
+                : null;
+
+            return {
+                kind: 'reference',
+                id: `${project.id}:reference:${activeReference.id}`,
+                type: activeItem.type,
+                title: activeItem.title || filename(activeItem.absolute_path),
+                path: activeItem.absolute_path,
+                item: activeItem,
+                reference: activeReference,
+                versions: record.versions || [],
+                versionGroup: record.version_group || null,
+                fileVersionGroup: groupKey,
+                fileVersions,
+                collection: project,
+            };
+        });
     }
 
     async function loadProjectReferencedItems(projectId, { reset = false } = {}) {
@@ -955,11 +1054,29 @@ function initializeGaiaLibrary() {
 
     function selectionEntries() {
         const entries = [];
+        function collectNodeEntries(node, collection) {
+            const sortedSubfolders = Array.from(node.subfolders.values()).sort((a, b) =>
+                a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+            );
+            sortedSubfolders.forEach(subfolder => {
+                const folderEntryId = `subfolder:${collection.id}:${subfolder.fullPath}`;
+                const folderEntry = state.subfolderEntries?.get(folderEntryId);
+                if (folderEntry) entries.push(folderEntry);
+                const subfolderKey = `${collection.id}:${subfolder.fullPath}`;
+                if (state.expandedSubfolders.has(subfolderKey)) {
+                    collectNodeEntries(subfolder, collection);
+                }
+            });
+            node.files.forEach(file => entries.push(file));
+        }
+
         visibleEntries().forEach(entry => {
             entries.push(entry);
             if (entry.kind === 'asset' && typeIsContainer(entry.type) && state.expandedCollections.has(entry.id)) {
                 const contents = collectionContentEntries(entry.item);
-                entries.push(...(filteringIsActive() && !entryMatches(entry) ? contents.filter(entryMatches) : contents));
+                const matchingContents = filteringIsActive() && !entryMatches(entry) ? contents.filter(entryMatches) : contents;
+                const tree = buildCollectionTree(matchingContents);
+                collectNodeEntries(tree, entry.item);
             }
         });
         return entries;
@@ -1082,7 +1199,12 @@ function initializeGaiaLibrary() {
             case 'name': return entry.title || '';
             case 'filename': return record.filename || filename(entryAbsolutePath(entry));
             case 'path': return entryPath(entry);
-            case 'type': return entry.kind === 'asset' ? record.attributes?.profile_label || typeLabel(entry.type) : typeLabel(entry.type);
+            case 'type': {
+                const label = record.attributes?.profile_label || entry.reference?.attributes?.profile_label || entry.content?.attributes?.profile_label;
+                if (label) return label;
+                if (record.attributes?.is_folder || entry.type === 'collection') return 'Folder';
+                return typeLabel(entry.type);
+            }
             case 'author': return firstEntryValue(entry, 'author', 'artist', 'album_artist');
             case 'album': return firstEntryValue(entry, 'album');
             case 'album_artist': return firstEntryValue(entry, 'album_artist');
@@ -1115,12 +1237,22 @@ function initializeGaiaLibrary() {
         if (entry.kind !== 'reference') return null;
         return entry.reference?.revision_label
             || entry.reference?.attributes?.label
+            || entry.reference?.attributes?.stage
+            || entry.item?.attributes?.cut_label
+            || entry.item?.attributes?.revision_label
+            || (entry.item?.attributes?.stage === 'cut' ? 'CUT' : null)
             || null;
     }
 
     function numericItemId(entry) {
         if (entry.kind === 'content') return Number(entry.content?.child_id) || null;
         return Number(entry.item?.id) || null;
+    }
+
+    function entryFolderItemId(entry) {
+        if (!entry) return null;
+        const raw = entry.item?.id ?? entry.content?.child_id ?? entry.folderItem?.child_id ?? entry.folderItem?.id ?? entry.folderItem?.item?.id ?? entry.collection?.id;
+        return raw && Number.isFinite(Number(raw)) ? Number(raw) : null;
     }
 
     function dragPayload(entry) {
@@ -1152,6 +1284,8 @@ function initializeGaiaLibrary() {
     }
 
     function canPreview(entry) {
+        const item = entry.kind === 'content' ? entry.content : entry.item;
+        if ((item?.availability || 'ready') !== 'ready') return false;
         if (entry.kind === 'content') return Boolean(entry.content.streamable);
         return ['audio', 'track', 'sample', 'multitrack'].includes(entry.type);
     }
@@ -1501,50 +1635,75 @@ function initializeGaiaLibrary() {
     }
 
     function toggleCollectionExpansion(entry) {
-        if (state.expandedCollections.has(entry.id)) {
-            state.expandedCollections.delete(entry.id);
+        const id = entry.id;
+        const itemId = entry.item?.id ? String(entry.item.id) : (entry.content?.child_id ? String(entry.content.child_id) : null);
+        if (state.expandedCollections.has(id) || (itemId && state.expandedCollections.has(itemId))) {
+            state.expandedCollections.delete(id);
+            if (itemId) state.expandedCollections.delete(itemId);
         } else {
-            state.expandedCollections.add(entry.id);
-            loadCollectionContents(entry.item.id);
-            if (typeIsProject(entry.type)) loadProjectReferencedItems(entry.item.id);
+            state.expandedCollections.add(id);
+            if (itemId) state.expandedCollections.add(itemId);
+            const targetId = entry.item?.id || (entry.content?.child_id ? Number(entry.content.child_id) : null);
+            if (targetId) {
+                loadCollectionContents(targetId);
+                if (typeIsProject(entry.type)) loadProjectReferencedItems(targetId);
+            }
         }
         renderAssets();
     }
 
-    function createRow(entry, { nested = false } = {}) {
+    function createRow(entry, { nested = false, subfolderDepth = 0 } = {}) {
         const row = document.createElement('div');
-        row.className = `asset-row${state.selectedEntryIds.has(entry.id) ? ' selected' : ''}${entry.kind === 'reference' ? ' referenced-row' : ''}`;
+        const availability = (entry.kind === 'content' ? entry.content?.availability : entry.item?.availability) || 'ready';
+        row.className = `asset-row${state.selectedEntryIds.has(entry.id) ? ' selected' : ''}${entry.kind === 'reference' ? ' referenced-row' : ''}${availability !== 'ready' ? ' unavailable-row' : ''}`;
         const layout = rowLayoutFor(entry, { nested });
         row.classList.add(nested ? 'nested-row' : 'main-row', `row-layout-${layout.id}`);
         row.style.setProperty('--row-columns', layout.columns);
-        if (!nested) row.style.setProperty('--main-table-width', `${mainColumnMinimumWidth()}px`);
+        if (layout.id === 'main') row.style.setProperty('--main-table-width', `${mainColumnMinimumWidth()}px`);
         row.setAttribute('role', 'listitem');
         row.setAttribute('aria-selected', String(state.selectedEntryIds.has(entry.id)));
-        row.draggable = Boolean(numericItemId(entry));
-        const isCollection = entry.kind === 'asset' && typeIsContainer(entry.type);
+        row.draggable = Boolean(numericItemId(entry)) && availability === 'ready';
+        const isCollection = Boolean(
+            (entry.kind === 'asset' && typeIsContainer(entry.type))
+            || entry.type === 'collection'
+            || typeIsContainer(entry.type)
+            || entry.item?.attributes?.is_folder
+            || entry.content?.attributes?.is_folder
+        );
         if (isCollection) row.title = 'Click the title to preview the master · double-click the row to show contents';
         if (entry.kind === 'reference') row.title = 'Linked file · edit its project tags in the Tags column';
+        if (availability !== 'ready') row.title = `Asset ${availability}; playback and project use are unavailable`;
 
         const referenceLabel = entryReferenceLabel(entry);
         const fileVersionSelector = entry.fileVersions?.length > 1
             ? `<select class="file-version-selector" title="Select file version" aria-label="Select file version">${entry.fileVersions.map(version => `<option value="${escapeHtml(version.id)}" ${String(version.id) === String(numericItemId(entry) || `${entry.collection?.id || 'root'}:${entry.content?.index || ''}`) ? 'selected' : ''}>${escapeHtml(version.label)}</option>`).join('')}</select>`
             : '';
         const isExpandable = isCollection;
-        const isExpanded = isExpandable && state.expandedCollections.has(entry.id);
+        const isExpanded = isExpandable && (state.expandedCollections.has(entry.id) || (entry.item?.id && state.expandedCollections.has(String(entry.item.id))));
         const expandToggle = isExpandable
-            ? `<button class="item-expand-toggle-btn" type="button" title="${isExpanded ? 'Collapse contents' : 'Expand contents'}" aria-label="${isExpanded ? 'Collapse contents' : 'Expand contents'}" aria-expanded="${isExpanded}">${isExpanded ? '⌄' : '›'}</button>`
+            ? `<button class="item-expand-toggle-btn" type="button" title="${isExpanded ? 'Collapse contents' : 'Expand contents'}" aria-label="${isExpanded ? 'Collapse contents' : 'Expand contents'}" aria-expanded="${isExpanded}">${isExpanded ? '▾' : '▸'}</button>`
+            : '';
+        const folderIcon = isCollection
+            ? `<span class="collection-title-icon" aria-hidden="true">📁</span>`
+            : '';
+        const countVal = entry.item?.content_count ?? entry.content?.content_count;
+        const countBadge = (isCollection && countVal !== undefined && countVal !== null)
+            ? `<span class="collection-title-count">(${countVal})</span>`
             : '';
         const titleEditable = canEdit(entry, 'title');
         const titleIsEmpty = titleEditable && String(entry.title || '').trim() === '';
         const titleText = titleIsEmpty
             ? '<span class="editable-cell-empty-marker" aria-hidden="true">-</span>'
             : escapeHtml(entry.title);
-        const titleCell = `<div class="asset-title">
-            <span class="asset-title-text${titleEditable ? ' editable-cell' : ''}${titleIsEmpty ? ' is-empty' : ''}" data-field="title"${titleEditable ? ' title="Click to preview · double-click to edit"' : ''}>${titleText}</span>
+        const titleIndent = subfolderDepth > 0 ? ` style="padding-left: ${subfolderDepth * 16}px;"` : '';
+        const titleCell = `<div class="asset-title"${titleIndent}>
             ${expandToggle}
+            ${folderIcon}
+            <span class="asset-title-text${titleEditable ? ' editable-cell' : ''}${titleIsEmpty ? ' is-empty' : ''}" data-field="title"${titleEditable ? ' title="Click to preview · double-click to edit"' : ''}>${titleText}</span>
+            ${countBadge}
             ${fileVersionSelector}
             ${referenceLabel ? `<button class="reference-label" type="button" title="Double-click to edit relationship label">${escapeHtml(referenceLabel)}</button>` : ''}
-            ${entry.kind === 'reference' && entry.versions?.length > 1 ? `<select class="reference-version-selector" title="Select file revision" aria-label="Select file revision">${entry.versions.map(version => `<option value="${escapeHtml(String(version.item.id))}" ${Number(version.item.id) === Number(entry.item.id) ? 'selected' : ''}>${escapeHtml(version.label)}</option>`).join('')}</select>` : ''}
+            ${entry.kind === 'reference' && !fileVersionSelector && entry.versions?.length > 1 ? `<select class="reference-version-selector" title="Select file revision" aria-label="Select file revision">${entry.versions.map(version => `<option value="${escapeHtml(String(version.item.id))}" ${Number(version.item.id) === Number(entry.item.id) ? 'selected' : ''}>${escapeHtml(version.label)}</option>`).join('')}</select>` : ''}
         </div>`;
         const displayType = entryColumnValue(entry, 'type');
         const isFav = Boolean(entryColumnValue(entry, 'favourite'));
@@ -1680,9 +1839,14 @@ function initializeGaiaLibrary() {
             event.dataTransfer.setData('application/x-gaia-library-item', payload);
             event.dataTransfer.setData('application/x-gaia-item-ids', JSON.stringify(itemIds));
             event.dataTransfer.setData('text/plain', payload);
+            state.isDraggingItem = true;
             row.classList.add('dragging');
         });
-        row.addEventListener('dragend', () => row.classList.remove('dragging'));
+        row.addEventListener('dragend', () => {
+            state.isDraggingItem = false;
+            stopDragAutoScroll();
+            row.classList.remove('dragging');
+        });
         if (isCollection) {
             row.addEventListener('dragover', event => {
                 if (!Array.from(event.dataTransfer?.types || []).includes('application/x-gaia-item-ids')) return;
@@ -1702,7 +1866,7 @@ function initializeGaiaLibrary() {
                 event.stopPropagation();
                 try {
                     const itemIds = JSON.parse(rawIds).map(Number).filter(id => Number.isFinite(id) && id !== Number(entry.item.id));
-                    if (itemIds.length) openItemPlacementDialog(entry, [...new Set(itemIds)]);
+                    if (itemIds.length) placeItemsDirectly(entry, [...new Set(itemIds)]);
                 } catch (_error) {
                     window.alert('GAIA could not read the dragged items.');
                 }
@@ -1723,11 +1887,12 @@ function initializeGaiaLibrary() {
             refreshSelectionPresentation();
         });
         row.addEventListener('dblclick', event => {
-            if (event.target.closest('button, input, select, textarea, .asset-title, .metadata-text, .tags-text, .path-text, .size-text, .type-badge')) return;
+            if (event.target.closest('button, input, select, textarea, .editable-cell')) return;
             if (isCollection) {
                 toggleCollectionExpansion(entry);
                 return;
             }
+            if (event.target.closest('.metadata-text, .tags-text, .path-text, .size-text, .type-badge')) return;
             if (!canPreview(entry)) return;
             previewEntry();
         });
@@ -1760,6 +1925,242 @@ function initializeGaiaLibrary() {
         return wrapper;
     }
 
+    function contentFolderPath(content) {
+        const folder = content.reference?.attributes?.folder
+            || content.item?.attributes?.folder
+            || content.content?.attributes?.folder
+            || content.attributes?.folder;
+        if (typeof folder === 'string') {
+            const clean = folder.trim().replace(/^\/+|\/+$/g, '');
+            if (clean && clean !== '.') return clean;
+        }
+        if (content.kind === 'reference') return '';
+        const rel = content.content?.relative_path || content.path || '';
+        if (!rel || rel.startsWith('/') || /^[a-zA-Z]:/.test(rel)) return '';
+        const idx = rel.lastIndexOf('/');
+        if (idx > 0) {
+            const clean = rel.slice(0, idx).trim().replace(/^\/+|\/+$/g, '');
+            return (clean && clean !== '.') ? clean : '';
+        }
+        return '';
+    }
+
+    function resolveTreeNode(root, folderPath) {
+        let current = root;
+        let currentPath = '';
+        for (const segment of (folderPath || '').split('/').filter(Boolean)) {
+            if (segment === '.') continue;
+            currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+            if (!current.subfolders.has(segment)) {
+                current.subfolders.set(segment, { name: segment, fullPath: currentPath, files: [], subfolders: new Map() });
+            }
+            current = current.subfolders.get(segment);
+        }
+        return current;
+    }
+
+    function buildCollectionTree(contents) {
+        const root = { files: [], subfolders: new Map() };
+        contents.forEach(content => {
+            const isFolder = content.type === 'collection' || typeIsContainer(content.type)
+                || content.content?.attributes?.is_folder || content.item?.attributes?.is_folder;
+            if (isFolder) {
+                const name = content.title || content.content?.title || content.filename || 'Folder';
+                if (!name || name === '.' || name === './') return;
+                const parentNode = resolveTreeNode(root, contentFolderPath(content));
+                if (!parentNode.subfolders.has(name)) {
+                    parentNode.subfolders.set(name, {
+                        name,
+                        fullPath: parentNode.fullPath ? `${parentNode.fullPath}/${name}` : name,
+                        files: [],
+                        subfolders: new Map(),
+                        folderItem: content,
+                    });
+                } else {
+                    parentNode.subfolders.get(name).folderItem = content;
+                }
+            } else {
+                resolveTreeNode(root, contentFolderPath(content)).files.push(content);
+            }
+        });
+        return root;
+    }
+
+    function countTreeFiles(node) {
+        let count = node.files.length;
+        for (const sub of node.subfolders.values()) {
+            count += countTreeFiles(sub);
+        }
+        return count;
+    }
+
+    function renderCollectionTree(node, collection, collectionLayout, container, depth = 0) {
+        const collectionId = Number(collection.id);
+
+        const sortedSubfolders = Array.from(node.subfolders.values()).sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+        );
+
+        sortedSubfolders.forEach(subfolder => {
+            const subfolderKey = `${collectionId}:${subfolder.fullPath}`;
+            const folderEntryId = `subfolder:${collectionId}:${subfolder.fullPath}`;
+            const totalFiles = countTreeFiles(subfolder);
+            const isExpanded = state.expandedSubfolders.has(subfolderKey);
+
+            const folderItemId = entryFolderItemId(subfolder.folderItem);
+
+            const folderEntry = {
+                id: folderEntryId,
+                kind: 'subfolder',
+                type: 'folder',
+                title: subfolder.name,
+                name: subfolder.name,
+                path: subfolder.fullPath,
+                fullPath: subfolder.fullPath,
+                collection: collection,
+                subfolder: subfolder,
+                folderItem: subfolder.folderItem || null,
+                item: subfolder.folderItem?.item
+                    || (folderItemId ? { id: Number(folderItemId), vault_id: collection.vault_id, type: 'collection', attributes: { is_folder: true } } : { id: null, vault_id: collection.vault_id, type: 'folder', attributes: { is_folder: true } }),
+                content: subfolder.folderItem?.content || subfolder.folderItem || { child_id: folderItemId ? Number(folderItemId) : null, vault_id: collection.vault_id, attributes: { is_folder: true } },
+            };
+            state.subfolderEntries.set(folderEntryId, folderEntry);
+
+            const row = document.createElement('div');
+            row.className = 'subfolder-row';
+            row.dataset.entryId = folderEntryId;
+            row.setAttribute('role', 'listitem');
+            const isSelected = state.selectedEntryIds.has(folderEntryId);
+            row.classList.toggle('selected', isSelected);
+            row.setAttribute('aria-selected', String(isSelected));
+            row.style.setProperty('--row-columns', collectionLayout.columns);
+
+            const favPlaceholder = document.createElement('span');
+
+            const nameCell = document.createElement('div');
+            nameCell.className = 'subfolder-name-cell';
+            nameCell.style.paddingLeft = `${depth * 16 + 8}px`;
+
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'subfolder-toggle';
+            toggle.setAttribute('aria-label', isExpanded ? 'Collapse folder' : 'Expand folder');
+            toggle.textContent = isExpanded ? '▾' : '▸';
+
+            const icon = document.createElement('span');
+            icon.className = 'subfolder-icon';
+            icon.setAttribute('aria-hidden', 'true');
+            icon.textContent = '📁';
+
+            const title = document.createElement('span');
+            title.className = 'subfolder-title';
+            title.textContent = subfolder.name;
+
+            const count = document.createElement('span');
+            count.className = 'subfolder-count';
+            count.textContent = `(${totalFiles})`;
+
+            nameCell.appendChild(toggle);
+            nameCell.appendChild(icon);
+            nameCell.appendChild(title);
+            nameCell.appendChild(count);
+
+            row.appendChild(favPlaceholder);
+            row.appendChild(nameCell);
+
+            for (let i = 2; i < collectionLayout.fields.length; i += 1) {
+                row.appendChild(document.createElement('span'));
+            }
+
+            const toggleSubfolder = () => {
+                if (state.expandedSubfolders.has(subfolderKey)) {
+                    state.expandedSubfolders.delete(subfolderKey);
+                } else {
+                    state.expandedSubfolders.add(subfolderKey);
+                }
+                renderAssets();
+            };
+
+            toggle.addEventListener('click', event => {
+                event.stopPropagation();
+                toggleSubfolder();
+            });
+
+            row.addEventListener('click', event => {
+                if (event.target.closest('.subfolder-toggle, button, input, select')) return;
+                selectEntry(folderEntry, event);
+                refreshSelectionPresentation();
+            });
+
+            row.addEventListener('dblclick', event => {
+                if (event.target.closest('.subfolder-toggle, button, input, select')) return;
+                toggleSubfolder();
+            });
+
+            row.addEventListener('contextmenu', event => {
+                event.preventDefault();
+                if (!state.selectedEntryIds.has(folderEntry.id)) {
+                    state.selectedEntryIds.clear();
+                    state.selectedEntryIds.add(folderEntry.id);
+                    state.selectionAnchorId = folderEntry.id;
+                    refreshSelectionPresentation();
+                }
+                state.contextEntry = folderEntry;
+                renderContextMenu();
+                contextMenu.classList.remove('hidden');
+                const width = contextMenu.offsetWidth || 180;
+                const height = contextMenu.offsetHeight || 120;
+                contextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
+                contextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
+            });
+
+            row.addEventListener('dragover', event => {
+                if (!Array.from(event.dataTransfer?.types || []).includes('application/x-gaia-item-ids')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                event.dataTransfer.dropEffect = 'move';
+                row.classList.add('drop-target');
+            });
+            row.addEventListener('dragleave', event => {
+                if (!row.contains(event.relatedTarget)) row.classList.remove('drop-target');
+            });
+            row.addEventListener('drop', event => {
+                row.classList.remove('drop-target');
+                const rawIds = event.dataTransfer?.getData('application/x-gaia-item-ids');
+                if (!rawIds) return;
+                event.preventDefault();
+                event.stopPropagation();
+                try {
+                    const itemIds = JSON.parse(rawIds).map(Number).filter(id => Number.isFinite(id) && id !== Number(folderItemId));
+                    if (itemIds.length) {
+                        const targetFolder = subfolder.fullPath || folderEntry.path || folderEntry.title;
+                        placeItemsDirectly(folderEntry, [...new Set(itemIds)], { folder: targetFolder });
+                    }
+                } catch (_error) {
+                    window.alert('GAIA could not read the dragged items.');
+                }
+            });
+
+            container.appendChild(row);
+
+            if (isExpanded) {
+                if (subfolder.files.length === 0 && subfolder.subfolders.size === 0) {
+                    const emptyRow = document.createElement('div');
+                    emptyRow.className = 'empty-subfolder-hint';
+                    emptyRow.style.paddingLeft = `${(depth + 1) * 16 + 28}px`;
+                    emptyRow.textContent = 'This folder is empty';
+                    container.appendChild(emptyRow);
+                } else {
+                    renderCollectionTree(subfolder, collection, collectionLayout, container, depth + 1);
+                }
+            }
+        });
+
+        node.files.forEach(content => {
+            container.appendChild(createEntry(content, { nested: true, subfolderDepth: depth }));
+        });
+    }
+
     function renderLibraryStatus(entries = visibleEntries()) {
         const current = filteringIsActive()
             ? entries.reduce((count, entry) => {
@@ -1778,6 +2179,7 @@ function initializeGaiaLibrary() {
     }
 
     function renderAssets() {
+        state.subfolderEntries?.clear();
         const entries = visibleEntries();
         assetList.innerHTML = '';
         renderMoveBar();
@@ -1788,7 +2190,9 @@ function initializeGaiaLibrary() {
             entries.forEach(entry => {
                 const wrapper = createEntry(entry);
 
-                if (entry.kind === 'asset' && typeIsContainer(entry.type) && state.expandedCollections.has(entry.id)) {
+                const isCollectionExpanded = state.expandedCollections.has(entry.id) || (entry.item?.id && state.expandedCollections.has(String(entry.item.id)));
+                const isContainerItem = typeIsContainer(entry.type) || entry.type === 'collection' || Boolean(entry.item?.attributes?.is_folder || entry.content?.attributes?.is_folder);
+                if (entry.kind === 'asset' && isContainerItem && isCollectionExpanded) {
                     const contentContainer = document.createElement('div');
                     const collectionLayout = collectionRowLayout(entry.item);
                     contentContainer.className = `collection-contents collection-layout-${collectionLayout.id}`;
@@ -1796,12 +2200,13 @@ function initializeGaiaLibrary() {
                     const contents = collectionContentEntries(entry.item);
                     const displayedContents = filteringIsActive() && !entryMatches(entry) ? contents.filter(entryMatches) : contents;
                     if (displayedContents.length) contentContainer.appendChild(createCollectionHeader(entry.item));
-                    displayedContents.forEach(content => contentContainer.appendChild(createEntry(content, { nested: true })));
+                    const tree = buildCollectionTree(displayedContents);
+                    renderCollectionTree(tree, entry.item, collectionLayout, contentContainer, 0);
                     if (!displayedContents.length) {
                         const loadingReferences = state.projectReferencesLoading.has(Number(entry.item.id));
                         const loadingContents = state.collectionContentsLoading.has(collectionId);
                         const error = state.collectionContentsErrors.get(collectionId);
-                        contentContainer.innerHTML = `<div class="empty">${loadingContents ? 'Loading collection contents…' : error ? escapeHtml(error) : loadingReferences ? 'Loading referenced files…' : filteringIsActive() ? 'No files in this collection match the active filter.' : 'This snapshot has no readable files.'}</div>`;
+                        contentContainer.innerHTML = `<div class="empty">${loadingContents ? 'Loading collection contents…' : error ? escapeHtml(error) : loadingReferences ? 'Loading referenced files…' : filteringIsActive() ? 'No files in this collection match the active filter.' : 'This folder is empty.'}</div>`;
                     }
                     const page = state.collectionContentPaging.get(collectionId);
                     if (page?.hasMore) {
@@ -1828,8 +2233,8 @@ function initializeGaiaLibrary() {
     }
 
     function refreshSelectionPresentation() {
-        assetList.querySelectorAll('.asset-row').forEach(row => {
-            const entryId = row.closest('.asset-entry')?.dataset.entryId;
+        assetList.querySelectorAll('.asset-row, .subfolder-row').forEach(row => {
+            const entryId = row.dataset.entryId || row.closest('.asset-entry')?.dataset.entryId;
             const selected = entryId ? state.selectedEntryIds.has(entryId) : false;
             row.classList.toggle('selected', selected);
             row.setAttribute('aria-selected', String(selected));
@@ -1856,6 +2261,102 @@ function initializeGaiaLibrary() {
         };
         rail.append(makeArrow(-1), chips, makeArrow(1));
         return rail;
+    }
+
+    function handleDragAutoScroll(event) {
+        if (!assetList || (!state.isDraggingItem && !Array.from(event.dataTransfer?.types || []).includes('application/x-gaia-item-ids'))) return;
+        const rect = assetList.getBoundingClientRect();
+        const zone = 50;
+        if (event.clientY < rect.top + zone && event.clientY >= rect.top - 20) {
+            assetList.scrollTop -= 14;
+        } else if (event.clientY > rect.bottom - zone && event.clientY <= rect.bottom + 20) {
+            assetList.scrollTop += 14;
+        }
+    }
+
+    function clearSelection() {
+        if (state.selectedEntryIds.size > 0 || state.selectionAnchorId || state.contextEntry) {
+            state.selectedEntryIds.clear();
+            state.selectionAnchorId = null;
+            state.contextEntry = null;
+            refreshSelectionPresentation();
+            window.dispatchEvent(new CustomEvent('gaia:selection', { detail: { entry: null } }));
+        }
+    }
+
+    function copySelectedEntries() {
+        const entries = getSelectedEntries();
+        const itemIds = [...new Set(entries.map(numericItemId).filter(Boolean))];
+        if (!itemIds.length) return false;
+        state.clipboard = {
+            type: 'library-items',
+            itemIds,
+            entries: entries.map(e => ({ id: e.id, title: e.title, itemId: numericItemId(e) })),
+        };
+        try {
+            if (navigator.clipboard?.writeText) {
+                const payload = JSON.stringify(entries.length === 1
+                    ? dragPayload(entries[0])
+                    : { type: 'library-items', items: entries.map(dragPayload) });
+                navigator.clipboard.writeText(payload).catch(() => {});
+            }
+        } catch (_err) {}
+        if (summary) {
+            const label = itemIds.length === 1 ? '1 item' : `${itemIds.length} items`;
+            summary.textContent = `Copied ${label} to clipboard`;
+            setTimeout(() => renderLibraryStatus(), 2200);
+        }
+        return true;
+    }
+
+    function getTargetProjectForPaste() {
+        if (state.contextEntry) {
+            if (state.contextEntry.kind === 'asset' && typeIsContainer(state.contextEntry.type)) {
+                return state.contextEntry;
+            }
+            if (state.contextEntry.collection?.id) {
+                const parentProject = allEntries().find(e => e.kind === 'asset' && Number(e.item?.id) === Number(state.contextEntry.collection.id));
+                if (parentProject) return parentProject;
+            }
+        }
+        const selected = getSelectedEntries();
+        const container = selected.find(e => e.kind === 'asset' && typeIsContainer(e.type));
+        if (container) return container;
+        const childInContainer = selected.find(e => e.collection?.id);
+        if (childInContainer) {
+            const parentProject = allEntries().find(e => e.kind === 'asset' && Number(e.item?.id) === Number(childInContainer.collection.id));
+            if (parentProject) return parentProject;
+        }
+        return null;
+    }
+
+    function pasteIntoProject() {
+        if (!state.clipboard?.itemIds?.length) return false;
+        const target = getTargetProjectForPaste();
+        if (target) {
+            const targetId = Number(target.item?.id);
+            const validItemIds = state.clipboard.itemIds.filter(id => id !== targetId);
+            if (!validItemIds.length) {
+                window.alert('Cannot paste a project into itself.');
+                return false;
+            }
+            openItemPlacementDialog(target, validItemIds, { action: 'copy' });
+            return true;
+        }
+
+        const currentVault = state.selectedVaultId !== null
+            ? state.vaults.find(v => Number(v.id) === Number(state.selectedVaultId))
+            : (state.vaults[0] || null);
+        if (!currentVault) {
+            window.alert('Please select a vault to paste into.');
+            return false;
+        }
+        openItemPlacementDialog({
+            isVault: true,
+            vault: currentVault,
+            title: currentVault.name,
+        }, state.clipboard.itemIds, { action: 'copy' });
+        return true;
     }
 
     function enableHorizontalDragScroll(element) {
@@ -2033,7 +2534,10 @@ function initializeGaiaLibrary() {
         const entries = allEntries();
         const selected = [];
         state.selectedEntryIds.forEach(id => {
-            const found = entries.find(e => e.id === id);
+            let found = entries.find(e => e.id === id);
+            if (!found && state.subfolderEntries?.has(id)) {
+                found = state.subfolderEntries.get(id);
+            }
             if (found) selected.push(found);
         });
         if (selected.length === 0 && state.contextEntry) {
@@ -2046,11 +2550,8 @@ function initializeGaiaLibrary() {
         const selected = getSelectedEntries();
         const ids = [];
         selected.forEach(entry => {
-            if (entry.kind === 'asset' && entry.item && entry.item.id) {
-                ids.push(Number(entry.item.id));
-            } else if (entry.kind === 'content' && entry.collection && entry.collection.id) {
-                ids.push(Number(entry.collection.id));
-            }
+            const id = entry.kind === 'subfolder' ? entryFolderItemId(entry) : (numericItemId(entry) || Number(entry.collection?.id) || null);
+            if (id && Number.isFinite(id)) ids.push(id);
         });
         return [...new Set(ids)];
     }
@@ -2234,7 +2735,10 @@ function initializeGaiaLibrary() {
 
     function openProjectImportBrowser() {
         if (!projectDialog?.open || state.importJobId || state.projectImportInspecting) return;
+        state.vaultPathPickerMode = null;
         state.projectImportPickerActive = true;
+        if (sourcePickerTitle) sourcePickerTitle.textContent = 'Choose a project source';
+        if (sourcePickerSubtitle) sourcePickerSubtitle.textContent = 'Select a folder, an individual asset, or a ZIP archive.';
         sourcePickerDialog?.showModal();
         loadSourcePicker(null);
     }
@@ -2445,29 +2949,147 @@ function initializeGaiaLibrary() {
         projectFilePaths.focus();
     }
 
-    function openItemPlacementDialog(targetEntry, itemIds) {
+    function openItemPlacementDialog(targetEntry, itemIds, { action = 'copy' } = {}) {
         const entryByItemId = new Map();
         allEntries().forEach(candidate => {
             const itemId = numericItemId(candidate);
             if (itemId && !entryByItemId.has(itemId)) entryByItemId.set(itemId, candidate);
         });
         const titles = itemIds.map(itemId => entryByItemId.get(itemId)?.title || `Item ${itemId}`);
+        const isVault = Boolean(targetEntry?.isVault);
+        const targetTitle = isVault ? targetEntry.vault.name : targetEntry.title;
+        const targetId = isVault ? Number(targetEntry.vault.id) : Number(targetEntry.item.id);
+
         state.pendingPlacement = {
-            targetId: Number(targetEntry.item.id),
-            targetTitle: targetEntry.title,
+            targetType: isVault ? 'vault' : 'collection',
+            targetId,
+            targetTitle,
+            action,
             itemIds,
             titles,
         };
-        itemPlacementTitle.textContent = `Add to ${targetEntry.title}`;
+
+        const actionLabel = document.getElementById('item-placement-action-label');
+        const actionDesc = document.getElementById('item-placement-action-desc');
+        const refLabel = document.getElementById('item-placement-ref-label');
+        const refDesc = document.getElementById('item-placement-ref-desc');
+        const eyebrow = document.getElementById('item-placement-eyebrow');
+
+        if (eyebrow) eyebrow.textContent = isVault ? 'Add to vault' : 'Add to collection';
+        itemPlacementTitle.textContent = `Add to ${targetTitle}`;
         itemPlacementSummary.textContent = titles.length === 1
-            ? `“${titles[0]}” will be linked to the project.`
-            : `${titles.length} items will be linked to the project.`;
+            ? `“${titles[0]}” will be placed in ${targetTitle}.`
+            : `${titles.length} items will be placed in ${targetTitle}.`;
+
+        if (actionLabel) actionLabel.textContent = action === 'move' ? 'Full move' : 'Full copy';
+        if (actionDesc) actionDesc.textContent = action === 'move'
+            ? `Move the physical files into ${targetTitle}.`
+            : `Copy physical files into ${targetTitle}.`;
+        if (refLabel) refLabel.textContent = 'Reference only';
+        if (refDesc) refDesc.textContent = `Keep original files in place. Linked items inherit future updates and versions.`;
+
         itemPlacementResult.className = 'result error hidden';
         itemPlacementMove.disabled = false;
         itemPlacementReference.disabled = false;
         itemPlacementClose.disabled = false;
         itemPlacementCancel.disabled = false;
         itemPlacementDialog.showModal();
+    }
+
+    async function refreshAfterPlacement(contextCollectionId, targetId, isVault, sourceCollectionIds = []) {
+        if (isVault) {
+            await loadLibrary({ force: true, resetNested: true });
+            renderFilterUI();
+            renderAssets();
+            return;
+        }
+
+        const idsToInvalidate = new Set([
+            contextCollectionId,
+            targetId,
+            ...(sourceCollectionIds || []),
+        ].map(Number).filter(id => Number.isFinite(id) && id > 0));
+
+        idsToInvalidate.forEach(id => {
+            state.collectionContents.delete(id);
+            state.projectReferencedItems.delete(id);
+            state.collectionContentPaging.delete(id);
+            state.collectionContentsLoading.delete(id);
+            state.projectReferencesLoading.delete(id);
+        });
+
+        await Promise.all([
+            ...Array.from(idsToInvalidate).map(id => loadCollectionContents(id, { reset: true })),
+            ...Array.from(idsToInvalidate).map(id => loadProjectReferencedItems(id, { reset: true })),
+            loadLibrary({ force: true, resetNested: true }),
+        ]);
+
+        renderFilterUI();
+        renderAssets();
+    }
+
+    async function placeItemsDirectly(targetEntry, itemIds, { folder = undefined, mode = 'reference' } = {}) {
+        const uniqueItemIds = [...new Set((itemIds || []).map(Number).filter(id => Number.isFinite(id) && id > 0))];
+        if (!uniqueItemIds.length) return;
+
+        const entryByItemId = new Map();
+        allEntries().forEach(candidate => {
+            const itemId = numericItemId(candidate);
+            if (itemId && !entryByItemId.has(itemId)) entryByItemId.set(itemId, candidate);
+        });
+
+        const sourceCollectionIds = new Set();
+        uniqueItemIds.forEach(id => {
+            const entry = entryByItemId.get(id);
+            if (entry?.collection?.id) sourceCollectionIds.add(Number(entry.collection.id));
+        });
+
+        const isVault = Boolean(targetEntry?.isVault);
+        const rawTargetId = isVault ? targetEntry.vault?.id : (targetEntry.item?.id || targetEntry.collection?.id);
+        const targetId = Number(rawTargetId);
+        if (!Number.isFinite(targetId) || targetId <= 0) return;
+
+        const resolvedFolder = folder !== undefined
+            ? folder
+            : (targetEntry.kind === 'subfolder' ? (targetEntry.path || targetEntry.fullPath || targetEntry.title) : undefined);
+
+        const contextCollectionId = Number(targetEntry.collection?.id || targetId);
+
+        try {
+            const url = isVault
+                ? `/vaults/${targetId}/place-items`
+                : `/items/${targetId}/place-items`;
+
+            const payload = {
+                item_ids: uniqueItemIds,
+                mode,
+            };
+            if (resolvedFolder !== undefined) {
+                payload.folder = resolvedFolder;
+            }
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Could not place items in folder');
+
+            state.selectedEntryIds.clear();
+            state.selectionAnchorId = null;
+
+            if (resolvedFolder) {
+                state.expandedSubfolders.add(`${contextCollectionId}:${resolvedFolder}`);
+            }
+            if (contextCollectionId) {
+                state.expandedCollections.add(String(contextCollectionId));
+            }
+
+            await refreshAfterPlacement(contextCollectionId, targetId, isVault, Array.from(sourceCollectionIds));
+        } catch (error) {
+            window.alert(error.message || 'Could not place items');
+        }
     }
 
     async function performItemPlacement(mode) {
@@ -2480,29 +3102,46 @@ function initializeGaiaLibrary() {
         itemPlacementCancel.disabled = true;
         itemPlacementResult.className = 'result error hidden';
         try {
-            const response = await fetch(`/items/${placement.targetId}/place-items`, {
+            const url = placement.targetType === 'vault'
+                ? `/vaults/${placement.targetId}/place-items`
+                : `/items/${placement.targetId}/place-items`;
+
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ item_ids: placement.itemIds, mode }),
             });
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.detail || 'Could not add the selected items');
-            const targetId = placement.targetId;
-            const target = result.target;
-            const targetIndex = state.items.findIndex(item => Number(item.id) === Number(targetId));
-            if (target && targetIndex >= 0) state.items[targetIndex] = { ...state.items[targetIndex], ...target };
+
+            const isVault = placement.targetType === 'vault';
+            const targetId = Number(placement.targetId);
+            const sourceItemIds = placement.itemIds || [];
+
             state.pendingPlacement = null;
             state.selectedEntryIds.clear();
             state.selectionAnchorId = null;
-            state.expandedCollections.add(String(targetId));
-            state.projectReferencedItems.delete(targetId);
-            state.collectionContents.delete(Number(targetId));
-            state.collectionContentPaging.delete(Number(targetId));
             itemPlacementDialog.close();
-            renderFilterUI();
-            renderAssets();
-            loadCollectionContents(targetId, { reset: true });
-            loadProjectReferencedItems(targetId);
+
+            if (!isVault) {
+                const target = result.target;
+                const targetIndex = state.items.findIndex(item => Number(item.id) === targetId);
+                if (target && targetIndex >= 0) state.items[targetIndex] = { ...state.items[targetIndex], ...target };
+                state.expandedCollections.add(String(targetId));
+            }
+
+            const entryByItemId = new Map();
+            allEntries().forEach(candidate => {
+                const itemId = numericItemId(candidate);
+                if (itemId && !entryByItemId.has(itemId)) entryByItemId.set(itemId, candidate);
+            });
+            const sourceCollectionIds = new Set();
+            sourceItemIds.forEach(id => {
+                const entry = entryByItemId.get(id);
+                if (entry?.collection?.id) sourceCollectionIds.add(Number(entry.collection.id));
+            });
+
+            await refreshAfterPlacement(targetId, targetId, isVault, Array.from(sourceCollectionIds));
         } catch (error) {
             itemPlacementResult.textContent = error.message;
             itemPlacementResult.className = 'result error';
@@ -2514,15 +3153,26 @@ function initializeGaiaLibrary() {
         }
     }
 
-    async function moveSelectedEntriesToVault(targetVaultId) {
+    async function moveSelectedEntriesToVault(targetVaultId, mode = 'move') {
         const itemIds = getSelectedNumericItemIds();
         if (!itemIds.length) return;
+        const externalSelected = getSelectedEntries().some(entry => (
+            String(entryRecord(entry)?.storage_mode || '').toLowerCase() === 'external_reference'
+        ));
+        if (mode === 'move' && externalSelected && !window.confirm(
+            'Move these referenced files into the vault? The original files will be removed from their current locations. This cannot be undone.'
+        )) return;
         stopPlayback();
         try {
             const response = await fetch('/items/move-to-vault', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ item_ids: itemIds, vault_id: targetVaultId }),
+                body: JSON.stringify({
+                    item_ids: itemIds,
+                    vault_id: targetVaultId,
+                    mode,
+                    move_confirmed: mode !== 'move' || externalSelected,
+                }),
             });
             if (!response.ok) {
                 const err = await response.json().catch(() => ({}));
@@ -2736,9 +3386,28 @@ function initializeGaiaLibrary() {
                 locator: { kind: 'item', item_id: itemId },
             };
         }
+        if (entry.kind === 'subfolder') {
+            const id = entryFolderItemId(entry);
+            if (id) {
+                return {
+                    key: `item:${id}`,
+                    label: entry.title || `Folder ${id}`,
+                    locator: { kind: 'item', item_id: id },
+                };
+            }
+            return null;
+        }
         if (entry.kind === 'content') {
             const collectionId = Number(entry.collection?.id);
             const contentIndex = Number(entry.content?.index);
+            const childId = Number(entry.content?.child_id || entry.item?.id);
+            if (entry.content?.attributes?.is_folder && Number.isFinite(childId)) {
+                return {
+                    key: `item:${childId}`,
+                    label: entry.title || `Folder ${childId}`,
+                    locator: { kind: 'item', item_id: childId },
+                };
+            }
             if (!Number.isFinite(collectionId) || !Number.isInteger(contentIndex)) return null;
             return {
                 key: `content:${collectionContentKey(collectionId, contentIndex)}`,
@@ -2898,9 +3567,35 @@ function initializeGaiaLibrary() {
 
     async function deleteEntries(entries) {
         const targetMap = new Map();
-        const versionedEntries = versionedAssetEntries(entries);
+        const expandedEntries = [];
+
+        function collectSubfolderLeaves(subfolder) {
+            const leaves = [];
+            if (subfolder.files) leaves.push(...subfolder.files);
+            if (subfolder.subfolders) {
+                for (const childSub of subfolder.subfolders.values()) {
+                    leaves.push(...collectSubfolderLeaves(childSub));
+                }
+            }
+            return leaves;
+        }
 
         entries.forEach(entry => {
+            if (entry.kind === 'subfolder') {
+                const target = deletionTargetForEntry(entry);
+                if (target) {
+                    expandedEntries.push(entry);
+                } else if (entry.subfolder) {
+                    expandedEntries.push(...collectSubfolderLeaves(entry.subfolder));
+                }
+            } else {
+                expandedEntries.push(entry);
+            }
+        });
+
+        const versionedEntries = versionedAssetEntries(expandedEntries);
+
+        expandedEntries.forEach(entry => {
             const target = deletionTargetForEntry(entry);
             if (target) targetMap.set(target.key, target);
         });
@@ -2926,14 +3621,24 @@ function initializeGaiaLibrary() {
 
         const targets = [...targetMap.values()];
         const count = targets.length;
+        const hasFolder = entries.some(e => e.kind === 'subfolder' || e.type === 'folder' || e.content?.attributes?.is_folder);
         const onlyReferences = targets.every(target => target.locator.kind === 'reference');
-        const confirmMsg = count === 1
-            ? onlyReferences
-                ? `Remove “${targets[0].label}” from this project?`
-                : `Remove “${targets[0].label}” from the library?`
-            : onlyReferences
-                ? `Remove ${count} selected links from their projects?`
-                : `Remove ${count} selected entries?`;
+        let confirmMsg;
+        if (count === 1) {
+            if (hasFolder) {
+                confirmMsg = `Delete folder “${targets[0].label}” and its contents?`;
+            } else if (onlyReferences) {
+                confirmMsg = `Remove “${targets[0].label}” from this project?`;
+            } else {
+                confirmMsg = `Remove “${targets[0].label}” from the library?`;
+            }
+        } else {
+            if (onlyReferences) {
+                confirmMsg = `Remove ${count} selected links from their projects?`;
+            } else {
+                confirmMsg = `Remove ${count} selected entries?`;
+            }
+        }
 
         if (!versionedEntries.length && !window.confirm(confirmMsg)) return;
 
@@ -2949,6 +3654,9 @@ function initializeGaiaLibrary() {
                 throw new Error(apiErrorMessage(result, 'Could not delete the selected entries'));
             }
             removeDeletedEntries(result.deleted || []);
+            state.selectedEntryIds.clear();
+            state.contextEntry = null;
+            refreshSelectionPresentation();
             if (result.warnings?.length) console.warn('Deletion completed with warnings', result.warnings);
             // The delete response is authoritative. Cancel any reads that
             // started before it and reload server state so stale collection or
@@ -2968,30 +3676,158 @@ function initializeGaiaLibrary() {
 
         const count = (state.contextEntry && state.selectedEntryIds.has(state.contextEntry.id))
             ? state.selectedEntryIds.size
-            : 1;
+            : (state.contextEntry ? 1 : state.selectedEntryIds.size);
+
+        if (copyEntryMenu) {
+            const hasItemsToCopy = count > 0;
+            copyEntryMenu.disabled = !hasItemsToCopy;
+            copyEntryMenu.textContent = count > 1 ? `Copy (${count})` : 'Copy';
+            copyEntryMenu.title = hasItemsToCopy
+                ? (count > 1 ? `Copy ${count} items` : 'Copy item')
+                : 'No items selected to copy';
+        }
+
+        if (pasteEntryMenu) {
+            const hasClipboard = Boolean(state.clipboard?.itemIds?.length);
+            const targetProject = getTargetProjectForPaste();
+            pasteEntryMenu.disabled = !hasClipboard;
+            if (!hasClipboard) {
+                pasteEntryMenu.textContent = 'Paste';
+                pasteEntryMenu.title = 'Clipboard is empty';
+            } else if (targetProject) {
+                const clipCount = state.clipboard.itemIds.length;
+                pasteEntryMenu.textContent = clipCount > 1 ? `Paste (${clipCount})` : 'Paste';
+                pasteEntryMenu.title = `Paste into ${targetProject.title}`;
+            } else {
+                pasteEntryMenu.textContent = 'Paste';
+                pasteEntryMenu.title = 'Select a project to paste into';
+            }
+        }
 
         if (analyzeEntryButton) {
+            analyzeEntryButton.disabled = count === 0;
             analyzeEntryButton.textContent = count > 1 ? `Analyze metadata (${count} items)` : 'Analyze metadata';
         }
         if (deleteEntryMenuButton) {
+            deleteEntryMenuButton.disabled = count === 0;
             deleteEntryMenuButton.textContent = count > 1 ? `Delete selected (${count})` : 'Delete selected';
         }
 
-        contextVaultOptions.innerHTML = '<div class="context-header sin-menu-heading">Move to Vault</div>';
+        const selectedEntries = getSelectedEntries();
+        const targetEntry = state.contextEntry || (selectedEntries.length === 1 ? selectedEntries[0] : null);
+        const isSingleContainer = count === 1 && targetEntry && (
+            typeIsContainer(targetEntry.type)
+            || targetEntry.type === 'collection'
+            || targetEntry.type === 'folder'
+            || targetEntry.kind === 'subfolder'
+            || Boolean(targetEntry.item?.attributes?.is_folder || targetEntry.content?.attributes?.is_folder)
+        );
+
+        if (contextNewFolderButton) {
+            if (count <= 1) {
+                contextNewFolderButton.classList.remove('hidden');
+                contextNewFolderButton.disabled = false;
+                if (isSingleContainer) {
+                    contextNewFolderButton.textContent = `New folder in ${targetEntry.title || targetEntry.name}`;
+                    contextNewFolderButton.title = `Create a folder inside ${targetEntry.title || targetEntry.name}`;
+                } else {
+                    contextNewFolderButton.textContent = 'New folder';
+                    contextNewFolderButton.title = 'Create a folder in the active vault';
+                }
+            } else {
+                contextNewFolderButton.classList.add('hidden');
+            }
+        }
+
+        if (contextMakeFolderMoveButton) {
+            if (count > 1) {
+                contextMakeFolderMoveButton.classList.remove('hidden');
+                contextMakeFolderMoveButton.disabled = false;
+                contextMakeFolderMoveButton.textContent = `Make folder and move (${count})`;
+                contextMakeFolderMoveButton.title = `Create a folder and move ${count} selected items into it`;
+            } else {
+                contextMakeFolderMoveButton.classList.add('hidden');
+            }
+        }
+
+        contextVaultOptions.innerHTML = '<div class="context-header sin-menu-heading">Move or copy to vault</div>';
+        if (count === 0) {
+            contextVaultOptions.classList.add('hidden');
+            return;
+        }
+        contextVaultOptions.classList.remove('hidden');
+        const externalSelected = selectedCommandEntries().some(entry => (
+            String(entryRecord(entry)?.storage_mode || '').toLowerCase() === 'external_reference'
+        ));
         state.vaults.forEach(vault => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'sin-menu-item';
-            btn.textContent = vault.name;
-            const handleMove = async event => {
-                if (event) { event.preventDefault(); event.stopPropagation(); }
-                contextMenu.classList.add('hidden');
-                await moveSelectedEntriesToVault(vault.id);
-            };
-            btn.addEventListener('click', handleMove);
-            contextVaultOptions.appendChild(btn);
+            const group = document.createElement('div');
+            group.className = 'context-vault-actions';
+            const label = document.createElement('span');
+            label.className = 'context-vault-name';
+            label.textContent = vault.name;
+            group.appendChild(label);
+            [['move', 'Move'], ['copy', 'Copy']].forEach(([mode, labelText]) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'sin-menu-item';
+                btn.textContent = labelText;
+                btn.disabled = mode === 'copy' && !externalSelected;
+                btn.title = mode === 'move'
+                    ? `Move selected assets to ${vault.name}`
+                    : (externalSelected ? `Copy external references into ${vault.name}` : 'Copy is available for external references');
+                btn.addEventListener('click', async event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    contextMenu.classList.add('hidden');
+                    await moveSelectedEntriesToVault(vault.id, mode);
+                });
+                group.appendChild(btn);
+            });
+            contextVaultOptions.appendChild(group);
         });
 
+    }
+
+    function openFolderDialog({ parentEntry = null, itemIds = [], referenceIds = [] } = {}) {
+        const activeVault = selectedVault() || state.vaults[0];
+        state.pendingFolderCreation = {
+            parentEntry,
+            itemIds,
+            referenceIds,
+            vaultId: parentEntry?.item?.vault_id ?? activeVault?.id ?? null,
+        };
+        if (folderNameInput) folderNameInput.value = '';
+        if (folderDialogResult) {
+            folderDialogResult.className = 'result hidden';
+            folderDialogResult.textContent = '';
+        }
+        const totalCount = (itemIds.length || 0) + (referenceIds.length || 0);
+        if (folderDialogTitle) {
+            if (totalCount > 0) {
+                folderDialogTitle.textContent = `Make folder and move (${totalCount})`;
+            } else if (parentEntry) {
+                folderDialogTitle.textContent = `New folder in ${parentEntry.title || parentEntry.name}`;
+            } else {
+                folderDialogTitle.textContent = 'Create a folder';
+            }
+        }
+        if (folderDialogHelp) {
+            if (totalCount > 0) {
+                folderDialogHelp.textContent = `Creates a new folder and moves the ${totalCount} selected asset(s) into it.`;
+            } else if (parentEntry) {
+                folderDialogHelp.textContent = `The folder will be created inside "${parentEntry.title || parentEntry.name}".`;
+            } else {
+                const vault = selectedVault();
+                folderDialogHelp.textContent = vault
+                    ? `The folder will be created in "${vault.name}".`
+                    : 'The folder will be created in the active vault.';
+            }
+        }
+        if (folderDialogSubmit) {
+            folderDialogSubmit.textContent = totalCount > 0 ? 'Make folder and move' : 'Create folder';
+        }
+        folderDialog?.showModal();
+        folderNameInput?.focus();
     }
 
     function selectedVault() {
@@ -3033,6 +3869,7 @@ function initializeGaiaLibrary() {
                 renderFilterUI();
                 renderAssets();
                 loadVaultImportLog();
+                loadLibrary({ force: true, resetNested: true });
             });
             vaultMenuList.appendChild(option);
         };
@@ -3058,6 +3895,18 @@ function initializeGaiaLibrary() {
             vaultNameInput.value = mode === 'rename' ? activeVault.name : '';
             vaultNameInput.select();
         }
+        if (vaultPathInput) {
+            vaultPathInput.value = mode === 'rename' ? activeVault.path : '';
+            vaultPathInput.title = vaultPathInput.value || 'GAIA will use its standard asset folder';
+        }
+        if (vaultPathLabel) vaultPathLabel.textContent = mode === 'rename' ? 'Vault path' : 'Storage root';
+        if (vaultPathAction) vaultPathAction.textContent = mode === 'rename' ? 'Migrate' : 'Choose storage root';
+        if (vaultPathHelp) {
+            vaultPathHelp.textContent = mode === 'rename'
+                ? 'Migration moves the complete vault and updates every tracked managed path.'
+                : 'GAIA creates a storage-key folder for this vault inside the selected root. Leave it unchanged to use the standard asset folder.';
+        }
+        if (vaultPreviewSelect) vaultPreviewSelect.value = mode === 'rename' ? activeVault.preview : 'quick';
         vaultDialogResult?.classList.add('hidden');
         vaultDialogResult.textContent = '';
         vaultDialog?.showModal();
@@ -3071,11 +3920,11 @@ function initializeGaiaLibrary() {
         vaultDialogResult.classList.remove('hidden');
     }
 
-    async function createVaultRecord(name) {
+    async function createVaultRecord(name, path = null, preview = 'quick') {
         const response = await fetch('/vaults/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description: null }),
+            body: JSON.stringify({ name, description: null, path: path || null, preview }),
         });
         const vault = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(vault.detail || 'Could not create vault');
@@ -3101,13 +3950,21 @@ function initializeGaiaLibrary() {
                 const response = await fetch(`/vaults/${activeVault.id}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, description: activeVault.description || null }),
+                    body: JSON.stringify({
+                        name,
+                        description: activeVault.description || null,
+                        preview: vaultPreviewSelect?.value || 'quick',
+                    }),
                 });
                 const updated = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(updated.detail || 'Could not rename vault');
                 state.vaults = state.vaults.map(vault => vault.id === updated.id ? updated : vault);
             } else {
-                const vault = await createVaultRecord(name);
+                const vault = await createVaultRecord(
+                    name,
+                    vaultPathInput?.value.trim() || null,
+                    vaultPreviewSelect?.value || 'quick',
+                );
                 state.vaults.push(vault);
                 state.selectedVaultId = vault.id;
                 state.importVaultId = vault.id;
@@ -3117,12 +3974,45 @@ function initializeGaiaLibrary() {
             renderVaults();
             renderFilterUI();
             renderAssets();
+            loadLibrary({ force: true, resetNested: true });
         } catch (error) {
             showVaultDialogError(error.message || 'Could not save vault');
         } finally {
             if (vaultDialogSubmit) {
                 vaultDialogSubmit.disabled = false;
                 vaultDialogSubmit.textContent = vaultDialogMode === 'rename' ? 'Save changes' : 'Create vault';
+            }
+        }
+    }
+
+    async function migrateActiveVault(path) {
+        const activeVault = selectedVault();
+        if (!activeVault || !path) return;
+        if (vaultPathAction) {
+            vaultPathAction.disabled = true;
+            vaultPathAction.textContent = 'Migrating…';
+        }
+        try {
+            const response = await fetch(`/vaults/${activeVault.id}/migrate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path }),
+            });
+            const updated = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(updated.detail || 'Could not migrate vault');
+            state.vaults = state.vaults.map(vault => vault.id === updated.id ? updated : vault);
+            if (vaultPathInput) {
+                vaultPathInput.value = updated.path;
+                vaultPathInput.title = updated.path;
+            }
+            renderVaults();
+            await loadLibrary({ force: true, resetNested: true });
+        } catch (error) {
+            showVaultDialogError(error.message || 'Could not migrate vault');
+        } finally {
+            if (vaultPathAction) {
+                vaultPathAction.disabled = false;
+                vaultPathAction.textContent = 'Migrate';
             }
         }
     }
@@ -3143,6 +4033,7 @@ function initializeGaiaLibrary() {
             renderVaults();
             renderFilterUI();
             renderAssets();
+            loadLibrary({ force: true, resetNested: true });
         } catch (error) {
             window.alert(error.message || 'Could not delete vault');
             renderVaultMenu();
@@ -3252,8 +4143,11 @@ function initializeGaiaLibrary() {
                         if (!response.ok) throw new Error('GAIA could not load item types');
                         return response.json();
                     });
+                const vaultScope = state.selectedVaultId === null
+                    ? '&vault_preview=quick'
+                    : `&vault_id=${encodeURIComponent(state.selectedVaultId)}`;
                 const querySuffix = requestedQuery ? `&query=${encodeURIComponent(requestedQuery)}` : '';
-                const itemsPromise = fetch(`/items/summaries?limit=10000${querySuffix}`, { signal: controller.signal }).then(async response => {
+                const itemsPromise = fetch(`/items/summaries?limit=10000${vaultScope}${querySuffix}`, { signal: controller.signal }).then(async response => {
                     if (!response.ok) throw new Error('GAIA could not load the library');
                     return response.json();
                 });
@@ -3761,7 +4655,10 @@ function initializeGaiaLibrary() {
     projectFilesClose?.addEventListener('click', () => projectFilesDialog.close());
     itemPlacementClose?.addEventListener('click', () => itemPlacementDialog.close());
     itemPlacementCancel?.addEventListener('click', () => itemPlacementDialog.close());
-    itemPlacementMove?.addEventListener('click', () => performItemPlacement('move'));
+    itemPlacementMove?.addEventListener('click', () => {
+        const action = state.pendingPlacement?.action || 'copy';
+        performItemPlacement(action === 'move' ? 'move' : 'copy');
+    });
     itemPlacementReference?.addEventListener('click', () => performItemPlacement('reference'));
     itemPlacementDialog?.addEventListener('close', () => {
         if (!itemPlacementMove.disabled && !itemPlacementReference.disabled) state.pendingPlacement = null;
@@ -3846,6 +4743,24 @@ function initializeGaiaLibrary() {
         }
     });
 
+    if (copyEntryMenu) {
+        const handleCopy = (event) => {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            contextMenu.classList.add('hidden');
+            copySelectedEntries();
+        };
+        copyEntryMenu.addEventListener('click', handleCopy);
+    }
+
+    if (pasteEntryMenu) {
+        const handlePaste = (event) => {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            contextMenu.classList.add('hidden');
+            pasteIntoProject();
+        };
+        pasteEntryMenu.addEventListener('click', handlePaste);
+    }
+
     if (analyzeEntryButton) {
         const handleAnalyze = async (event) => {
             if (event) { event.preventDefault(); event.stopPropagation(); }
@@ -3862,6 +4777,56 @@ function initializeGaiaLibrary() {
             await deleteSelectedEntries();
         };
         deleteEntryMenuButton.addEventListener('click', handleDeleteMenu);
+    }
+
+    if (contextNewFolderButton) {
+        const handleNewFolder = (event) => {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            contextMenu.classList.add('hidden');
+            const selectedEntries = getSelectedEntries();
+            const targetEntry = state.contextEntry || (selectedEntries.length === 1 ? selectedEntries[0] : null);
+            const isSingleContainer = targetEntry && (
+                typeIsContainer(targetEntry.type)
+                || targetEntry.type === 'collection'
+                || targetEntry.type === 'folder'
+                || targetEntry.kind === 'subfolder'
+                || Boolean(targetEntry.item?.attributes?.is_folder || targetEntry.content?.attributes?.is_folder)
+            );
+            const parentCollection = isSingleContainer
+                ? targetEntry
+                : (targetEntry?.collection ? { item: targetEntry.collection, title: targetEntry.collection.title || targetEntry.collection.name } : null);
+            openFolderDialog({
+                parentEntry: parentCollection,
+                itemIds: [],
+                referenceIds: [],
+            });
+        };
+        contextNewFolderButton.addEventListener('click', handleNewFolder);
+    }
+
+    if (contextMakeFolderMoveButton) {
+        const handleMakeFolderMove = (event) => {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            contextMenu.classList.add('hidden');
+            const selectedEntries = getSelectedEntries();
+            const referenceIds = selectedEntries
+                .filter(e => e.kind === 'reference' && e.reference?.id)
+                .map(e => Number(e.reference.id));
+            const itemIds = selectedEntries
+                .filter(e => e.kind !== 'reference')
+                .map(e => numericItemId(e))
+                .filter(id => id !== null && Number.isFinite(id));
+            const firstCol = selectedEntries.find(e => e.collection)?.collection || state.contextEntry?.collection;
+            const parentCollection = (selectedEntries.length > 0 && selectedEntries.every(e => !e.collection || Number(e.collection.id) === Number(firstCol?.id))) && firstCol
+                ? { item: firstCol, title: firstCol.title || firstCol.name }
+                : (firstCol ? { item: firstCol, title: firstCol.title || firstCol.name } : null);
+            openFolderDialog({
+                parentEntry: parentCollection,
+                itemIds,
+                referenceIds,
+            });
+        };
+        contextMakeFolderMoveButton.addEventListener('click', handleMakeFolderMove);
     }
 
     analyzeSelectionButton?.addEventListener('click', async event => {
@@ -3895,19 +4860,35 @@ function initializeGaiaLibrary() {
         if (event.key === 'Escape') {
             contextMenu.classList.add('hidden');
             closeAppMenus();
-            if (state.selectedEntryIds.size || state.selectionAnchorId) {
-                state.selectedEntryIds.clear();
-                state.selectionAnchorId = null;
-                state.contextEntry = null;
-                refreshSelectionPresentation();
+            clearSelection();
+            return;
+        }
+        const activeEl = document.activeElement;
+        const isEditing = activeEl && (
+            activeEl.tagName === 'INPUT' ||
+            activeEl.tagName === 'SELECT' ||
+            activeEl.tagName === 'TEXTAREA' ||
+            activeEl.isContentEditable
+        );
+        if (isEditing) return;
+
+        if ((event.ctrlKey || event.metaKey) && (event.key === 'c' || event.key === 'C')) {
+            if (state.selectedEntryIds.size > 0 || state.contextEntry) {
+                event.preventDefault();
+                copySelectedEntries();
             }
             return;
         }
-        if (event.key === 'Delete' || event.key === 'Backspace') {
-            const activeEl = document.activeElement;
-            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
-                return;
+
+        if ((event.ctrlKey || event.metaKey) && (event.key === 'v' || event.key === 'V')) {
+            if (state.clipboard?.itemIds?.length) {
+                event.preventDefault();
+                pasteIntoProject();
             }
+            return;
+        }
+
+        if (event.key === 'Delete' || event.key === 'Backspace') {
             if (state.selectedEntryIds.size > 0) {
                 event.preventDefault();
                 await deleteSelectedEntries();
@@ -3915,6 +4896,42 @@ function initializeGaiaLibrary() {
         }
     });
     assetList?.addEventListener('scroll', () => contextMenu.classList.add('hidden'));
+
+    window.addEventListener('dragover', handleDragAutoScroll, { capture: true, passive: true });
+    window.addEventListener('dragend', () => {
+        state.isDraggingItem = false;
+        stopDragAutoScroll();
+    }, { capture: true });
+    window.addEventListener('drop', () => {
+        state.isDraggingItem = false;
+        stopDragAutoScroll();
+    }, { capture: true });
+
+    assetList?.addEventListener('dragover', event => {
+        if (state.isDraggingItem || Array.from(event.dataTransfer?.types || []).includes('application/x-gaia-item-ids')) {
+            event.preventDefault();
+        }
+    });
+    assetList?.addEventListener('contextmenu', event => {
+        if (event.target.closest('.asset-row')) return;
+        event.preventDefault();
+        state.contextEntry = null;
+        renderContextMenu();
+        contextMenu.classList.remove('hidden');
+        const width = contextMenu.offsetWidth || 180;
+        const height = contextMenu.offsetHeight || 120;
+        contextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
+        contextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
+    });
+
+    document.addEventListener('click', event => {
+        if (event.button !== 0) return;
+        if (event.target.closest('.asset-row, .subfolder-row')) return;
+        if (event.target.closest('button, input, select, textarea, label, dialog, .sin-menu-surface, .sin-menu-item, .app-menu-bar, .media-editor-dock, .filter-chip, .column-resizer, .file-version-selector')) {
+            return;
+        }
+        clearSelection();
+    });
 
     let importPollTimer = null;
 
@@ -3942,6 +4959,8 @@ function initializeGaiaLibrary() {
         state.importFolderAssignments = new Map();
         state.importItemTypes = new Map();
         state.importExcludedIndexes = new Set();
+        state.importTransferMode = 'copy';
+        state.skipTrackAnalysis = false;
         state.importCollapsedFolders = new Set();
         state.importConflictAction = null;
         importResult.className = 'result hidden';
@@ -3960,7 +4979,15 @@ function initializeGaiaLibrary() {
     }
 
     function folderAssignmentOptions(preview, selected) {
-        const typeOptions = (preview.folder_type_options || []).map(option =>
+        const defaultFolderOptions = [
+            { value: 'action:contain', label: 'Contain folder' },
+            { value: 'action:ignore', label: 'Ignore folder (flatten)' },
+            { value: 'type:multitrack', label: 'Multitrack' },
+        ];
+        const rawOptions = (preview.folder_type_options && preview.folder_type_options.length)
+            ? preview.folder_type_options
+            : defaultFolderOptions;
+        const typeOptions = rawOptions.map(option =>
             `<option value="${escapeHtml(option.value)}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`
         ).join('');
         const profileOptions = (preview.profiles || [])
@@ -3969,7 +4996,7 @@ function initializeGaiaLibrary() {
                 const value = `profile:${profile.id}`;
                 return `<option value="${escapeHtml(value)}" ${selected === value ? 'selected' : ''}>${escapeHtml(profile.label)}</option>`;
             }).join('');
-        return `<option value="" ${selected ? '' : 'selected'}>Unclassified folder</option>${typeOptions ? `<optgroup label="Folder types">${typeOptions}</optgroup>` : ''}${profileOptions ? `<optgroup label="Profiles">${profileOptions}</optgroup>` : ''}`;
+        return `<option value="" ${selected ? '' : 'selected'}>Unclassified folder</option>${typeOptions ? `<optgroup label="Folder actions & types">${typeOptions}</optgroup>` : ''}${profileOptions ? `<optgroup label="Profiles">${profileOptions}</optgroup>` : ''}`;
     }
 
     function fileTypeOptions(entry, selected) {
@@ -4053,7 +5080,7 @@ function initializeGaiaLibrary() {
                     ? `<span class="import-folder-warning" title="${escapeHtml(`${node.warning_count} flagged file${node.warning_count === 1 ? '' : 's'}: ${(node.warning_messages || []).join(', ')}`)}">⚠<span>${node.warning_count}</span></span>`
                     : '';
                 return `<div class="import-tree-row folder" style="--import-depth:${Number(node.depth) || 0}">
-                    <div class="import-tree-name"><button class="import-folder-toggle" type="button" data-import-collapse="${escapeHtml(node.relative_path)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}" aria-expanded="${!collapsed}">${collapsed ? '▸' : '▾'}</button><span class="import-tree-label"><strong>${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}</strong>${reason}</span>${warning}</div>
+                    <div class="import-tree-name"><input type="checkbox" class="import-folder-checkbox" data-import-folder-include="${escapeHtml(node.relative_path)}" aria-label="Include folder ${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}"><button class="import-folder-toggle" type="button" data-import-collapse="${escapeHtml(node.relative_path)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}" aria-expanded="${!collapsed}">${collapsed ? '▸' : '▾'}</button><span class="import-tree-label"><strong>${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}</strong>${reason}</span>${warning}</div>
                     <div class="import-tree-detection">${detection}</div>
                     <select data-import-folder="${escapeHtml(node.relative_path)}" ${inheritedFrom ? `disabled title="Contained by classified folder ${escapeHtml(inheritedFrom)}"` : ''}>${folderAssignmentOptions(preview, selected)}</select>
                     <span class="import-tree-size">${node.relative_path === '.' ? escapeHtml(formatSize(preview.size_bytes)) : '—'}</span>
@@ -4081,12 +5108,52 @@ function initializeGaiaLibrary() {
                 <label>On conflict <select id="import-conflict-action"><option value="">Choose an action</option><option value="skip" ${state.importConflictAction === 'skip' ? 'selected' : ''}>Skip existing content</option><option value="new_snapshot" ${state.importConflictAction === 'new_snapshot' ? 'selected' : ''}>Keep a new immutable snapshot</option></select></label>
             </div>` : '';
         const canStart = includedCount > 0 && (!conflicts.length || state.importConflictAction);
+        if (preview.source_kind === 'zip' && state.importTransferMode === 'keep') state.importTransferMode = 'copy';
+        const transferHelp = {
+            move: 'Moves the selected files into the vault. Originals disappear only after verified publication.',
+            copy: 'Copies the selected files into the vault and leaves every original untouched.',
+            keep: 'Registers read-only references to the original paths. No source file is changed.',
+        }[state.importTransferMode];
+        const startLabel = state.importTransferMode === 'move' ? 'Move files and import' : 'Start background import';
+        const hasAudioEntries = (preview.entries || []).some(entry => (entry.family || '') === 'audio');
         importPreviewStep.innerHTML = `
             ${preview.warnings?.length ? `<div class="import-warning-box"><strong>Inspection warnings</strong>${preview.warnings.map(warning => `<div>${escapeHtml(warning)}</div>`).join('')}</div>` : ''}
             ${renderImportFilters(preview)}
             ${conflictPanel}
+            <section class="import-transfer-choice"><label for="import-transfer-mode"><strong>File handling</strong></label><select id="import-transfer-mode"><option value="move" ${state.importTransferMode === 'move' ? 'selected' : ''}>Move files into vault</option><option value="copy" ${state.importTransferMode === 'copy' ? 'selected' : ''}>Copy files into vault</option><option value="keep" ${state.importTransferMode === 'keep' ? 'selected' : ''} ${preview.source_kind === 'zip' ? 'disabled' : ''}>Keep files in original position (reference)</option></select><p>${escapeHtml(transferHelp)}</p></section>
+            ${hasAudioEntries ? `<label class="import-analysis-choice"><input id="import-skip-track-analysis" type="checkbox" ${state.skipTrackAnalysis ? 'checked' : ''}><span><strong>Skip analysis for tracks</strong><small>Import rows assigned the Track type using inspection only; BPM, key, duration, and embedded metadata will remain empty until analyzed later.</small></span></label>` : ''}
             <section class="import-preview-section"><div class="import-section-heading"><h3>Inspected folders and files</h3><button id="import-exclude-artifacts" class="secondary compact" type="button" ${remainingArtifacts.length ? '' : 'disabled'}>Exclude flagged artifacts${remainingArtifacts.length ? ` (${remainingArtifacts.length})` : ''}</button></div><div class="import-tree-head"><span>Name</span><span>Inspection</span><span>Type or profile</span><span>Size</span></div><div class="import-tree">${rows || '<div class="empty">No files were found.</div>'}</div></section>
-            <div class="dialog-actions"><button id="import-preview-back" class="secondary" type="button">Choose another source</button><button id="import-job-start" class="primary" type="button" ${canStart ? '' : 'disabled'}>Start background import</button></div>`;
+            <div class="dialog-actions"><button id="import-preview-back" class="secondary" type="button">Choose another source</button><button id="import-job-start" class="primary" type="button" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button></div>`;
+        importPreviewStep.querySelectorAll('input[data-import-folder-include]').forEach(checkbox => {
+            const folderPath = checkbox.dataset.importFolderInclude;
+            const descendants = (preview.entries || []).filter(entry =>
+                folderPath === '.' || entry.relative_path === folderPath || entry.relative_path.startsWith(`${folderPath}/`)
+            );
+            if (!descendants.length) {
+                checkbox.checked = true;
+                checkbox.indeterminate = false;
+                return;
+            }
+            const included = descendants.filter(e => !state.importExcludedIndexes.has(e.index)).length;
+            if (included === 0) {
+                checkbox.checked = false;
+                checkbox.indeterminate = false;
+            } else if (included === descendants.length) {
+                checkbox.checked = true;
+                checkbox.indeterminate = false;
+            } else {
+                checkbox.checked = false;
+                checkbox.indeterminate = true;
+            }
+        });
+        importPreviewStep.querySelector('#import-transfer-mode')?.addEventListener('change', event => {
+            state.importTransferMode = event.target.value;
+            renderImportPreview();
+        });
+        importPreviewStep.querySelector('#import-skip-track-analysis')?.addEventListener('change', event => {
+            state.skipTrackAnalysis = event.target.checked;
+            renderImportPreview();
+        });
         importPreviewStep.querySelectorAll('[data-import-collapse]').forEach(button => button.addEventListener('click', () => {
             const path = button.dataset.importCollapse;
             if (state.importCollapsedFolders.has(path)) state.importCollapsedFolders.delete(path);
@@ -4096,6 +5163,18 @@ function initializeGaiaLibrary() {
         importPreviewStep.querySelectorAll('[data-import-folder]').forEach(select => select.addEventListener('change', () => {
             if (select.value) state.importFolderAssignments.set(select.dataset.importFolder, select.value);
             else state.importFolderAssignments.delete(select.dataset.importFolder);
+            renderImportPreview();
+        }));
+        importPreviewStep.querySelectorAll('[data-import-folder-include]').forEach(input => input.addEventListener('change', () => {
+            const folderPath = input.dataset.importFolderInclude;
+            const descendants = (preview.entries || []).filter(entry =>
+                folderPath === '.' || entry.relative_path === folderPath || entry.relative_path.startsWith(`${folderPath}/`)
+            );
+            if (input.checked) {
+                descendants.forEach(entry => state.importExcludedIndexes.delete(entry.index));
+            } else {
+                descendants.forEach(entry => state.importExcludedIndexes.add(entry.index));
+            }
             renderImportPreview();
         }));
         importPreviewStep.querySelectorAll('[data-import-item]').forEach(select => select.addEventListener('change', () => {
@@ -4139,18 +5218,24 @@ function initializeGaiaLibrary() {
     }
 
     function renderImportJob(job) {
+        const registrationTotal = Math.max(1, Number(job.registration_total ?? job.total) || 1);
+        const registrationCompleted = Number(job.registration_completed) || 0;
         const stagingTotal = Math.max(1, Number(job.staging_total ?? job.total) || 1);
         const stagingCompleted = Number(job.staging_completed ?? (job.phase === 'staging' ? job.completed : 0)) || 0;
         const stagingBytesTotal = Number(job.staging_bytes_total) || 0;
         const stagingBytesCompleted = Number(job.staging_bytes_completed) || 0;
         const processingTotal = Math.max(1, Number(job.processing_total ?? job.total) || 1);
         const processingCompleted = Number(job.processing_completed ?? job.completed) || 0;
-        const stagingProgress = Math.min(100, Math.round(
+        const stagingProgressRaw = Math.min(100,
             stagingBytesTotal > 0
                 ? (stagingBytesCompleted / stagingBytesTotal) * 100
                 : (stagingCompleted / stagingTotal) * 100
-        ));
+        );
+        const stagingProgress = stagingProgressRaw >= 10
+            ? stagingProgressRaw.toFixed(1)
+            : stagingProgressRaw.toFixed(2);
         const processingProgress = Math.min(100, Math.round((processingCompleted / processingTotal) * 100));
+        const registrationProgress = Math.min(100, Math.round((registrationCompleted / registrationTotal) * 100));
         const active = ['queued', 'running', 'cancelling'].includes(job.status);
         const labels = {
             queued: 'Import queued', running: 'Importing assets', cancelling: 'Cancelling import',
@@ -4164,13 +5249,21 @@ function initializeGaiaLibrary() {
         importProgressContainer.classList.toggle('complete', job.status === 'completed');
         importProgressLabel.textContent = labels[job.status] || job.phase || job.status;
         importProgressDetail.textContent = active ? (job.current_title || job.phase || 'Preparing managed import…') : terminalDetail;
+        importRegistrationFill.style.width = `${job.status === 'completed' ? 100 : registrationProgress}%`;
+        importRegistrationCount.textContent = `${registrationCompleted} / ${job.registration_total ?? job.total ?? 0}`;
         importProgressFill.style.width = `${job.status === 'completed' ? 100 : stagingProgress}%`;
-        importProgressCount.textContent = `${stagingCompleted} / ${job.staging_total ?? job.total ?? 0} · ${job.status === 'completed' ? 100 : stagingProgress}%`;
+        const transferredSize = stagingBytesTotal > 0
+            ? ` · ${formatSize(stagingBytesCompleted)} / ${formatSize(stagingBytesTotal)}`
+            : '';
+        importProgressCount.textContent = `${stagingCompleted} / ${job.staging_total ?? job.total ?? 0}${transferredSize} · ${job.status === 'completed' ? '100' : stagingProgress}%`;
         importProcessingFill.style.width = `${job.status === 'completed' ? 100 : processingProgress}%`;
         importProcessingCount.textContent = `${processingCompleted} / ${job.processing_total ?? job.total ?? 0} · ${job.status === 'completed' ? 100 : processingProgress}%`;
+        importRegistrationStage.classList.toggle('complete', job.status === 'completed' || registrationProgress === 100);
+        importRegistrationStage.classList.toggle('active', job.phase === 'registering');
         importStagingStage.classList.toggle('complete', job.status === 'completed' || stagingProgress === 100);
+        importStagingStage.classList.toggle('active', job.phase === 'transferring');
         importProcessingStage.classList.toggle('complete', job.status === 'completed' || processingProgress === 100);
-        importProcessingStage.classList.toggle('active', job.phase === 'processing' || job.phase === 'finalizing');
+        importProcessingStage.classList.toggle('active', job.phase === 'analyzing' || job.phase === 'finalizing');
         importProgressCancel.classList.toggle('hidden', !active);
         importProgressCancel.disabled = job.status === 'cancelling';
         importProgressCancel.textContent = job.status === 'cancelling' ? 'Cancelling…' : 'Cancel';
@@ -4220,10 +5313,19 @@ function initializeGaiaLibrary() {
                 throw new Error(job.detail || 'Could not read import progress');
             }
             renderImportJob(job);
+            if (
+                job.status === 'running'
+                && Number(job.registration_completed || 0) >= Number(job.registration_total || job.total || 0)
+                && state.importRegisteredJobId !== job.job_id
+            ) {
+                state.importRegisteredJobId = job.job_id;
+                await loadLibrary({ force: true, resetNested: true });
+            }
             if (['completed', 'failed', 'cancelled', 'stale'].includes(job.status)) {
                 stopImportPolling();
                 localStorage.removeItem('gaia.activeImportJobId');
                 state.importLastJob = job;
+                state.importRegisteredJobId = null;
                 state.importJobId = null;
                 setImportBusy(false);
                 if (job.status === 'completed') {
@@ -4255,10 +5357,15 @@ function initializeGaiaLibrary() {
     async function startImportJob() {
         const preview = state.importPreview;
         if (!preview) return;
+        const moving = state.importTransferMode === 'move';
+        if (moving && !window.confirm('Move these files into the vault? The original files will be removed from their current locations after GAIA verifies the vault copies. This cannot be undone by cancelling later.')) return;
         setImportBusy(true);
         try {
             const job = await createImportJob({
                 preview_id: preview.preview_id,
+                transfer_mode: state.importTransferMode,
+                move_confirmed: moving,
+                skip_track_analysis: state.skipTrackAnalysis,
                 folder_assignments: Object.fromEntries(state.importFolderAssignments),
                 item_types: Object.fromEntries(state.importItemTypes),
                 excluded_indexes: [...state.importExcludedIndexes],
@@ -4317,6 +5424,82 @@ function initializeGaiaLibrary() {
         if (event.target === vaultDialog) vaultDialog.close();
     });
 
+    folderForm?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const name = folderNameInput?.value?.trim();
+        if (!name) return;
+        const { parentEntry, itemIds, referenceIds, vaultId } = state.pendingFolderCreation || {};
+        const resolvedParentId = entryFolderItemId(parentEntry);
+        try {
+            if (folderDialogSubmit) folderDialogSubmit.disabled = true;
+            const payload = {
+                name,
+                vault_id: vaultId ? Number(vaultId) : null,
+                parent_id: resolvedParentId,
+                item_ids: Array.isArray(itemIds) && itemIds.length ? itemIds.map(Number) : [],
+                reference_ids: Array.isArray(referenceIds) && referenceIds.length ? referenceIds.map(Number) : [],
+            };
+            const response = await fetch('/items/folders/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                let detailMsg = 'Could not create folder';
+                if (typeof err.detail === 'string') {
+                    detailMsg = err.detail;
+                } else if (Array.isArray(err.detail)) {
+                    detailMsg = err.detail.map(d => d.msg || JSON.stringify(d)).join(', ');
+                } else if (err.detail && typeof err.detail === 'object') {
+                    detailMsg = JSON.stringify(err.detail);
+                } else if (err.message) {
+                    detailMsg = err.message;
+                }
+                throw new Error(detailMsg);
+            }
+            folderDialog?.close();
+            state.pendingFolderCreation = null;
+            await loadLibrary({ force: true, resetNested: true });
+            const refreshId = entryFolderItemId(parentEntry);
+            if (refreshId) {
+                state.collectionContents.delete(refreshId);
+                loadCollectionContents(refreshId, { reset: true });
+                if (typeIsProject(parentEntry.item?.type || parentEntry.type)) {
+                    loadProjectReferencedItems(refreshId, { reset: true });
+                }
+            }
+            const collId = Number(parentEntry?.collection?.id);
+            if (collId && collId !== refreshId) {
+                state.collectionContents.delete(collId);
+                loadCollectionContents(collId, { reset: true });
+                loadProjectReferencedItems(collId, { reset: true });
+            }
+        } catch (err) {
+            if (folderDialogResult) {
+                folderDialogResult.className = 'result error';
+                folderDialogResult.textContent = err.message;
+                folderDialogResult.classList.remove('hidden');
+            }
+        } finally {
+            if (folderDialogSubmit) folderDialogSubmit.disabled = false;
+        }
+    });
+    folderDialogClose?.addEventListener('click', () => {
+        folderDialog?.close();
+        state.pendingFolderCreation = null;
+    });
+    folderDialogCancel?.addEventListener('click', () => {
+        folderDialog?.close();
+        state.pendingFolderCreation = null;
+    });
+    folderDialog?.addEventListener('click', event => {
+        if (event.target === folderDialog) {
+            folderDialog.close();
+            state.pendingFolderCreation = null;
+        }
+    });
+
     openImportButton?.addEventListener('click', () => {
         if (state.importJobId) return;
         state.importVaultId = state.selectedVaultId ?? state.importVaultId ?? state.vaults[0]?.id ?? null;
@@ -4354,9 +5537,10 @@ function initializeGaiaLibrary() {
     }
 
     function renderSourcePicker(result) {
+        const choosingVaultPath = Boolean(state.vaultPathPickerMode);
         state.sourcePickerDirectory = result.path;
         state.sourcePickerParent = result.parent;
-        state.sourcePickerSelection = result.selected_path || null;
+        state.sourcePickerSelection = choosingVaultPath ? null : result.selected_path || null;
         sourcePickerLocation.value = result.path;
         sourcePickerUp.disabled = !result.parent;
 
@@ -4373,7 +5557,7 @@ function initializeGaiaLibrary() {
             sourcePickerList.innerHTML = '<div class="source-picker-empty">This folder is empty.</div>';
         } else {
             sourcePickerList.innerHTML = result.entries.map(entry => {
-                const selected = entry.path === state.sourcePickerSelection;
+                const selected = !choosingVaultPath && entry.path === state.sourcePickerSelection;
                 const actionLabel = entry.kind === 'folder' ? `Open ${entry.name}` : `Select ${entry.name}`;
                 return `<button class="source-picker-row" type="button" role="option" aria-label="${escapeHtml(actionLabel)}" aria-selected="${selected}" data-kind="${escapeHtml(entry.kind)}" data-path="${escapeHtml(entry.path)}" data-name="${escapeHtml(entry.name)}">
                     <span class="source-picker-name">${sourcePickerIcon(entry)}<strong>${escapeHtml(entry.name)}</strong></span>
@@ -4389,7 +5573,10 @@ function initializeGaiaLibrary() {
         sourcePickerList.querySelectorAll('.source-picker-row').forEach(row => {
             row.setAttribute('aria-selected', String(row.dataset.path === state.sourcePickerSelection));
         });
-        if (state.sourcePickerSelection) {
+        if (state.vaultPathPickerMode) {
+            sourcePickerSelection.textContent = state.sourcePickerDirectory || 'No folder selected.';
+            sourcePickerChoose.textContent = state.vaultPathPickerMode === 'migrate' ? 'Migrate to this root' : 'Use this root';
+        } else if (state.sourcePickerSelection) {
             sourcePickerSelection.textContent = state.sourcePickerSelection;
             sourcePickerChoose.textContent = 'Choose file';
         } else {
@@ -4421,11 +5608,38 @@ function initializeGaiaLibrary() {
     }
 
     async function openSourcePicker() {
+        state.vaultPathPickerMode = null;
+        if (sourcePickerTitle) sourcePickerTitle.textContent = 'Choose an import source';
+        if (sourcePickerSubtitle) sourcePickerSubtitle.textContent = 'Select a folder, an individual asset, or a ZIP archive.';
         if (!sourcePickerDialog.open) sourcePickerDialog.showModal();
         await loadSourcePicker(sourcePath.value.trim() || null);
     }
 
+    async function openVaultPathPicker(mode) {
+        const activeVault = selectedVault();
+        state.vaultPathPickerMode = mode;
+        state.projectImportPickerActive = false;
+        if (sourcePickerTitle) sourcePickerTitle.textContent = mode === 'migrate' ? 'Migrate vault' : 'Choose vault storage';
+        if (sourcePickerSubtitle) sourcePickerSubtitle.textContent = 'Choose the asset-store folder that should contain this vault.';
+        if (!sourcePickerDialog.open) sourcePickerDialog.showModal();
+        const initialPath = mode === 'migrate' ? activeVault?.root_path : vaultPathInput?.value.trim();
+        await loadSourcePicker(initialPath || null);
+    }
+
     function chooseSourcePickerPath() {
+        if (state.vaultPathPickerMode) {
+            const mode = state.vaultPathPickerMode;
+            const path = state.sourcePickerDirectory;
+            state.vaultPathPickerMode = null;
+            sourcePickerDialog.close();
+            if (!path) return;
+            if (mode === 'migrate') migrateActiveVault(path);
+            else if (vaultPathInput) {
+                vaultPathInput.value = path;
+                vaultPathInput.title = path;
+            }
+            return;
+        }
         const path = state.sourcePickerSelection || state.sourcePickerDirectory;
         if (!path) return;
         if (state.projectImportPickerActive) {
@@ -4464,6 +5678,8 @@ function initializeGaiaLibrary() {
             );
             state.importItemTypes = new Map((preview.entries || []).map(entry => [entry.index, entry.type]));
             state.importExcludedIndexes = new Set();
+            state.importTransferMode = 'copy';
+            state.skipTrackAnalysis = false;
             state.importCollapsedFolders = new Set(
                 (preview.nodes || []).filter(node => node.kind === 'folder').map(node => node.relative_path),
             );
@@ -4489,6 +5705,7 @@ function initializeGaiaLibrary() {
     sourcePickerCancel.addEventListener('click', () => sourcePickerDialog.close());
     sourcePickerDialog.addEventListener('close', () => {
         state.projectImportPickerActive = false;
+        state.vaultPathPickerMode = null;
     });
     sourcePickerUp.addEventListener('click', () => {
         if (state.sourcePickerParent) loadSourcePicker(state.sourcePickerParent);
@@ -4508,16 +5725,21 @@ function initializeGaiaLibrary() {
             loadSourcePicker(entry.dataset.path);
             return;
         }
+        if (state.vaultPathPickerMode) return;
         state.sourcePickerSelection = entry.dataset.path;
         updateSourcePickerSelection();
     });
     sourcePickerList.addEventListener('dblclick', event => {
+        if (state.vaultPathPickerMode) return;
         const entry = event.target.closest('.source-picker-row[data-kind="file"]');
         if (!entry) return;
         state.sourcePickerSelection = entry.dataset.path;
         chooseSourcePickerPath();
     });
     sourcePickerChoose.addEventListener('click', chooseSourcePickerPath);
+    vaultPathAction?.addEventListener('click', () => {
+        openVaultPathPicker(vaultDialogMode === 'rename' ? 'migrate' : 'create');
+    });
     sourcePickerDialog.addEventListener('click', event => {
         if (event.target === sourcePickerDialog) sourcePickerDialog.close();
     });

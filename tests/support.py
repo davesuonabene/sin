@@ -145,6 +145,9 @@ class GaiaTestCase(unittest.TestCase):
         excluded_types: list[str] | None = None,
         excluded_extensions: list[str] | None = None,
         conflict_action: str | None = None,
+        transfer_mode: str = "copy",
+        move_confirmed: bool = False,
+        skip_track_analysis: bool = False,
     ) -> dict:
         """Queue a background import and wait only for its terminal test state."""
         from gaia import schemas
@@ -158,6 +161,9 @@ class GaiaTestCase(unittest.TestCase):
         job = import_job_manager.create_job(
             schemas.ImportJobCreateRequest(
                 preview_id=preview["preview_id"],
+                transfer_mode=transfer_mode,
+                move_confirmed=move_confirmed,
+                skip_track_analysis=skip_track_analysis,
                 folder_assignments=detected_assignments if folder_assignments is None else folder_assignments,
                 item_types=item_types or {},
                 excluded_indexes=excluded_indexes or [],

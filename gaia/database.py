@@ -107,6 +107,52 @@ def migrate_performance_indexes() -> None:
         for statement in statements:
             connection.execute(text(statement))
 
+
+def migrate_vault_locations() -> None:
+    """Add location and loading-policy fields to existing GAIA databases."""
+    table_names = set(inspect(engine).get_table_names())
+    if "vaults" not in table_names:
+        return
+    columns = {column["name"] for column in inspect(engine).get_columns("vaults")}
+    with engine.begin() as connection:
+        if "custom_path" not in columns:
+            connection.execute(text("ALTER TABLE vaults ADD COLUMN custom_path VARCHAR"))
+        if "custom_layout" not in columns:
+            # Rows created by the first custom-path implementation stored the
+            # final vault directory rather than its containing storage root.
+            connection.execute(
+                text("ALTER TABLE vaults ADD COLUMN custom_layout VARCHAR NOT NULL DEFAULT 'vault'")
+            )
+        if "preview" not in columns:
+            connection.execute(
+                text("ALTER TABLE vaults ADD COLUMN preview VARCHAR NOT NULL DEFAULT 'quick'")
+            )
+        connection.execute(
+            text("UPDATE vaults SET preview = 'quick' WHERE preview IS NULL OR preview NOT IN ('quick', 'lazy', 'hidden')")
+        )
+        connection.execute(
+            text("UPDATE vaults SET custom_layout = 'vault' WHERE custom_layout IS NULL OR custom_layout NOT IN ('root', 'vault')")
+        )
+        connection.execute(
+            text("UPDATE vaults SET custom_layout = 'root' WHERE custom_path IS NULL")
+        )
+
+
+def migrate_item_residency() -> None:
+    """Add explicit storage and readiness state to existing library rows."""
+    if "items" not in set(inspect(engine).get_table_names()):
+        return
+    columns = {column["name"] for column in inspect(engine).get_columns("items")}
+    with engine.begin() as connection:
+        if "storage_mode" not in columns:
+            connection.execute(text("ALTER TABLE items ADD COLUMN storage_mode VARCHAR NOT NULL DEFAULT 'managed'"))
+        if "availability" not in columns:
+            connection.execute(text("ALTER TABLE items ADD COLUMN availability VARCHAR NOT NULL DEFAULT 'ready'"))
+        connection.execute(text("UPDATE items SET storage_mode = 'managed' WHERE storage_mode IS NULL"))
+        connection.execute(text("UPDATE items SET availability = 'ready' WHERE availability IS NULL"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_items_storage_mode ON items (storage_mode)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_items_availability ON items (availability)"))
+
 def get_db():
     db = SessionLocal()
     try:

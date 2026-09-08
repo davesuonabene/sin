@@ -21,6 +21,8 @@ class ItemBase(BaseModel):
     mime_type: Optional[str] = None
     vault_id: Optional[int] = None
     parent_id: Optional[int] = None
+    storage_mode: Literal["managed", "external_reference"] = "managed"
+    availability: Literal["pending", "transferring", "ready", "missing", "failed"] = "ready"
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 class ItemCreate(ItemBase):
@@ -138,6 +140,8 @@ class CollectionContent(BaseModel):
     tags: List[str] = Field(default_factory=list)
     streamable: bool = False
     child_id: Optional[int] = None
+    storage_mode: Literal["managed", "external_reference"] = "managed"
+    availability: Literal["pending", "transferring", "ready", "missing", "failed"] = "ready"
 
 
 class CollectionContentPage(BaseModel):
@@ -154,6 +158,8 @@ class ItemSummary(BaseModel):
     mime_type: Optional[str] = None
     vault_id: int
     parent_id: Optional[int] = None
+    storage_mode: Literal["managed", "external_reference"] = "managed"
+    availability: Literal["pending", "transferring", "ready", "missing", "failed"] = "ready"
     attributes: dict[str, Any] = Field(default_factory=dict)
     id: int
     created_at: datetime
@@ -216,6 +222,8 @@ class Item(ItemBase):
 class MoveItemsRequest(BaseModel):
     item_ids: List[int]
     vault_id: int
+    mode: Literal["move", "copy"] = "move"
+    move_confirmed: bool = False
 
 class AudioItemCreate(ItemCreate):
     type: str = "audio"
@@ -306,6 +314,9 @@ class ImportPreviewRequest(BaseModel):
 
 class ImportJobCreateRequest(BaseModel):
     preview_id: str
+    transfer_mode: Literal["move", "copy", "keep"] = "copy"
+    move_confirmed: bool = False
+    skip_track_analysis: bool = False
     folder_assignments: dict[str, str] = Field(default_factory=dict)
     item_types: dict[int, str] = Field(default_factory=dict)
     excluded_indexes: List[int] = Field(default_factory=list)
@@ -330,7 +341,17 @@ class ProjectAddPathsRequest(BaseModel):
 
 class FolderPlacementRequest(BaseModel):
     item_ids: List[int] = Field(default_factory=list)
-    mode: Literal["move", "reference"]
+    mode: Literal["move", "reference", "copy"] = "reference"
+    folder: Optional[str] = None
+
+
+
+class FolderCreateRequest(BaseModel):
+    name: str
+    vault_id: Optional[int] = None
+    parent_id: Optional[int] = None
+    item_ids: Optional[List[int]] = None
+    reference_ids: Optional[List[int]] = None
 
 
 class ItemDeleteLocator(BaseModel):
@@ -391,7 +412,7 @@ class ProjectReferenceCreate(BaseModel):
     revision_label: Optional[str] = None
     is_master: bool = False
     tags: List[str] = Field(default_factory=list)
-    attributes: dict[str, Any] = Field(default_factory=dict)
+    attributes: Optional[dict[str, Any]] = Field(default_factory=dict)
 
 
 class ProjectReferenceUpdate(BaseModel):
@@ -515,16 +536,25 @@ class ItemTagRequest(BaseModel):
 class VaultBase(BaseModel):
     name: str
     description: Optional[str] = None
+    preview: Literal["quick", "lazy", "hidden"] = "quick"
 
 class VaultCreate(VaultBase):
-    pass
+    path: Optional[str] = None
 
 class VaultUpdate(BaseModel):
     name: str
     description: Optional[str] = None
+    preview: Literal["quick", "lazy", "hidden"] = "quick"
+
+
+class VaultMigrate(BaseModel):
+    path: str
 
 class Vault(VaultBase):
     id: int
+    storage_key: str
+    path: str
+    root_path: str
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

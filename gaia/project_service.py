@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import mimetypes
 import os
 from pathlib import Path
@@ -88,6 +89,44 @@ def _remove_empty_loose_parents(start: Path, files_root: Path) -> None:
         current = current.parent
 
 
+def _find_owning_project(db: Session, item: models.Item | None) -> models.ProjectItem | None:
+    curr = item
+    while curr:
+        if isinstance(curr, models.ProjectItem) or getattr(curr, "type", None) == "project":
+            return curr
+        pid = getattr(curr, "parent_id", None)
+        curr = db.query(models.FolderItem).filter(models.FolderItem.id == pid).first() if pid is not None else None
+    return None
+
+
+def _folder_label(folder: models.Item, context_project: models.ProjectItem | None) -> str | None:
+    if context_project:
+        if folder.id == context_project.id:
+            return None
+        try:
+            rel = Path(folder.absolute_path).relative_to(Path(context_project.absolute_path)).as_posix()
+            if rel and rel != ".":
+                return rel
+            return None
+        except ValueError:
+            pass
+    if isinstance(folder, models.ProjectItem) or getattr(folder, "type", None) == "project":
+        return None
+    title = getattr(folder, "title", None) or Path(folder.absolute_path).name
+    return title if title and title != "." else None
+
+
+def _count_folder_contents(db: Session, folder_id: int, context_project_id: int | None, folder_label: str | None) -> int:
+    ref_count = 0
+    if context_project_id:
+        refs = db.query(models.ItemReference).filter(models.ItemReference.context_id == context_project_id).all()
+        if folder_label:
+            ref_count = sum(1 for r in refs if (r.attributes or {}).get("folder") == folder_label)
+        elif folder_id == context_project_id:
+            ref_count = len(refs)
+    return db.query(models.Item).filter(models.Item.parent_id == folder_id).count() + ref_count
+
+
 def file_schema_for_path(path: Path, vault_id: int, parent_id: int | None = None):
     """Register files as generic audio until a user classifies them otherwise."""
     extension = path.suffix.lower()
@@ -126,6 +165,47 @@ def file_schema_for_path(path: Path, vault_id: int, parent_id: int | None = None
     if extension in collection_importer.AUDIO_EXTENSIONS:
         return schemas.AudioItemCreate(**common), analysis.get("tags", [])
     return schemas.ItemCreate(**common, type="item"), analysis.get("tags", [])
+
+
+def _clone_item_file(
+    db: Session,
+    source: models.Item,
+    source_path: Path,
+    destination: Path,
+    target_vault_id: int,
+    target_parent_id: int | None,
+) -> models.Item:
+    """Copy a file and preserve its GAIA metadata and database row."""
+    shutil.copy2(source_path, destination)
+    item_schema, _ = file_schema_for_path(destination, target_vault_id, target_parent_id)
+    common = item_schema.model_dump() if hasattr(item_schema, "model_dump") else item_schema.dict()
+    common["attributes"] = dict(source.attributes)
+    common["type"] = source.type
+    common["file_hash"] = source.file_hash
+    common["size_bytes"] = source.size_bytes
+    common["mime_type"] = source.mime_type
+    if source.type == "sample":
+        item_schema = schemas.SampleItemCreate(
+            **common,
+            key=getattr(source, "key", None),
+            bpm=getattr(source, "bpm", None),
+            is_loop=bool(getattr(source, "is_loop", False)),
+        )
+    elif source.type == "track":
+        item_schema = schemas.TrackItemCreate(**common)
+    elif source.type == "midi":
+        item_schema = schemas.MidiItemCreate(
+            **common,
+            key=getattr(source, "key", None),
+            bpm=getattr(source, "bpm", None),
+        )
+    else:
+        item_schema = schemas.ItemCreate(**common)
+    cloned = crud.create_item(db, item_schema, commit=False)
+    source_tags = [tag.name for tag in source.tags]
+    if source_tags:
+        crud.set_item_tags(db, cloned.id, source_tags, commit=False)
+    return cloned
 
 
 def _prepare_project(
@@ -336,13 +416,13 @@ def _top_level_selection(items: list[models.Item]) -> list[models.Item]:
     return result
 
 
-def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> dict:
+def place_items(db: Session, target_id: int, item_ids: list[int], mode: str, folder: str | None = None) -> dict:
     """Place library items in a folder by physical move or generic link."""
     target = db.query(models.FolderItem).filter(models.FolderItem.id == target_id).first()
     if not target:
         raise ValueError("Target folder not found")
-    if mode not in {"move", "reference"}:
-        raise ValueError("Choose either a full move or a reference")
+    if mode not in {"move", "reference", "copy"}:
+        raise ValueError("Choose move, reference, or copy")
 
     unique_ids = list(dict.fromkeys(item_ids))
     if not unique_ids:
@@ -355,30 +435,190 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> 
     if target.id in by_id:
         raise ValueError("A folder cannot be placed inside itself")
 
+    context_project = _find_owning_project(db, target)
+    context_project_id = context_project.id if context_project else None
+    effective_project_id = context_project_id or (target.id if isinstance(target, models.ProjectItem) else None)
+
+    if folder is not None:
+        folder_clean = folder.strip().strip("/")
+        folder_label = folder_clean if folder_clean and folder_clean != "." else None
+    else:
+        folder_label = _folder_label(target, context_project)
+
+    # Virtual folder / bin check: per AGENTS.md, folders in vaults and projects are logical bins.
+    # Organizing items into/between folders never moves files on disk.
+    is_virtual_folder = (
+        effective_project_id is not None
+        or folder_label is not None
+        or getattr(target, "type", None) == "folder"
+        or bool((getattr(target, "attributes", None) or {}).get("is_folder"))
+        or ("is_folder" in str(getattr(target, "metadata_json", "")))
+    )
+
     if mode == "reference":
         def link_operation():
             for item in ordered_items:
-                if not _project_link_exists(db, target.id, item.id):
+                if effective_project_id:
+                    refs = db.query(models.ItemReference).filter(
+                        models.ItemReference.context_id == effective_project_id,
+                        models.ItemReference.to_item_id == item.id,
+                    ).all()
+                    if refs:
+                        for ref in refs:
+                            ref_attrs = dict(ref.attributes or {})
+                            if folder_label:
+                                ref_attrs["folder"] = folder_label
+                            else:
+                                ref_attrs.pop("folder", None)
+                            ref.attributes = ref_attrs
+                    else:
+                        revision_label = None
+                        stage_name = None
+                        tags = []
+                        if hasattr(item, "attributes") and isinstance(item.attributes, dict):
+                            revision_label = item.attributes.get("cut_label") or item.attributes.get("revision_label")
+                            stage_name = item.attributes.get("stage")
+                        existing_ref = (
+                            db.query(models.ItemReference)
+                            .filter(models.ItemReference.to_item_id == item.id)
+                            .first()
+                        )
+                        if existing_ref:
+                            if not revision_label:
+                                revision_label = existing_ref.revision_label
+                            if not stage_name:
+                                stage_name = existing_ref.stage_name
+                            tags = reference_service.relation_tags(existing_ref)
+
+                        reference_service.create_reference(
+                            db,
+                            schemas.ProjectReferenceCreate(
+                                from_item_id=effective_project_id,
+                                to_item_id=item.id,
+                                relation_kind="use",
+                                stage_name=stage_name,
+                                revision_label=revision_label,
+                                tags=tags,
+                                attributes={"folder": folder_label} if folder_label else {},
+                            ),
+                            context_id=effective_project_id,
+                            commit=False,
+                        )
+                else:
+                    if not _project_link_exists(db, target.id, item.id):
+                        revision_label = None
+                        stage_name = None
+                        tags = []
+                        if hasattr(item, "attributes") and isinstance(item.attributes, dict):
+                            revision_label = item.attributes.get("cut_label") or item.attributes.get("revision_label")
+                            stage_name = item.attributes.get("stage")
+                        existing_ref = (
+                            db.query(models.ItemReference)
+                            .filter(models.ItemReference.to_item_id == item.id)
+                            .first()
+                        )
+                        if existing_ref:
+                            if not revision_label:
+                                revision_label = existing_ref.revision_label
+                            if not stage_name:
+                                stage_name = existing_ref.stage_name
+                            tags = reference_service.relation_tags(existing_ref)
+
+                        reference_service.create_reference(
+                            db,
+                            schemas.ProjectReferenceCreate(
+                                from_item_id=target.id,
+                                to_item_id=item.id,
+                                relation_kind="use",
+                                stage_name=stage_name,
+                                revision_label=revision_label,
+                                tags=tags,
+                                attributes={"folder": folder_label} if folder_label else {},
+                            ),
+                            context_id=target.id,
+                            commit=False,
+                        )
+                    else:
+                        refs = db.query(models.ItemReference).filter(
+                            models.ItemReference.context_id == target.id,
+                            models.ItemReference.to_item_id == item.id,
+                        ).all()
+                        for ref in refs:
+                            ref_attrs = dict(ref.attributes or {})
+                            if folder_label:
+                                ref_attrs["folder"] = folder_label
+                            else:
+                                ref_attrs.pop("folder", None)
+                            ref.attributes = ref_attrs
+            target.content_count = _count_folder_contents(db, target.id, effective_project_id, folder_label)
+            return target.id
+
+        _run_transaction(db, link_operation)
+        if effective_project_id:
+            sync_project_manifest(db, effective_project_id)
+        return {
+            "target": crud.item_summary(target),
+            "target_id": target.id,
+            "mode": mode,
+            "item_ids": unique_ids,
+        }
+
+
+    if mode == "copy":
+        target_root = Path(target.absolute_path).resolve()
+        if not target_root.exists() or not target_root.is_dir():
+            raise ValueError("Target folder is missing from disk")
+        copied_items = _top_level_selection(ordered_items)
+        created_paths: list[Path] = []
+        cloned_ids: list[int] = []
+
+        def copy_operation():
+            for item in copied_items:
+                source = Path(item.absolute_path).resolve()
+                if not source.exists():
+                    raise ValueError(f"'{source.name}' is missing from disk")
+                destination = _unique_destination(target_root, source.name)
+                created_paths.append(destination)
+                cloned = _clone_item_file(db, item, source, destination, target.vault_id, target.id)
+                cloned_ids.append(cloned.id)
+                if isinstance(target, models.ProjectItem):
+                    revision_label = None
+                    stage_name = None
+                    if hasattr(item, "attributes") and isinstance(item.attributes, dict):
+                        revision_label = item.attributes.get("cut_label") or item.attributes.get("revision_label")
+                        stage_name = item.attributes.get("stage")
+                    existing_ref = (
+                        db.query(models.ItemReference)
+                        .filter(models.ItemReference.to_item_id == item.id)
+                        .first()
+                    )
+                    if existing_ref:
+                        if not revision_label:
+                            revision_label = existing_ref.revision_label
+                        if not stage_name:
+                            stage_name = existing_ref.stage_name
                     reference_service.create_reference(
                         db,
                         schemas.ProjectReferenceCreate(
                             from_item_id=target.id,
-                            to_item_id=item.id,
+                            to_item_id=cloned.id,
                             relation_kind="use",
+                            stage_name=stage_name,
+                            revision_label=revision_label,
                         ),
                         context_id=target.id,
                         commit=False,
                     )
             return target.id
 
-        _run_transaction(db, link_operation)
+        _run_transaction(db, copy_operation, created_paths)
         if isinstance(target, models.ProjectItem):
             sync_project_manifest(db, target.id)
         return {
             "target": crud.item_summary(target),
             "target_id": target.id,
             "mode": mode,
-            "item_ids": unique_ids,
+            "item_ids": cloned_ids,
         }
 
     moved_items = _top_level_selection(ordered_items)
@@ -394,16 +634,50 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> 
     destination_root = target_root
 
     validated: list[tuple[models.Item, Path]] = []
+    external_items: list[models.Item] = []
+    context_project = _find_owning_project(db, target)
+    context_project_id = context_project.id if context_project else None
+    if folder is not None:
+        folder_clean = folder.strip().strip("/")
+        folder_label = folder_clean if folder_clean and folder_clean != "." else None
+    else:
+        folder_label = _folder_label(target, context_project)
+
     for item in moved_items:
-        source_vault = vaults.get_vault(db, item.vault_id)
         source = Path(item.absolute_path).resolve()
-        if not source_vault or not _is_within(vaults.vault_store(source_vault), source):
-            raise ValueError(f"'{source.name}' is outside its owning vault")
-        if not source.exists():
-            raise ValueError(f"'{source.name}' is missing from disk")
         if _is_within(source, target_root):
             raise ValueError("A folder cannot be moved into one of its descendants")
-        validated.append((item, source))
+
+        is_external = (
+            getattr(item, "storage_mode", None) == "external_reference"
+            or getattr(item, "source_kind", None) == "external"
+            or (isinstance(getattr(item, "attributes", None), dict) and item.attributes.get("storage_mode") == "external_reference")
+        )
+        if not is_external and item.vault_id:
+            source_vault = vaults.get_vault(db, item.vault_id)
+            if source_vault and not _is_within(vaults.vault_store(source_vault), source):
+                is_external = True
+
+        # If placing inside a project and the item is already a project reference,
+        # keep it as a reference without altering original file on disk.
+        is_project_ref = False
+        if context_project_id:
+            existing_ref = db.query(models.ItemReference).filter(
+                models.ItemReference.context_id == context_project_id,
+                models.ItemReference.to_item_id == item.id,
+            ).first()
+            if existing_ref:
+                is_project_ref = True
+
+        if is_external or is_project_ref:
+            external_items.append(item)
+        else:
+            if not source.exists():
+                raise ValueError(f"'{source.name}' is missing from disk")
+            source_vault = vaults.get_vault(db, item.vault_id)
+            if not source_vault or not _is_within(vaults.vault_store(source_vault), source):
+                raise ValueError(f"'{source.name}' is outside its owning vault")
+            validated.append((item, source))
 
     moves: list[tuple[Path, Path]] = []
     created_destination_root = not destination_root.exists()
@@ -425,7 +699,32 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> 
                 current.vault_id = target.vault_id
                 stack.extend(current.children)
             item.parent_id = target.id
-            if isinstance(target, models.ProjectItem) and not _project_link_exists(db, target.id, item.id):
+            if context_project_id:
+                refs = db.query(models.ItemReference).filter(
+                    models.ItemReference.context_id == context_project_id,
+                    models.ItemReference.to_item_id == item.id,
+                ).all()
+                if refs:
+                    for ref in refs:
+                        ref_attrs = dict(ref.attributes or {})
+                        if folder_label:
+                            ref_attrs["folder"] = folder_label
+                        else:
+                            ref_attrs.pop("folder", None)
+                        ref.attributes = ref_attrs
+                elif not _project_link_exists(db, context_project_id, item.id):
+                    reference_service.create_reference(
+                        db,
+                        schemas.ProjectReferenceCreate(
+                            from_item_id=context_project_id,
+                            to_item_id=item.id,
+                            relation_kind="use",
+                            attributes={"folder": folder_label} if folder_label else {},
+                        ),
+                        context_id=context_project_id,
+                        commit=False,
+                    )
+            elif isinstance(target, models.ProjectItem) and not _project_link_exists(db, target.id, item.id):
                 reference_service.create_reference(
                     db,
                     schemas.ProjectReferenceCreate(
@@ -436,6 +735,49 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> 
                     context_id=target.id,
                     commit=False,
                 )
+
+        for item in external_items:
+            is_proj_ref = False
+            if context_project_id:
+                refs = db.query(models.ItemReference).filter(
+                    models.ItemReference.context_id == context_project_id,
+                    models.ItemReference.to_item_id == item.id,
+                ).all()
+                if refs:
+                    is_proj_ref = True
+                    for ref in refs:
+                        ref_attrs = dict(ref.attributes or {})
+                        if folder_label:
+                            ref_attrs["folder"] = folder_label
+                        else:
+                            ref_attrs.pop("folder", None)
+                        ref.attributes = ref_attrs
+
+            if not is_proj_ref:
+                if context_project_id:
+                    if not _project_link_exists(db, context_project_id, item.id):
+                        reference_service.create_reference(
+                            db,
+                            schemas.ProjectReferenceCreate(
+                                from_item_id=context_project_id,
+                                to_item_id=item.id,
+                                relation_kind="use",
+                                attributes={"folder": folder_label} if folder_label else {},
+                            ),
+                            context_id=context_project_id,
+                            commit=False,
+                        )
+                else:
+                    item.parent_id = target.id
+                    item.vault_id = target.vault_id
+                    attrs = dict(item.attributes or {})
+                    if folder_label:
+                        attrs["folder"] = folder_label
+                    else:
+                        attrs.pop("folder", None)
+                    item.attributes = attrs
+
+        target.content_count = _count_folder_contents(db, target.id, context_project_id, folder_label)
 
         db.flush()
         if operations:
@@ -454,14 +796,80 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str) -> 
                 pass
         raise
 
-    if isinstance(target, models.ProjectItem):
-        sync_project_manifest(db, target.id)
+    if context_project:
+        sync_project_manifest(db, context_project.id)
     return {
         "target": crud.item_summary(target),
         "target_id": target.id,
         "mode": mode,
         "item_ids": [item.id for item in moved_items],
     }
+
+
+def create_folder(
+    db: Session,
+    name: str,
+    vault_id: int | None = None,
+    parent_id: int | None = None,
+    item_ids: list[int] | None = None,
+    reference_ids: list[int] | None = None,
+) -> models.CollectionItem:
+    """Create a folder directory and lightweight CollectionItem, optionally placing items."""
+    folder_name = _safe_name(name, field_name="Folder name")
+    parent = None
+    if parent_id is not None:
+        parent = db.query(models.FolderItem).filter(models.FolderItem.id == parent_id).first()
+        if not parent:
+            raise ValueError("Parent folder not found")
+        vault = vaults.get_vault(db, parent.vault_id)
+        parent_root = Path(parent.absolute_path).resolve()
+        folder_path = _unique_destination(parent_root, folder_name)
+    else:
+        vault = vaults.ensure_default_vault(db) if vault_id is None else vaults.get_vault(db, vault_id)
+        if not vault:
+            raise ValueError("Vault not found")
+        store = vaults.vault_store(vault).resolve()
+        folder_path = _unique_destination(store, folder_name)
+
+    folder_path.mkdir(parents=True, exist_ok=True)
+    folder = models.CollectionItem(
+        absolute_path=str(folder_path.resolve()),
+        vault_id=vault.id,
+        parent_id=parent_id,
+        title=folder_name,
+        source_kind="managed",
+        content_count=0,
+        type="collection",
+        storage_mode="managed",
+        availability="ready",
+        metadata_json=json.dumps({"is_folder": True, "profile_id": "folder", "profile_label": "Folder"}),
+    )
+    db.add(folder)
+    db.flush()
+
+    context_project = _find_owning_project(db, parent)
+    folder_label = _folder_label(folder, context_project)
+
+    if reference_ids:
+        refs = db.query(models.ItemReference).filter(models.ItemReference.id.in_(reference_ids)).all()
+        for ref in refs:
+            ref_attrs = dict(ref.attributes or {})
+            if folder_label:
+                ref_attrs["folder"] = folder_label
+            else:
+                ref_attrs.pop("folder", None)
+            ref.attributes = ref_attrs
+
+    if item_ids:
+        place_items(db, folder.id, item_ids, mode="move")
+
+    folder.content_count = _count_folder_contents(db, folder.id, context_project.id if context_project else None, folder_label)
+    vaults.log_import(db, vault.id, folder.absolute_path, "created", "folder_created", folder.id)
+    if context_project:
+        sync_project_manifest(db, context_project.id)
+    db.commit()
+    db.refresh(folder)
+    return folder
 
 
 def adopt_orphans(db: Session, project_id: int) -> dict:
@@ -511,31 +919,49 @@ def adopt_orphans(db: Session, project_id: int) -> dict:
     if not orphans:
         return {"project": crud.get_item(db, project.id), "adopted": 0, "item_ids": []}
 
-    validated: list[tuple[models.Item, Path]] = []
+    validated: list[tuple[models.Item, Path, bool]] = []
     for item in orphans:
         source = Path(item.absolute_path).resolve()
-        if not _is_within(store, source):
+        is_external = getattr(item, "storage_mode", "managed") == "external_reference"
+        if not is_external and not _is_within(store, source):
             raise ValueError(f"Orphan asset '{source.name}' is outside its owning vault")
         if not source.is_file():
             raise ValueError(f"Orphan asset '{source.name}' is missing from disk")
-        validated.append((item, source))
+        validated.append((item, source, is_external))
 
     moves: list[tuple[Path, Path]] = []
+    copied_paths: list[Path] = []
     try:
-        for item, source in validated:
-            destination = project_root / source.name
+        for item, source, is_external in validated:
+            destination_root = project_stage_directory(project, "source") if is_external else project_root
+            destination_root.mkdir(parents=True, exist_ok=True)
+            destination = destination_root / source.name
             if source.parent == project_root:
                 destination = source
             elif destination.exists():
                 if destination != source:
-                    destination = _unique_destination(project_root, source.name)
+                    destination = _unique_destination(destination_root, source.name)
             if source == destination:
                 destination = source
+            elif is_external:
+                partial = destination.with_name(f".{destination.name}.gaia-adopt-{uuid.uuid4().hex}")
+                try:
+                    shutil.copy2(source, partial)
+                    if partial.stat().st_size != source.stat().st_size:
+                        raise OSError(f"Adopted copy size does not match '{source.name}'")
+                    os.replace(partial, destination)
+                    copied_paths.append(destination)
+                finally:
+                    partial.unlink(missing_ok=True)
             else:
                 source.replace(destination)
                 moves.append((source, destination))
             item.absolute_path = str(destination.resolve())
             item.parent_id = project.id
+            item.storage_mode = "managed"
+            item.availability = "ready"
+            if is_external:
+                item.file_hash = integrity.calculate_file_hash(str(destination))
         db.commit()
     except Exception:
         db.rollback()
@@ -543,6 +969,8 @@ def adopt_orphans(db: Session, project_id: int) -> dict:
             if destination.exists() and not source.exists():
                 source.parent.mkdir(parents=True, exist_ok=True)
                 destination.replace(source)
+        for copied in copied_paths:
+            copied.unlink(missing_ok=True)
         raise
 
     files_root = store / "files"
@@ -702,36 +1130,7 @@ def create_from_items(
         target_project: models.ProjectItem,
     ) -> models.Item:
         """Copy a project-owned file and preserve its GAIA metadata."""
-        shutil.copy2(source_path, destination)
-        item_schema, _ = file_schema_for_path(destination, target_project.vault_id, target_project.id)
-        common = item_schema.model_dump() if hasattr(item_schema, "model_dump") else item_schema.dict()
-        common["attributes"] = source.attributes
-        common["type"] = source.type
-        common["file_hash"] = source.file_hash
-        common["size_bytes"] = source.size_bytes
-        common["mime_type"] = source.mime_type
-        if source.type == "sample":
-            item_schema = schemas.SampleItemCreate(
-                **common,
-                key=getattr(source, "key", None),
-                bpm=getattr(source, "bpm", None),
-                is_loop=bool(getattr(source, "is_loop", False)),
-            )
-        elif source.type == "track":
-            item_schema = schemas.TrackItemCreate(**common)
-        elif source.type == "midi":
-            item_schema = schemas.MidiItemCreate(
-                **common,
-                key=getattr(source, "key", None),
-                bpm=getattr(source, "bpm", None),
-            )
-        else:
-            item_schema = schemas.ItemCreate(**common)
-        cloned = crud.create_item(db, item_schema, commit=False)
-        source_tags = [tag.name for tag in source.tags]
-        if source_tags:
-            crud.set_item_tags(db, cloned.id, source_tags, commit=False)
-        return cloned
+        return _clone_item_file(db, source, source_path, destination, target_project.vault_id, target_project.id)
 
     def operation():
         project_ids: list[int] = []

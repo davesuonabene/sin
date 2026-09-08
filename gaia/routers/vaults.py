@@ -7,21 +7,58 @@ from .. import database, schemas, vaults
 router = APIRouter(prefix="/vaults", tags=["vaults"])
 
 @router.get("/", response_model=List[schemas.Vault])
-def read_vaults(db: Session = Depends(database.get_db)):
-    return vaults.get_vaults(db)
+def read_vaults(preview: str | None = None, db: Session = Depends(database.get_db)):
+    records = vaults.get_vaults(db)
+    if preview is None:
+        return records
+    if preview not in {"quick", "lazy", "hidden"}:
+        raise HTTPException(status_code=400, detail="Vault preview must be quick, lazy, or hidden")
+    return [vault for vault in records if vault.preview == preview]
 
 @router.post("/", response_model=schemas.Vault)
 def create_vault(request: schemas.VaultCreate, db: Session = Depends(database.get_db)):
     try:
-        return vaults.create_vault(db, request.name.strip(), request.description)
-    except ValueError as exc:
+        return vaults.create_vault(
+            db,
+            request.name.strip(),
+            request.description,
+            request.path,
+            request.preview,
+        )
+    except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @router.patch("/{vault_id}", response_model=schemas.Vault)
 def update_vault(vault_id: int, request: schemas.VaultUpdate, db: Session = Depends(database.get_db)):
     try:
-        return vaults.update_vault(db, vault_id, request.name.strip(), request.description)
+        return vaults.update_vault(
+            db,
+            vault_id,
+            request.name.strip(),
+            request.description,
+            request.preview,
+        )
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{vault_id}/migrate", response_model=schemas.Vault)
+def migrate_vault(vault_id: int, request: schemas.VaultMigrate, db: Session = Depends(database.get_db)):
+    try:
+        return vaults.migrate_vault(db, vault_id, request.path)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{vault_id}/place-items")
+def place_items_in_vault(
+    vault_id: int,
+    req: schemas.FolderPlacementRequest,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        return vaults.place_items_in_vault(db, vault_id, req.item_ids, req.mode)
+    except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @router.delete("/{vault_id}", status_code=status.HTTP_204_NO_CONTENT)

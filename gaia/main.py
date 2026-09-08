@@ -12,11 +12,15 @@ from .routers import items, media_edits, tags, projects, sin_proposals, vaults a
 database.migrate_sample_pack_profiles()
 database.migrate_project_links()
 models.Base.metadata.create_all(bind=database.engine)
+database.migrate_vault_locations()
+database.migrate_item_residency()
 database.migrate_performance_indexes()
 with database.SessionLocal() as db:
+    vaults.migrate_custom_vault_layouts(db)
     vaults.ensure_default_vault(db)
     profiles.ensure_builtin_profile_bundles()
 import_jobs.cleanup_stale_staging()
+import_jobs.cleanup_abandoned_import_rows()
 
 app = FastAPI(
     title="Gaia Archive Manager",

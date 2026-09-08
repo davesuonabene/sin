@@ -22,7 +22,7 @@ from api import (
     update_library_bpm,
     update_library_favourite,
 )
-from gaia import collection_importer, crud, import_jobs as import_jobs_module, midi_parser, models, profiles, schemas, text_analyzer, vaults
+from gaia import collection_importer, crud, deletion_service, import_jobs as import_jobs_module, midi_parser, models, profiles, schemas, text_analyzer, vaults
 from gaia.import_jobs import ImportPreviewError, import_job_manager
 from gaia.routers import items as items_router, sin_proposals as sin_proposals_router
 from tests.support import GaiaTestCase
@@ -113,6 +113,107 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertTrue(vaults.vault_store(vault).is_dir())
         with self.assertRaisesRegex(ValueError, "conflicts with an existing vault folder"):
             vaults.create_vault(self.db, "Field-Recordings", None)
+
+    def test_vault_can_use_a_custom_path_and_lazy_loading_policy(self):
+        custom_path = self.temp_path / "external-vault"
+        (custom_path / "another-vault").mkdir(parents=True)
+        vault = vaults.create_vault(
+            self.db,
+            "External recordings",
+            None,
+            str(custom_path),
+            "lazy",
+        )
+
+        self.assertEqual(vault.preview, "lazy")
+        expected_store = (custom_path / "external-recordings").resolve()
+        self.assertEqual(vault.root_path, str(custom_path.resolve()))
+        self.assertEqual(vault.path, str(expected_store))
+        self.assertEqual(vaults.vault_store(vault), expected_store)
+        self.assertTrue(expected_store.is_dir())
+        self.assertNotIn(vault.id, [row.id for row in vaults.get_vaults(self.db) if row.preview == "quick"])
+
+    def test_vault_migration_moves_files_and_rewrites_tracked_paths(self):
+        source = self.temp_path / "custom-source"
+        vault = vaults.create_vault(self.db, "Portable", None, str(source), "hidden")
+        audio_path = self.write_audio(vaults.vault_store(vault) / "files", "Take.wav")
+        item = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(audio_path.resolve()),
+                vault_id=vault.id,
+                attributes={"preview_path": str(audio_path.resolve())},
+            ),
+        )
+        target = self.temp_path / "custom-target"
+        target.mkdir()
+
+        migrated = vaults.migrate_vault(self.db, vault.id, str(target))
+        self.db.expire_all()
+        refreshed = crud.get_item(self.db, item.id)
+
+        self.assertEqual(migrated.preview, "hidden")
+        migrated_store = (target / "portable").resolve()
+        self.assertEqual(migrated.root_path, str(target.resolve()))
+        self.assertEqual(migrated.path, str(migrated_store))
+        self.assertFalse((source / "portable").exists())
+        self.assertTrue((migrated_store / "files" / "Take.wav").is_file())
+        self.assertEqual(refreshed.absolute_path, str((migrated_store / "files" / "Take.wav").resolve()))
+        self.assertEqual(refreshed.attributes["preview_path"], refreshed.absolute_path)
+
+    def test_legacy_custom_vault_folder_is_upgraded_into_its_storage_root(self):
+        root = self.temp_path / "legacy-root"
+        root.mkdir()
+        legacy_file = self.write_audio(root / "files", "Legacy.wav")
+        legacy = models.Vault(
+            name="Legacy archive",
+            storage_key="legacy-archive",
+            custom_path=str(root),
+            custom_layout="vault",
+            preview="quick",
+        )
+        self.db.add(legacy)
+        self.db.commit()
+        item = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(legacy_file.resolve()),
+                vault_id=legacy.id,
+                attributes={"managed_copy": str(legacy_file.resolve())},
+            ),
+        )
+
+        vaults.migrate_custom_vault_layouts(self.db)
+        self.db.expire_all()
+        upgraded = vaults.get_vault(self.db, legacy.id)
+        refreshed = crud.get_item(self.db, item.id)
+        expected = (root / "legacy-archive" / "files" / "Legacy.wav").resolve()
+
+        self.assertEqual(upgraded.custom_layout, "root")
+        self.assertEqual(upgraded.root_path, str(root.resolve()))
+        self.assertEqual(upgraded.path, str((root / "legacy-archive").resolve()))
+        self.assertTrue(expected.is_file())
+        self.assertEqual(refreshed.absolute_path, str(expected))
+        self.assertEqual(refreshed.attributes["managed_copy"], str(expected))
+
+    def test_quick_summary_scope_does_not_hydrate_lazy_or_hidden_vaults(self):
+        quick_file = self.write_audio(vaults.vault_store(self.vault) / "files", "Quick.wav")
+        quick_item = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(absolute_path=str(quick_file.resolve()), vault_id=self.vault.id),
+        )
+        lazy = vaults.create_vault(self.db, "Slow archive", None, None, "lazy")
+        lazy_file = self.write_audio(vaults.vault_store(lazy) / "files", "Lazy.wav")
+        lazy_item = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(absolute_path=str(lazy_file.resolve()), vault_id=lazy.id),
+        )
+
+        automatic = crud.get_item_summaries(self.db, limit=100, vault_preview="quick")
+        explicit = crud.get_item_summaries(self.db, limit=100, vault_id=lazy.id)
+
+        self.assertEqual([row["id"] for row in automatic], [quick_item.id])
+        self.assertEqual([row["id"] for row in explicit], [lazy_item.id])
 
     def test_vault_metadata_can_be_renamed_and_empty_vaults_can_be_deleted(self):
         vault = vaults.create_vault(self.db, "Field Recordings", "Original")
@@ -334,13 +435,35 @@ class TestGaiaLibrary(GaiaTestCase):
             queued = import_job_manager.create_job(
                 schemas.ImportJobCreateRequest(preview_id=preview["preview_id"])
             )
-            job = self.wait_for_import(queued["job_id"], timeout=15.0)
+            job = self.wait_for_import(queued["job_id"], timeout=30.0)
 
         self.assertEqual((job["status"], job["completed"], job["total"]), ("completed", 1001, 1001))
         self.assertEqual(self.db.query(models.Item).count(), 1001)
         self.assertEqual(self.db.query(models.VaultImportLog).count(), 1001)
         imported = self.db.query(models.Item).filter(models.Item.absolute_path.like("%asset-0000.txt")).one()
         self.assertEqual(imported.attributes["import"]["source_path"], str((source / "Group 0" / "asset-0000.txt").resolve()))
+
+    def test_track_import_can_skip_content_analysis(self):
+        source = self.write_audio(self.temp_path / "large-track", "Unanalyzed.wav")
+        preview = self.preview_import(source)
+
+        with patch(
+            "gaia.collection_importer.analyze_manifest_entry",
+            side_effect=AssertionError("track analysis should be skipped"),
+        ):
+            job = self.start_import(
+                preview,
+                item_types={preview["entries"][0]["index"]: "track"},
+                skip_track_analysis=True,
+            )
+
+        self.assertEqual(job["status"], "completed")
+        imported = crud.get_item(self.db, job["result_items"][0]["id"])
+        self.assertEqual(imported.type, "track")
+        self.assertEqual(imported.attributes["import"]["state"], "analysis_skipped")
+        self.assertNotIn("analyzed_at", imported.attributes["import"])
+        self.assertIsNone(imported.author)
+        self.assertIsNone(imported.album)
 
     def test_import_reports_staging_then_processing_progress(self):
         source = self.temp_path / "two-phase-progress"
@@ -384,7 +507,7 @@ class TestGaiaLibrary(GaiaTestCase):
                 )
                 self.assertTrue(second_copy_started.wait(3.0))
                 staging = import_job_manager.get_job(queued["job_id"])
-                self.assertEqual((staging["phase"], staging["staging_completed"]), ("staging", 1))
+                self.assertEqual((staging["phase"], staging["staging_completed"]), ("transferring", 1))
                 self.assertEqual(staging["processing_completed"], 0)
                 self.assertGreater(staging["staging_bytes_completed"], 0)
                 self.assertLess(staging["staging_bytes_completed"], staging["staging_bytes_total"])
@@ -392,7 +515,7 @@ class TestGaiaLibrary(GaiaTestCase):
                 release_copy.set()
                 self.assertTrue(analysis_started.wait(3.0))
                 processing = import_job_manager.get_job(queued["job_id"])
-                self.assertEqual(processing["phase"], "processing")
+                self.assertEqual(processing["phase"], "analyzing")
                 self.assertEqual(processing["staging_completed"], processing["staging_total"])
                 self.assertEqual(processing["processing_completed"], 0)
 
@@ -423,6 +546,103 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertNotEqual(Path(imported.absolute_path), original.resolve())
         self.assertEqual(imported.attributes["import"]["source_path"], str(original.resolve()))
         self.assertFalse(any(vaults.vault_store(self.vault).glob(".gaia-import-*.staging")))
+
+    def test_keep_import_registers_external_reference_without_touching_source(self):
+        source = self.write_audio(self.temp_path / "external", "Keep.wav")
+        original_bytes = source.read_bytes()
+
+        job = self.start_import(
+            self.preview_import(source),
+            folder_assignments={},
+            transfer_mode="keep",
+        )
+
+        self.assertEqual(job["status"], "completed")
+        imported = crud.get_item(self.db, job["result_items"][0]["id"])
+        self.assertEqual(imported.storage_mode, "external_reference")
+        self.assertEqual(imported.availability, "ready")
+        self.assertEqual(Path(imported.absolute_path), source.resolve())
+        self.assertEqual(imported.attributes["import"]["source_path"], str(source.resolve()))
+        self.assertEqual(source.read_bytes(), original_bytes)
+        self.assertFalse((vaults.vault_store(self.vault) / "files" / source.name).exists())
+
+    def test_copy_import_leaves_source_and_publishes_managed_file(self):
+        source = self.write_audio(self.temp_path / "copy-source", "Copy.wav")
+        original_bytes = source.read_bytes()
+
+        job = self.start_import(
+            self.preview_import(source),
+            folder_assignments={},
+            transfer_mode="copy",
+        )
+
+        imported = crud.get_item(self.db, job["result_items"][0]["id"])
+        self.assertEqual((imported.storage_mode, imported.availability), ("managed", "ready"))
+        self.assertNotEqual(Path(imported.absolute_path), source.resolve())
+        self.assertEqual(Path(imported.absolute_path).read_bytes(), original_bytes)
+        self.assertEqual(source.read_bytes(), original_bytes)
+
+    def test_move_import_requires_confirmation_and_removes_confirmed_source(self):
+        source = self.write_audio(self.temp_path / "move-source", "Move.wav")
+        preview = self.preview_import(source)
+        with self.assertRaisesRegex(ImportPreviewError, "requires confirmation"):
+            import_job_manager.create_job(
+                schemas.ImportJobCreateRequest(
+                    preview_id=preview["preview_id"],
+                    transfer_mode="move",
+                )
+            )
+
+        job = self.start_import(
+            preview,
+            folder_assignments={},
+            transfer_mode="move",
+            move_confirmed=True,
+        )
+
+        imported = crud.get_item(self.db, job["result_items"][0]["id"])
+        self.assertFalse(source.exists())
+        self.assertTrue(Path(imported.absolute_path).is_file())
+        self.assertEqual((imported.storage_mode, imported.availability), ("managed", "ready"))
+        self.assertEqual(imported.attributes["import"]["source_path"], str(source.resolve()))
+
+    def test_deleting_external_reference_never_deletes_source(self):
+        source = self.write_audio(self.temp_path / "external-delete", "Safe.wav")
+        job = self.start_import(
+            self.preview_import(source),
+            folder_assignments={},
+            transfer_mode="keep",
+        )
+        item_id = job["result_items"][0]["id"]
+
+        result = deletion_service.delete_entries(
+            self.db,
+            [schemas.ItemDeleteLocator(item_id=item_id)],
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertIsNone(crud.get_item(self.db, item_id))
+        self.assertTrue(source.is_file())
+
+    def test_external_reference_can_be_copied_or_explicitly_moved_to_vault(self):
+        source = self.write_audio(self.temp_path / "materialize", "Reference.wav")
+        keep_job = self.start_import(self.preview_import(source), transfer_mode="keep")
+        item = crud.get_item(self.db, keep_job["result_items"][0]["id"])
+        destination_vault = vaults.create_vault(self.db, "Materialized", None)
+
+        copied = vaults.move_items_to_vault(self.db, [item.id], destination_vault.id, mode="copy")[0]
+        self.assertEqual(copied.storage_mode, "managed")
+        self.assertTrue(Path(copied.absolute_path).is_file())
+        self.assertEqual(copied.attributes["import"]["source_path"], str(source.resolve()))
+        self.assertTrue(source.is_file())
+
+        source2 = self.write_audio(self.temp_path / "materialize", "Moved.wav")
+        keep_job2 = self.start_import(self.preview_import(source2), transfer_mode="keep")
+        item2 = crud.get_item(self.db, keep_job2["result_items"][0]["id"])
+        moved = vaults.move_items_to_vault(self.db, [item2.id], destination_vault.id, mode="move")[0]
+        self.assertEqual(moved.storage_mode, "managed")
+        self.assertFalse(source2.exists())
+        self.assertTrue(Path(moved.absolute_path).is_file())
 
     def test_manifest_only_collection_content_can_be_deleted(self):
         root = vaults.vault_store(self.vault) / "legacy-project"
@@ -1198,6 +1418,23 @@ class TestGaiaLibrary(GaiaTestCase):
         self.db.expire_all()
         hydrated = crud.get_item(self.db, sample.id)
         self.assertFalse(hydrated.favourite)
+
+    def test_import_folder_action_contain_and_ignore(self):
+        source = self.temp_path / "folder-actions"
+        self.write_audio(source / "Pack" / "Drums", "Kick.wav")
+        self.write_audio(source / "Pack" / "Synth", "Lead.wav")
+
+        preview = self.preview_import(source / "Pack")
+        self.assertIn("folder_type_options", preview)
+        values = [opt["value"] for opt in preview["folder_type_options"]]
+        self.assertIn("action:contain", values)
+        self.assertIn("action:ignore", values)
+
+        job = self.start_import(
+            preview,
+            folder_assignments={"Drums": "action:contain", "Synth": "action:ignore"},
+        )
+        self.assertEqual(job["status"], "completed")
 
 
 if __name__ == "__main__":

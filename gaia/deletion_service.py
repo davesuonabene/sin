@@ -77,6 +77,9 @@ class DeletionContext:
 
     def stage_item(self, item: models.Item) -> StagedSnapshot | None:
         """Move a managed item aside until the database transaction commits."""
+        if getattr(item, "storage_mode", "managed") == "external_reference":
+            # External references own database state, never the referenced bytes.
+            return None
         snapshot = Path(item.absolute_path).resolve()
         store = self._vault_store(item.vault_id)
         if snapshot == store:
@@ -149,12 +152,34 @@ class DeletionContext:
         if not item:
             raise DeletionError("Item not found")
         subtree_ids = self._item_subtree_ids(item.id)
-        self.affected_project_ids.update(crud.owning_project_context_ids(self.db, item))
+        owning_projects = crud.owning_project_context_ids(self.db, item)
+        self.affected_project_ids.update(owning_projects)
         if isinstance(item, models.ProjectItem):
             self.deleted_project_ids.add(item.id)
+
+        # Clean up any ItemReference in owning projects that were nested under this folder
+        for project_id in owning_projects:
+            project = self.db.query(models.ProjectItem).filter(models.ProjectItem.id == project_id).first()
+            if project:
+                try:
+                    folder_rel_path = Path(item.absolute_path).relative_to(Path(project.absolute_path)).as_posix()
+                except ValueError:
+                    folder_rel_path = getattr(item, "title", None) or Path(item.absolute_path).name
+
+                refs = self.db.query(models.ItemReference).filter(
+                    models.ItemReference.context_id == project_id,
+                ).all()
+                for ref in refs:
+                    ref_folder = (ref.attributes or {}).get("folder")
+                    if ref_folder and (ref_folder == folder_rel_path or ref_folder.startswith(f"{folder_rel_path}/")):
+                        ref_attrs = dict(ref.attributes or {})
+                        del ref_attrs["folder"]
+                        ref.attributes = ref_attrs
+                        self.db.add(ref)
+
         self.stage_item(item)
-        crud.delete_item(self.db, item_id, commit=False)
-        self.deleted_item_ids.update(subtree_ids)
+        deleted_ids = crud.delete_item(self.db, item_id, commit=False)
+        self.deleted_item_ids.update(deleted_ids if isinstance(deleted_ids, set) else subtree_ids)
         return item
 
     def restore(self) -> None:

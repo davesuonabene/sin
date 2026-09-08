@@ -25,6 +25,8 @@ class Item(Base):
     size_bytes = Column(Integer, nullable=True)
     mime_type = Column(String, nullable=True)
     parent_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), index=True, nullable=True)
+    storage_mode = Column(String, nullable=False, default="managed", index=True)
+    availability = Column(String, nullable=False, default="ready", index=True)
     metadata_json = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
@@ -39,7 +41,7 @@ class Item(Base):
     tags = relationship("Tag", secondary=item_tags, back_populates="items")
     vault = relationship("Vault", back_populates="items")
     parent = relationship("Item", remote_side=[id], back_populates="children", foreign_keys=[parent_id])
-    children = relationship("Item", back_populates="parent", cascade="all, delete-orphan", foreign_keys=[parent_id])
+    children = relationship("Item", back_populates="parent", foreign_keys=[parent_id], passive_deletes=True)
 
     @property
     def attributes(self) -> dict:
@@ -211,6 +213,9 @@ class Vault(Base):
     preset = Column(String, nullable=False, default="general")
     rules_json = Column(Text, nullable=False, default="{}")
     storage_key = Column(String, unique=True, index=True, nullable=False)
+    custom_path = Column(String, nullable=True)
+    custom_layout = Column(String, nullable=False, default="root")
+    preview = Column(String, nullable=False, default="quick")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     items = relationship("Item", back_populates="vault")

@@ -321,12 +321,14 @@ def _request_fields(req) -> set[str]:
 
 def _analysis_attributes(db_item: models.Item, analysis: dict) -> dict:
     attributes = dict(getattr(db_item, "attributes", {}) or {})
-    attributes["analysis"] = {
-        "duration_seconds": analysis.get("duration_seconds"),
+    summary = {
         "is_loop": bool(analysis.get("is_loop")),
         "bpm": analysis.get("bpm"),
         "key": analysis.get("key"),
     }
+    if analysis.get("duration_seconds") is not None:
+        summary["duration_seconds"] = analysis.get("duration_seconds")
+    attributes["analysis"] = summary
     embedded_metadata = dict(analysis.get("audio_metadata") or {})
     if embedded_metadata:
         existing_metadata = dict(attributes.get("audio_metadata") or {})
@@ -373,7 +375,7 @@ def _analyze_and_update_item(db: Session, db_item: models.Item):
     return _apply_item_update(db_item, _analysis_update_request(db_item, analysis), db)
 
 
-def _apply_item_update(db_item, req: schemas.ItemUpdate, db: Session):
+def _apply_item_update(db_item, req: schemas.ItemUpdate, db: Session, *, commit: bool = True):
     fields = _request_fields(req)
     if "title" in fields and isinstance(db_item, models.ProjectItem):
         if fields != {"title"}:
@@ -470,10 +472,13 @@ def _apply_item_update(db_item, req: schemas.ItemUpdate, db: Session):
         db_item.attributes = attributes
 
     if fields.intersection({"title", "bpm", "key", "is_loop", "favourite", "attributes"} | metadata_fields):
-        db.commit()
-        db.refresh(db_item)
+        if commit:
+            db.commit()
+            db.refresh(db_item)
+        else:
+            db.flush()
     if "tags" in fields:
-        db_item = crud.set_item_tags(db, db_item.id, _clean_tags(req.tags))
+        db_item = crud.set_item_tags(db, db_item.id, _clean_tags(req.tags), commit=commit)
     return crud.get_item(db, db_item.id)
 
 
@@ -602,6 +607,7 @@ def read_item_summaries(
     skip: int = 0,
     limit: int = 10000,
     vault_id: int | None = None,
+    vault_preview: str | None = None,
     query: str | None = None,
     db: Session = Depends(database.get_db),
 ):
@@ -610,7 +616,16 @@ def read_item_summaries(
     Unlike the legacy list endpoint, this does not serialize collection
     contents for collapsed rows.
     """
-    return crud.get_item_summaries(db, skip=skip, limit=limit, vault_id=vault_id, query_text=query)
+    if vault_preview is not None and vault_preview not in {"quick", "lazy", "hidden"}:
+        raise HTTPException(status_code=400, detail="Vault preview must be quick, lazy, or hidden")
+    return crud.get_item_summaries(
+        db,
+        skip=skip,
+        limit=limit,
+        vault_id=vault_id,
+        vault_preview=vault_preview,
+        query_text=query,
+    )
 
 
 @router.post("/import/preview")
@@ -766,8 +781,33 @@ def read_items(skip: int = 0, limit: int = 10000, vault_id: int | None = None, i
 @router.post("/move-to-vault", response_model=List[schemas.Item])
 def move_items_to_vault(req: schemas.MoveItemsRequest, db: Session = Depends(database.get_db)):
     vault = _vault_for_request(db, req.vault_id)
+    if req.mode == "move" and req.move_confirmed is not True:
+        # This endpoint can remove external originals, so the confirmation is
+        # deliberately required by the API as well as by the UI.
+        selected = db.query(models.Item).filter(models.Item.id.in_(req.item_ids)).all()
+        if any(getattr(item, "storage_mode", "managed") == "external_reference" for item in selected):
+            raise HTTPException(status_code=400, detail="Moving requires confirmation that the original files will be removed")
     try:
-        return vaults.move_items_to_vault(db, req.item_ids, vault.id)
+        return vaults.move_items_to_vault(db, req.item_ids, vault.id, mode=req.mode)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/folders/create", response_model=schemas.Item)
+def create_folder(
+    req: schemas.FolderCreateRequest,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        folder = project_service.create_folder(
+            db,
+            name=req.name,
+            vault_id=req.vault_id,
+            parent_id=req.parent_id,
+            item_ids=req.item_ids,
+            reference_ids=req.reference_ids,
+        )
+        return crud.get_item(db, folder.id)
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -779,7 +819,7 @@ def place_items_in_folder(
     db: Session = Depends(database.get_db),
 ):
     try:
-        return project_service.place_items(db, folder_id, req.item_ids, req.mode)
+        return project_service.place_items(db, folder_id, req.item_ids, req.mode, folder=req.folder)
     except (ValueError, OSError, reference_service.ReferenceError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1060,6 +1100,8 @@ def stream_collection_content(item_id: int, content_index: int, db: Session = De
     if not db_item:
         raise HTTPException(status_code=404, detail="Item not found")
     content, content_path = _get_collection_content(db_item, content_index)
+    if content.get("availability", "ready") != "ready":
+        raise HTTPException(status_code=409, detail="Asset transfer is not ready")
     return FileResponse(path=content_path, media_type=content.get("mime_type") or "application/octet-stream")
 
 @router.get("/{item_id}/stems")
@@ -1096,6 +1138,8 @@ def stream_item(item_id: int, db: Session = Depends(database.get_db)):
     db_item = crud.get_item(db, item_id=item_id)
     if not db_item:
         raise HTTPException(status_code=404, detail="Item not found")
+    if db_item.availability != "ready":
+        raise HTTPException(status_code=409, detail="Asset transfer is not ready")
     
     if db_item.type == "multitrack":
         stems = getattr(db_item, "stems", []) or []

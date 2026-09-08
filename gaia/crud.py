@@ -85,7 +85,11 @@ def _child_content(
     try:
         relative_path = Path(child.absolute_path).relative_to(Path(collection.absolute_path)).as_posix()
     except ValueError:
-        relative_path = os.path.basename(child.absolute_path)
+        folder_attr = (getattr(child, "attributes", {}) or {}).get("folder")
+        if folder_attr:
+            relative_path = f"{folder_attr}/{os.path.basename(child.absolute_path)}"
+        else:
+            relative_path = os.path.basename(child.absolute_path)
     return {
         **existing,
         "index": existing.get("index", fallback_index),
@@ -118,6 +122,9 @@ def _child_content(
         "tags": [tag.name for tag in getattr(child, "tags", [])],
         "streamable": child.type in {"audio", "track", "sample"},
         "child_id": child.id,
+        "storage_mode": child.storage_mode,
+        "availability": child.availability,
+        "attributes": dict(getattr(child, "attributes", {}) or existing.get("attributes") or {}),
     }
 
 
@@ -296,6 +303,8 @@ def item_summary(item: models.Item, *, content_types=None, content_tags=None, ma
         "mime_type": item.mime_type,
         "vault_id": item.vault_id,
         "parent_id": item.parent_id,
+        "storage_mode": item.storage_mode,
+        "availability": item.availability,
         "attributes": item.attributes,
         "id": item.id,
         "created_at": item.created_at,
@@ -330,6 +339,7 @@ def get_item_summaries(
     skip: int = 0,
     limit: int = 100,
     vault_id: int | None = None,
+    vault_preview: str | None = None,
     query_text: str | None = None,
 ) -> list[dict]:
     """Return root rows without hydrating collection contents.
@@ -347,6 +357,10 @@ def get_item_summaries(
     )
     if vault_id is not None:
         query = query.filter(models.Item.vault_id == vault_id)
+    elif vault_preview is not None:
+        query = query.join(models.Vault, models.Vault.id == models.Item.vault_id).filter(
+            models.Vault.preview == vault_preview
+        )
     needle = (query_text or "").strip()
     child_alias = None
     if needle:
@@ -437,9 +451,27 @@ def get_collection_contents_page(
         for entry in manifest_contents
         if entry.get("relative_path")
     }
+    folder_ids = [item_id]
+    subfolder_ids = [
+        row[0] for row in
+        db.query(models.Item.id)
+        .filter(models.Item.parent_id == item_id, models.Item.type == "collection")
+        .all()
+    ]
+    current_level = subfolder_ids
+    while current_level:
+        folder_ids.extend(current_level)
+        next_level = [
+            row[0] for row in
+            db.query(models.Item.id)
+            .filter(models.Item.parent_id.in_(current_level), models.Item.type == "collection")
+            .all()
+        ]
+        current_level = next_level
+
     child_count = (
         db.query(func.count(models.Item.id))
-        .filter(models.Item.parent_id == item_id)
+        .filter(models.Item.parent_id.in_(folder_ids))
         .scalar()
         or 0
     )
@@ -452,7 +484,7 @@ def get_collection_contents_page(
         children = [] if child_count == 0 else (
             db.query(models.Item)
             .options(selectinload(models.Item.tags))
-            .filter(models.Item.parent_id == item_id)
+            .filter(models.Item.parent_id.in_(folder_ids))
             .order_by(models.Item.absolute_path, models.Item.id)
             .all()
         )
@@ -470,7 +502,7 @@ def get_collection_contents_page(
         page = contents[safe_offset:safe_offset + safe_limit]
         total = len(contents)
     else:
-        child_query = db.query(models.Item).filter(models.Item.parent_id == item_id)
+        child_query = db.query(models.Item).filter(models.Item.parent_id.in_(folder_ids))
         if needle:
             tag_alias = aliased(models.Tag)
             pattern = f"%{needle}%"
@@ -501,7 +533,7 @@ def get_collection_contents_page(
                     models.Item.id.label("child_id"),
                     (func.row_number().over(order_by=(models.Item.absolute_path, models.Item.id)) - 1).label("content_index"),
                 )
-                .filter(models.Item.parent_id == item_id)
+                .filter(models.Item.parent_id.in_(folder_ids))
                 .subquery()
             )
             index_by_id = {
@@ -544,10 +576,14 @@ def create_item(db: Session, item: schemas.ItemCreate, *, commit: bool = True, f
     vault = vaults.get_vault(db, item.vault_id)
     if not vault:
         raise ValueError("Vault not found")
-    try:
-        Path(item.absolute_path).resolve().relative_to(vaults.vault_store(vault).resolve())
-    except ValueError as exc:
-        raise ValueError("Item path must be inside its owning vault") from exc
+    storage_mode = getattr(item, "storage_mode", "managed")
+    if storage_mode == "managed":
+        try:
+            Path(item.absolute_path).resolve().relative_to(vaults.vault_store(vault).resolve())
+        except ValueError as exc:
+            raise ValueError("Managed item path must be inside its owning vault") from exc
+    elif storage_mode != "external_reference":
+        raise ValueError("Unsupported item storage mode")
 
     type_map = {
         "item": models.Item,
@@ -567,6 +603,8 @@ def create_item(db: Session, item: schemas.ItemCreate, *, commit: bool = True, f
         absolute_path=item.absolute_path,
         vault_id=item.vault_id,
         parent_id=getattr(item, "parent_id", None),
+        storage_mode=storage_mode,
+        availability=getattr(item, "availability", "ready"),
         file_hash=item.file_hash,
         size_bytes=item.size_bytes,
         mime_type=item.mime_type or ("audio/multitrack" if item.type == "multitrack" else None)
@@ -673,58 +711,121 @@ def _remove_child_from_parent_manifest(db: Session, child: models.Item) -> None:
 
 def delete_item(db: Session, item_id: int, *, commit: bool = True):
     db_item = get_item(db, item_id=item_id)
-    if db_item:
-        subtree_ids = {db_item.id}
-        frontier = [db_item.id]
-        while frontier:
-            child_ids = [
-                row[0]
-                for row in db.query(models.Item.id)
-                .filter(models.Item.parent_id.in_(frontier))
-                .all()
-                if row[0] not in subtree_ids
-            ]
-            subtree_ids.update(child_ids)
-            frontier = child_ids
-        owner_context_ids = owning_project_context_ids(db, db_item)
-        external_references = (
-            db.query(models.ItemReference)
-            .filter(
-                (models.ItemReference.from_item_id.in_(subtree_ids))
-                | (models.ItemReference.to_item_id.in_(subtree_ids))
-            )
-            .filter(~models.ItemReference.context_id.in_(subtree_ids | owner_context_ids))
-            .count()
+    if not db_item:
+        return set()
+
+    subtree_ids = {db_item.id}
+    frontier = [db_item.id]
+    while frontier:
+        child_ids = [
+            row[0]
+            for row in db.query(models.Item.id)
+            .filter(models.Item.parent_id.in_(frontier))
+            .all()
+            if row[0] not in subtree_ids
+        ]
+        subtree_ids.update(child_ids)
+        frontier = child_ids
+
+    owner_context_ids = owning_project_context_ids(db, db_item)
+
+    # Reject deletion only if db_item itself is directly referenced by an external project
+    item_external_references = (
+        db.query(models.ItemReference)
+        .filter(
+            (models.ItemReference.from_item_id == db_item.id)
+            | (models.ItemReference.to_item_id == db_item.id)
         )
-        if external_references:
-            raise ValueError("Item is referenced by a project; remove those references before deleting it")
-        _remove_child_from_parent_manifest(db, db_item)
-        # Project-owned generated files may be linked in their owning project's
-        # context. Remove those links with the file, while retaining the guard
-        # against deleting externally referenced source assets.
-        reference_filter = models.ItemReference.context_id.in_(subtree_ids)
-        if owner_context_ids:
-            reference_filter |= (
-                models.ItemReference.context_id.in_(owner_context_ids)
-                & (
-                    models.ItemReference.from_item_id.in_(subtree_ids)
-                    | models.ItemReference.to_item_id.in_(subtree_ids)
-                )
+        .filter(~models.ItemReference.context_id.in_({db_item.id} | owner_context_ids))
+        .count()
+    )
+    if item_external_references:
+        raise ValueError("Item is referenced by a project; remove those references before deleting it")
+
+    # Descendants that are referenced outside this subtree/owning project must be preserved,
+    # rather than failing container/folder deletion or deleting active external project references.
+    descendant_ids = subtree_ids - {db_item.id}
+    if descendant_ids:
+        externally_referenced_descendants = {
+            row[0]
+            for row in db.query(models.ItemReference.to_item_id)
+            .filter(
+                models.ItemReference.to_item_id.in_(descendant_ids),
+                ~models.ItemReference.context_id.in_(subtree_ids | owner_context_ids),
             )
-        db.query(models.ItemReference).filter(reference_filter).delete(synchronize_session=False)
-        db.query(models.VaultImportLog).filter(
-            models.VaultImportLog.item_id.in_(subtree_ids)
-        ).update({models.VaultImportLog.item_id: None}, synchronize_session=False)
-        db.delete(db_item)
-        try:
-            if commit:
-                db.commit()
-            else:
-                db.flush()
-        except Exception:
-            db.rollback()
-            raise
-    return db_item
+            .all()
+        } | {
+            row[0]
+            for row in db.query(models.ItemReference.from_item_id)
+            .filter(
+                models.ItemReference.from_item_id.in_(descendant_ids),
+                ~models.ItemReference.context_id.in_(subtree_ids | owner_context_ids),
+            )
+            .all()
+        }
+        if externally_referenced_descendants:
+            preserved_ids = set(externally_referenced_descendants)
+            frontier = list(externally_referenced_descendants)
+            while frontier:
+                child_ids = [
+                    row[0]
+                    for row in db.query(models.Item.id)
+                    .filter(models.Item.parent_id.in_(frontier))
+                    .all()
+                    if row[0] not in preserved_ids
+                ]
+                preserved_ids.update(child_ids)
+                frontier = child_ids
+
+            preserved_items = db.query(models.Item).filter(
+                models.Item.id.in_(externally_referenced_descendants),
+                models.Item.parent_id == db_item.id,
+            ).all()
+            parent_item = get_item(db, db_item.parent_id) if db_item.parent_id else None
+            for preserved_item in preserved_items:
+                preserved_item.parent_id = db_item.parent_id
+                preserved_item.parent = parent_item
+            if "children" in db_item.__dict__:
+                db_item.children = [c for c in db_item.children if c.id not in preserved_ids]
+            db.flush()
+
+            subtree_ids -= preserved_ids
+
+    _remove_child_from_parent_manifest(db, db_item)
+    # Project-owned generated files may be linked in their owning project's
+    # context. Remove those links with the file, while retaining the guard
+    # against deleting externally referenced source assets.
+    reference_filter = models.ItemReference.context_id.in_(subtree_ids)
+    if owner_context_ids:
+        reference_filter |= (
+            models.ItemReference.context_id.in_(owner_context_ids)
+            & (
+                models.ItemReference.from_item_id.in_(subtree_ids)
+                | models.ItemReference.to_item_id.in_(subtree_ids)
+            )
+        )
+    db.query(models.ItemReference).filter(reference_filter).delete(synchronize_session=False)
+    db.query(models.VaultImportLog).filter(
+        models.VaultImportLog.item_id.in_(subtree_ids)
+    ).update({models.VaultImportLog.item_id: None}, synchronize_session=False)
+
+    remaining_descendants = subtree_ids - {db_item.id}
+    if remaining_descendants:
+        for child_id in remaining_descendants:
+            child_item = get_item(db, child_id)
+            if child_item:
+                db.delete(child_item)
+
+    db.delete(db_item)
+    try:
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+    except Exception:
+        db.rollback()
+        raise
+    return subtree_ids
 
 def add_tag_to_item(db: Session, item_id: int, tag_id: int):
     db_item = get_item(db, item_id=item_id)
