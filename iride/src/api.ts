@@ -1,9 +1,11 @@
-import { runtimeLog } from './runtimeLog';
+import { runtimeLog } from './runtimeLog.ts';
 
 export interface LibraryFile {
     id?: number | string;
     absolute_path: string;
     name: string;
+    title?: string;
+    filename?: string;
     type?: string;
     key?: string | null;
     bpm?: number | null;
@@ -14,6 +16,13 @@ export interface LibraryFile {
     collection_id?: number | string;
     content_index?: number;
     contents?: LibraryFile[];
+    folder?: string | null;
+    is_external?: boolean;
+    reference_id?: number | string;
+    favourite?: boolean;
+    stems?: any[];
+    is_valid_length?: boolean;
+    length_variance?: number;
 }
 
 export interface LibraryBpmUpdateResult {
@@ -78,8 +87,12 @@ function libraryCacheKey(vaultId: number | null): string {
     return vaultId === null ? 'all' : `vault:${vaultId}`;
 }
 
+export function clearLibraryCache(): void {
+    libraryCache.clear();
+}
+
 export async function fetchLibrary(forceRefresh = false, allVaults = false): Promise<LibraryFile[]> {
-    const storedVault = Number(localStorage.getItem('sin.selectedVaultId'));
+    const storedVault = typeof localStorage !== 'undefined' ? Number(localStorage.getItem('sin.selectedVaultId')) : NaN;
     const vaultId = !allVaults && Number.isFinite(storedVault) && storedVault > 0 ? storedVault : null;
     const cacheKey = libraryCacheKey(vaultId);
     const cached = libraryCache.get(cacheKey);

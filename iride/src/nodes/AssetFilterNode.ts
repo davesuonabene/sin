@@ -88,6 +88,10 @@ export class AssetFilterNode extends ModulatorNode {
         return this.properties?.node_name || "Asset Pool";
     }
 
+    override get modifierKind(): string {
+        return 'asset_filter';
+    }
+
     async syncMetadataFromLibrary(files?: LibraryFile[]): Promise<void> {
         const items = Array.isArray(this.properties?.selected_items) ? this.properties.selected_items : [];
         const libraryFiles = files || await resolveLibraryAssets(items);

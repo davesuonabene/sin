@@ -25,6 +25,8 @@ SAVES_DIR = PROJECT_ROOT / "saves"
 STAGE_SAVE_PATH = SAVES_DIR / ".current-stage.json"
 
 logger = logging.getLogger("iride.api")
+# Suppress noisy numba internal bytecode and compiler debug logging
+logging.getLogger("numba").setLevel(logging.WARNING)
 
 
 def workspace_save_path(name: str) -> Path:
@@ -41,6 +43,7 @@ def workspace_save_path(name: str) -> Path:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.getLogger("numba").setLevel(logging.WARNING)
     logger.info("Initializing IRIDE server lifespan...")
 
     SAVES_DIR.mkdir(exist_ok=True)
@@ -795,8 +798,8 @@ def get_library(vault_id: Optional[int] = None):
     raw_items = []
 
     def prepare_and_filter_library(items_list: list[dict]) -> list[dict]:
-        folder_types = {"collection", "sample_pack", "multitrack", "project"}
-        organizer_types = {"collection", "sample_pack", "project"}
+        folder_types = {"collection", "sample_pack", "multitrack", "project", "folder"}
+        organizer_types = {"collection", "sample_pack", "project", "folder"}
         pack_roots = []
         for item in items_list:
             item_type = item.get("type", "audio")
@@ -813,8 +816,10 @@ def get_library(vault_id: Optional[int] = None):
             abs_path = item.get("absolute_path") or ""
             norm_path = os.path.abspath(abs_path).replace("\\", "/").lower() if abs_path else ""
 
-            # Filter out loose child items inside pack roots
+            # Filter out loose child items inside pack roots or child items with explicit parent
             if item_type not in folder_types:
+                if item.get("parent_id") is not None:
+                    continue
                 is_inside_pack = any(
                     norm_path != pack_root and norm_path.startswith(pack_root + "/")
                     for pack_root in pack_roots
@@ -822,36 +827,66 @@ def get_library(vault_id: Optional[int] = None):
                 if is_inside_pack:
                     continue
 
-            # Ensure collection / sample_pack items have prepared contents
+            # Ensure collection / sample_pack / project / folder items have prepared contents
             if item_type in organizer_types:
                 root = item.get("absolute_path") or ""
                 contents = item.get("contents") or []
 
                 prepared_contents = []
+                seen_content_keys = set()
                 for content in contents:
+                    if not isinstance(content, dict):
+                        continue
                     relative_path = content.get("relative_path") or ""
-                    candidate = os.path.abspath(os.path.join(root, relative_path))
+                    content_abs = content.get("absolute_path")
+                    if content_abs and (os.path.isabs(content_abs) or content.get("is_external") or os.path.exists(content_abs)):
+                        candidate = content_abs
+                    elif relative_path:
+                        candidate = os.path.abspath(os.path.join(root, relative_path))
+                    else:
+                        candidate = content_abs or ""
+
                     collection_id = item.get("id")
                     content_index = content.get("index", len(prepared_contents))
-                    child_id = content.get("child_id")
+                    child_id = content.get("child_id") if content.get("child_id") is not None else content.get("id")
                     content_id = child_id if child_id is not None else (
                         f"collection:{collection_id}:{content_index}" if collection_id is not None else None
                     )
+
+                    unique_key = str(content_id or candidate or content_index)
+                    if unique_key in seen_content_keys:
+                        continue
+                    seen_content_keys.add(unique_key)
+
+                    folder = content.get("folder")
+                    if not folder:
+                        folder = (content.get("attributes") or {}).get("folder")
+                    if not folder and relative_path:
+                        norm_rel = relative_path.replace("\\", "/").strip("/")
+                        if "/" in norm_rel:
+                            folder = os.path.dirname(norm_rel)
+
                     prepared_contents.append({
                         "id": content_id,
+                        "child_id": child_id,
+                        "reference_id": content.get("reference_id"),
                         "collection_id": collection_id,
                         "content_index": content_index,
                         "filename": content.get("filename") or os.path.basename(candidate),
                         "title": content.get("title") or content.get("filename") or os.path.basename(candidate),
                         "relative_path": relative_path,
                         "absolute_path": candidate,
+                        "folder": folder or None,
                         "type": content.get("type", "sample"),
                         "tags": content.get("tags", []),
                         "key": content.get("key"),
                         "bpm": content.get("bpm"),
                         "duration_seconds": content.get("duration_seconds"),
                         "favourite": bool(content.get("favourite") or (content.get("attributes") or {}).get("favourite", False)),
-                        "stream_url": f"/api/library/stream/{content_id}" if content_id is not None else None,
+                        "is_external": bool(content.get("is_external", False)),
+                        "versions": content.get("versions"),
+                        "version_group": content.get("version_group"),
+                        "stream_url": content.get("stream_url") or (f"/api/library/stream/{content_id}" if content_id is not None else None),
                     })
                 item["contents"] = prepared_contents
 
@@ -885,20 +920,85 @@ def get_library(vault_id: Optional[int] = None):
                     key = f.get("key")
                     bpm = f.get("bpm")
                     favourite = bool(f.get("favourite") or (f.get("attributes") or {}).get("favourite", False))
+                    item_type = f.get("type", "audio")
+                    item_id = f.get("id")
+                    contents = f.get("contents", [])
+
+                    # For projects, load full referenced items via /projects/{id}/table
+                    if item_type == "project" and item_id:
+                        try:
+                            table_req = urllib.request.Request(f"http://127.0.0.1:8001/projects/{item_id}/table", headers={'Accept': 'application/json'})
+                            with urllib.request.urlopen(table_req, timeout=8.0) as table_resp:
+                                if table_resp.status == 200:
+                                    table_rows = json.loads(table_resp.read().decode('utf-8'))
+                                    merged_contents = []
+                                    seen_item_ids = set()
+                                    for row in table_rows:
+                                        target_item = row.get("item") or {}
+                                        ref = row.get("reference") or {}
+                                        ref_attrs = ref.get("attributes") or {}
+                                        target_attrs = target_item.get("attributes") or {}
+                                        tid = target_item.get("id")
+                                        if tid in seen_item_ids:
+                                            continue
+                                        seen_item_ids.add(tid)
+                                        tpath = target_item.get("absolute_path") or ""
+                                        folder_name = ref_attrs.get("folder") or target_attrs.get("folder") or None
+                                        merged_contents.append({
+                                            "id": tid,
+                                            "child_id": tid,
+                                            "reference_id": ref.get("id"),
+                                            "collection_id": item_id,
+                                            "filename": os.path.basename(tpath),
+                                            "title": target_item.get("title") or os.path.basename(tpath),
+                                            "absolute_path": tpath,
+                                            "relative_path": target_item.get("relative_path") or os.path.basename(tpath),
+                                            "folder": folder_name,
+                                            "type": target_item.get("type", "sample"),
+                                            "tags": ref.get("tags") or target_item.get("tags") or [],
+                                            "key": target_item.get("key"),
+                                            "bpm": target_item.get("bpm"),
+                                            "duration_seconds": target_item.get("duration_seconds"),
+                                            "favourite": bool(target_item.get("favourite") or target_attrs.get("favourite", False)),
+                                            "is_external": bool(row.get("is_external", False)),
+                                            "versions": row.get("versions"),
+                                            "version_group": row.get("version_group"),
+                                            "stream_url": f"/api/library/stream/{tid}" if tid is not None else None,
+                                        })
+                                    # Preserve any manifest contents that weren't in project_table
+                                    for c in contents:
+                                        cid = c.get("child_id") or c.get("id")
+                                        if cid not in seen_item_ids:
+                                            merged_contents.append(c)
+                                    contents = merged_contents
+                        except Exception as p_err:
+                            logger.debug(f"[API /library] Project table query failed for {item_id}: {p_err}")
+
+                    # For collections, if contents is empty, query /items/{id}/contents
+                    elif item_type in {"collection", "folder"} and item_id and not contents:
+                        try:
+                            col_req = urllib.request.Request(f"http://127.0.0.1:8001/items/{item_id}/contents", headers={'Accept': 'application/json'})
+                            with urllib.request.urlopen(col_req, timeout=8.0) as col_resp:
+                                if col_resp.status == 200:
+                                    contents = json.loads(col_resp.read().decode('utf-8'))
+                        except Exception as c_err:
+                            logger.debug(f"[API /library] Collection contents query failed for {item_id}: {c_err}")
+
                     raw_items.append({
-                        "id": f.get("id"),
+                        "id": item_id,
                         "vault_id": f.get("vault_id"),
+                        "parent_id": f.get("parent_id"),
                         "absolute_path": abs_path,
                         "name": os.path.basename(abs_path),
                         "tags": f.get("tags", []),
-                        "type": f.get("type", "audio"),
+                        "type": item_type,
                         "key": key,
                         "bpm": bpm,
                         "duration_seconds": f.get("duration_seconds"),
                         "stems": f.get("stems"),
                         "is_valid_length": f.get("is_valid_length"),
                         "length_variance": f.get("length_variance"),
-                        "contents": f.get("contents", []),
+                        "contents": contents,
                         "favourite": favourite,
                         "attributes": f.get("attributes", {}),
                     })
@@ -919,7 +1019,7 @@ def get_library(vault_id: Optional[int] = None):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             query = """
-                SELECT i.id, i.absolute_path, i.type,
+                SELECT i.id, i.absolute_path, i.type, i.parent_id,
                        i.vault_id, i.metadata_json,
                        COALESCE(s.key, m.key, mt.key) as key,
                        COALESCE(s.bpm, m.bpm, mt.bpm) as bpm,
@@ -954,6 +1054,93 @@ def get_library(vault_id: Optional[int] = None):
                     "id": tag_row["id"],
                     "name": tag_row["name"],
                 })
+
+            # For project items, query item_references
+            project_ids = [row["id"] for row in rows if row["type"] == "project"]
+            refs_by_project: dict[int, list[dict[str, Any]]] = {}
+            if project_ids:
+                placeholders = ",".join("?" for _ in project_ids)
+                ref_rows = cursor.execute(f"""
+                    SELECT r.id as ref_id, r.context_id, r.to_item_id, r.metadata_json as ref_metadata_json,
+                           i.id as item_id, i.absolute_path, i.type, i.vault_id, i.metadata_json as item_metadata_json,
+                           COALESCE(s.key, m.key, mt.key) as key,
+                           COALESCE(s.bpm, m.bpm, mt.bpm) as bpm
+                    FROM item_references r
+                    JOIN items i ON r.to_item_id = i.id
+                    LEFT JOIN sample_items s ON i.id = s.id
+                    LEFT JOIN midi_items m ON i.id = m.id
+                    LEFT JOIN multitrack_items mt ON i.id = mt.id
+                    WHERE r.context_id IN ({placeholders})
+                """, project_ids).fetchall()
+                for rr in ref_rows:
+                    pid = rr["context_id"]
+                    try:
+                        ref_attrs = json.loads(rr["ref_metadata_json"] or "{}")
+                    except Exception:
+                        ref_attrs = {}
+                    try:
+                        item_attrs = json.loads(rr["item_metadata_json"] or "{}")
+                    except Exception:
+                        item_attrs = {}
+                    tpath = rr["absolute_path"] or ""
+                    tid = rr["item_id"]
+                    refs_by_project.setdefault(pid, []).append({
+                        "id": tid,
+                        "child_id": tid,
+                        "reference_id": rr["ref_id"],
+                        "collection_id": pid,
+                        "filename": os.path.basename(tpath),
+                        "title": item_attrs.get("title") or os.path.basename(tpath),
+                        "absolute_path": tpath,
+                        "relative_path": os.path.basename(tpath),
+                        "folder": ref_attrs.get("folder") or item_attrs.get("folder") or None,
+                        "type": rr["type"] or "sample",
+                        "tags": [t["name"] for t in tags_by_item.get(tid, [])],
+                        "key": rr["key"],
+                        "bpm": rr["bpm"],
+                        "favourite": bool(item_attrs.get("favourite", False)),
+                        "stream_url": f"/api/library/stream/{tid}",
+                    })
+
+            # For collection items, query child items from items table if manifest_json is empty
+            collection_ids = [row["id"] for row in rows if row["type"] in {"collection", "folder", "sample_pack"}]
+            children_by_collection: dict[int, list[dict[str, Any]]] = {}
+            if collection_ids:
+                placeholders = ",".join("?" for _ in collection_ids)
+                child_rows = cursor.execute(f"""
+                    SELECT i.id, i.parent_id, i.absolute_path, i.type, i.metadata_json,
+                           COALESCE(s.key, m.key, mt.key) as key,
+                           COALESCE(s.bpm, m.bpm, mt.bpm) as bpm
+                    FROM items i
+                    LEFT JOIN sample_items s ON i.id = s.id
+                    LEFT JOIN midi_items m ON i.id = m.id
+                    LEFT JOIN multitrack_items mt ON i.id = mt.id
+                    WHERE i.parent_id IN ({placeholders})
+                """, collection_ids).fetchall()
+                for cr in child_rows:
+                    cid = cr["parent_id"]
+                    try:
+                        c_attrs = json.loads(cr["metadata_json"] or "{}")
+                    except Exception:
+                        c_attrs = {}
+                    cpath = cr["absolute_path"] or ""
+                    children_by_collection.setdefault(cid, []).append({
+                        "id": cr["id"],
+                        "child_id": cr["id"],
+                        "collection_id": cid,
+                        "filename": os.path.basename(cpath),
+                        "title": c_attrs.get("title") or os.path.basename(cpath),
+                        "absolute_path": cpath,
+                        "relative_path": os.path.basename(cpath),
+                        "folder": c_attrs.get("folder") or None,
+                        "type": cr["type"] or "sample",
+                        "tags": [t["name"] for t in tags_by_item.get(cr["id"], [])],
+                        "key": cr["key"],
+                        "bpm": cr["bpm"],
+                        "favourite": bool(c_attrs.get("favourite", False)),
+                        "stream_url": f"/api/library/stream/{cr['id']}",
+                    })
+
             for row in rows:
                 item_id = row["id"]
                 tags = tags_by_item.get(item_id, [])
@@ -976,6 +1163,12 @@ def get_library(vault_id: Optional[int] = None):
                     except Exception:
                         contents = []
 
+                if row["type"] == "project" and item_id in refs_by_project:
+                    seen_tids = {r["id"] for r in refs_by_project[item_id]}
+                    contents = refs_by_project[item_id] + [c for c in contents if (c.get("child_id") or c.get("id")) not in seen_tids]
+                elif row["type"] in {"collection", "folder", "sample_pack"} and not contents and item_id in children_by_collection:
+                    contents = children_by_collection[item_id]
+
                 metadata_json = row["metadata_json"]
                 attributes = {}
                 if metadata_json:
@@ -988,6 +1181,7 @@ def get_library(vault_id: Optional[int] = None):
                 raw_items.append({
                     "id": item_id,
                     "vault_id": row["vault_id"],
+                    "parent_id": row["parent_id"],
                     "absolute_path": abs_path,
                     "name": os.path.basename(abs_path),
                     "tags": tags,
@@ -1685,5 +1879,6 @@ if __name__ == "__main__":
         level=logging.DEBUG,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     )
+    logging.getLogger("numba").setLevel(logging.WARNING)
     logger.info("Starting uvicorn server directly from api.py with DEBUG logging...")
     uvicorn.run("api:app", host="127.0.0.1", port=8000, reload=True, log_level="debug")

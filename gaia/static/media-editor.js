@@ -103,6 +103,9 @@
     const destinationFormatField = $('media-destination-format-field');
     const destinationProjectChoice = $('media-project-choice');
     const destinationOverrideChoice = $('media-override-choice');
+    const existingProjectChoice = $('media-existing-project-choice');
+    const existingProjectFields = $('media-existing-project-fields');
+    const projectExistingSelect = $('media-existing-project-select');
     const destinationSubmit = $('media-destination-submit');
     const destinationClose = $('media-destination-close');
     const destinationCancel = $('media-destination-cancel');
@@ -154,6 +157,7 @@
     function rootIdForEntry(entry) {
         if (!entry) return null;
         if (entry.kind === 'content') return Number(entry.collection?.id) || null;
+        if (entry.kind === 'reference') return Number(entry.collection?.id) || Number(entry.item?.id) || null;
         return Number(entry.item?.id) || null;
     }
 
@@ -163,7 +167,16 @@
 
     function targetIdForEntry(entry) {
         if (!entry) return null;
-        if (entry.kind === 'content' && entry.content?.child_id) return `item:${entry.content.child_id}`;
+        if (entry.kind === 'reference') {
+            const itemId = entry.item?.id || entry.reference?.to_item_id;
+            if (itemId) {
+                return entry.item?.type === 'multitrack' ? `root:${itemId}` : `item:${itemId}`;
+            }
+            return null;
+        }
+        if (entry.kind === 'content' && entry.content?.child_id) {
+            return entry.item?.type === 'multitrack' ? `root:${entry.content.child_id}` : `item:${entry.content.child_id}`;
+        }
         if (entry.kind === 'asset' && entry.item?.type === 'multitrack') return `root:${entry.item.id}`;
         if (entry.kind === 'asset' && entry.item?.id && ['audio', 'track', 'sample'].includes(entry.item?.type)) return `item:${entry.item.id}`;
         return null;
@@ -1831,16 +1844,39 @@
         projectVault.innerHTML = vaults.map(vault => `<option value="${vault.id}">${escapeHtml(vault.name)}</option>`).join('');
     }
 
+    async function populateProjects(vaultId = null) {
+        const query = vaultId ? `?vault_id=${vaultId}` : '';
+        const response = await fetch(`/items/summaries${query}`);
+        const items = await response.json().catch(() => []);
+        const projects = (Array.isArray(items) ? items : []).filter(item => item.type === 'project');
+        if (projectExistingSelect) {
+            if (projects.length) {
+                projectExistingSelect.innerHTML = projects.map(p => `<option value="${p.id}">${escapeHtml(p.title || 'Untitled Project')}</option>`).join('');
+                if (existingProjectChoice) existingProjectChoice.classList.remove('hidden');
+            } else {
+                projectExistingSelect.innerHTML = '<option value="">No existing projects</option>';
+                if (existingProjectChoice) existingProjectChoice.classList.add('hidden');
+                if (destinationForm.querySelector('input[name="media-destination-mode"]:checked')?.value === 'existing_project') {
+                    const projectRadio = destinationForm.querySelector('input[value="project"]');
+                    if (projectRadio) projectRadio.checked = true;
+                }
+            }
+        }
+    }
+
     function destinationMode() {
-        if (state.destinationAction === 'save') return 'project';
         return destinationForm.querySelector('input[name="media-destination-mode"]:checked')?.value || 'project';
     }
 
     function updateDestinationFields() {
-        const projectMode = state.destinationAction === 'save' || destinationMode() === 'project';
-        projectFields.classList.toggle('hidden', !projectMode);
-        projectName.required = projectMode;
-        projectVault.required = projectMode;
+        const mode = destinationMode();
+        const isNewProject = mode === 'project';
+        const isExistingProject = mode === 'existing_project';
+        projectFields.classList.toggle('hidden', !isNewProject);
+        if (existingProjectFields) existingProjectFields.classList.toggle('hidden', !isExistingProject);
+        projectName.required = isNewProject;
+        projectVault.required = isNewProject;
+        if (projectExistingSelect) projectExistingSelect.required = isExistingProject;
     }
 
     async function openDestinationDialog(scope = 'main', action = 'render') {
@@ -1860,16 +1896,17 @@
         }
         const savingProgress = action === 'save';
         destinationEyebrow.textContent = savingProgress ? 'Editor progress' : 'Render destination';
-        destinationTitle.textContent = savingProgress ? 'Create a project' : 'Save media result';
+        destinationTitle.textContent = savingProgress ? 'Save progress to project' : 'Save media result';
         destinationFormatField.classList.toggle('hidden', savingProgress);
-        destinationProjectChoice.classList.toggle('hidden', savingProgress);
+        destinationProjectChoice.classList.remove('hidden');
         destinationOverrideChoice.classList.toggle('hidden', savingProgress);
-        destinationSubmit.textContent = savingProgress ? 'Create and save' : 'Continue';
+        destinationSubmit.textContent = savingProgress ? 'Save progress' : 'Continue';
         destinationResult.className = 'result hidden';
         destinationResult.textContent = '';
         projectName.value = state.session?.title ? `${state.session.title} edits` : '';
         try {
             await populateVaults();
+            await populateProjects(projectVault?.value || null);
         } catch (error) {
             destinationResult.textContent = error.message;
             destinationResult.className = 'result error';
@@ -1890,6 +1927,18 @@
         }
         updateDestinationFields();
         destinationDialog.showModal();
+    }
+
+    async function addSourceToProject(projectId, sourceItemId) {
+        const response = await fetch(`/projects/${projectId}/items`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item_ids: [Number(sourceItemId)] }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Could not add item to project');
+        }
     }
 
     function projectSourceId() {
@@ -2001,7 +2050,13 @@
         const editRevision = state.editRevision;
         try {
             let destination = { mode, project_id: projectId, revision_label: null, set_master: true };
-            if (mode === 'project' && !projectId) {
+            if (mode === 'existing_project') {
+                destination.mode = 'project';
+                destination.project_id = projectId;
+                await addSourceToProject(projectId, projectSourceId());
+                const saved = await saveProjectState(projectId, { force: true });
+                if (!saved) throw new Error('Render stopped because editor progress could not be saved');
+            } else if (mode === 'project' && !projectId) {
                 const project = await createFocusedProject(projectNameValue, vaultId, moveSource, projectSourceId());
                 projectId = project.id;
                 destination.project_id = projectId;
@@ -2629,7 +2684,12 @@
     });
     editorRender.addEventListener('click', () => openDestinationDialog('main'));
     editorRenderAll.addEventListener('click', () => openDestinationDialog('all'));
-    destinationForm.addEventListener('change', updateDestinationFields);
+    destinationForm.addEventListener('change', event => {
+        updateDestinationFields();
+        if (event.target === projectVault) {
+            populateProjects(projectVault.value);
+        }
+    });
     destinationForm.addEventListener('submit', async event => {
         event.preventDefault();
         const mode = destinationMode();
@@ -2638,17 +2698,32 @@
             destinationResult.className = 'result error';
             return;
         }
+        if (mode === 'existing_project' && (!projectExistingSelect || !projectExistingSelect.value)) {
+            destinationResult.textContent = 'Select a project.';
+            destinationResult.className = 'result error';
+            return;
+        }
         if (state.destinationAction === 'save') {
             destinationSubmit.disabled = true;
-            destinationResult.textContent = 'Creating project and saving progress…';
+            destinationResult.textContent = mode === 'existing_project' ? 'Saving progress to project…' : 'Creating project and saving progress…';
             destinationResult.className = 'result';
             try {
-                await createFocusedProject(
-                    projectName.value.trim(),
-                    projectVault.value,
-                    projectMove.checked,
-                    projectSourceId(),
-                );
+                if (mode === 'existing_project') {
+                    const existingId = Number(projectExistingSelect.value);
+                    await addSourceToProject(existingId, projectSourceId());
+                    const saved = await saveProjectState(existingId, { force: true });
+                    if (!saved) throw new Error('Could not save editor progress to project');
+                    await loadSession(existingId, `item:${projectSourceId()}`);
+                    window.dispatchEvent(new CustomEvent('gaia:library-refresh'));
+                    setStatus('Progress saved to project');
+                } else {
+                    await createFocusedProject(
+                        projectName.value.trim(),
+                        projectVault.value,
+                        projectMove.checked,
+                        projectSourceId(),
+                    );
+                }
                 destinationDialog.close();
             } catch (error) {
                 destinationResult.textContent = error.message || 'Could not save editor progress';
@@ -2660,6 +2735,7 @@
         }
         await submitRender({
             mode,
+            projectId: mode === 'existing_project' ? Number(projectExistingSelect.value) : null,
             projectNameValue: projectName.value.trim(),
             vaultId: projectVault.value,
             moveSource: projectMove.checked,

@@ -30,6 +30,7 @@ def serve(
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         force=True
     )
+    logging.getLogger("numba").setLevel(logging.WARNING)
     typer.echo(f"Starting IRIDE server on http://{host}:{port} (log level: {log_level})...")
     uvicorn.run("api:app", host=host, port=port, reload=reload, log_level=log_level)
 

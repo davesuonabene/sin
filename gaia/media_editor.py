@@ -234,7 +234,7 @@ def build_editor_session(
     saved_state_warning: str | None = None
     if isinstance(root, models.ProjectItem) and include_saved_state:
         try:
-            saved_state = read_project_editor_state(db, root.id)
+            saved_state = read_project_editor_state(db, root.id, target_id=target_id)
         except ValueError as exc:
             saved_state_warning = str(exc)
         if not target_id and saved_state:
@@ -277,6 +277,11 @@ def build_editor_session(
         active_ids = []
 
     target_key = _target_id_for_item(current, isinstance(current, models.MultitrackItem))
+    if isinstance(root, models.ProjectItem) and include_saved_state and (not saved_state or saved_state.get("target_id") != target_key):
+        try:
+            saved_state = read_project_editor_state(db, root.id, target_id=target_key)
+        except ValueError as exc:
+            saved_state_warning = str(exc)
     targets: list[dict[str, Any]] = []
     for item in candidates:
         is_multitrack = isinstance(item, models.MultitrackItem)
@@ -336,12 +341,12 @@ def build_editor_session(
     return result
 
 
-def read_project_editor_state(db: Session, project_id: int) -> dict[str, Any] | None:
+def read_project_editor_state(db: Session, project_id: int, target_id: str | None = None) -> dict[str, Any] | None:
     """Read the project's mutable edit document without changing the graph."""
     project = db.query(models.ProjectItem).filter(models.ProjectItem.id == project_id).first()
     if not project:
         raise ValueError("Project not found")
-    document = project_manifest.editor_state_document(project)
+    document = project_manifest.editor_state_document(project, target_id=target_id)
     if document is None:
         return None
     if document.get("schema") != _EDITOR_STATE_SCHEMA:

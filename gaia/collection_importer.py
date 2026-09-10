@@ -358,28 +358,70 @@ def analyze_manifest_entry(root: Path, entry: dict[str, Any]) -> dict[str, Any]:
         role = text_analyzer.key_role(str(file_path), False, analysis.get("tags", []))
         key = text_analyzer.normalize_key_for_role(midi_values.get("key") or key, role)
     existing_metadata = dict(entry.get("audio_metadata") or {})
+    for field in AUDIO_METADATA_FIELDS:
+        if field == "title":
+            continue
+        val = entry.get(field)
+        if val is not None and (not isinstance(val, str) or val.strip() != "") and field not in existing_metadata:
+            existing_metadata[field] = val
     embedded_metadata = dict(analysis.get("audio_metadata") or {})
-    embedded_metadata = {**existing_metadata, **embedded_metadata}
-    title = embedded_metadata.get("title") or entry.get("title") or analysis["title"]
+    merged_metadata = dict(embedded_metadata)
+    for field, val in existing_metadata.items():
+        if val is not None and (not isinstance(val, str) or val.strip() != ""):
+            merged_metadata[field] = val
+
+    filename = entry.get("filename", "")
+    filename_stem = Path(filename).stem
+    raw_title = (entry.get("title") or "").strip()
+    if raw_title and raw_title != filename and raw_title != filename_stem:
+        title = raw_title
+    elif merged_metadata.get("title"):
+        title = merged_metadata["title"]
+    else:
+        title = raw_title or analysis.get("title") or filename_stem
+
+    final_bpm = entry.get("bpm")
+    if final_bpm is None and bpm is not None:
+        try:
+            final_bpm = round(float(bpm))
+        except (ValueError, TypeError):
+            final_bpm = None
+
+    existing_key = (entry.get("key") or "").strip() if isinstance(entry.get("key"), str) else entry.get("key")
+    final_key = existing_key or key
+
+    final_is_loop = bool(entry.get("is_loop") or analysis.get("is_loop"))
+
+    current_type = entry.get("type")
+    if current_type and current_type not in {"audio", "file"}:
+        final_type = current_type
+    else:
+        final_type = item_type
+
+    existing_tags = [t.strip() for t in (entry.get("tags") or []) if isinstance(t, str) and t.strip()]
+    seen_tags = {t.casefold() for t in existing_tags}
+    merged_tags = list(existing_tags)
+    for t in analysis.get("tags", []):
+        cleaned = t.strip() if isinstance(t, str) else ""
+        if cleaned and cleaned.casefold() not in seen_tags:
+            seen_tags.add(cleaned.casefold())
+            merged_tags.append(cleaned)
+    final_tags = merged_tags[:24]
+
     result = {
         **entry,
         "title": title,
-        "type": item_type,
+        "type": final_type,
         "duration_seconds": duration,
-        "bpm": round(float(bpm)) if bpm is not None else None,
-        "key": key,
-        "is_loop": bool(analysis.get("is_loop")),
-        "tags": analysis.get("tags", []),
-        "streamable": item_type in {"audio", "track", "sample"},
+        "bpm": final_bpm,
+        "key": final_key,
+        "is_loop": final_is_loop,
+        "tags": final_tags,
+        "streamable": final_type in {"audio", "track", "sample"},
+        "audio_metadata": merged_metadata,
     }
-    if embedded_metadata:
-        result["audio_metadata"] = embedded_metadata
-        for field in AUDIO_METADATA_FIELDS:
-            result[field] = embedded_metadata.get(field)
-    else:
-        result["audio_metadata"] = {}
-        for field in AUDIO_METADATA_FIELDS:
-            result[field] = entry.get(field)
+    for field in AUDIO_METADATA_FIELDS:
+        result[field] = merged_metadata.get(field)
     return result
 
 

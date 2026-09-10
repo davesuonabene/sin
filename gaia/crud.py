@@ -986,3 +986,65 @@ def get_or_create_tag(db: Session, name: str):
     db.commit()
     db.refresh(db_tag)
     return db_tag
+
+
+def locate_item(db: Session, item_id: int) -> dict | None:
+    item = db.query(models.Item).filter(models.Item.id == item_id).first()
+    if not item:
+        return None
+
+    target = item
+    visited = {target.id}
+    while True:
+        attrs = target.attributes if hasattr(target, "attributes") and isinstance(target.attributes, dict) else {}
+        source_id = attrs.get("source_item_id")
+        if source_id and isinstance(source_id, int) and source_id not in visited:
+            candidate = db.query(models.Item).filter(models.Item.id == source_id).first()
+            if candidate:
+                target = candidate
+                visited.add(target.id)
+                continue
+        ref = (
+            db.query(models.ItemReference)
+            .filter(
+                models.ItemReference.to_item_id == target.id,
+                models.ItemReference.from_item_id != models.ItemReference.context_id,
+            )
+            .first()
+        )
+        if ref and ref.from_item_id not in visited:
+            candidate = db.query(models.Item).filter(models.Item.id == ref.from_item_id).first()
+            if candidate:
+                target = candidate
+                visited.add(target.id)
+                continue
+        break
+
+    vault = db.query(models.Vault).filter(models.Vault.id == target.vault_id).first()
+    vault_name = vault.name if vault else ""
+
+    ancestor_ids: list[int] = []
+    curr = target.parent
+    seen_parents = {target.id}
+    while curr and curr.id not in seen_parents:
+        seen_parents.add(curr.id)
+        ancestor_ids.insert(0, curr.id)
+        curr = curr.parent
+
+    target_attrs = target.attributes if hasattr(target, "attributes") and isinstance(target.attributes, dict) else {}
+    folder_path = target_attrs.get("folder")
+    from pathlib import Path
+    fname = Path(target.absolute_path).name if target.absolute_path else None
+    title = getattr(target, "title", None) or fname
+
+    return {
+        "item_id": target.id,
+        "vault_id": target.vault_id,
+        "vault_name": vault_name,
+        "ancestor_ids": ancestor_ids,
+        "folder_path": folder_path,
+        "title": title,
+        "filename": fname,
+        "type": target.type or "file",
+    }
+

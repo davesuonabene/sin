@@ -3,6 +3,8 @@ import { WaveformVisualizer } from './WaveformVisualizer';
 import { ArrangementVisualizer } from './ArrangementVisualizer';
 import { getGhostSource, isGhostFieldLinked, isGhostNode, relinkGhostField, syncGhostTrackData, unlinkGhostField } from '../ghosts';
 import { SectionRendererFactory } from './SectionRendererFactory';
+import { RandomParamOverlay } from './RandomParamOverlay';
+import { advanceRandomSeed, applyRandomModulation } from '../../../ermes/ts/randomResolver.ts';
 
 export class PropertiesWindow {
     container: HTMLElement;
@@ -18,6 +20,8 @@ export class PropertiesWindow {
     private nodePropertiesRefreshHandler: (event: Event) => void;
     private arrangementGraphHandler: () => void;
     private disposed: boolean = false;
+    private isRandomMappingMode: boolean = false;
+    private startRandomMappingHandler: (event: Event) => void;
 
     constructor(container: HTMLElement, node: LGraphNode, onClose: () => void) {
         this.container = container;
@@ -33,11 +37,27 @@ export class PropertiesWindow {
                 void this.renderTabContent();
             }
         };
+        this.startRandomMappingHandler = (event: Event) => {
+            if ((event as CustomEvent).detail?.nodeId === this.node.id) {
+                this.isRandomMappingMode = true;
+                if (!(this.node as any).isModifier) {
+                    RandomParamOverlay.getOrCreateRandomModifier(this.node as any);
+                }
+                const randomModeBtn = this.container.querySelector('#td-random-mode-btn');
+                if (randomModeBtn) {
+                    randomModeBtn.classList.add('active');
+                    const textSpan = randomModeBtn.querySelector('.random-mode-btn-text');
+                    if (textSpan) textSpan.textContent = 'Mapping ON';
+                }
+                void this.render();
+            }
+        };
         window.addEventListener('modifier-assignment-changed', this.modifierAssignmentHandler);
         window.addEventListener('node-properties-refreshed', this.nodePropertiesRefreshHandler);
         window.addEventListener('graph-connections-changed', this.arrangementGraphHandler);
         window.addEventListener('arrangement-length-changed', this.arrangementGraphHandler);
         window.addEventListener('arrangement-source-changed', this.arrangementGraphHandler);
+        window.addEventListener('start-random-mapping', this.startRandomMappingHandler);
         this.onClose = () => {
             this.dispose();
             onClose();
@@ -58,11 +78,13 @@ export class PropertiesWindow {
             this.currentArrangementVisualizer = null;
         }
         this.stopPoolItemPreview();
+        RandomParamOverlay.closePopover();
         window.removeEventListener('modifier-assignment-changed', this.modifierAssignmentHandler);
         window.removeEventListener('node-properties-refreshed', this.nodePropertiesRefreshHandler);
         window.removeEventListener('graph-connections-changed', this.arrangementGraphHandler);
         window.removeEventListener('arrangement-length-changed', this.arrangementGraphHandler);
         window.removeEventListener('arrangement-source-changed', this.arrangementGraphHandler);
+        window.removeEventListener('start-random-mapping', this.startRandomMappingHandler);
     }
 
     private isAssetFilterNode(): boolean {
@@ -80,6 +102,7 @@ export class PropertiesWindow {
         if (this.node.type === "Audio/Arrangement") return "ARRANGEMENT";
         if (this.isAssetFilterNode()) return "FILTER";
         if (this.node.type === "Audio/Modulator") return "MODULATOR";
+        if (this.node.type === "Audio/Random") return "RANDOM";
         return "PARAMS";
     }
 
@@ -93,6 +116,7 @@ export class PropertiesWindow {
         else if (this.node.type === "Audio/Arrangement") tabs = ["ARRANGEMENT", "CHAIN", "COMMON"];
         else if (this.isAssetFilterNode()) tabs = ["FILTER", "COMMON"];
         else if (this.node.type === "Audio/Modulator") tabs = ["MODULATOR", "COMMON"];
+        else if (this.node.type === "Audio/Random") tabs = ["RANDOM", "COMMON"];
         else tabs = ["TRACK", "CHAIN", "COMMON"];
         return tabs;
     }
@@ -106,6 +130,7 @@ export class PropertiesWindow {
         if (this.node.type === "Audio/Arrangement") return "ARR";
         if (this.isAssetFilterNode()) return "PATH";
         if (this.node.type === "Audio/Modulator") return "MOD";
+        if (this.node.type === "Audio/Random") return "RND";
         return "NODE";
     }
 
@@ -276,6 +301,8 @@ export class PropertiesWindow {
         };
         const dockTitle = isFloating() ? 'Dock to Right Side' : 'Float Window';
         const dockIcon = isFloating() ? '📌' : '↗';
+        const hasAttachedRandomModifier = !(this.node as any).isModifier
+            && Boolean(RandomParamOverlay.getAttachedRandomModifier(this.node as any));
 
         this.container.innerHTML = `
             <div class="td-param-container">
@@ -285,7 +312,18 @@ export class PropertiesWindow {
                         <span class="node-badge">${this.getNodeBadge()}</span>
                         <span class="node-title" id="td-title-display"></span>
                     </div>
-                    <div style="display: flex; align-items: center; gap: 2px;">
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                        ${!(this.node as any).isModifier ? `
+                            <button type="button" class="random-mode-toggle-btn ${this.isRandomMappingMode ? 'active' : ''}" id="td-random-mode-btn" title="Toggle Live Random Mapping Mode (Locks normal editing, click parameter to map, Ctrl+Click to edit range)" style="display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; font-size: 10px; font-weight: 600; border-radius: 4px; border: 1px solid ${this.isRandomMappingMode ? '#ec4899' : '#334155'}; background: ${this.isRandomMappingMode ? '#db2777' : '#1e293b'}; color: ${this.isRandomMappingMode ? '#ffffff' : '#f472b6'}; cursor: pointer; transition: all 0.15s ease;">
+                                <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: ${this.isRandomMappingMode ? '#ffffff' : '#ec4899'};"></span>
+                                <span class="random-mode-btn-text">${this.isRandomMappingMode ? 'Mapping Active' : 'Map Mode'}</span>
+                            </button>
+                            ${hasAttachedRandomModifier ? `
+                                <button type="button" id="td-random-roll-btn" title="Roll random parameters" style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; font-size: 10px; font-weight: 600; border-radius: 4px; border: 1px solid #db2777; background: #4c1d95; color: #fbcfe8; cursor: pointer;">
+                                    Roll 🎲
+                                </button>
+                            ` : ''}
+                        ` : ''}
                         <button class="close-btn" id="td-dock-btn" title="${dockTitle}">${dockIcon}</button>
                         <button class="close-btn" id="td-close-btn" title="Close Panel">✕</button>
                     </div>
@@ -310,6 +348,24 @@ export class PropertiesWindow {
         const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
         this.setupInlineTitleEditor(titleDisplay, titleText);
 
+        const randomModeBtn = this.container.querySelector('#td-random-mode-btn');
+        randomModeBtn?.addEventListener('click', () => {
+            this.isRandomMappingMode = !this.isRandomMappingMode;
+            if (this.isRandomMappingMode && !(this.node as any).isModifier) {
+                RandomParamOverlay.getOrCreateRandomModifier(this.node as any);
+            }
+            void this.render();
+        });
+
+        this.container.querySelector('#td-random-roll-btn')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            const modifier = RandomParamOverlay.getOrCreateRandomModifier(this.node as any);
+            if (!modifier) return;
+            advanceRandomSeed(modifier);
+            applyRandomModulation(modifier, this.node);
+            this.applyOverlays();
+        });
+
         this.container.querySelector('#td-dock-btn')?.addEventListener('click', () => {
             window.dispatchEvent(new CustomEvent('toggle-properties-dock', { detail: { nodeId: this.node.id } }));
         });
@@ -332,6 +388,14 @@ export class PropertiesWindow {
         await this.renderTabContent();
     }
 
+    applyOverlays() {
+        const contentContainer = this.container.querySelector('#td-tab-content') as HTMLElement;
+        if (!contentContainer || this.disposed) return;
+        if (!(this.node as any).isModifier) {
+            RandomParamOverlay.updateVisualFeedback(contentContainer, this.node as any, this.isRandomMappingMode);
+        }
+    }
+
     private async renderTabContent() {
         const token = ++this.renderToken;
 
@@ -348,8 +412,42 @@ export class PropertiesWindow {
 
         const contentContainer = this.container.querySelector('#td-tab-content') as HTMLElement;
         if (!contentContainer) return;
+
+        // Update random mode button state in header if present
+        const randomModeBtn = this.container.querySelector('#td-random-mode-btn');
+        if (randomModeBtn) {
+            randomModeBtn.classList.toggle('active', this.isRandomMappingMode);
+            (randomModeBtn as HTMLElement).style.borderColor = this.isRandomMappingMode ? '#ec4899' : '#334155';
+            (randomModeBtn as HTMLElement).style.background = this.isRandomMappingMode ? '#db2777' : '#1e293b';
+            (randomModeBtn as HTMLElement).style.color = this.isRandomMappingMode ? '#ffffff' : '#f472b6';
+            const textSpan = randomModeBtn.querySelector('.random-mode-btn-text');
+            if (textSpan) textSpan.textContent = this.isRandomMappingMode ? 'Mapping Active' : 'Map Mode';
+        }
+
         const finish = () => {
-            if (token === this.renderToken) this.applyGhostBindingControls(contentContainer);
+            if (token === this.renderToken) {
+                this.applyGhostBindingControls(contentContainer);
+                if (!(this.node as any).isModifier) {
+                    if (this.isRandomMappingMode) {
+                        const existingBanner = contentContainer.querySelector('.td-random-mapping-banner');
+                        if (!existingBanner) {
+                            const banner = document.createElement('div');
+                            banner.className = 'td-random-mapping-banner';
+                            banner.style.cssText = 'background: rgba(236, 72, 153, 0.15); border: 1px solid #ec4899; color: #f472b6; padding: 6px 10px; font-size: 11px; font-weight: 500; border-radius: 5px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;';
+                            banner.innerHTML = `
+                                <span><b>Live Parameter Mapping</b> · Click parameter to toggle · Ctrl+Click to adjust range</span>
+                                <button type="button" class="exit-random-mode-btn" style="background: #db2777; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; font-size: 9px; font-weight: 700; cursor: pointer;">Done</button>
+                            `;
+                            banner.querySelector('.exit-random-mode-btn')?.addEventListener('click', () => {
+                                this.isRandomMappingMode = false;
+                                void this.renderTabContent();
+                            });
+                            contentContainer.prepend(banner);
+                        }
+                    }
+                    this.applyOverlays();
+                }
+            }
         };
 
         if (typeof (this.node as any).getPanelSchema === 'function') {

@@ -1,6 +1,6 @@
 function initializeGaiaLibrary() {
     const MAIN_COLUMN_DEFINITIONS = Object.freeze({
-        favourite: { label: '★', menuLabel: '★ Favourite', width: 52 },
+        favourite: { label: '★', menuLabel: '★ Favourite', width: 26 },
         name: { label: 'Title', width: 240 },
         filename: { label: 'Filename', width: 190 },
         path: { label: 'Path', width: 260 },
@@ -56,7 +56,8 @@ function initializeGaiaLibrary() {
             const widths = { ...fallback.widths };
             Object.entries(stored?.widths || {}).forEach(([field, width]) => {
                 const numericWidth = Number(width);
-                if (validFields.has(field) && Number.isFinite(numericWidth)) widths[field] = Math.min(600, Math.max(40, numericWidth));
+                const minWidth = field === 'favourite' ? 22 : 40;
+                if (validFields.has(field) && Number.isFinite(numericWidth)) widths[field] = Math.min(600, Math.max(minWidth, numericWidth));
             });
             return { order, visible, widths };
         } catch (_error) {
@@ -94,6 +95,8 @@ function initializeGaiaLibrary() {
         playingKey: null,
         vaults: [],
         selectedVaultId: null,
+        vaultSyncStatus: null,
+        isCheckingSync: false,
         importVaultId: null,
         importPreview: null,
         importFolderAssignments: new Map(),
@@ -195,8 +198,11 @@ function initializeGaiaLibrary() {
     const listHeader = document.getElementById('list-header');
     const columnMenu = document.getElementById('column-menu');
     const contextMenu = document.getElementById('context-menu');
+    const contextSelectAllButton = document.getElementById('context-select-all');
     const copyEntryMenu = document.getElementById('copy-entry-menu');
     const pasteEntryMenu = document.getElementById('paste-entry-menu');
+    const contextGoToLocationButton = document.getElementById('context-go-to-location');
+    const contextShowOriginalButton = document.getElementById('context-show-original');
     const contextNewFolderButton = document.getElementById('context-new-folder');
     const contextMakeFolderMoveButton = document.getElementById('context-make-folder-move');
     const folderDialog = document.getElementById('folder-dialog');
@@ -218,7 +224,6 @@ function initializeGaiaLibrary() {
     const analyzeSelectionButton = document.getElementById('analyze-selection');
     const deleteSelectionButton = document.getElementById('delete-selection');
     const selectionTypeActions = document.getElementById('selection-type-actions');
-    const contextVaultOptions = document.getElementById('context-vault-options');
     const filterStatus = document.getElementById('filter-status');
     const typeChips = document.getElementById('type-chips');
     const tagChips = document.getElementById('tag-chips');
@@ -257,8 +262,29 @@ function initializeGaiaLibrary() {
     const fileImportButton = document.getElementById('file-import');
     const fileRefreshButton = document.getElementById('file-refresh');
     const vaultMenuCreateButton = document.getElementById('vault-menu-create');
+    const vaultMenuSyncButton = document.getElementById('vault-menu-sync');
     const vaultMenuOptionsButton = document.getElementById('vault-menu-options');
     const vaultMenuDeleteButton = document.getElementById('vault-menu-delete');
+    const vaultSyncPill = document.getElementById('vault-sync-pill');
+    const vaultSyncPillText = document.getElementById('vault-sync-pill-text');
+    const vaultSyncDialog = document.getElementById('vault-sync-dialog');
+    const vaultSyncDialogTitle = document.getElementById('vault-sync-dialog-title');
+    const vaultSyncDialogClose = document.getElementById('vault-sync-dialog-close');
+    const vaultSyncDialogCancel = document.getElementById('vault-sync-dialog-cancel');
+    const vaultSyncDialogQuickAll = document.getElementById('vault-sync-dialog-quick-all');
+    const vaultSyncSummaryBanner = document.getElementById('vault-sync-summary-banner');
+    const vaultSyncSummaryText = document.getElementById('vault-sync-summary-text');
+    const vaultSyncDialogResult = document.getElementById('vault-sync-dialog-result');
+    const syncMovedSection = document.getElementById('sync-moved-section');
+    const syncMovedCount = document.getElementById('sync-moved-count');
+    const syncMovedList = document.getElementById('sync-moved-list');
+    const syncUntrackedSection = document.getElementById('sync-untracked-section');
+    const syncUntrackedCount = document.getElementById('sync-untracked-count');
+    const syncUntrackedList = document.getElementById('sync-untracked-list');
+    const syncMissingSection = document.getElementById('sync-missing-section');
+    const syncMissingCount = document.getElementById('sync-missing-count');
+    const syncMissingList = document.getElementById('sync-missing-list');
+
     const appMenuBar = document.getElementById('app-menu-bar');
     const projectDialog = document.getElementById('project-dialog');
     const projectForm = document.getElementById('project-form');
@@ -505,7 +531,15 @@ function initializeGaiaLibrary() {
     }
 
     function collectionRowLayout(collection) {
-        return isSamplePackCollection(collection) ? ROW_LAYOUTS.samplePack : mainRowLayout();
+        if (isSamplePackCollection(collection)) {
+            const favW = Math.round(Number(state.mainColumnWidths.favourite || MAIN_COLUMN_DEFINITIONS.favourite.width));
+            return {
+                id: 'sample-pack',
+                columns: `${favW}px minmax(145px, 1.25fr) minmax(140px, 1fr) minmax(78px, .45fr) 58px 62px minmax(100px, .8fr) 78px`,
+                fields: ['favourite', 'name', 'path', 'type', 'bpm', 'key', 'tags', 'size'],
+            };
+        }
+        return mainRowLayout();
     }
 
     function rowLayoutFor(entry, { nested = false } = {}) {
@@ -519,9 +553,10 @@ function initializeGaiaLibrary() {
             header.style.setProperty('--main-table-width', `${mainColumnMinimumWidth()}px`);
         }
         header.replaceChildren();
-        const isMainLayout = layout.id === 'main';
+
+        const isMainLayout = (layout.id === 'main');
         layout.fields.forEach(field => {
-            const cell = document.createElement(isMainLayout ? 'div' : 'span');
+            const cell = document.createElement('div');
             if (isMainLayout) {
                 cell.className = 'row-header-cell';
                 cell.dataset.column = field;
@@ -598,34 +633,24 @@ function initializeGaiaLibrary() {
             if (!definition) return;
             const label = document.createElement('label');
             label.className = 'column-menu-item sin-menu-item';
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.checked = state.mainVisibleColumns.has(field);
-            checkbox.disabled = field === 'name';
-            checkbox.dataset.column = field;
-            const text = document.createElement('span');
-            text.textContent = definition.menuLabel || definition.label;
-            label.append(checkbox, text);
+            label.innerHTML = `<input type="checkbox" data-column="${field}" ${state.mainVisibleColumns.has(field) ? 'checked' : ''} ${field === 'name' ? 'disabled' : ''}><span>${definition.menuLabel || definition.label}</span>`;
             columnMenu.appendChild(label);
         });
     }
 
-    function openColumnMenu(clientX, clientY) {
+    function openColumnMenu(x, y) {
         if (!columnMenu) return;
         renderColumnMenu();
+        columnMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - 220))}px`;
+        columnMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - 260))}px`;
         columnMenu.classList.remove('hidden');
-        const width = columnMenu.offsetWidth || 220;
-        const height = columnMenu.offsetHeight || 300;
-        columnMenu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - width - 8))}px`;
-        columnMenu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - height - 8))}px`;
     }
 
     function reorderMainColumn(sourceField, targetField, placeAfter) {
         if (!sourceField || !targetField || sourceField === targetField) return;
         const order = [...state.mainColumnOrder];
         const sourceIndex = order.indexOf(sourceField);
-        const targetIndex = order.indexOf(targetField);
-        if (sourceIndex < 0 || targetIndex < 0) return;
+        if (sourceIndex < 0) return;
         order.splice(sourceIndex, 1);
         const adjustedTargetIndex = order.indexOf(targetField);
         order.splice(adjustedTargetIndex + (placeAfter ? 1 : 0), 0, sourceField);
@@ -644,7 +669,8 @@ function initializeGaiaLibrary() {
     function handleColumnResizeMove(event) {
         const resize = state.columnResize;
         if (!resize) return;
-        const width = Math.min(600, Math.max(70, resize.startWidth + event.clientX - resize.startX));
+        const minWidth = resize.field === 'favourite' ? 22 : 50;
+        const width = Math.min(600, Math.max(minWidth, resize.startWidth + event.clientX - resize.startX));
         state.mainColumnWidths[resize.field] = Math.round(width);
         applyMainColumnLayout();
     }
@@ -843,6 +869,22 @@ function initializeGaiaLibrary() {
         }));
     }
 
+    function isPathExternalToProject(filePath, projectPath) {
+        if (!filePath || !projectPath) return true;
+        const normItem = String(filePath).replace(/\\/g, '/').toLowerCase();
+        let normProj = String(projectPath).replace(/\\/g, '/').toLowerCase();
+        if (!normProj.endsWith('/')) normProj += '/';
+        return !normItem.startsWith(normProj);
+    }
+
+    function isEntryExternalReference(entry) {
+        if (!entry || entry.kind !== 'reference') return false;
+        if (typeof entry.is_external === 'boolean') {
+            return entry.is_external;
+        }
+        return isPathExternalToProject(entry.item?.absolute_path || entry.path, entry.collection?.absolute_path);
+    }
+
     function projectReferenceEntries(project) {
         if (!typeIsContainer(project?.type)) return [];
         return (state.projectReferencedItems.get(Number(project.id)) || []).map(record => {
@@ -854,11 +896,15 @@ function initializeGaiaLibrary() {
                 : null;
             const activeItem = selectedVersion ? selectedVersion.item : record.item;
             const activeReference = selectedVersion ? selectedVersion.reference : record.reference;
+            const activeIsExternal = selectedVersion
+                ? Boolean(selectedVersion.is_external)
+                : (record.is_external !== undefined ? Boolean(record.is_external) : isPathExternalToProject(activeItem?.absolute_path, project?.absolute_path));
             const fileVersions = hasVersions
                 ? record.versions.map(v => ({
                     id: String(v.item.id),
                     label: v.label,
                     record: v.item,
+                    is_external: Boolean(v.is_external),
                 }))
                 : null;
 
@@ -870,6 +916,7 @@ function initializeGaiaLibrary() {
                 path: activeItem.absolute_path,
                 item: activeItem,
                 reference: activeReference,
+                is_external: activeIsExternal,
                 versions: record.versions || [],
                 versionGroup: record.version_group || null,
                 fileVersionGroup: groupKey,
@@ -898,7 +945,11 @@ function initializeGaiaLibrary() {
                     reference: row.reference,
                     item: row.item,
                     version_group: row.version_group,
-                    versions: row.versions || [],
+                    is_external: Boolean(row.is_external),
+                    versions: (row.versions || []).map(v => ({
+                        ...v,
+                        is_external: Boolean(v.is_external),
+                    })),
                 }))
                 .filter(record => record.item && record.reference));
         } catch (error) {
@@ -1652,10 +1703,26 @@ function initializeGaiaLibrary() {
         renderAssets();
     }
 
+    function getCollectionIcon(entry) {
+        const type = entry?.type || entry?.item?.type || '';
+        const sourceKind = entry?.item?.source_kind || entry?.content?.source_kind || '';
+        if (sourceKind === 'zip') {
+            return '<span class="collection-title-icon archive" aria-hidden="true" title="Archive"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v9.5h-11z"/><line x1="8" y1="3.5" x2="8" y2="13"/><line x1="6.5" y1="5.5" x2="9.5" y2="5.5"/><line x1="6.5" y1="7.5" x2="9.5" y2="7.5"/><line x1="6.5" y1="9.5" x2="9.5" y2="9.5"/></svg></span>';
+        }
+        if (type === 'multitrack') {
+            return '<span class="collection-title-icon multitrack" aria-hidden="true" title="Stem collection"><svg viewBox="0 0 16 16"><line x1="2" y1="4.5" x2="14" y2="4.5"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="11.5" x2="14" y2="11.5"/><circle cx="5" cy="4.5" r="1.5" fill="currentColor"/><circle cx="11" cy="8" r="1.5" fill="currentColor"/><circle cx="7" cy="11.5" r="1.5" fill="currentColor"/></svg></span>';
+        }
+        if (type === 'project' || typeIsProject(type)) {
+            return '<span class="collection-title-icon project" aria-hidden="true" title="Project"><svg viewBox="0 0 16 16"><rect x="2" y="5" width="12" height="8.5" rx="1.5"/><path d="M5.5 5V3.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V5M2 8.5h12"/></svg></span>';
+        }
+        return '<span class="collection-title-icon folder" aria-hidden="true" title="Folder"><svg viewBox="0 0 16 16"><path d="M1.5 3.5h4l1.5 2h7.5v7h-13z"/></svg></span>';
+    }
+
     function createRow(entry, { nested = false, subfolderDepth = 0 } = {}) {
         const row = document.createElement('div');
         const availability = (entry.kind === 'content' ? entry.content?.availability : entry.item?.availability) || 'ready';
-        row.className = `asset-row${state.selectedEntryIds.has(entry.id) ? ' selected' : ''}${entry.kind === 'reference' ? ' referenced-row' : ''}${availability !== 'ready' ? ' unavailable-row' : ''}`;
+        const isExternalReference = isEntryExternalReference(entry);
+        row.className = `asset-row${state.selectedEntryIds.has(entry.id) ? ' selected' : ''}${isExternalReference ? ' referenced-row' : ''}${availability !== 'ready' ? ' unavailable-row' : ''}`;
         const layout = rowLayoutFor(entry, { nested });
         row.classList.add(nested ? 'nested-row' : 'main-row', `row-layout-${layout.id}`);
         row.style.setProperty('--row-columns', layout.columns);
@@ -1671,7 +1738,11 @@ function initializeGaiaLibrary() {
             || entry.content?.attributes?.is_folder
         );
         if (isCollection) row.title = 'Click the title to preview the master · double-click the row to show contents';
-        if (entry.kind === 'reference') row.title = 'Linked file · edit its project tags in the Tags column';
+        if (isExternalReference) {
+            row.title = 'External linked file · points to file outside this project';
+        } else if (entry.kind === 'reference') {
+            row.title = 'Linked file · edit its project tags in the Tags column';
+        }
         if (availability !== 'ready') row.title = `Asset ${availability}; playback and project use are unavailable`;
 
         const referenceLabel = entryReferenceLabel(entry);
@@ -1683,9 +1754,7 @@ function initializeGaiaLibrary() {
         const expandToggle = isExpandable
             ? `<button class="item-expand-toggle-btn" type="button" title="${isExpanded ? 'Collapse contents' : 'Expand contents'}" aria-label="${isExpanded ? 'Collapse contents' : 'Expand contents'}" aria-expanded="${isExpanded}">${isExpanded ? '▾' : '▸'}</button>`
             : '';
-        const folderIcon = isCollection
-            ? `<span class="collection-title-icon" aria-hidden="true">📁</span>`
-            : '';
+        const folderIcon = isCollection ? getCollectionIcon(entry) : '';
         const countVal = entry.item?.content_count ?? entry.content?.content_count;
         const countBadge = (isCollection && countVal !== undefined && countVal !== null)
             ? `<span class="collection-title-count">(${countVal})</span>`
@@ -1818,6 +1887,10 @@ function initializeGaiaLibrary() {
             if (record) {
                 record.item = selected.item;
                 record.reference = selected.reference;
+                record.is_external = Boolean(selected.is_external);
+            }
+            if (entry.fileVersionGroup) {
+                state.versionSelections.set(entry.fileVersionGroup, String(selected.item.id));
             }
             renderAssets();
         });
@@ -2050,7 +2123,7 @@ function initializeGaiaLibrary() {
             const icon = document.createElement('span');
             icon.className = 'subfolder-icon';
             icon.setAttribute('aria-hidden', 'true');
-            icon.textContent = '📁';
+            icon.innerHTML = '<svg viewBox="0 0 16 16"><path d="M1.5 3.5h4l1.5 2h7.5v7h-13z"/></svg>';
 
             const title = document.createElement('span');
             title.className = 'subfolder-title';
@@ -2272,6 +2345,17 @@ function initializeGaiaLibrary() {
         } else if (event.clientY > rect.bottom - zone && event.clientY <= rect.bottom + 20) {
             assetList.scrollTop += 14;
         }
+    }
+
+    function selectAllEntries() {
+        const entries = selectionEntries();
+        if (!entries.length) return;
+        state.selectedEntryIds.clear();
+        entries.forEach(entry => state.selectedEntryIds.add(entry.id));
+        state.selectionAnchorId = entries[0]?.id || null;
+        state.contextEntry = null;
+        refreshSelectionPresentation();
+        window.dispatchEvent(new CustomEvent('gaia:selection', { detail: { entry: entries[0] || null } }));
     }
 
     function clearSelection() {
@@ -2689,7 +2773,7 @@ function initializeGaiaLibrary() {
                 projectMoveAll.indeterminate = false;
                 projectMoveAll.disabled = true;
             }
-            projectSourceList.replaceChildren();
+            projectSourceList.innerHTML = `<p class="help" style="margin: 6px 0; color: var(--muted); font-size: 11px;">No files selected (project will be created empty, ready for future work).</p>`;
             return;
         }
 
@@ -2717,6 +2801,7 @@ function initializeGaiaLibrary() {
                         <span>Move</span>
                         <input type="checkbox" data-project-move-id="${escapeHtml(sourceId)}" ${moved ? 'checked' : ''}${movable ? '' : ' disabled'}>
                     </label>
+                    <button type="button" class="project-source-remove-btn" data-project-remove-id="${escapeHtml(sourceId)}" title="Deselect this item" aria-label="Deselect this item">✕</button>
                 </div>
             `;
         }).join('');
@@ -2728,6 +2813,23 @@ function initializeGaiaLibrary() {
                 const value = pending ? sourceId : Number(sourceId);
                 if (event.currentTarget.checked) target.add(value);
                 else target.delete(value);
+                renderProjectSourcePreview();
+            });
+        });
+        projectSourceList.querySelectorAll('[data-project-remove-id]').forEach(button => {
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                const sourceId = event.currentTarget.dataset.projectRemoveId;
+                const pending = sourceId.startsWith('pending-import:');
+                if (pending) {
+                    state.projectPendingImports = state.projectPendingImports.filter(item => item.id !== sourceId);
+                    state.projectPendingMoveIds.delete(sourceId);
+                } else {
+                    const numericId = Number(sourceId);
+                    state.projectSourceIds.delete(numericId);
+                    state.projectMoveIds.delete(numericId);
+                }
                 renderProjectSourcePreview();
             });
         });
@@ -2789,8 +2891,8 @@ function initializeGaiaLibrary() {
             preview_id: preview.preview_id,
             folder_assignments: Object.fromEntries(
                 (preview.nodes || [])
-                    .filter(node => node.kind === 'folder' && node.detected_assignment)
-                    .map(node => [node.relative_path, node.detected_assignment]),
+                    .filter(node => node.kind === 'folder')
+                    .map(node => [node.relative_path, 'action:contain']),
             ),
             item_types: Object.fromEntries((preview.entries || []).map(entry => [entry.index, entry.type])),
             excluded_indexes: [],
@@ -2925,9 +3027,11 @@ function initializeGaiaLibrary() {
         state.projectImportInspecting = false;
         state.projectCreationImportContext = null;
         projectResult.className = 'result hidden';
-        projectName.value = selectedSources.length ? selectedSources[0].title : '';
-        projectName.required = true;
+        projectSubmit.disabled = false;
         projectName.disabled = false;
+        projectName.required = true;
+        projectName.placeholder = 'e.g. My Project';
+        projectName.value = selectedSources.length ? selectedSources[0].title : '';
         if (projectMoveAll) {
             projectMoveAll.checked = false;
             projectMoveAll.indeterminate = false;
@@ -3671,12 +3775,126 @@ function initializeGaiaLibrary() {
         }
     }
 
+    async function showOriginalFileForEntry(entry) {
+        if (!entry) return;
+        const targetId = entry.kind === 'reference'
+            ? (entry.item?.id || entry.reference?.to_item_id)
+            : (entry.item?.attributes?.source_item_id || entry.content?.attributes?.source_item_id || entry.reference?.to_item_id || entry.item?.id || entry.content?.child_id);
+        if (!targetId) return;
+
+        try {
+            const response = await fetch(`/items/${targetId}/locate`);
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || 'Could not locate original file');
+            }
+            const location = await response.json();
+
+            const targetVaultId = Number(location.vault_id);
+            const needsVaultSwitch = state.selectedVaultId !== null && Number(state.selectedVaultId) !== targetVaultId;
+            let needsReload = needsVaultSwitch;
+
+            if (needsVaultSwitch) {
+                state.selectedVaultId = targetVaultId;
+            }
+
+            if (state.query) {
+                state.query = '';
+                if (searchInput) searchInput.value = '';
+                needsReload = true;
+            }
+
+            if (needsReload) {
+                await loadLibrary();
+            }
+
+            // Expand all ancestor collections/folders
+            if (Array.isArray(location.ancestor_ids) && location.ancestor_ids.length > 0) {
+                for (const ancestorId of location.ancestor_ids) {
+                    const ancestorStr = String(ancestorId);
+                    state.expandedCollections.add(ancestorStr);
+                    if (!state.collectionContents.has(Number(ancestorId))) {
+                        await loadCollectionContents(ancestorId);
+                    }
+                }
+            }
+
+            // Expand logical subfolder if any
+            if (location.folder_path) {
+                const segments = String(location.folder_path).split('/').filter(Boolean);
+                let currentSubPath = '';
+                const baseCollectionId = location.ancestor_ids?.[location.ancestor_ids.length - 1] || targetVaultId;
+                for (const segment of segments) {
+                    currentSubPath = currentSubPath ? `${currentSubPath}/${segment}` : segment;
+                    state.expandedSubfolders.add(`${baseCollectionId}:${currentSubPath}`);
+                }
+            }
+
+            renderFilterUI();
+            renderAssets();
+
+            const resolvedItemId = Number(location.item_id);
+            const foundEntry = allEntries().find(e => (
+                Number(e.item?.id) === resolvedItemId
+                || (e.kind === 'content' && Number(e.content?.child_id) === resolvedItemId)
+            ));
+
+            if (foundEntry) {
+                state.selectedEntryIds.clear();
+                state.selectedEntryIds.add(foundEntry.id);
+                state.selectionAnchorId = foundEntry.id;
+                refreshSelectionPresentation();
+            }
+
+            setTimeout(() => {
+                const row = (foundEntry ? assetList?.querySelector(`[data-entry-id="${foundEntry.id}"]`) : null)
+                    || assetList?.querySelector(`[data-item-id="${resolvedItemId}"]`);
+                if (row) {
+                    row.classList.add('highlight-target');
+                    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                    setTimeout(() => row.classList.remove('highlight-target'), 2400);
+                }
+            }, 80);
+        } catch (error) {
+            console.error('Failed to show original file:', error);
+            window.alert(error.message || 'Could not locate original file');
+        }
+    }
+
+    async function openFileLocationForEntry(entry) {
+        if (!entry) return;
+        const itemId = numericItemId(entry) || entry.item?.id || entry.content?.child_id;
+        const path = entry.path || entry.item?.absolute_path || entry.content?.source_path || null;
+        try {
+            const response = await fetch('/items/open-location', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    item_id: itemId ? Number(itemId) : null,
+                    path: path ? String(path) : null,
+                }),
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || 'Could not open file location');
+            }
+        } catch (error) {
+            console.error('Failed to open file location:', error);
+            window.alert(error.message || 'Could not open file location');
+        }
+    }
+
     function renderContextMenu() {
-        if (!contextVaultOptions) return;
+        if (!contextMenu) return;
 
         const count = (state.contextEntry && state.selectedEntryIds.has(state.contextEntry.id))
             ? state.selectedEntryIds.size
             : (state.contextEntry ? 1 : state.selectedEntryIds.size);
+
+        if (contextSelectAllButton) {
+            const hasVisibleEntries = selectionEntries().length > 0;
+            contextSelectAllButton.disabled = !hasVisibleEntries;
+        }
 
         if (copyEntryMenu) {
             const hasItemsToCopy = count > 0;
@@ -3704,6 +3922,34 @@ function initializeGaiaLibrary() {
             }
         }
 
+        const selectedEntries = getSelectedEntries();
+        const targetEntry = state.contextEntry || (selectedEntries.length === 1 ? selectedEntries[0] : null);
+        if (contextGoToLocationButton) {
+            const hasLocation = Boolean(targetEntry && (
+                targetEntry.path
+                || targetEntry.item?.absolute_path
+                || targetEntry.content?.source_path
+                || numericItemId(targetEntry)
+            ));
+            contextGoToLocationButton.disabled = !hasLocation;
+            contextGoToLocationButton.title = hasLocation ? 'Open file location in OS file explorer' : 'No item selected';
+        }
+
+        if (contextShowOriginalButton) {
+            const canShowOriginal = count === 1 && targetEntry && (
+                targetEntry.kind === 'reference'
+                || Boolean(targetEntry.reference)
+                || Boolean(targetEntry.item?.attributes?.source_item_id || targetEntry.content?.attributes?.source_item_id)
+            );
+            if (canShowOriginal) {
+                contextShowOriginalButton.classList.remove('hidden');
+                contextShowOriginalButton.disabled = false;
+            } else {
+                contextShowOriginalButton.classList.add('hidden');
+                contextShowOriginalButton.disabled = true;
+            }
+        }
+
         if (analyzeEntryButton) {
             analyzeEntryButton.disabled = count === 0;
             analyzeEntryButton.textContent = count > 1 ? `Analyze metadata (${count} items)` : 'Analyze metadata';
@@ -3713,8 +3959,6 @@ function initializeGaiaLibrary() {
             deleteEntryMenuButton.textContent = count > 1 ? `Delete selected (${count})` : 'Delete selected';
         }
 
-        const selectedEntries = getSelectedEntries();
-        const targetEntry = state.contextEntry || (selectedEntries.length === 1 ? selectedEntries[0] : null);
         const isSingleContainer = count === 1 && targetEntry && (
             typeIsContainer(targetEntry.type)
             || targetEntry.type === 'collection'
@@ -3749,43 +3993,6 @@ function initializeGaiaLibrary() {
                 contextMakeFolderMoveButton.classList.add('hidden');
             }
         }
-
-        contextVaultOptions.innerHTML = '<div class="context-header sin-menu-heading">Move or copy to vault</div>';
-        if (count === 0) {
-            contextVaultOptions.classList.add('hidden');
-            return;
-        }
-        contextVaultOptions.classList.remove('hidden');
-        const externalSelected = selectedCommandEntries().some(entry => (
-            String(entryRecord(entry)?.storage_mode || '').toLowerCase() === 'external_reference'
-        ));
-        state.vaults.forEach(vault => {
-            const group = document.createElement('div');
-            group.className = 'context-vault-actions';
-            const label = document.createElement('span');
-            label.className = 'context-vault-name';
-            label.textContent = vault.name;
-            group.appendChild(label);
-            [['move', 'Move'], ['copy', 'Copy']].forEach(([mode, labelText]) => {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'sin-menu-item';
-                btn.textContent = labelText;
-                btn.disabled = mode === 'copy' && !externalSelected;
-                btn.title = mode === 'move'
-                    ? `Move selected assets to ${vault.name}`
-                    : (externalSelected ? `Copy external references into ${vault.name}` : 'Copy is available for external references');
-                btn.addEventListener('click', async event => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    contextMenu.classList.add('hidden');
-                    await moveSelectedEntriesToVault(vault.id, mode);
-                });
-                group.appendChild(btn);
-            });
-            contextVaultOptions.appendChild(group);
-        });
-
     }
 
     function openFolderDialog({ parentEntry = null, itemIds = [], referenceIds = [] } = {}) {
@@ -3870,7 +4077,9 @@ function initializeGaiaLibrary() {
                 renderAssets();
                 loadVaultImportLog();
                 loadLibrary({ force: true, resetNested: true });
+                checkVaultSync(value);
             });
+
             vaultMenuList.appendChild(option);
         };
 
@@ -4040,7 +4249,207 @@ function initializeGaiaLibrary() {
         }
     }
 
+    async function checkVaultSync(vaultId = state.selectedVaultId) {
+        const targetVaultId = vaultId ?? (state.vaults[0]?.id ?? null);
+        if (!targetVaultId || !vaultSyncPill) return;
+
+        state.isCheckingSync = true;
+        try {
+            const response = await fetch(`/vaults/${targetVaultId}/sync-status`);
+            if (!response.ok) return;
+            const status = await response.json();
+            state.vaultSyncStatus = status;
+            renderSyncPill(status);
+        } catch (_err) {
+            // Non-blocking background sync check
+        } finally {
+            state.isCheckingSync = false;
+        }
+    }
+
+    function renderSyncPill(status) {
+        if (!vaultSyncPill || !vaultSyncPillText) return;
+        if (!status) {
+            vaultSyncPill.classList.add('hidden');
+            return;
+        }
+
+        vaultSyncPill.classList.remove('hidden');
+        if (status.in_sync) {
+            vaultSyncPill.classList.remove('is-unsynced');
+            vaultSyncPill.classList.add('is-synced');
+            vaultSyncPill.title = 'Vault folders and database are in sync';
+            vaultSyncPillText.textContent = 'In sync';
+        } else {
+            vaultSyncPill.classList.add('is-unsynced');
+            vaultSyncPill.classList.remove('is-synced');
+            const untracked = status.untracked?.length || 0;
+            const missing = status.missing?.length || 0;
+            const parts = [];
+            if (untracked > 0) parts.push(`+${untracked} new`);
+            if (missing > 0) parts.push(`-${missing} missing`);
+            const summaryText = parts.join(', ') || 'Unsynced';
+            vaultSyncPillText.textContent = summaryText;
+            vaultSyncPill.title = `Vault out of sync: ${summaryText}. Click to review.`;
+        }
+    }
+
+    function closeVaultSyncDialog() {
+        if (vaultSyncDialog?.open) vaultSyncDialog.close();
+    }
+
+    async function openVaultSyncDialog() {
+        if (!vaultSyncDialog) return;
+        const targetVaultId = state.selectedVaultId ?? (state.vaults[0]?.id ?? null);
+        if (!targetVaultId) return;
+
+        vaultSyncDialog.showModal();
+        vaultSyncDialogResult.classList.add('hidden');
+        vaultSyncSummaryText.textContent = 'Scanning vault folders…';
+        vaultSyncSummaryBanner.className = 'vault-sync-summary-banner';
+
+        try {
+            const response = await fetch(`/vaults/${targetVaultId}/sync-status`);
+            if (!response.ok) throw new Error('Could not check vault sync status');
+            const status = await response.json();
+            state.vaultSyncStatus = status;
+            renderSyncDialogContent(status);
+            renderSyncPill(status);
+        } catch (err) {
+            vaultSyncSummaryText.textContent = err.message || 'Scan failed';
+        }
+    }
+
+    function renderSyncDialogContent(status) {
+        if (!status) return;
+        const { in_sync, untracked = [], missing = [], moved = [], vault_name } = status;
+        if (vaultSyncDialogTitle) vaultSyncDialogTitle.textContent = `Sync: ${vault_name}`;
+
+        if (in_sync) {
+            vaultSyncSummaryBanner.className = 'vault-sync-summary-banner is-clean';
+            vaultSyncSummaryText.textContent = '✓ All local files and database records are in sync.';
+            syncMovedSection.classList.add('hidden');
+            syncUntrackedSection.classList.add('hidden');
+            syncMissingSection.classList.add('hidden');
+            if (vaultSyncDialogQuickAll) vaultSyncDialogQuickAll.disabled = true;
+            return;
+        }
+
+        if (vaultSyncDialogQuickAll) vaultSyncDialogQuickAll.disabled = false;
+        vaultSyncSummaryBanner.className = 'vault-sync-summary-banner';
+        const discCount = status.total_discrepancies || (untracked.length + missing.length);
+        vaultSyncSummaryText.textContent = `Found ${discCount} discrepanc${discCount === 1 ? 'y' : 'ies'} between local storage and database.`;
+
+        // 1. Moved candidates
+        if (moved.length > 0) {
+            syncMovedSection.classList.remove('hidden');
+            syncMovedCount.textContent = moved.length;
+            syncMovedList.innerHTML = '';
+            moved.forEach(m => {
+                const row = document.createElement('div');
+                row.className = 'sync-item-row';
+                row.innerHTML = `
+                    <div class="sync-item-info">
+                        <span class="sync-item-name">${escapeHtml(m.filename)}</span>
+                        <span class="sync-item-detail">Moved to: ${escapeHtml(m.new_path)}</span>
+                    </div>
+                    <div class="sync-item-actions">
+                        <button type="button" class="sync-action-btn primary-action" data-relink-item="${m.item_id}" data-new-path="${escapeHtml(m.new_path)}">Relink</button>
+                    </div>
+                `;
+                syncMovedList.appendChild(row);
+            });
+        } else {
+            syncMovedSection.classList.add('hidden');
+        }
+
+        // 2. Untracked files
+        const movedNewPaths = new Set(moved.map(m => m.new_path));
+        const pureUntracked = untracked.filter(u => !movedNewPaths.has(u.path));
+        if (pureUntracked.length > 0) {
+            syncUntrackedSection.classList.remove('hidden');
+            syncUntrackedCount.textContent = pureUntracked.length;
+            syncUntrackedList.innerHTML = '';
+            pureUntracked.forEach(u => {
+                const row = document.createElement('div');
+                row.className = 'sync-item-row';
+                row.innerHTML = `
+                    <div class="sync-item-info">
+                        <span class="sync-item-name">${escapeHtml(u.filename)}</span>
+                        <span class="sync-item-detail">${escapeHtml(u.relative_path || u.path)} · ${formatSize(u.size_bytes)} · ${escapeHtml(u.type)}</span>
+                    </div>
+                    <div class="sync-item-actions">
+                        <button type="button" class="sync-action-btn primary-action" data-add-path="${escapeHtml(u.path)}">Add to Library</button>
+                    </div>
+                `;
+                syncUntrackedList.appendChild(row);
+            });
+        } else {
+            syncUntrackedSection.classList.add('hidden');
+        }
+
+        // 3. Missing files
+        const movedOldItemIds = new Set(moved.map(m => m.item_id));
+        const pureMissing = missing.filter(m => !movedOldItemIds.has(m.id));
+        if (pureMissing.length > 0) {
+            syncMissingSection.classList.remove('hidden');
+            syncMissingCount.textContent = pureMissing.length;
+            syncMissingList.innerHTML = '';
+            pureMissing.forEach(m => {
+                const row = document.createElement('div');
+                row.className = 'sync-item-row';
+                row.innerHTML = `
+                    <div class="sync-item-info">
+                        <span class="sync-item-name">${escapeHtml(m.filename)}</span>
+                        <span class="sync-item-detail">${escapeHtml(m.path)} · ${escapeHtml(m.type)}</span>
+                    </div>
+                    <div class="sync-item-actions">
+                        <button type="button" class="sync-action-btn" data-mark-missing="${m.id}">Mark Missing</button>
+                        <button type="button" class="sync-action-btn danger-action" data-purge-missing="${m.id}" title="Remove database record">Remove</button>
+                    </div>
+                `;
+                syncMissingList.appendChild(row);
+            });
+        } else {
+            syncMissingSection.classList.add('hidden');
+        }
+    }
+
+    async function applyVaultReconcile(payload) {
+        const targetVaultId = state.selectedVaultId ?? (state.vaults[0]?.id ?? null);
+        if (!targetVaultId) return;
+
+        vaultSyncDialogResult.classList.remove('hidden');
+        vaultSyncDialogResult.textContent = 'Applying reconciliation…';
+        try {
+            const response = await fetch(`/vaults/${targetVaultId}/reconcile`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const res = await response.json();
+            if (!response.ok) throw new Error(res.detail || 'Failed to reconcile vault');
+
+            const summaryParts = [];
+            if (res.added_count > 0) summaryParts.push(`+${res.added_count} added`);
+            if (res.marked_missing_count > 0) summaryParts.push(`${res.marked_missing_count} marked missing`);
+            if (res.relinked_count > 0) summaryParts.push(`${res.relinked_count} relinked`);
+            if (res.purged_count > 0) summaryParts.push(`${res.purged_count} removed`);
+            vaultSyncDialogResult.textContent = `Reconciled: ${summaryParts.join(', ') || 'Done'}.`;
+
+            // Refresh library and sync
+            await loadLibrary({ force: true, resetNested: true });
+            await checkVaultSync(targetVaultId);
+            if (state.vaultSyncStatus) {
+                renderSyncDialogContent(state.vaultSyncStatus);
+            }
+        } catch (err) {
+            vaultSyncDialogResult.textContent = err.message || 'Reconciliation failed';
+        }
+    }
+
     function showImportVaultCreate(show) {
+
         importVaultCreate.classList.toggle('hidden', !show);
         if (!show) {
             importVaultCreateResult.classList.add('hidden');
@@ -4632,8 +5041,86 @@ function initializeGaiaLibrary() {
         closeAppMenus();
         deleteActiveVault();
     });
-    projectDialogClose?.addEventListener('click', () => projectDialog.close());
-    projectDialogCancel?.addEventListener('click', () => projectDialog.close());
+    vaultMenuSyncButton?.addEventListener('click', () => {
+        closeAppMenus();
+        openVaultSyncDialog();
+    });
+    vaultSyncPill?.addEventListener('click', openVaultSyncDialog);
+    vaultSyncDialogClose?.addEventListener('click', closeVaultSyncDialog);
+    vaultSyncDialogCancel?.addEventListener('click', closeVaultSyncDialog);
+    vaultSyncDialogQuickAll?.addEventListener('click', async () => {
+        const status = state.vaultSyncStatus;
+        if (!status) return;
+        const relink_moved = (status.moved || []).map(m => ({ item_id: m.item_id, new_path: m.new_path }));
+        await applyVaultReconcile({
+            relink_moved,
+            add_all_untracked: true,
+            mark_all_missing: true,
+        });
+    });
+    vaultSyncDialog?.addEventListener('click', async event => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+
+        const relinkBtn = target.closest('[data-relink-item]');
+        if (relinkBtn) {
+            const itemId = Number(relinkBtn.dataset.relinkItem);
+            const newPath = relinkBtn.dataset.newPath;
+            if (itemId && newPath) {
+                await applyVaultReconcile({
+                    relink_moved: [{ item_id: itemId, new_path: newPath }],
+                });
+            }
+            return;
+        }
+
+        const addBtn = target.closest('[data-add-path]');
+        if (addBtn) {
+            const addPath = addBtn.dataset.addPath;
+            if (addPath) {
+                await applyVaultReconcile({
+                    add_untracked: [addPath],
+                });
+            }
+            return;
+        }
+
+        const markMissingBtn = target.closest('[data-mark-missing]');
+        if (markMissingBtn) {
+            const itemId = Number(markMissingBtn.dataset.markMissing);
+            if (itemId) {
+                await applyVaultReconcile({
+                    mark_missing: [itemId],
+                });
+            }
+            return;
+        }
+
+        const purgeBtn = target.closest('[data-purge-missing]');
+        if (purgeBtn) {
+            const itemId = Number(purgeBtn.dataset.purgeMissing);
+            if (itemId && window.confirm('Remove this asset record from GAIA?')) {
+                await applyVaultReconcile({
+                    purge_missing: [itemId],
+                });
+            }
+            return;
+        }
+    });
+    projectDialogClose?.addEventListener('click', () => {
+        projectSubmit.disabled = false;
+        projectDialog.close();
+    });
+
+    projectDialogCancel?.addEventListener('click', () => {
+        projectSubmit.disabled = false;
+        projectDialog.close();
+    });
+    projectDialog?.addEventListener('close', () => {
+        projectSubmit.disabled = false;
+        projectName.disabled = false;
+        if (projectImportAdd) projectImportAdd.disabled = false;
+    });
     projectImportAdd?.addEventListener('click', openProjectImportBrowser);
     projectMoveAll?.addEventListener('change', event => {
         const movableSources = [
@@ -4713,6 +5200,9 @@ function initializeGaiaLibrary() {
             state.projectPendingImports = [];
             state.projectPendingMoveIds.clear();
             state.projectCreationImportContext = null;
+            projectSubmit.disabled = false;
+            projectName.disabled = false;
+            if (projectImportAdd) projectImportAdd.disabled = false;
             projectDialog.close();
             await loadLibrary();
             await loadVaultImportLog();
@@ -4761,6 +5251,28 @@ function initializeGaiaLibrary() {
         pasteEntryMenu.addEventListener('click', handlePaste);
     }
 
+    if (contextGoToLocationButton) {
+        contextGoToLocationButton.addEventListener('click', async (event) => {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            const entry = state.contextEntry;
+            contextMenu.classList.add('hidden');
+            if (entry) {
+                await openFileLocationForEntry(entry);
+            }
+        });
+    }
+
+    if (contextShowOriginalButton) {
+        contextShowOriginalButton.addEventListener('click', async (event) => {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            const entry = state.contextEntry;
+            contextMenu.classList.add('hidden');
+            if (entry) {
+                await showOriginalFileForEntry(entry);
+            }
+        });
+    }
+
     if (analyzeEntryButton) {
         const handleAnalyze = async (event) => {
             if (event) { event.preventDefault(); event.stopPropagation(); }
@@ -4768,6 +5280,14 @@ function initializeGaiaLibrary() {
             await analyzeSelectedEntries();
         };
         analyzeEntryButton.addEventListener('click', handleAnalyze);
+    }
+
+    if (contextSelectAllButton) {
+        contextSelectAllButton.addEventListener('click', (event) => {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            contextMenu.classList.add('hidden');
+            selectAllEntries();
+        });
     }
 
     if (deleteEntryMenuButton) {
@@ -4871,6 +5391,12 @@ function initializeGaiaLibrary() {
             activeEl.isContentEditable
         );
         if (isEditing) return;
+
+        if ((event.ctrlKey || event.metaKey) && (event.key === 'a' || event.key === 'A')) {
+            event.preventDefault();
+            selectAllEntries();
+            return;
+        }
 
         if ((event.ctrlKey || event.metaKey) && (event.key === 'c' || event.key === 'C')) {
             if (state.selectedEntryIds.size > 0 || state.contextEntry) {
@@ -4979,24 +5505,8 @@ function initializeGaiaLibrary() {
     }
 
     function folderAssignmentOptions(preview, selected) {
-        const defaultFolderOptions = [
-            { value: 'action:contain', label: 'Contain folder' },
-            { value: 'action:ignore', label: 'Ignore folder (flatten)' },
-            { value: 'type:multitrack', label: 'Multitrack' },
-        ];
-        const rawOptions = (preview.folder_type_options && preview.folder_type_options.length)
-            ? preview.folder_type_options
-            : defaultFolderOptions;
-        const typeOptions = rawOptions.map(option =>
-            `<option value="${escapeHtml(option.value)}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`
-        ).join('');
-        const profileOptions = (preview.profiles || [])
-            .filter(profile => ['collection', 'multitrack'].includes(profile.container_type))
-            .map(profile => {
-                const value = `profile:${profile.id}`;
-                return `<option value="${escapeHtml(value)}" ${selected === value ? 'selected' : ''}>${escapeHtml(profile.label)}</option>`;
-            }).join('');
-        return `<option value="" ${selected ? '' : 'selected'}>Unclassified folder</option>${typeOptions ? `<optgroup label="Folder actions & types">${typeOptions}</optgroup>` : ''}${profileOptions ? `<optgroup label="Profiles">${profileOptions}</optgroup>` : ''}`;
+        const isIgnore = selected === 'action:ignore';
+        return `<option value="action:contain" ${!isIgnore ? 'selected' : ''}>Container</option><option value="action:ignore" ${isIgnore ? 'selected' : ''}>Ignore</option>`;
     }
 
     function fileTypeOptions(entry, selected) {
@@ -5042,16 +5552,6 @@ function initializeGaiaLibrary() {
             || (left.kind === 'folder' ? -1 : 1);
     }
 
-    function assignedAncestor(node) {
-        if (node.kind !== 'folder' || node.relative_path === '.') return null;
-        const parts = node.relative_path.split('/');
-        for (let length = parts.length - 1; length >= 0; length -= 1) {
-            const candidate = length === 0 ? '.' : parts.slice(0, length).join('/');
-            if (state.importFolderAssignments.get(candidate)) return candidate;
-        }
-        return null;
-    }
-
     function importPathIsWithin(relativePath, folderPath) {
         return folderPath === '.' ? relativePath !== '.' : relativePath.startsWith(`${folderPath}/`);
     }
@@ -5063,14 +5563,41 @@ function initializeGaiaLibrary() {
     function renderImportPreview() {
         const preview = state.importPreview;
         if (!preview) return;
+        const existingTree = importPreviewStep.querySelector('.import-tree');
+        const treeScrollTop = existingTree ? existingTree.scrollTop : 0;
+        const treeScrollLeft = existingTree ? existingTree.scrollLeft : 0;
+        const dialogScrollTop = importDialog ? importDialog.scrollTop : 0;
+        const dialogScrollLeft = importDialog ? importDialog.scrollLeft : 0;
+
+        const activeEl = document.activeElement;
+        let activeSelector = null;
+        if (activeEl && importPreviewStep.contains(activeEl)) {
+            if (activeEl.dataset.importFolder !== undefined) {
+                activeSelector = `select[data-import-folder="${CSS.escape(activeEl.dataset.importFolder)}"]`;
+            } else if (activeEl.dataset.importItem !== undefined) {
+                activeSelector = `select[data-import-item="${CSS.escape(activeEl.dataset.importItem)}"]`;
+            } else if (activeEl.dataset.importCollapse !== undefined) {
+                activeSelector = `button[data-import-collapse="${CSS.escape(activeEl.dataset.importCollapse)}"]`;
+            } else if (activeEl.dataset.importFolderInclude !== undefined) {
+                activeSelector = `input[data-import-folder-include="${CSS.escape(activeEl.dataset.importFolderInclude)}"]`;
+            } else if (activeEl.dataset.importInclude !== undefined) {
+                activeSelector = `input[data-import-include="${CSS.escape(activeEl.dataset.importInclude)}"]`;
+            } else if (activeEl.dataset.importExcludeType !== undefined) {
+                activeSelector = `input[data-import-exclude-type="${CSS.escape(activeEl.dataset.importExcludeType)}"]`;
+            } else if (activeEl.dataset.importExcludeExtension !== undefined) {
+                activeSelector = `input[data-import-exclude-extension="${CSS.escape(activeEl.dataset.importExcludeExtension)}"]`;
+            } else if (activeEl.id) {
+                activeSelector = `#${CSS.escape(activeEl.id)}`;
+            }
+        }
+
         const includedCount = preview.file_count - state.importExcludedIndexes.size;
         const remainingArtifacts = (preview.entries || []).filter(entry => entry.artifact && !state.importExcludedIndexes.has(entry.index));
         importHeadingSource.innerHTML = `<div class="import-heading-source-copy"><h3>${escapeHtml(preview.title)}</h3><p>${escapeHtml(preview.source_path)}</p></div><div class="import-preview-stats"><span>${escapeHtml(preview.source_kind)}</span><span>${preview.folder_count || 0} folders</span><span>${includedCount}/${preview.file_count} files</span><span>${escapeHtml(formatSize(preview.size_bytes))}</span><span>${preview.inspection_ms || 0} ms</span></div>`;
         importHeadingSource.classList.remove('hidden');
         const rows = [...(preview.nodes || [])].sort(importNodeSort).filter(node => !hiddenByCollapsedFolder(node)).map(node => {
             if (node.kind === 'folder') {
-                const selected = state.importFolderAssignments.get(node.relative_path) || '';
-                const inheritedFrom = assignedAncestor(node);
+                const selected = state.importFolderAssignments.get(node.relative_path) || 'action:contain';
                 const collapsed = state.importCollapsedFolders.has(node.relative_path);
                 const detection = node.detection_label
                     ? `<span class="import-detection ${node.detected_assignment ? 'detected' : 'suggested'}">${escapeHtml(node.detected_assignment ? 'Detected' : 'Suggested')}: ${escapeHtml(node.detection_label)}</span>`
@@ -5082,7 +5609,7 @@ function initializeGaiaLibrary() {
                 return `<div class="import-tree-row folder" style="--import-depth:${Number(node.depth) || 0}">
                     <div class="import-tree-name"><input type="checkbox" class="import-folder-checkbox" data-import-folder-include="${escapeHtml(node.relative_path)}" aria-label="Include folder ${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}"><button class="import-folder-toggle" type="button" data-import-collapse="${escapeHtml(node.relative_path)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}" aria-expanded="${!collapsed}">${collapsed ? '▸' : '▾'}</button><span class="import-tree-label"><strong>${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}</strong>${reason}</span>${warning}</div>
                     <div class="import-tree-detection">${detection}</div>
-                    <select data-import-folder="${escapeHtml(node.relative_path)}" ${inheritedFrom ? `disabled title="Contained by classified folder ${escapeHtml(inheritedFrom)}"` : ''}>${folderAssignmentOptions(preview, selected)}</select>
+                    <select data-import-folder="${escapeHtml(node.relative_path)}">${folderAssignmentOptions(preview, selected)}</select>
                     <span class="import-tree-size">${node.relative_path === '.' ? escapeHtml(formatSize(preview.size_bytes)) : '—'}</span>
                 </div>`;
             }
@@ -5161,8 +5688,7 @@ function initializeGaiaLibrary() {
             renderImportPreview();
         }));
         importPreviewStep.querySelectorAll('[data-import-folder]').forEach(select => select.addEventListener('change', () => {
-            if (select.value) state.importFolderAssignments.set(select.dataset.importFolder, select.value);
-            else state.importFolderAssignments.delete(select.dataset.importFolder);
+            state.importFolderAssignments.set(select.dataset.importFolder, select.value);
             renderImportPreview();
         }));
         importPreviewStep.querySelectorAll('[data-import-folder-include]').forEach(input => input.addEventListener('change', () => {
@@ -5215,6 +5741,21 @@ function initializeGaiaLibrary() {
         });
         importPreviewStep.querySelector('#import-preview-back')?.addEventListener('click', resetImportFlow);
         importPreviewStep.querySelector('#import-job-start')?.addEventListener('click', startImportJob);
+        const newTree = importPreviewStep.querySelector('.import-tree');
+        if (newTree) {
+            newTree.scrollTop = treeScrollTop;
+            newTree.scrollLeft = treeScrollLeft;
+        }
+        if (importDialog) {
+            importDialog.scrollTop = dialogScrollTop;
+            importDialog.scrollLeft = dialogScrollLeft;
+        }
+        if (activeSelector) {
+            const restoredEl = importPreviewStep.querySelector(activeSelector);
+            if (restoredEl && typeof restoredEl.focus === 'function') {
+                restoredEl.focus({ preventScroll: true });
+            }
+        }
     }
 
     function renderImportJob(job) {
@@ -5673,8 +6214,8 @@ function initializeGaiaLibrary() {
             state.importPreview = preview;
             state.importFolderAssignments = new Map(
                 (preview.nodes || [])
-                    .filter(node => node.kind === 'folder' && node.detected_assignment)
-                    .map(node => [node.relative_path, node.detected_assignment]),
+                    .filter(node => node.kind === 'folder')
+                    .map(node => [node.relative_path, 'action:contain']),
             );
             state.importItemTypes = new Map((preview.entries || []).map(entry => [entry.index, entry.type]));
             state.importExcludedIndexes = new Set();
@@ -5790,8 +6331,11 @@ function initializeGaiaLibrary() {
         }
     });
     window.addEventListener('gaia:library-refresh', () => loadLibrary());
-    loadLibrary();
+    window.addEventListener('focus', () => checkVaultSync());
+    loadLibrary().then(() => checkVaultSync());
 }
+
+
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeGaiaLibrary, { once: true });

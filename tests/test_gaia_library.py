@@ -22,7 +22,7 @@ from api import (
     update_library_bpm,
     update_library_favourite,
 )
-from gaia import collection_importer, crud, deletion_service, import_jobs as import_jobs_module, midi_parser, models, profiles, schemas, text_analyzer, vaults
+from gaia import collection_importer, crud, deletion_service, import_jobs as import_jobs_module, midi_parser, models, profiles, project_service, reference_service, schemas, text_analyzer, vaults
 from gaia.import_jobs import ImportPreviewError, import_job_manager
 from gaia.routers import items as items_router, sin_proposals as sin_proposals_router
 from tests.support import GaiaTestCase
@@ -266,6 +266,67 @@ class TestGaiaLibrary(GaiaTestCase):
             0,
         )
         self.assertFalse(store.exists())
+
+    def test_vault_delete_purges_import_logs_and_handles_readonly_files(self):
+        import os
+        import stat
+        doomed = vaults.create_vault(self.db, "Vault with import logs", None)
+        store = vaults.vault_store(doomed)
+        physical_file = store / "files" / "read_only_sample.wav"
+        physical_file.parent.mkdir(parents=True, exist_ok=True)
+        physical_file.write_bytes(b"RIFF....WAVE")
+        # Mark physical file read-only on Windows
+        os.chmod(physical_file, stat.S_IREAD)
+
+        item = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(physical_file.resolve()),
+                vault_id=doomed.id,
+                size_bytes=physical_file.stat().st_size,
+                mime_type="audio/wav",
+            ),
+        )
+        tag = crud.create_tag(self.db, schemas.TagCreate(name="test-tag"))
+        crud.add_tag_to_item(self.db, item.id, tag.id)
+
+        # Create import log referencing item and vault
+        log = models.VaultImportLog(
+            vault_id=doomed.id,
+            source_path=str(physical_file.resolve()),
+            item_id=item.id,
+            status="imported",
+            action="imported",
+        )
+        self.db.add(log)
+
+        # Create an external project in another vault referencing this item
+        external_vault = vaults.create_vault(self.db, "Referencing external vault", None)
+        project = project_service.create_project(
+            self.db, "External project", "project", external_vault.id
+        )
+        reference_service.create_source_reference(self.db, project.id, item.id)
+        self.db.commit()
+
+        # Delete vault with contents
+        vaults.delete_vault(self.db, doomed.id, delete_contents=True)
+
+        self.assertIsNone(
+            self.db.query(models.Vault).filter(models.Vault.id == doomed.id).first()
+        )
+        self.assertEqual(
+            self.db.query(models.Item).filter(models.Item.vault_id == doomed.id).count(),
+            0,
+        )
+        self.assertEqual(
+            self.db.query(models.VaultImportLog).filter(models.VaultImportLog.vault_id == doomed.id).count(),
+            0,
+        )
+        self.assertFalse(store.exists())
+        self.assertEqual(
+            self.db.query(models.ItemReference).filter(models.ItemReference.to_item_id == item.id).count(),
+            0,
+        )
 
     def test_text_analysis_midi_parsing_and_typed_crud(self):
         expectations = [
@@ -784,7 +845,7 @@ class TestGaiaLibrary(GaiaTestCase):
                 vault_id=self.vault.id,
                 size_bytes=wav_path.stat().st_size,
                 mime_type="audio/wav",
-                attributes={"audio_metadata": {"title": "Stale title", "release_year": 1900}},
+                attributes={},
             ),
         )
         with patch("gaia.collection_importer.MutagenFile", None):
@@ -1048,6 +1109,96 @@ class TestGaiaLibrary(GaiaTestCase):
 
         self.assertEqual((status["status"], status["completed"], status["failed"]), ("failed", 1, 1))
         self.assertEqual(status["errors"][0]["error"], "Asset is missing on disk")
+
+    def test_analysis_preserves_user_tags_and_appends_detected_tags(self):
+        source = vaults.vault_store(self.vault) / "files"
+        wav_path = self.write_audio(source, "808-kick-loop-140bpm.wav")
+        sample = crud.create_item(
+            self.db,
+            schemas.SampleItemCreate(
+                absolute_path=str(wav_path),
+                vault_id=self.vault.id,
+                size_bytes=wav_path.stat().st_size,
+                mime_type="audio/wav",
+                bpm=128,
+                key="Fm",
+                is_loop=True,
+            ),
+        )
+        items_router.update_item(sample.id, schemas.ItemUpdate(title="My Custom Sample"), self.db)
+        crud.set_item_tags(self.db, sample.id, ["UserCustomTag", "Bass"])
+
+        analyzed = items_router.analyze_item(sample.id, self.db)
+        tag_names = [t.name for t in analyzed.tags]
+        self.assertIn("UserCustomTag", tag_names)
+        self.assertIn("Bass", tag_names)
+        self.assertIn("Kick", tag_names)
+        self.assertEqual(analyzed.bpm, 128)
+        self.assertEqual(analyzed.key, "Fm")
+        self.assertTrue(analyzed.is_loop)
+        self.assertEqual(analyzed.title, "My Custom Sample")
+
+    def test_analysis_preserves_user_metadata_on_track_and_adds_missing(self):
+        class EmbeddedTrack:
+            tags = {
+                "title": ["Embedded Title"],
+                "artist": ["Embedded Artist"],
+                "album": ["Embedded Album"],
+                "genre": ["Techno"],
+                "date": ["2020"],
+            }
+
+        source = vaults.vault_store(self.vault) / "files"
+        wav_path = self.write_audio(source, "user-track.wav")
+        track = crud.create_item(
+            self.db,
+            schemas.TrackItemCreate(
+                absolute_path=str(wav_path),
+                vault_id=self.vault.id,
+                size_bytes=wav_path.stat().st_size,
+                mime_type="audio/wav",
+                attributes={"audio_metadata": {"title": "User Title", "author": "User Artist"}},
+            ),
+        )
+
+        with patch("gaia.collection_importer.MutagenFile", return_value=EmbeddedTrack()):
+            analyzed = items_router.analyze_item(track.id, self.db)
+
+        self.assertEqual(analyzed.title, "User Title")
+        self.assertEqual(analyzed.author, "User Artist")
+        self.assertEqual(analyzed.album, "Embedded Album")
+        self.assertEqual(analyzed.genre, "Techno")
+        self.assertEqual(analyzed.release_year, 2020)
+
+    def test_collection_and_content_analysis_preserves_tags_and_user_metadata(self):
+        source = self.temp_path / "additive_pack"
+        self.write_audio(source, "Kick.wav")
+        self.write_audio(source, "Snare.wav")
+        job = self.start_import(
+            self.preview_import(source),
+            folder_assignments={".": "profile:sample_pack"},
+        )
+        collection = crud.get_item(self.db, job["result_items"][0]["id"])
+        crud.set_item_tags(self.db, collection.id, ["CustomPackTag"])
+
+        # Update first entry with user-added tag and custom bpm
+        items_router.update_collection_content(
+            collection.id,
+            0,
+            schemas.CollectionContentUpdate(tags=["UserContentTag"], bpm=95, title="User Custom Kick"),
+            self.db,
+        )
+
+        # Analyze single collection content
+        analyzed_content = items_router.analyze_collection_content(collection.id, 0, self.db)
+        self.assertIn("UserContentTag", analyzed_content.get("tags", []))
+        self.assertEqual(analyzed_content.get("bpm"), 95)
+        self.assertEqual(analyzed_content.get("title"), "User Custom Kick")
+
+        # Now run batch or collection analyze
+        analyzed_collection = items_router.analyze_item(collection.id, self.db)
+        collection_tags = [t.name for t in analyzed_collection.tags]
+        self.assertIn("CustomPackTag", collection_tags)
 
     def test_compact_root_summaries_and_paginated_collection_contents(self):
         source = self.temp_path / "summary_pack"
@@ -1429,12 +1580,101 @@ class TestGaiaLibrary(GaiaTestCase):
         values = [opt["value"] for opt in preview["folder_type_options"]]
         self.assertIn("action:contain", values)
         self.assertIn("action:ignore", values)
+        labels = {opt["value"]: opt["label"] for opt in preview["folder_type_options"]}
+        self.assertEqual(labels.get("action:contain"), "Container")
+        self.assertEqual(labels.get("action:ignore"), "Ignore")
 
         job = self.start_import(
             preview,
-            folder_assignments={"Drums": "action:contain", "Synth": "action:ignore"},
+            folder_assignments={".": "action:ignore", "Drums": "action:contain", "Synth": "action:ignore"},
         )
         self.assertEqual(job["status"], "completed")
+
+        drums_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "Drums").first()
+        self.assertIsNotNone(drums_col)
+        synth_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "Synth").first()
+        self.assertIsNone(synth_col)
+
+        kick = self.db.query(models.Item).filter(models.Item.absolute_path.like("%Kick.wav")).first()
+        self.assertIsNotNone(kick)
+        self.assertEqual(kick.parent_id, drums_col.id)
+
+        lead = self.db.query(models.Item).filter(models.Item.absolute_path.like("%Lead.wav")).first()
+        self.assertIsNotNone(lead)
+        self.assertIsNone(lead.parent_id)
+
+    def test_import_folder_ignore_root_preserves_subfolder_containers(self):
+        source = self.temp_path / "root-ignore"
+        self.write_audio(source / "MyLibrary", "root_track.wav")
+        self.write_audio(source / "MyLibrary" / "SubA", "trackA.wav")
+        self.write_audio(source / "MyLibrary" / "SubB", "trackB.wav")
+
+        preview = self.preview_import(source / "MyLibrary")
+        job = self.start_import(
+            preview,
+            folder_assignments={".": "action:ignore", "SubA": "action:contain", "SubB": "action:contain"},
+        )
+        self.assertEqual(job["status"], "completed")
+
+        root_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "MyLibrary").first()
+        self.assertIsNone(root_col)
+
+        suba_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "SubA").first()
+        self.assertIsNotNone(suba_col)
+        subb_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "SubB").first()
+        self.assertIsNotNone(subb_col)
+
+        root_file = self.db.query(models.Item).filter(models.Item.absolute_path.like("%root_track.wav")).first()
+        self.assertIsNotNone(root_file)
+        self.assertIsNone(root_file.parent_id)
+
+        track_a = self.db.query(models.Item).filter(models.Item.absolute_path.like("%trackA.wav")).first()
+        self.assertIsNotNone(track_a)
+        self.assertEqual(track_a.parent_id, suba_col.id)
+
+        track_b = self.db.query(models.Item).filter(models.Item.absolute_path.like("%trackB.wav")).first()
+        self.assertIsNotNone(track_b)
+        self.assertEqual(track_b.parent_id, subb_col.id)
+
+    def test_import_nested_folder_ignore_boundaries(self):
+        source = self.temp_path / "nested-ignore-boundary"
+        self.write_audio(source / "RootPack", "root.wav")
+        self.write_audio(source / "RootPack" / "SubA", "a.wav")
+        self.write_audio(source / "RootPack" / "SubB", "b_loose.wav")
+        self.write_audio(source / "RootPack" / "SubB" / "Deep", "deep.wav")
+
+        preview = self.preview_import(source / "RootPack")
+        job = self.start_import(
+            preview,
+            folder_assignments={
+                ".": "action:contain",
+                "SubA": "action:contain",
+                "SubB": "action:ignore",
+                "SubB/Deep": "action:contain",
+            },
+        )
+        self.assertEqual(job["status"], "completed")
+
+        root_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "RootPack").first()
+        self.assertIsNotNone(root_col)
+
+        subb_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "SubB").first()
+        self.assertIsNone(subb_col)
+
+        deep_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "Deep").first()
+        self.assertIsNotNone(deep_col)
+
+        root_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%root.wav")).first()
+        self.assertEqual(root_item.parent_id, root_col.id)
+
+        a_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%a.wav")).first()
+        self.assertEqual(a_item.parent_id, root_col.id)
+
+        b_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%b_loose.wav")).first()
+        self.assertIsNone(b_item.parent_id)
+
+        deep_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%deep.wav")).first()
+        self.assertEqual(deep_item.parent_id, deep_col.id)
 
 
 if __name__ == "__main__":

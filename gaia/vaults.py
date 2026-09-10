@@ -651,9 +651,27 @@ def delete_vault(
         staged_store = store.parent / f".deleting-vault-{vault.id}-{uuid.uuid4().hex}"
         os.replace(store, staged_store)
 
+    affected_project_ids: set[int] = set()
+
     try:
         if delete_contents and has_items:
             vault_item_ids = db.query(models.Item.id).filter(models.Item.vault_id == vault_id)
+
+            # Track external projects that reference items in this vault so their
+            # manifests can be synchronized after references are deleted.
+            external_refs = (
+                db.query(models.ItemReference.context_id)
+                .filter(
+                    or_(
+                        models.ItemReference.from_item_id.in_(vault_item_ids),
+                        models.ItemReference.to_item_id.in_(vault_item_ids),
+                    )
+                )
+                .filter(~models.ItemReference.context_id.in_(vault_item_ids))
+                .all()
+            )
+            affected_project_ids.update(row[0] for row in external_refs)
+
             db.query(models.ItemReference).filter(
                 or_(
                     models.ItemReference.context_id.in_(vault_item_ids),
@@ -662,27 +680,67 @@ def delete_vault(
                 )
             ).delete(synchronize_session=False)
 
+            # Clear import log references before deleting items so SQLite foreign key
+            # constraints do not block item deletion.
+            db.query(models.VaultImportLog).filter(
+                models.VaultImportLog.vault_id == vault_id
+            ).delete(synchronize_session=False)
+            db.query(models.VaultImportLog).filter(
+                models.VaultImportLog.item_id.in_(vault_item_ids)
+            ).update({models.VaultImportLog.item_id: None}, synchronize_session=False)
+
+            # Clear item tag associations before deleting items.
+            db.execute(models.item_tags.delete().where(models.item_tags.c.item_id.in_(vault_item_ids)))
+
             # Joined-table inheritance needs ORM deletion so every concrete
             # subtype row is removed before its base Item row.
-            for item in db.query(models.Item).filter(models.Item.vault_id == vault_id).all():
+            # Order child items first so parent-child relationships cascade cleanly.
+            items_to_delete = (
+                db.query(models.Item)
+                .filter(models.Item.vault_id == vault_id)
+                .order_by(models.Item.parent_id.isnot(None).desc())
+                .all()
+            )
+            for item in items_to_delete:
                 db.delete(item)
             db.flush()
+        else:
+            db.query(models.VaultImportLog).filter(
+                models.VaultImportLog.vault_id == vault_id
+            ).delete(synchronize_session=False)
 
         db.delete(vault)
         db.commit()
     except Exception:
         db.rollback()
         if staged_store and staged_store.exists() and not store.exists():
-            os.replace(staged_store, store)
+            try:
+                os.replace(staged_store, store)
+            except OSError:
+                pass
         raise
 
     if staged_store and staged_store.exists():
         if background_tasks is None:
-            shutil.rmtree(staged_store)
+            paths.safe_rmtree(staged_store)
         else:
-            background_tasks.add_task(shutil.rmtree, staged_store, True)
+            background_tasks.add_task(paths.safe_rmtree, staged_store)
     elif store.exists():
-        store.rmdir()
+        try:
+            store.rmdir()
+        except OSError:
+            if delete_contents:
+                paths.safe_rmtree(store)
+
+    if affected_project_ids:
+        from . import project_service
+
+        for proj_id in sorted(affected_project_ids):
+            try:
+                project_service.sync_project_manifest(db, proj_id)
+            except (ValueError, OSError):
+                pass
+
 
 
 def log_import(

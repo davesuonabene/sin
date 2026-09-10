@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from typing import List
 
-from .. import database, schemas, vaults
+from .. import database, reconciler, schemas, vaults
 
 router = APIRouter(prefix="/vaults", tags=["vaults"])
 
@@ -84,3 +84,24 @@ def read_import_log(vault_id: int, limit: int = 100, db: Session = Depends(datab
     if not vaults.get_vault(db, vault_id):
         raise HTTPException(status_code=404, detail="Vault not found")
     return vaults.get_logs(db, vault_id, limit)
+
+
+@router.get("/{vault_id}/sync-status", response_model=schemas.VaultSyncStatus)
+def read_vault_sync_status(vault_id: int, db: Session = Depends(database.get_db)):
+    try:
+        return reconciler.scan_vault_discrepancies(db, vault_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{vault_id}/reconcile", response_model=schemas.VaultReconcileResponse)
+def reconcile_vault_endpoint(
+    vault_id: int,
+    request: schemas.VaultReconcileRequest,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        return reconciler.reconcile_vault(db, vault_id, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+

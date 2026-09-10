@@ -417,9 +417,8 @@ def create_preview(source_path: str, vault_id: int | None, db: Session) -> dict[
         "inspection_ms": round((time.perf_counter() - started) * 1000),
         "profiles": profile_options,
         "folder_type_options": [
-            {"value": "action:contain", "label": "Contain folder"},
-            {"value": "action:ignore", "label": "Ignore folder (flatten)"},
-            {"value": "type:multitrack", "label": "Multitrack"},
+            {"value": "action:contain", "label": "Container"},
+            {"value": "action:ignore", "label": "Ignore"},
         ],
         "filter_options": {
             "types": [
@@ -440,10 +439,37 @@ def _relative_is_within(relative_path: str, folder_path: str) -> bool:
     return folder_path == "." or relative_path == folder_path or relative_path.startswith(folder_path + "/")
 
 
+def _is_contained_by(relative_path: str, target_path: str, assignments: dict[str, str]) -> bool:
+    """Check if relative_path is contained within target_path without an intervening action:ignore."""
+    if not _relative_is_within(relative_path, target_path):
+        return False
+    entry_pp = PurePosixPath(relative_path)
+    if target_path == ".":
+        parts = entry_pp.parts
+        current = PurePosixPath()
+        for part in parts[:-1]:
+            current = current / part
+            if assignments.get(current.as_posix()) == "action:ignore":
+                return False
+        return True
+    else:
+        target_pp = PurePosixPath(target_path)
+        try:
+            rel = entry_pp.relative_to(target_pp)
+        except ValueError:
+            return False
+        current = target_pp
+        for part in rel.parts[:-1]:
+            current = current / part
+            if assignments.get(current.as_posix()) == "action:ignore":
+                return False
+        return True
+
+
 def _topmost_folder_targets(assignments: dict[str, str]) -> list[tuple[str, str]]:
     targets: list[tuple[str, str]] = []
     for path, assignment in sorted(assignments.items(), key=lambda pair: (0 if pair[0] == "." else len(PurePosixPath(pair[0]).parts), pair[0])):
-        if assignment and assignment != "action:ignore" and not any(_relative_is_within(path, parent) for parent, _ in targets):
+        if assignment and assignment != "action:ignore" and not any(_is_contained_by(path, parent, assignments) for parent, _ in targets):
             targets.append((path, assignment))
     return targets
 
@@ -939,11 +965,11 @@ class ImportJobManager:
             raise ImportPreviewError("Keep at least one file in the import")
         targets = [
             target for target in targets
-            if any(_relative_is_within(entry["relative_path"], target["relative_path"]) for entry in included_entries)
+            if any(_is_contained_by(entry["relative_path"], target["relative_path"], folder_assignments) for entry in included_entries)
         ]
         if preview["conflicts"] and request.conflict_action is None:
             raise ImportPreviewError("Choose how to handle the conflict shown in the preview")
-        covered = {entry["index"] for entry in included_entries if any(_relative_is_within(entry["relative_path"], target["relative_path"]) for target in targets)}
+        covered = {entry["index"] for entry in included_entries if any(_is_contained_by(entry["relative_path"], target["relative_path"], folder_assignments) for target in targets)}
         loose = [entry["index"] for entry in included_entries if entry["index"] not in covered]
         job_id = uuid.uuid4().hex
         task = {
@@ -1075,7 +1101,7 @@ class ImportJobManager:
                 for target in task["targets"]:
                     entries = [
                         entry for entry in included_entries
-                        if _relative_is_within(entry["relative_path"], target["relative_path"])
+                        if _is_contained_by(entry["relative_path"], target["relative_path"], task["folder_assignments"])
                     ]
                     prefix = PurePosixPath() if target["relative_path"] == "." else PurePosixPath(target["relative_path"])
                     if transfer_mode == "keep":
@@ -1445,18 +1471,16 @@ def cleanup_stale_staging() -> None:
         return
     for candidate in root.rglob(".gaia-import-*.staging"):
         if candidate.is_dir():
-            shutil.rmtree(candidate, ignore_errors=True)
+            paths.safe_rmtree(candidate)
     # A process interruption can leave an unpublished transfer beside its
     # destination. These names are generated exclusively by the importer and
     # are safe to remove on the next startup.
     for candidate in root.rglob(".*.gaia-part-*"):
-        try:
-            if candidate.is_dir():
-                shutil.rmtree(candidate, ignore_errors=True)
-            else:
-                candidate.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if candidate.is_dir():
+            paths.safe_rmtree(candidate)
+        else:
+            paths.safe_unlink(candidate)
+
 
 
 def _remove_abandoned_rows(db: Session, job_id: str | None = None) -> int:

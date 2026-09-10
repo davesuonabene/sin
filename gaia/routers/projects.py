@@ -115,9 +115,13 @@ def add_files_to_project(
 
 
 @router.get("/{project_id}/editor-state")
-def get_project_editor_state(project_id: int, db: Session = Depends(database.get_db)):
+def get_project_editor_state(
+    project_id: int,
+    target_id: str | None = None,
+    db: Session = Depends(database.get_db),
+):
     try:
-        return media_editor.read_project_editor_state(db, project_id)
+        return media_editor.read_project_editor_state(db, project_id, target_id=target_id)
     except ValueError as exc:
         _bad_request(exc)
 

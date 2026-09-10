@@ -38,8 +38,8 @@ export abstract class BaseNode extends LGraphNode {
     static readonly visualSize = 44;
     static readonly bodySize: number = BaseNode.visualSize;
     buttons: CanvasButton[] = [];
+    previewBtn: CanvasButton;
     renderBtn: CanvasButton;
-    modulatorBtn: CanvasButton;
     removeBtn: CanvasButton;
 
     static createNode<T extends BaseNode>(this: new () => T, properties?: Record<string, any>): T {
@@ -105,6 +105,14 @@ export abstract class BaseNode extends LGraphNode {
     get defaultPropertiesTab(): string {
         const ctor = this.constructor as typeof BaseNode;
         return ctor.defaultTab || "PARAMS";
+    }
+
+    get isModifier(): boolean {
+        return false;
+    }
+
+    get modifierKind(): string | null {
+        return null;
     }
 
     // Backwards compatibility helpers
@@ -334,18 +342,20 @@ export abstract class BaseNode extends LGraphNode {
         }
 
         // Action buttons positioned floating on the right side of the node
-        this.renderBtn = new CanvasButton(
+        this.previewBtn = new CanvasButton(
             48, 0, 16, 16, "▶", "#0f3b5f", "#0369a1",
             () => {
                 window.dispatchEvent(new CustomEvent('preview-node', { detail: { nodeId: this.id } }));
-            }
+            },
+            "Preview (RAM)"
         );
 
-        this.modulatorBtn = new CanvasButton(
-            48, 18, 16, 16, "⌁", "#3b1764", "#7e22ce",
+        this.renderBtn = new CanvasButton(
+            48, 18, 16, 16, "R", "#064e3b", "#059669",
             () => {
-                window.dispatchEvent(new CustomEvent('add-modulator-node', { detail: { parentId: this.id } }));
-            }
+                window.dispatchEvent(new CustomEvent('render-node', { detail: { nodeId: this.id } }));
+            },
+            "Render (Save to Temp)"
         );
 
         this.removeBtn = new CanvasButton(
@@ -356,11 +366,12 @@ export abstract class BaseNode extends LGraphNode {
                 } else {
                     window.dispatchEvent(new CustomEvent('node-removed', { detail: { nodeId: this.id } }));
                 }
-            }
+            },
+            "Delete Node"
         );
 
+        this.addButton(this.previewBtn);
         this.addButton(this.renderBtn);
-        this.addButton(this.modulatorBtn);
         this.addButton(this.removeBtn);
     }
 
@@ -384,14 +395,15 @@ export abstract class BaseNode extends LGraphNode {
         const width = BaseNode.visualSize;
         const height = BaseNode.visualSize;
         const isHoveredOrSelected = Boolean(this.is_selected || ((window as any).editorCanvas?.node_over === this));
-        const extraRight = isHoveredOrSelected ? 28 : 0;
+        const extraRight = 28;
         const extraTop = isHoveredOrSelected ? 32 : 0;
+        const extraBottom = 16;
 
         return (
             x >= this.pos[0] - margin - 8 &&
             x <= this.pos[0] + width + margin + extraRight &&
             y >= this.pos[1] - margin - extraTop &&
-            y <= this.pos[1] + height + margin
+            y <= this.pos[1] + height + margin + extraBottom
         );
     }
 
@@ -417,11 +429,22 @@ export abstract class BaseNode extends LGraphNode {
         const x = local_pos[0];
         const y = local_pos[1];
         let dirty = false;
+        let hoveredTooltip: string | null = null;
         for (const btn of this.buttons) {
             const hit = btn.checkHit(x, y, this);
             if (btn.isHovered !== hit) {
                 btn.isHovered = hit;
                 dirty = true;
+            }
+            if (hit && btn.tooltip) {
+                hoveredTooltip = btn.tooltip;
+            }
+        }
+        if (canvas?.canvas) {
+            if (hoveredTooltip) {
+                canvas.canvas.title = hoveredTooltip;
+            } else if (canvas.canvas.title) {
+                canvas.canvas.title = '';
             }
         }
         if (dirty) {
@@ -429,26 +452,30 @@ export abstract class BaseNode extends LGraphNode {
         }
     }
 
-    onMouseDown(_e: MouseEvent, local_pos: any, canvas: any): boolean {
-        if (this.flags.collapsed || (this.flags as any).hidden) return false;
+    onMouseLeave?(_e: MouseEvent, _prev_node: any) {
+        for (const btn of this.buttons) {
+            btn.isHovered = false;
+        }
+        if ((window as any).editorCanvas?.canvas?.title) {
+            (window as any).editorCanvas.canvas.title = '';
+        }
+        this.setDirtyCanvas(true, true);
+    }
 
-        const isHovered = canvas && canvas.node_over === this;
-        const isSelected = Boolean(canvas && canvas.selected_nodes && canvas.selected_nodes[this.id]) || this.is_selected;
+    onMouseDown(_e: MouseEvent, local_pos: any, _canvas: any): boolean {
+        if (this.flags.collapsed || (this.flags as any).hidden) return false;
 
         if (local_pos && local_pos.length >= 2) {
             const x = local_pos[0];
             const y = local_pos[1];
-            if (isHovered || isSelected) {
-                for (const btn of this.buttons) {
-                    if (btn.checkHit(x, y, this)) {
-                        btn.onClick(_e);
-                        return true;
-                    }
+            for (const btn of this.buttons) {
+                if (btn.checkHit(x, y, this)) {
+                    btn.onClick(_e);
+                    return true;
                 }
             }
         }
 
-        // LiteGraph owns selection here so modifier clicks and group dragging work.
         return false;
     }
 

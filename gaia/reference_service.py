@@ -222,11 +222,19 @@ def list_references(db: Session, project_id: int) -> list[models.ItemReference]:
     )
 
 
-def _find_item_version_siblings(db: Session, item: models.Item) -> list[models.Item]:
+def _find_item_version_siblings(
+    db: Session,
+    item: models.Item,
+    context_id: int | None = None,
+) -> list[models.Item]:
     info = file_version_info(item.absolute_path)
     target_group = info.get("group")
     if not target_group:
         return [item]
+
+    siblings_map: dict[int, models.Item] = {item.id: item}
+
+    # 1. Physical directory siblings (same vault_id, parent_id, same parent directory)
     item_dir = str(Path(item.absolute_path).parent).replace("\\", "/")
     candidates = (
         db.query(models.Item)
@@ -236,18 +244,77 @@ def _find_item_version_siblings(db: Session, item: models.Item) -> list[models.I
         )
         .all()
     )
-    candidate_ids = {c.id for c in candidates}
-    if item.id not in candidate_ids:
-        candidates.append(item)
-
-    siblings: list[models.Item] = []
     for candidate in candidates:
         cand_dir = str(Path(candidate.absolute_path).parent).replace("\\", "/")
         if cand_dir.casefold() == item_dir.casefold():
             cand_info = file_version_info(candidate.absolute_path)
             if cand_info.get("group") == target_group:
-                siblings.append(candidate)
-    return siblings or [item]
+                siblings_map[candidate.id] = candidate
+
+    # 2. In project context, also find sibling versions within the project or referenced by the project
+    if context_id is not None:
+        project_item = db.query(models.ProjectItem).filter(models.ProjectItem.id == context_id).first()
+        if project_item:
+            # Query items directly parented to the project
+            proj_items = (
+                db.query(models.Item)
+                .filter(models.Item.parent_id == context_id)
+                .all()
+            )
+            for cand in proj_items:
+                cand_info = file_version_info(cand.absolute_path)
+                if cand_info.get("group") == target_group:
+                    siblings_map[cand.id] = cand
+
+            # Subfolders of the project
+            subfolders = (
+                db.query(models.Item)
+                .filter(models.Item.parent_id == context_id, models.Item.type.in_(["collection", "folder"]))
+                .all()
+            )
+            if subfolders:
+                sub_items = (
+                    db.query(models.Item)
+                    .filter(models.Item.parent_id.in_([sf.id for sf in subfolders]))
+                    .all()
+                )
+                for cand in sub_items:
+                    cand_info = file_version_info(cand.absolute_path)
+                    if cand_info.get("group") == target_group:
+                        siblings_map[cand.id] = cand
+
+            # Referenced items in this project
+            ref_items = (
+                db.query(models.Item)
+                .join(models.ItemReference, models.ItemReference.to_item_id == models.Item.id)
+                .filter(models.ItemReference.context_id == context_id)
+                .all()
+            )
+            for cand in ref_items:
+                cand_info = file_version_info(cand.absolute_path)
+                if cand_info.get("group") == target_group:
+                    siblings_map[cand.id] = cand
+
+    return list(siblings_map.values()) or [item]
+
+
+def _is_path_external(path_str: str | None, project_root: Path) -> bool:
+    if not path_str:
+        return True
+    try:
+        resolved = Path(path_str).resolve()
+        if resolved == project_root or resolved.is_relative_to(project_root):
+            return False
+    except Exception:
+        pass
+    try:
+        c_str = str(Path(path_str).resolve()).casefold().replace("\\", "/") + "/"
+        p_str = str(project_root.resolve()).casefold().replace("\\", "/")
+        if not p_str.endswith("/"):
+            p_str += "/"
+        return not c_str.startswith(p_str)
+    except Exception:
+        return True
 
 
 def project_table(db: Session, project_id: int) -> list[dict]:
@@ -258,6 +325,9 @@ def project_table(db: Session, project_id: int) -> list[dict]:
     selector. References automatically inherit newly created sibling versions.
     """
     from . import crud
+
+    project_item = _folder_context(db, project_id)
+    project_root = Path(project_item.absolute_path).resolve()
 
     references = list_references(db, project_id)
     referenced_map = {ref.to_item_id: ref for ref in references}
@@ -273,7 +343,7 @@ def project_table(db: Session, project_id: int) -> list[dict]:
         expanded_refs.append(reference)
 
         item = _item(db, reference.to_item_id)
-        siblings = _find_item_version_siblings(db, item)
+        siblings = _find_item_version_siblings(db, item, context_id=project_id)
         for sibling in siblings:
             if sibling.id in referenced_map:
                 sib_ref = referenced_map[sibling.id]
@@ -281,6 +351,14 @@ def project_table(db: Session, project_id: int) -> list[dict]:
                     seen_ref_ids.add(sib_ref.id)
                     expanded_refs.append(sib_ref)
             else:
+                ref_attrs = dict(reference.attributes or {})
+                if sibling.parent_id and sibling.parent_id != project_id:
+                    parent = db.query(models.FolderItem).filter(models.FolderItem.id == sibling.parent_id).first()
+                    if parent and parent.id != project_id:
+                        flabel = getattr(parent, "title", None) or Path(parent.absolute_path).name
+                        if flabel:
+                            ref_attrs["folder"] = flabel
+
                 sib_ref = create_reference(
                     db,
                     schemas.ProjectReferenceCreate(
@@ -290,7 +368,7 @@ def project_table(db: Session, project_id: int) -> list[dict]:
                         stage_name=reference.stage_name,
                         revision_label=reference.revision_label,
                         tags=relation_tags(reference),
-                        attributes=dict(reference.attributes),
+                        attributes=ref_attrs,
                     ),
                     context_id=project_id,
                     commit=False,
@@ -330,15 +408,20 @@ def project_table(db: Session, project_id: int) -> list[dict]:
                 label = f".{rev}"
             else:
                 label = "Original"
+            is_ext = _is_path_external(item.absolute_path, project_root)
             versions.append({
                 "item": crud.get_item(db, item.id),
                 "reference": _reference_payload(reference),
                 "label": str(label),
+                "is_external": is_ext,
             })
+        sel_item = selected[1]
+        sel_is_ext = _is_path_external(sel_item.absolute_path, project_root)
         rows.append({
-            "item": crud.get_item(db, selected[1].id),
+            "item": crud.get_item(db, sel_item.id),
             "reference": _reference_payload(selected[0]),
             "version_group": group,
+            "is_external": sel_is_ext,
             "versions": versions,
         })
     return rows

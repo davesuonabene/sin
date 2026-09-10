@@ -58,25 +58,25 @@ export class ArrangementTimelineSection {
 
             sectionEditor.innerHTML = `
                 <div class="arrangement-section-heading">Section ${index + 1}</div>
-                <div class="td-param-row">
+                <div class="td-param-row" data-field-key="section_probability" data-param-label="${probabilityField?.label || 'Probability'}">
                     <div class="td-param-label">${probabilityField?.label || 'Probability'}</div>
                     <div class="td-param-control">
                         <input class="td-param-input" id="sec-prob-input" type="number" min="0" max="1" step="0.05" value="${structure.probability[index]}">
                     </div>
                 </div>
-                <div class="td-param-row">
+                <div class="td-param-row" data-field-key="section_sample_start" data-param-label="${sampleStartField?.label || 'Sample Start'}">
                     <div class="td-param-label">${sampleStartField?.label || 'Sample Start'}</div>
                     <div class="td-param-control">
                         <input class="td-param-input" id="sec-sample-start-input" type="number" min="${sampleStartField?.min ?? 0}" max="${sampleStartField?.max ?? 1}" step="${sampleStartField?.step ?? 0.01}" value="${structure.sampleStart[index]}">
                     </div>
                 </div>
-                <div class="td-param-row">
+                <div class="td-param-row" data-field-key="section_quant" data-param-label="${quantField?.label || 'Quantize'}">
                     <div class="td-param-label">${quantField?.label || 'Quantize'}</div>
                     <div class="td-param-control">
                         <select class="td-param-input sin-select" id="prop-sec-quant"></select>
                     </div>
                 </div>
-                <div class="td-param-row">
+                <div class="td-param-row" data-field-key="section_quant_anchor" data-param-label="${anchorField?.label || 'Anchor'}">
                     <div class="td-param-label">${anchorField?.label || 'Anchor'}</div>
                     <div class="td-param-control">
                         <select class="td-param-input sin-select" id="prop-sec-quant-anchor"></select>
@@ -122,6 +122,8 @@ export class ArrangementTimelineSection {
                 container.replaceChildren();
                 void ArrangementTimelineSection.render(container, node, windowContext);
             });
+
+            windowContext?.applyOverlays?.();
         };
 
         visualizer = new ArrangementVisualizer({

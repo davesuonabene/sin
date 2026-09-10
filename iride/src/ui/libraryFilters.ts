@@ -51,22 +51,36 @@ export function getAssetVaultIds(item: any): number[] {
  * actual assets inside it.
  */
 export function isAssetOrganizer(item: any): boolean {
-    return ['collection', 'sample_pack', 'project'].includes(normalizeFacetValue(item?.type))
+    const type = normalizeFacetValue(item?.type);
+    return (['collection', 'sample_pack', 'project', 'folder'].includes(type) || Boolean(item?.is_container))
         && Array.isArray(item?.contents);
 }
 
 export function getFilterableAssetItems(item: any): any[] {
     if (!isAssetOrganizer(item)) return [item];
 
-    return item.contents
-        .filter((content: any) => content && typeof content === 'object')
-        .map((content: any) => ({
-            ...content,
-            name: content.name || content.title || content.filename,
-            vault_id: getAssetVaultIds(content).length
-                ? content.vault_id
-                : item.vault_id,
-        }));
+    const result: any[] = [];
+    const visit = (entries: any[], parentVaultId: any) => {
+        for (const content of entries) {
+            if (!content || typeof content !== 'object') continue;
+            const isChildContainer = isAssetOrganizer(content)
+                || ['collection', 'folder', 'project', 'sample_pack'].includes(normalizeFacetValue(content.type))
+                || Boolean(content.attributes?.is_folder);
+            if (isChildContainer) {
+                if (Array.isArray(content.contents) && content.contents.length > 0) {
+                    visit(content.contents, content.vault_id ?? parentVaultId);
+                }
+            } else {
+                result.push({
+                    ...content,
+                    name: content.name || content.title || content.filename,
+                    vault_id: getAssetVaultIds(content).length ? content.vault_id : parentVaultId,
+                });
+            }
+        }
+    };
+    visit(item.contents, item.vault_id);
+    return result;
 }
 
 function tagMatches(selectedTag: string, itemTag: string): boolean {

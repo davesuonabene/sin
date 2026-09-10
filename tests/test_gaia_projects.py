@@ -5,6 +5,7 @@ import json
 import unittest
 from pathlib import Path
 import shutil
+from unittest.mock import patch
 from fastapi import BackgroundTasks, HTTPException
 
 from gaia import crud, models, profiles, project_service, reference_service, schemas, vaults
@@ -556,6 +557,36 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertEqual(version_labels, ["Original", ".2"])
         # Verify the active item is the latest version
         self.assertEqual(updated_table[0]["item"].id, v2_item.id)
+        self.assertTrue(updated_table[0]["is_external"])
+        self.assertTrue(updated_table[0]["versions"][0]["is_external"])
+        self.assertTrue(updated_table[0]["versions"][1]["is_external"])
+
+        # Now create Vocal.3.wav inside the project's own files directory
+        v3_dir = Path(project.absolute_path) / "files"
+        v3_dir.mkdir(parents=True, exist_ok=True)
+        v3_path = v3_dir / "Vocal.3.wav"
+        shutil.copy2(source.absolute_path, v3_path)
+        v3_item = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(v3_path.resolve()),
+                vault_id=self.vault.id,
+                parent_id=project.id,
+                file_hash="fixture-v3-hash",
+                size_bytes=v3_path.stat().st_size,
+                mime_type="audio/wav",
+            ),
+        )
+
+        final_table = reference_service.project_table(self.db, project.id)
+        self.assertEqual(len(final_table), 1)
+        self.assertEqual(len(final_table[0]["versions"]), 3)
+        self.assertEqual(final_table[0]["item"].id, v3_item.id)
+        # Vocal.3 is inside project -> is_external must be False!
+        self.assertFalse(final_table[0]["is_external"])
+        self.assertTrue(final_table[0]["versions"][0]["is_external"])
+        self.assertTrue(final_table[0]["versions"][1]["is_external"])
+        self.assertFalse(final_table[0]["versions"][2]["is_external"])
 
     def test_project_place_items_copy_mode(self):
         source = self.register_audio(self.write_audio(self.temp_path / "sources", "Loop.wav"))
@@ -933,6 +964,88 @@ class TestGaiaProjects(GaiaTestCase):
         reloaded_ref_http = self.db.query(models.ItemReference).filter(models.ItemReference.id == ref.id).first()
         self.assertEqual(reloaded_ref_http.attributes.get("folder"), "Final")
         self.assertTrue(Path(original_path).is_file())
+
+    def test_locate_original_item(self):
+        vstore = vaults.vault_store(self.vault)
+        sub_dir = vstore / "Subfolder"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        file_path = sub_dir / "sample.wav"
+        file_path.write_text("dummy audio", encoding="utf-8")
+        folder = crud.create_item(
+            self.db,
+            schemas.ItemCreate(
+                absolute_path=str(sub_dir),
+                vault_id=self.vault.id,
+                type="folder",
+            ),
+        )
+        sample = crud.create_item(
+            self.db,
+            schemas.ItemCreate(
+                absolute_path=str(file_path),
+                vault_id=self.vault.id,
+                parent_id=folder.id,
+                type="sample",
+            ),
+        )
+        loc = crud.locate_item(self.db, sample.id)
+        self.assertIsNotNone(loc)
+        self.assertEqual(loc["item_id"], sample.id)
+        self.assertEqual(loc["vault_id"], self.vault.id)
+        self.assertEqual(loc["ancestor_ids"], [folder.id])
+        self.assertEqual(loc["filename"], "sample.wav")
+
+        endpoint_loc = items_router.locate_item_location(sample.id, self.db)
+        self.assertEqual(endpoint_loc["item_id"], sample.id)
+        self.assertEqual(endpoint_loc["ancestor_ids"], [folder.id])
+
+        # Test referencing this sample in a project
+        project = project_service.create_project(self.db, "Locate Test Project", "project", self.vault.id)
+        project_service.add_items(self.db, project.id, [sample.id])
+        ref = self.db.query(models.ItemReference).filter(
+            models.ItemReference.context_id == project.id,
+            models.ItemReference.to_item_id == sample.id,
+        ).first()
+        self.assertIsNotNone(ref)
+        ref_loc = crud.locate_item(self.db, ref.to_item_id)
+        self.assertEqual(ref_loc["item_id"], sample.id)
+        self.assertEqual(ref_loc["ancestor_ids"], [folder.id])
+
+    def test_empty_project_creation_prepares_stage_directories_and_manifest(self):
+        project = project_service.create_project(self.db, "Empty New Project", "project", self.vault.id)
+        self.assertIsNotNone(project)
+        project_root = Path(project.absolute_path)
+        self.assertTrue(project_root.is_dir())
+        files_root = project_root / "files"
+        self.assertTrue(files_root.is_dir())
+        self.assertTrue((files_root / "edit").is_dir())
+        self.assertTrue((files_root / "source").is_dir())
+        self.assertTrue((files_root / "derived").is_dir())
+        manifest_file = files_root / "edit" / "current.json"
+        self.assertTrue(manifest_file.is_file())
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["schema"], "gaia-project-state")
+        self.assertEqual(manifest["references"], [])
+
+    def test_open_file_location_endpoint(self):
+        sample_path = self.write_audio(self.asset_store / "loose", "LocationTest.wav")
+        sample = self.register_audio(sample_path)
+
+        with patch("gaia.routers.items._open_file_in_os_file_manager") as mock_open:
+            resp = items_router.open_item_location(
+                schemas.OpenLocationRequest(item_id=sample.id),
+                self.db,
+            )
+            self.assertEqual(resp["status"], "opened")
+            mock_open.assert_called_once()
+            called_path = mock_open.call_args[0][0]
+            self.assertEqual(str(Path(called_path).resolve()), str(Path(sample.absolute_path).resolve()))
+
+        with self.assertRaises(HTTPException):
+            items_router.open_item_location(
+                schemas.OpenLocationRequest(item_id=999999),
+                self.db,
+            )
 
 
 if __name__ == "__main__":

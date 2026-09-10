@@ -10,6 +10,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import shutil
+import stat
+
 from . import collection_importer
 
 
@@ -37,3 +40,40 @@ def vaults_directory() -> Path:
 def import_logs_directory() -> Path:
     """Return GAIA's durable per-import diagnostic log directory."""
     return Path(__file__).resolve().parent / "log" / "imports"
+
+
+def safe_unlink(path: Path | str) -> None:
+    """Remove a file, clearing read-only attributes on Windows if necessary."""
+    p = Path(path)
+    if not p.exists() and not p.is_symlink():
+        return
+    try:
+        p.unlink(missing_ok=True)
+    except PermissionError:
+        try:
+            os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
+    except OSError:
+        pass
+
+
+def safe_rmtree(path: Path | str) -> None:
+    """Recursively remove a directory, clearing read-only attributes on Windows."""
+    p = Path(path)
+    if not p.exists():
+        return
+
+    def _on_error(func, subpath, exc_info):
+        try:
+            os.chmod(subpath, stat.S_IWRITE | stat.S_IREAD)
+            func(subpath)
+        except OSError:
+            pass
+
+    try:
+        shutil.rmtree(p, onexc=lambda action, sp, exc: _on_error(action, sp, exc))
+    except TypeError:
+        shutil.rmtree(p, onerror=_on_error)
+

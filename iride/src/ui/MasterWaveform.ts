@@ -75,7 +75,7 @@ export class MasterWaveform {
         this.draw();
     }
 
-    async load(source: string) {
+    async load(source: string): Promise<AudioBuffer | null> {
         const token = ++this.loadToken;
         this.audioBuffer = null;
         this.invalidatePeaks();
@@ -95,19 +95,25 @@ export class MasterWaveform {
                 const data = await response.arrayBuffer();
                 return this.audioContext!.decodeAudioData(data);
             });
-            if (token !== this.loadToken) return;
+            if (token !== this.loadToken) return null;
             this.audioBuffer = decoded;
             this.invalidatePeaks();
             this.knownDuration = decoded.duration;
             this.message = '';
             this.updateAccessibility();
             this.draw();
+            return decoded;
         } catch (error) {
-            if (token !== this.loadToken) return;
+            if (token !== this.loadToken) return null;
             console.error('Could not load master waveform', error);
             this.message = 'Waveform unavailable';
             this.draw();
+            return null;
         }
+    }
+
+    get playbackContext(): AudioContext | null {
+        return this.audioContext;
     }
 
     get duration() {

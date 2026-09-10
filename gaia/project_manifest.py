@@ -46,21 +46,31 @@ def _read_document(path: Path) -> dict[str, Any] | None:
     return document
 
 
-def editor_state_document(project: models.ProjectItem) -> dict[str, Any] | None:
+def editor_state_document(project: models.ProjectItem, target_id: str | None = None) -> dict[str, Any] | None:
     """Read either the current envelope or the previous editor-only document."""
     document = _read_document(manifest_path(project))
     if document is None:
         return None
     if document.get("schema") == MANIFEST_SCHEMA:
+        if target_id:
+            edits = document.get("edits")
+            if isinstance(edits, dict) and target_id in edits:
+                target_state = edits[target_id]
+                if isinstance(target_state, dict):
+                    return dict(target_state)
         editor = document.get("editor")
         if editor is None:
             return None
         if not isinstance(editor, dict):
             raise ValueError("The project manifest editor state is invalid")
+        if target_id and editor.get("target_id") != target_id:
+            return None
         return dict(editor)
     if document.get("schema") == EDITOR_STATE_SCHEMA:
         # Version-one editor documents are upgraded atomically the next time
         # the project manifest is written.
+        if target_id and document.get("target_id") != target_id:
+            return None
         return document
     raise ValueError("The saved editor state uses an unknown format")
 
@@ -280,12 +290,23 @@ def sync_project_manifest(
         raise ValueError("Project not found")
 
     path = manifest_path(project)
+    existing_doc = _read_document(path)
+    existing_edits: dict[str, Any] = {}
+    if existing_doc and isinstance(existing_doc.get("edits"), dict):
+        existing_edits = dict(existing_doc["edits"])
+
     if editor_state is _KEEP_EDITOR_STATE:
         editor = editor_state_document(project)
+        edits = existing_edits
     elif editor_state is None:
         editor = None
+        edits = {}
     elif isinstance(editor_state, dict):
         editor = dict(editor_state)
+        edits = existing_edits
+        target_key = editor.get("target_id")
+        if target_key:
+            edits[str(target_key)] = editor
     else:
         raise ValueError("The project manifest editor state is invalid")
 
@@ -303,6 +324,7 @@ def sync_project_manifest(
         "project_id": project.id,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "editor": editor,
+        "edits": edits,
         "references": references,
     }
     previous = _atomic_write(path, document)

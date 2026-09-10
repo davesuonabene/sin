@@ -32,6 +32,7 @@ export class NodePopupMenu {
         { type: "preset_synth", label: "Synth Lead", category: "PRESETS", badge: "PSET", badgeColor: "#84cc16", isCallable: false },
 
         // MODULATORS
+        { type: "random", label: "Random Modifier", category: "MODULATORS", badge: "RND", badgeColor: "#ec4899", isCallable: true },
         { type: "mod_lfo", label: "LFO Generator", category: "MODULATORS", badge: "MOD", badgeColor: "#06b6d4", isCallable: false },
         { type: "mod_env", label: "ADSR Envelope", category: "MODULATORS", badge: "MOD", badgeColor: "#06b6d4", isCallable: false },
 
@@ -89,6 +90,11 @@ export class NodePopupMenu {
         this.menuElement.appendChild(this.tabsContainer);
         this.menuElement.appendChild(this.gridContainer);
 
+        this.menuElement.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
         document.body.appendChild(this.menuElement);
 
         // Search Filter Event
@@ -105,6 +111,14 @@ export class NodePopupMenu {
 
         window.addEventListener('pointerdown', outsideDismissHandler, true);
         window.addEventListener('click', outsideDismissHandler, true);
+        window.addEventListener('contextmenu', (e) => {
+            if (this.isVisible) {
+                e.preventDefault();
+                if (Date.now() - this.openTime > 200 && !this.menuElement.contains(e.target as Node)) {
+                    this.hide();
+                }
+            }
+        }, true);
 
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.isVisible) {

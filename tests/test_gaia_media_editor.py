@@ -344,3 +344,58 @@ class TestGaiaMediaEditor(GaiaTestCase):
                 media_editor.save_project_editor_state(self.db, project.id, state)
 
         self.assertEqual(state_path.read_bytes(), original)
+
+    def test_multi_target_project_editor_state_tracking(self):
+        source_a = self.register_audio("Track A.wav")
+        source_b = self.register_audio("Track B.wav")
+        project = project_service.create_from_items(
+            self.db,
+            [source_a.id, source_b.id],
+            "single",
+            "Multi Track Project",
+            "project",
+            self.vault.id,
+        )[0]
+
+        state_a = schemas.MediaEditorState(
+            source_item_id=source_a.id,
+            target_id=f"item:{source_a.id}",
+            active_layer_ids=[source_a.id],
+            layers=[schemas.MediaEditLayer(item_id=source_a.id, gain_db=-3)],
+        )
+        media_editor.save_project_editor_state(self.db, project.id, state_a)
+
+        state_b = schemas.MediaEditorState(
+            source_item_id=source_b.id,
+            target_id=f"item:{source_b.id}",
+            active_layer_ids=[source_b.id],
+            layers=[schemas.MediaEditLayer(item_id=source_b.id, gain_db=2)],
+        )
+        media_editor.save_project_editor_state(self.db, project.id, state_b)
+
+        # Verify reading per target
+        loaded_a = media_editor.read_project_editor_state(self.db, project.id, target_id=f"item:{source_a.id}")
+        self.assertIsNotNone(loaded_a)
+        self.assertEqual(loaded_a["target_id"], f"item:{source_a.id}")
+        self.assertEqual(loaded_a["layers"][0]["gain_db"], -3)
+
+        loaded_b = media_editor.read_project_editor_state(self.db, project.id, target_id=f"item:{source_b.id}")
+        self.assertIsNotNone(loaded_b)
+        self.assertEqual(loaded_b["target_id"], f"item:{source_b.id}")
+        self.assertEqual(loaded_b["layers"][0]["gain_db"], 2)
+
+        # Verify build_editor_session loads corresponding target state
+        session_a = media_editor.build_editor_session(self.db, project.id, target_id=f"item:{source_a.id}")
+        self.assertIsNotNone(session_a["editor_state"])
+        self.assertEqual(session_a["editor_state"]["layers"][0]["gain_db"], -3)
+
+        session_b = media_editor.build_editor_session(self.db, project.id, target_id=f"item:{source_b.id}")
+        self.assertIsNotNone(session_b["editor_state"])
+        self.assertEqual(session_b["editor_state"]["layers"][0]["gain_db"], 2)
+
+        # Verify manifest current.json
+        state_path = Path(project.absolute_path) / "files" / "edit" / "current.json"
+        manifest = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertIn("edits", manifest)
+        self.assertIn(f"item:{source_a.id}", manifest["edits"])
+        self.assertIn(f"item:{source_b.id}", manifest["edits"])

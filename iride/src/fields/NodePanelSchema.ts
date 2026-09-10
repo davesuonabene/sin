@@ -8,7 +8,8 @@ export type SectionType =
     | 'sequence_grid'
     | 'arrangement_timeline'
     | 'fx_chain'
-    | 'pool_editor';
+    | 'pool_editor'
+    | 'random_panel';
 
 export interface PanelSectionConfig {
     type: SectionType;

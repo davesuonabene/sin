@@ -4,7 +4,7 @@ Serves as the single source of truth for graph serialization payloads across SIN
 """
 
 from typing import List, Optional, Literal, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class FxModuleModel(BaseModel):
@@ -61,6 +61,33 @@ class AudioNodeModel(BaseModel):
     chain: List[FxModuleModel] = []
     modulators: Optional[List[Dict[str, Any]]] = None
     children: List['AudioNodeModel'] = []
+
+    @field_validator('seed_mode', mode='before')
+    @classmethod
+    def sanitize_seed_mode(cls, v):
+        if not v or not isinstance(v, str):
+            return "moving"
+        v_str = str(v).strip().lower()
+        return v_str if v_str in ("fixed", "moving") else "moving"
+
+    @field_validator('refresh_mode', mode='before')
+    @classmethod
+    def sanitize_refresh_mode(cls, v):
+        valid = {
+            "local", "parent", "ancestor", "global", "off",
+            "local_refresh", "parent_refresh", "global_refresh",
+            "parent_render", "self_render", "manual", "fixed"
+        }
+        if not v or str(v).lower() not in valid:
+            return "off"
+        return str(v).lower()
+
+    @field_validator('section_points', 'section_enabled', 'section_probability',
+                     'section_sample_start', 'section_quant', 'section_quant_anchor',
+                     'chain', 'children', mode='before')
+    @classmethod
+    def sanitize_lists(cls, v):
+        return [] if v is None else v
 
 
 class PoolResolveRequest(BaseModel):

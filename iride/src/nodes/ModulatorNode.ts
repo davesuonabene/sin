@@ -76,9 +76,9 @@ export class ModulatorNode extends BaseNode {
         }
 
         // A modulator cannot own another modulator, but its preview action can
-        // render the audio node it controls.
-        this.buttons = [this.renderBtn];
-        this.renderBtn.onClick = () => {
+        // preview the audio node it controls.
+        this.buttons = [this.previewBtn];
+        this.previewBtn.onClick = () => {
             const previewNodeId = this.properties?.parentId ?? this.id;
             window.dispatchEvent(new CustomEvent('preview-node', { detail: { nodeId: previewNodeId } }));
         };
@@ -90,7 +90,8 @@ export class ModulatorNode extends BaseNode {
                 } else {
                     window.dispatchEvent(new CustomEvent('node-removed', { detail: { nodeId: this.id } }));
                 }
-            }
+            },
+            "Delete Node"
         );
         this.addButton(this.removeBtn);
     }
@@ -105,6 +106,14 @@ export class ModulatorNode extends BaseNode {
 
     canBeMainPreview(): boolean {
         return false;
+    }
+
+    override get isModifier(): boolean {
+        return true;
+    }
+
+    override get modifierKind(): string {
+        return 'modulator';
     }
 }
 

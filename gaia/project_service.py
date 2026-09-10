@@ -223,6 +223,10 @@ def _prepare_project(
     if destination.exists():
         raise ValueError(f"A managed project folder named '{title}' already exists")
     destination.mkdir(parents=False, exist_ok=False)
+    files_root = destination / PROJECT_FILES_DIRECTORY
+    files_root.mkdir(parents=True, exist_ok=True)
+    for stage_name in ("edit", "source", "derived"):
+        (files_root / stage_name).mkdir(parents=True, exist_ok=True)
     schema = _project_schema(project_type)(
         absolute_path=str(destination),
         vault_id=vault.id,

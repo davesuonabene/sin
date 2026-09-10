@@ -9,7 +9,7 @@ import {
     normalizeFacetValue,
 } from './libraryFilters';
 import { drawNeonIcon, type NeonIcon } from '../nodes/NodeVisuals';
-import { fetchLibrary as fetchCachedLibrary, submitLibraryMetadataProposal } from '../api';
+import { clearLibraryCache, fetchLibrary as fetchCachedLibrary, submitLibraryMetadataProposal } from '../api';
 import { groupFileVersions, type GroupedFileVersion } from '../libraryVersioning';
 
 type LibraryTypeVisual = {
@@ -28,7 +28,16 @@ const LIBRARY_TYPE_VISUALS: Record<string, LibraryTypeVisual> = {
     collection: { icon: 'arrangement', color: '#ec4899', label: 'Collection' },
     sample_pack: { icon: 'arrangement', color: '#ec4899', label: 'Sample pack' },
     project: { icon: 'arrangement', color: '#38bdf8', label: 'Project' },
+    folder: { icon: 'arrangement', color: '#ec4899', label: 'Folder' },
 };
+
+interface ContainerTreeFolder {
+    name: string;
+    fullPath: string;
+    folders: Map<string, ContainerTreeFolder>;
+    files: GroupedFileVersion<any>[];
+    totalCount: number;
+}
 
 function getLibraryTypeVisual(item: any): LibraryTypeVisual {
     const type = getAssetType(item);
@@ -78,10 +87,17 @@ export class LibraryPanel {
     private renderLimit: number = LibraryPanel.INITIAL_RENDER_LIMIT;
     private onlyFavourites: boolean = false;
     private favFilterBtn: HTMLButtonElement | null = null;
+    private refreshBtn: HTMLButtonElement | null = null;
+    private isRefreshing: boolean = false;
     private fileVersionSelections = new Map<string, string>();
+    private expandedOrganizerKeys = new Set<string>();
+    private expandedSubfolderKeys = new Set<string>();
     private readonly handlePreviewStateChange = (event: Event) => {
         this.previewEnabled = Boolean((event as CustomEvent).detail?.enabled);
         if (!this.previewEnabled) this.stopCurrentPreview();
+    };
+    private readonly handleRefreshRequest = () => {
+        void this.refresh();
     };
 
     constructor(parent: HTMLElement) {
@@ -93,6 +109,16 @@ export class LibraryPanel {
         this.searchInput = document.createElement('input');
         this.searchInput.className = 'td-node-popup-search';
         this.searchInput.placeholder = 'Search loops...';
+
+        this.refreshBtn = document.createElement('button');
+        this.refreshBtn.type = 'button';
+        this.refreshBtn.className = 'td-library-refresh-btn';
+        this.refreshBtn.title = 'Refresh library';
+        this.refreshBtn.setAttribute('aria-label', 'Refresh library');
+        this.refreshBtn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>';
+        this.refreshBtn.onclick = () => {
+            void this.refresh();
+        };
 
         this.favFilterBtn = document.createElement('button');
         this.favFilterBtn.type = 'button';
@@ -109,6 +135,7 @@ export class LibraryPanel {
         };
 
         searchRow.appendChild(this.searchInput);
+        searchRow.appendChild(this.refreshBtn);
         searchRow.appendChild(this.favFilterBtn);
 
         // Filter Bar
@@ -151,6 +178,7 @@ export class LibraryPanel {
         
         parent.appendChild(this.container);
         window.addEventListener('library-preview-changed', this.handlePreviewStateChange);
+        window.addEventListener('request-library-refresh', this.handleRefreshRequest);
 
         [this.vaultChipsContainer, this.typeChipsContainer, this.tagChipsContainer]
             .forEach(rail => this.enableHorizontalDragScroll(rail));
@@ -193,13 +221,14 @@ export class LibraryPanel {
             }
         });
         window.addEventListener('library-content-changed', () => {
-            void this.loadVaults();
+            void this.refresh();
         });
         this.loadVaults();
     }
 
     dispose(): void {
         window.removeEventListener('library-preview-changed', this.handlePreviewStateChange);
+        window.removeEventListener('request-library-refresh', this.handleRefreshRequest);
         this.stopCurrentPreview();
     }
 
@@ -285,7 +314,22 @@ export class LibraryPanel {
         });
     }
 
-    private async loadVaults(selectId?: number) {
+    public async refresh(): Promise<void> {
+        if (this.isRefreshing) return;
+        this.isRefreshing = true;
+        this.refreshBtn?.classList.add('spinning');
+        this.refreshBtn?.setAttribute('disabled', 'true');
+        try {
+            clearLibraryCache();
+            await this.loadVaults(undefined, true);
+        } finally {
+            this.isRefreshing = false;
+            this.refreshBtn?.classList.remove('spinning');
+            this.refreshBtn?.removeAttribute('disabled');
+        }
+    }
+
+    private async loadVaults(selectId?: number, forceRefresh = false) {
         try {
             const res = await fetch('/api/vaults');
             if (!res.ok) throw new Error('Unable to load vaults');
@@ -301,7 +345,7 @@ export class LibraryPanel {
                 'sin.selectedVaultId',
                 this.selectedVaultId === null ? 'all' : String(this.selectedVaultId),
             );
-            await this.fetchLibrary();
+            await this.fetchLibrary(forceRefresh);
         } catch (error) {
             console.error('Failed to load vaults', error);
             this.listContainer.innerHTML = '<div class="td-node-popup-empty">Unable to load vaults</div>';
@@ -534,7 +578,7 @@ export class LibraryPanel {
 
     private itemMatchesSearch(item: any, query: string): boolean {
         if (!query) return true;
-        return [item?.name, item?.title, item?.filename, item?.absolute_path, item?.filepath]
+        return [item?.name, item?.title, item?.filename, item?.absolute_path, item?.filepath, item?.folder]
             .some(value => String(value || '').toLowerCase().includes(query));
     }
 
@@ -550,6 +594,206 @@ export class LibraryPanel {
                 onlyFavourites: this.onlyFavourites,
             });
         });
+    }
+
+    private buildContainerTree(
+        organizerKey: string,
+        versionedContents: GroupedFileVersion<any>[],
+    ): { rootFiles: GroupedFileVersion<any>[]; subfolders: ContainerTreeFolder[] } {
+        const rootFiles: GroupedFileVersion<any>[] = [];
+        const foldersMap = new Map<string, ContainerTreeFolder>();
+
+        const getOrCreateFolder = (parentMap: Map<string, ContainerTreeFolder>, folderName: string, fullPath: string): ContainerTreeFolder => {
+            let folder = parentMap.get(folderName);
+            if (!folder) {
+                folder = {
+                    name: folderName,
+                    fullPath,
+                    folders: new Map(),
+                    files: [],
+                    totalCount: 0,
+                };
+                parentMap.set(folderName, folder);
+            }
+            return folder;
+        };
+
+        for (const versionedContent of versionedContents) {
+            const record = versionedContent.record;
+            const folderStr = String(record.folder || '').replace(/\\/g, '/').trim();
+            if (!folderStr) {
+                rootFiles.push(versionedContent);
+                continue;
+            }
+            const segments = folderStr.split('/').filter(Boolean);
+            if (segments.length === 0) {
+                rootFiles.push(versionedContent);
+                continue;
+            }
+
+            let currentMap = foldersMap;
+            let currentPath = organizerKey;
+            let currentFolder: ContainerTreeFolder | null = null;
+            for (const segment of segments) {
+                currentPath += `/${segment}`;
+                currentFolder = getOrCreateFolder(currentMap, segment, currentPath);
+                currentFolder.totalCount++;
+                currentMap = currentFolder.folders;
+            }
+            if (currentFolder) {
+                currentFolder.files.push(versionedContent);
+            }
+        }
+
+        const sortedFolders = Array.from(foldersMap.values()).sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+        );
+        return { rootFiles, subfolders: sortedFolders };
+    }
+
+    private renderSubfolder(
+        folder: ContainerTreeFolder,
+        container: HTMLElement,
+        isSearchActive: boolean,
+        parentOrganizerItem: any,
+        depth: number = 0,
+    ): void {
+        const subfolderWrapper = document.createElement('div');
+        subfolderWrapper.className = 'td-library-subfolder';
+        if (depth > 0) {
+            subfolderWrapper.style.marginLeft = `${depth * 8}px`;
+        }
+
+        const subfolderRow = document.createElement('div');
+        subfolderRow.className = 'td-library-subfolder-row';
+        subfolderRow.setAttribute('role', 'button');
+        subfolderRow.setAttribute('tabindex', '0');
+
+        const isExpanded = isSearchActive || this.expandedSubfolderKeys.has(folder.fullPath);
+
+        const toggleSpan = document.createElement('span');
+        toggleSpan.className = 'td-library-subfolder-toggle';
+        toggleSpan.textContent = isExpanded ? '▾' : '▸';
+
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'td-library-subfolder-icon';
+        iconSpan.textContent = '📁';
+
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'td-library-subfolder-title';
+        titleSpan.textContent = folder.name;
+        titleSpan.title = folder.name;
+
+        const countSpan = document.createElement('span');
+        countSpan.className = 'td-library-subfolder-count';
+        countSpan.textContent = `(${folder.totalCount})`;
+
+        subfolderRow.append(toggleSpan, iconSpan, titleSpan, countSpan);
+
+        const subfolderContents = document.createElement('div');
+        subfolderContents.className = 'td-library-subfolder-contents';
+        subfolderContents.style.display = isExpanded ? 'block' : 'none';
+
+        subfolderRow.onclick = (e) => {
+            e.stopPropagation();
+            const willExpand = subfolderContents.style.display === 'none';
+            subfolderContents.style.display = willExpand ? 'block' : 'none';
+            toggleSpan.textContent = willExpand ? '▾' : '▸';
+            if (willExpand) {
+                this.expandedSubfolderKeys.add(folder.fullPath);
+            } else {
+                this.expandedSubfolderKeys.delete(folder.fullPath);
+            }
+        };
+
+        const childFolders = Array.from(folder.folders.values()).sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+        );
+        for (const childFolder of childFolders) {
+            this.renderSubfolder(childFolder, subfolderContents, isSearchActive, parentOrganizerItem, depth + 1);
+        }
+
+        for (const file of folder.files) {
+            const fileRow = this.createOrganizerFileRow(file, parentOrganizerItem);
+            subfolderContents.appendChild(fileRow);
+        }
+
+        subfolderWrapper.append(subfolderRow, subfolderContents);
+        container.appendChild(subfolderWrapper);
+    }
+
+    private createOrganizerFileRow(
+        versionedContent: GroupedFileVersion<any>,
+        parentOrganizerItem: any,
+    ): HTMLElement {
+        const content = versionedContent.record;
+        const contentRow = document.createElement('div');
+        contentRow.className = 'multitrack-stem-row pack-content-row';
+        contentRow.draggable = true;
+        const contentVisual = getLibraryTypeVisual(content);
+
+        const contentMeta: string[] = [];
+        if (content.bpm) contentMeta.push(`${content.bpm} BPM`);
+        if (content.key) contentMeta.push(content.key);
+        const metaInfo = contentMeta.length ? ` (${contentMeta.join(' • ')})` : '';
+
+        const isContentFav = Boolean(content.favourite ?? content.attributes?.favourite);
+        const externalBadge = content.is_external ? '<span class="td-library-external-badge" title="External vault reference">↗ ext</span>' : '';
+
+        contentRow.innerHTML = `
+            <span class="library-type-icon library-type-icon--small" style="--library-icon-color: ${contentVisual.color}; background-color: ${contentVisual.color}; border-color: ${contentVisual.color}" title="${contentVisual.label}" aria-label="${contentVisual.label}">
+                <canvas width="24" height="24"></canvas>
+            </span>
+            <span class="stem-name" title="${content.absolute_path || content.relative_path}">${versionedContent.fileVersionDisplayName || content.filename || content.name || content.title}${metaInfo}${externalBadge}</span>
+            <span class="stem-duration">${content.duration_seconds ? content.duration_seconds + 's' : ''}</span>
+            <button class="td-library-row-fav-btn${isContentFav ? ' active' : ''}" type="button" title="${isContentFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isContentFav ? '★' : '☆'}</button>
+        `;
+        const contentIconCanvas = contentRow.querySelector('.library-type-icon canvas') as HTMLCanvasElement | null;
+        if (contentIconCanvas) drawLibraryTypeIcon(contentIconCanvas, contentVisual);
+
+        const contentFavBtn = contentRow.querySelector('.td-library-row-fav-btn') as HTMLButtonElement | null;
+        if (contentFavBtn) {
+            contentFavBtn.onmousedown = (e) => e.stopPropagation();
+            contentFavBtn.onclick = (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                void this.toggleFavourite(content, contentFavBtn, parentOrganizerItem);
+            };
+        }
+
+        const contentVersionSelector = this.createFileVersionSelector(versionedContent);
+        if (contentVersionSelector) {
+            contentRow.querySelector('.stem-name')?.after(contentVersionSelector);
+        }
+
+        contentRow.ondragstart = (e) => {
+            if (e.dataTransfer) {
+                const payload = {
+                    type: 'library-item',
+                    itemType: content.type || 'sample',
+                    id: content.id,
+                    filepath: content.absolute_path,
+                    name: content.filename || content.name || content.title,
+                    key: content.key || null,
+                    bpm: content.bpm || null,
+                    duration_seconds: content.duration_seconds || null,
+                    stems: content.stems || [],
+                    is_valid_length: content.is_valid_length ?? true,
+                    length_variance: content.length_variance ?? 0.0,
+                };
+                e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+                e.dataTransfer.setData('application/x-gaia-library-item', JSON.stringify(payload));
+                e.dataTransfer.effectAllowed = 'copy';
+            }
+        };
+
+        contentRow.onclick = (e) => {
+            e.stopPropagation();
+            const streamUrl = content.stream_url || `/api/library/stream/${content.id}`;
+            this.previewAudio(streamUrl, contentRow, contentVisual.color);
+        };
+
+        return contentRow;
     }
 
     private previewAudio(url: string, row: HTMLElement, accent: string): void {
@@ -725,20 +969,25 @@ export class LibraryPanel {
 
             const metaStr = metaParts.length > 0 ? `<span style="font-size: 11px; color: #64748b; margin-left: 6px; font-weight: normal;">(${metaParts.join(' • ')})</span>` : '';
 
+            const isSearchActive = Boolean(query);
+            const isOrganizerExpanded = this.expandedOrganizerKeys.has(itemKey)
+                || (isSearchActive && versionedOrganizerContents.length > 0);
+
             let accordionToggle = '';
             if (item.type === 'multitrack' && Array.isArray(item.stems) && item.stems.length > 0) {
                 accordionToggle = `<button class="multitrack-toggle-btn" title="Toggle Stem List" aria-label="Toggle stem list">▼</button>`;
             } else if (isAssetOrganizer(item) && visibleOrganizerContents.length > 0) {
-                accordionToggle = `<button class="pack-toggle-btn multitrack-toggle-btn" title="Toggle Pack Contents" aria-label="Toggle pack contents">▼</button>`;
+                accordionToggle = `<button class="pack-toggle-btn multitrack-toggle-btn" title="Toggle Pack Contents" aria-label="Toggle pack contents">${isOrganizerExpanded ? '▲' : '▼'}</button>`;
             }
 
             const isFav = Boolean(item.favourite ?? item.attributes?.favourite);
+            const externalBadge = item.is_external ? '<span class="td-library-external-badge" title="External vault reference">↗ ext</span>' : '';
 
             el.innerHTML = `
                 <span class="library-type-icon" style="--library-icon-color: ${typeVisual.color}; background-color: ${typeVisual.color}; border-color: ${typeVisual.color}" title="${typeVisual.label}" aria-label="${typeVisual.label}">
                     <canvas width="24" height="24"></canvas>
                 </span>
-                <span class="item-label" title="${item.absolute_path}">${displayName}${metaStr} ${lengthBadge}</span>
+                <span class="item-label" title="${item.absolute_path}">${displayName}${metaStr} ${lengthBadge}${externalBadge}</span>
                 ${accordionToggle}
                 <button class="td-library-row-fav-btn${isFav ? ' active' : ''}" type="button" title="${isFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isFav ? '★' : '☆'}</button>
             `;
@@ -779,6 +1028,7 @@ export class LibraryPanel {
                         ? { type: 'library-item', ...this.toDragItem(draggedItems[0]) }
                         : { type: 'library-items', items: draggedItems.map(candidate => this.toDragItem(candidate)) };
                     e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+                    e.dataTransfer.setData('application/x-gaia-library-item', JSON.stringify(payload));
                     e.dataTransfer.effectAllowed = 'copy';
                 }
             };
@@ -794,9 +1044,9 @@ export class LibraryPanel {
 
             el.onclick = (e) => {
                 const target = e.target as HTMLElement;
-                if (target.classList.contains('multitrack-toggle-btn')) {
+                if (target.classList.contains('multitrack-toggle-btn') && !target.classList.contains('pack-toggle-btn')) {
                     e.stopPropagation();
-                    const stemContainer = itemWrapper.querySelector('.multitrack-stem-container') as HTMLElement;
+                    const stemContainer = itemWrapper.querySelector('.multitrack-stem-container:not(.pack-content-container)') as HTMLElement;
                     if (stemContainer) {
                         const isHidden = stemContainer.style.display === 'none';
                         stemContainer.style.display = isHidden ? 'block' : 'none';
@@ -804,13 +1054,19 @@ export class LibraryPanel {
                     }
                     return;
                 }
-                if (target.classList.contains('pack-toggle-btn')) {
+                if (target.classList.contains('pack-toggle-btn') || isAssetOrganizer(item)) {
                     e.stopPropagation();
                     const packContainer = itemWrapper.querySelector('.pack-content-container') as HTMLElement;
                     if (packContainer) {
                         const isHidden = packContainer.style.display === 'none';
                         packContainer.style.display = isHidden ? 'block' : 'none';
-                        target.innerText = isHidden ? '▲' : '▼';
+                        const toggleBtn = itemWrapper.querySelector('.pack-toggle-btn') as HTMLElement | null;
+                        if (toggleBtn) toggleBtn.innerText = isHidden ? '▲' : '▼';
+                        if (isHidden) {
+                            this.expandedOrganizerKeys.add(itemKey);
+                        } else {
+                            this.expandedOrganizerKeys.delete(itemKey);
+                        }
                     }
                     return;
                 }
@@ -902,72 +1158,21 @@ export class LibraryPanel {
             if (isAssetOrganizer(item) && versionedOrganizerContents.length > 0) {
                 const packContainer = document.createElement('div');
                 packContainer.className = 'pack-content-container multitrack-stem-container';
-                packContainer.style.display = 'none';
+                packContainer.style.display = isOrganizerExpanded ? 'block' : 'none';
 
-                versionedOrganizerContents.forEach(versionedContent => {
-                    const content = versionedContent.record;
-                    const contentRow = document.createElement('div');
-                    contentRow.className = 'multitrack-stem-row pack-content-row';
-                    contentRow.draggable = true;
-                    const contentVisual = getLibraryTypeVisual(content);
+                const { rootFiles, subfolders } = this.buildContainerTree(
+                    itemKey,
+                    versionedOrganizerContents,
+                );
 
-                    const contentMeta: string[] = [];
-                    if (content.bpm) contentMeta.push(`${content.bpm} BPM`);
-                    if (content.key) contentMeta.push(content.key);
-                    const metaInfo = contentMeta.length ? ` (${contentMeta.join(' • ')})` : '';
+                for (const subfolder of subfolders) {
+                    this.renderSubfolder(subfolder, packContainer, isSearchActive, item);
+                }
 
-                    const isContentFav = Boolean(content.favourite ?? content.attributes?.favourite);
-
-                    contentRow.innerHTML = `
-                        <span class="library-type-icon library-type-icon--small" style="--library-icon-color: ${contentVisual.color}; background-color: ${contentVisual.color}; border-color: ${contentVisual.color}" title="${contentVisual.label}" aria-label="${contentVisual.label}">
-                            <canvas width="24" height="24"></canvas>
-                        </span>
-                        <span class="stem-name" title="${content.absolute_path || content.relative_path}">${versionedContent.fileVersionDisplayName || content.filename}${metaInfo}</span>
-                        <span class="stem-duration">${content.duration_seconds ? content.duration_seconds + 's' : ''}</span>
-                        <button class="td-library-row-fav-btn${isContentFav ? ' active' : ''}" type="button" title="${isContentFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isContentFav ? '★' : '☆'}</button>
-                    `;
-                    const contentIconCanvas = contentRow.querySelector('.library-type-icon canvas') as HTMLCanvasElement | null;
-                    if (contentIconCanvas) drawLibraryTypeIcon(contentIconCanvas, contentVisual);
-
-                    const contentFavBtn = contentRow.querySelector('.td-library-row-fav-btn') as HTMLButtonElement | null;
-                    if (contentFavBtn) {
-                        contentFavBtn.onmousedown = (e) => e.stopPropagation();
-                        contentFavBtn.onclick = (e) => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                            void this.toggleFavourite(content, contentFavBtn, item);
-                        };
-                    }
-
-                    const contentVersionSelector = this.createFileVersionSelector(versionedContent);
-                    if (contentVersionSelector) {
-                        contentRow.querySelector('.stem-name')?.after(contentVersionSelector);
-                    }
-
-                    contentRow.ondragstart = (e) => {
-                        if (e.dataTransfer) {
-                            const payload = {
-                                type: 'library-item',
-                                itemType: content.type || 'sample',
-                                id: content.id,
-                                filepath: content.absolute_path,
-                                name: content.filename,
-                                key: content.key || null,
-                                bpm: content.bpm || null,
-                                duration_seconds: content.duration_seconds || null,
-                            };
-                            e.dataTransfer.setData('text/plain', JSON.stringify(payload));
-                            e.dataTransfer.effectAllowed = 'copy';
-                        }
-                    };
-
-                    contentRow.onclick = () => {
-                        const streamUrl = content.stream_url || `/api/library/stream/${content.id}`;
-                        this.previewAudio(streamUrl, contentRow, contentVisual.color);
-                    };
-
+                for (const versionedContent of rootFiles) {
+                    const contentRow = this.createOrganizerFileRow(versionedContent, item);
                     packContainer.appendChild(contentRow);
-                });
+                }
 
                 itemWrapper.appendChild(packContainer);
             }

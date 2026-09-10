@@ -9,6 +9,7 @@ export class CanvasButton {
     color: string;
     hoverColor: string;
     isHovered: boolean = false;
+    tooltip?: string;
     onClick: (e?: MouseEvent) => void;
 
     constructor(
@@ -19,7 +20,8 @@ export class CanvasButton {
         label: string,
         color: string,
         hoverColor: string,
-        onClick: (e?: MouseEvent) => void
+        onClick: (e?: MouseEvent) => void,
+        tooltip?: string
     ) {
         this.x = x;
         this.y = y;
@@ -29,6 +31,7 @@ export class CanvasButton {
         this.color = color;
         this.hoverColor = hoverColor;
         this.onClick = onClick;
+        this.tooltip = tooltip;
     }
 
     draw(ctx: CanvasRenderingContext2D, node: LGraphNode) {
@@ -55,15 +58,15 @@ export class CanvasButton {
         ctx.fillText(this.label, finalX + this.width / 2, finalY + this.height / 2 + 1);
     }
 
-    checkHit(local_x: number, local_y: number, node: LGraphNode): boolean {
+    checkHit(local_x: number, local_y: number, node: LGraphNode, paddingX: number = 0, paddingY: number = 0): boolean {
         const finalX = this.x < 0 ? node.size[0] + this.x : this.x;
         const finalY = this.y < 0 ? node.size[1] + this.y : this.y;
 
         return (
-            local_x >= finalX &&
-            local_x <= finalX + this.width &&
-            local_y >= finalY &&
-            local_y <= finalY + this.height
+            local_x >= finalX - paddingX &&
+            local_x <= finalX + this.width + paddingX &&
+            local_y >= finalY - paddingY &&
+            local_y <= finalY + this.height + paddingY
         );
     }
 }

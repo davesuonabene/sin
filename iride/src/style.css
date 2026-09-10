@@ -708,6 +708,15 @@ body, html, #app {
   background: #1e293b;
 }
 
+.master-loop-btn {
+  color: #94a3b8;
+}
+
+.master-loop-btn.is-active {
+  color: #3ee6b0;
+  background: rgba(62, 230, 176, 0.12);
+}
+
 .master-control-btn:focus-visible,
 .master-waveform-canvas:focus-visible {
   outline: 2px solid #10b981;
@@ -723,6 +732,14 @@ body, html, #app {
   width: 15px;
   height: 15px;
   fill: currentColor;
+}
+
+.master-loop-btn svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .master-waveform {
@@ -1823,6 +1840,50 @@ canvas {
 .td-node-popup-search:focus {
   border-color: var(--sin-menu-accent);
   box-shadow: none;
+}
+
+.td-library-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  color: #94a3b8;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.td-library-refresh-btn:hover:not(:disabled) {
+  border-color: var(--sin-menu-accent, #38bdf8);
+  color: var(--sin-menu-accent, #38bdf8);
+  background-color: #f0f9ff;
+}
+
+.td-library-refresh-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.td-library-refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.td-library-refresh-btn.spinning svg {
+  animation: sin-spin 0.75s linear infinite;
+}
+
+@keyframes sin-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .td-library-fav-filter-btn {
@@ -3533,6 +3594,101 @@ canvas {
 
 .multitrack-stem-row .stem-play-btn:hover {
   background: rgba(56, 189, 248, 0.2);
+}
+
+.pack-toggle-btn {
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #38bdf8;
+}
+
+.pack-toggle-btn:hover {
+  background: rgba(56, 189, 248, 0.3);
+}
+
+.pack-content-container {
+  border-left: 2px solid #38bdf8;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.td-library-subfolder {
+  margin: 3px 0;
+}
+
+.td-library-subfolder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(30, 41, 59, 0.5);
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: #cbd5e1;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.td-library-subfolder-row:hover {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #f8fafc;
+}
+
+.td-library-subfolder-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  font-size: 10px;
+  color: #94a3b8;
+  user-select: none;
+}
+
+.td-library-subfolder-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.td-library-subfolder-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.td-library-subfolder-count {
+  font-size: 10px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.td-library-subfolder-contents {
+  padding-left: 10px;
+  margin-top: 2px;
+  margin-bottom: 4px;
+  border-left: 1px dashed rgba(255, 255, 255, 0.1);
+  margin-left: 6px;
+}
+
+.td-library-external-badge {
+  display: inline-block;
+  font-size: 9px;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 2px;
+  padding: 0 4px;
+  margin-left: 6px;
+  font-weight: 500;
+  white-space: nowrap;
+  line-height: 14px;
+  vertical-align: middle;
 }
 
 /* Import Toolbar & Multitrack Checkbox Styles */

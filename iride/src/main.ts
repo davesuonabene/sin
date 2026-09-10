@@ -8,6 +8,7 @@ import './nodes/SequenceNode';
 import './nodes/ArrangementNode';
 import './nodes/ModulatorNode';
 import './nodes/AssetFilterNode';
+import './nodes/RandomNode';
 import './nodes/DisabledNode';
 import { PropertiesWindow } from './ui/PropertiesWindow';
 import { NodePopupMenu } from './ui/NodePopupMenu';
@@ -19,9 +20,10 @@ import { getParameterWheelStep, registerParameterWheelControl } from './ui/Param
 import { appendServerRuntimeLog, installFetchLogging, loggedTask, runtimeLog } from './runtimeLog';
 import { attachGhostProperties, createGhostNode, detachGhostDependents, isGhostNode, syncGhostTrackData } from './ghosts';
 import { installSeparatedNodeClipboard } from './nodeClipboard';
-import { fetchLibrary, findLibraryFile, findLibraryFileById, findLibraryFileForPoolLocator, refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from './api';
+import { clearLibraryCache, fetchLibrary, findLibraryFile, findLibraryFileById, findLibraryFileForPoolLocator, refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from './api';
 import { serializeNodeSubtree } from '../../ermes/ts/serializer';
 import { advanceAssetPoolSeed, normalizeAssetRefreshMode, resolveAssetFilterNode, resolveAssignedAssetFilters } from '../../ermes/ts/assetResolver';
+import { resolveAssignedRandomModifiers } from '../../ermes/ts/randomResolver';
 
 const appElement = document.getElementById('app');
 if (!appElement) throw new Error('Could not find #app element');
@@ -64,6 +66,7 @@ topHeader.innerHTML = `
                 <summary>Library</summary>
                 <div class="header-menu-popover sin-menu-surface">
                     <button id="toggle-library-btn" class="header-menu-action sin-menu-item">Open Library</button>
+                    <button id="refresh-library-btn" class="header-menu-action sin-menu-item">Refresh Library</button>
                     <button id="toggle-library-preview-btn" class="header-menu-action sin-menu-item" aria-pressed="true">Auto-preview: On</button>
                     <div class="header-menu-hint">Library management stays in GAIA.</div>
                 </div>
@@ -113,6 +116,9 @@ playbackFooter.innerHTML = `
             <audio id="master-player" preload="metadata"></audio>
             <button id="master-play-btn" class="master-control-btn" type="button" aria-label="Play" title="Play" disabled>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>
+            </button>
+            <button id="master-loop-btn" class="master-control-btn master-loop-btn" type="button" aria-label="Loop off" title="Loop off" aria-pressed="false" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h9.5a3.5 3.5 0 0 1 0 7H15m2-3 3 3-3 3M17 17H7.5a3.5 3.5 0 0 1 0-7H9m-2 3-3-3 3-3"/></svg>
             </button>
         </div>
         <div id="master-waveform" class="master-waveform" title="Click or drag to seek"></div>
@@ -166,12 +172,14 @@ window.addEventListener('pointermove', scheduleFloatingPanelClamp, { passive: tr
 const tempFilesSelect = playbackFooter.querySelector('#temp-files-select') as HTMLSelectElement;
 const masterPlayer = playbackFooter.querySelector('#master-player') as HTMLAudioElement;
 const masterPlayBtn = playbackFooter.querySelector('#master-play-btn') as HTMLButtonElement;
+const masterLoopBtn = playbackFooter.querySelector('#master-loop-btn') as HTMLButtonElement;
 const masterMuteBtn = playbackFooter.querySelector('#master-mute-btn') as HTMLButtonElement;
 const masterVolume = playbackFooter.querySelector('#master-volume') as HTMLInputElement;
 const exportBtn = topHeader.querySelector('#export-btn') as HTMLButtonElement;
 const globalPreviewBtn = topHeader.querySelector('#global-preview-btn') as HTMLButtonElement;
 const previewRecalculateBtn = topHeader.querySelector('#preview-recalculate-btn') as HTMLButtonElement;
 const toggleLibraryBtn = topHeader.querySelector('#toggle-library-btn') as HTMLButtonElement;
+const refreshLibraryBtn = topHeader.querySelector('#refresh-library-btn') as HTMLButtonElement | null;
 const toggleLibraryPreviewBtn = topHeader.querySelector('#toggle-library-preview-btn') as HTMLButtonElement;
 const headerToggleLibrary = topHeader.querySelector('#header-toggle-library') as HTMLButtonElement;
 const headerToggleProperties = topHeader.querySelector('#header-toggle-properties') as HTMLButtonElement;
@@ -267,10 +275,16 @@ const volumeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h
 const mutedIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5 1 2 2 2-2 1.5 1.5-2 2 2 2-1.5 1.5-2-2-2 2-1.5-1.5 2-2-2-2z"/></svg>';
 
 function updatePlaybackControls() {
-    const isPlaying = !masterPlayer.paused && !masterPlayer.ended;
+    const isPlaying = loopEnabled ? loopSource !== null || !masterPlayer.paused && !masterPlayer.ended : !masterPlayer.paused && !masterPlayer.ended;
     masterPlayBtn.innerHTML = isPlaying ? pauseIcon : playIcon;
     masterPlayBtn.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
     masterPlayBtn.title = isPlaying ? 'Pause' : 'Play';
+    const isLooping = loopEnabled;
+    masterLoopBtn.disabled = masterPlayBtn.disabled;
+    masterLoopBtn.classList.toggle('is-active', isLooping);
+    masterLoopBtn.setAttribute('aria-pressed', String(isLooping));
+    masterLoopBtn.setAttribute('aria-label', isLooping ? 'Loop on' : 'Loop off');
+    masterLoopBtn.title = isLooping ? 'Loop on' : 'Loop off';
     const isMuted = masterPlayer.muted || masterPlayer.volume === 0;
     masterMuteBtn.innerHTML = isMuted ? mutedIcon : volumeIcon;
     masterMuteBtn.setAttribute('aria-label', isMuted ? 'Unmute' : 'Mute');
@@ -282,6 +296,16 @@ function updatePlaybackTrackPresentation() {
 }
 
 let pendingMasterSeek: number | null = null;
+let loopEnabled = false;
+let loopBuffer: AudioBuffer | null = null;
+let loopBufferRequestId = 0;
+let loopLoad: Promise<AudioBuffer | null> = Promise.resolve(null);
+let loopSource: AudioBufferSourceNode | null = null;
+let loopContext: AudioContext | null = null;
+let loopGain: GainNode | null = null;
+let loopStartedAt = 0;
+let loopOffset = 0;
+let loopAnimationFrame: number | null = null;
 
 const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
     const duration = Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0
@@ -291,6 +315,13 @@ const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
     const targetTime = Math.max(0, Math.min(duration, progress * duration));
     pendingMasterSeek = targetTime;
     masterWaveform.setPlayback(targetTime, duration);
+    if (loopEnabled) {
+        const wasPlaying = loopSource !== null || !masterPlayer.paused;
+        loopOffset = targetTime;
+        stopLoop(false);
+        masterPlayer.pause();
+        if (wasPlaying) void playLoop(targetTime);
+    }
     try {
         masterPlayer.currentTime = targetTime;
     } catch (error) {
@@ -299,8 +330,91 @@ const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
     }
 });
 
+function loopTime() {
+    if (!loopSource || !loopContext || !loopBuffer?.duration) return Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : loopOffset;
+    return (loopOffset + Math.max(0, loopContext.currentTime - loopStartedAt)) % loopBuffer.duration;
+}
+
+function animateLoop() {
+    if (!loopSource || !loopBuffer) return;
+    masterWaveform.setPlayback(loopTime(), loopBuffer.duration);
+    loopAnimationFrame = requestAnimationFrame(animateLoop);
+}
+
+function stopLoop(savePosition: boolean) {
+    if (loopSource) {
+        if (savePosition) loopOffset = loopTime();
+        try { loopSource.stop(); } catch { /* already stopped */ }
+        loopSource.disconnect();
+        loopSource = null;
+    }
+    if (loopAnimationFrame !== null) cancelAnimationFrame(loopAnimationFrame);
+    loopAnimationFrame = null;
+}
+
+function syncLoopGain() {
+    if (loopGain) loopGain.gain.value = masterPlayer.muted ? 0 : masterPlayer.volume;
+}
+
+function playNativeLoop(offset: number) {
+    masterPlayer.loop = true;
+    try { masterPlayer.currentTime = Math.max(0, offset); } catch { /* metadata is still loading */ }
+    masterPlayer.play().catch(error => console.error('Play failed', error));
+}
+
+async function playLoop(offset: number, requestId = loopBufferRequestId) {
+    const buffer = loopBuffer || await loopLoad;
+    if (!loopEnabled || requestId !== loopBufferRequestId) return;
+    if (!buffer || !masterWaveform.playbackContext) {
+        playNativeLoop(offset);
+        return;
+    }
+
+    const context = masterWaveform.playbackContext;
+    try {
+        await context.resume();
+    } catch {
+        playNativeLoop(offset);
+        return;
+    }
+    if (!loopEnabled || requestId !== loopBufferRequestId) return;
+    stopLoop(false);
+    if (!loopGain || loopContext !== context) {
+        loopGain?.disconnect();
+        loopGain = context.createGain();
+        loopGain.connect(context.destination);
+    }
+    loopContext = context;
+    syncLoopGain();
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.loopEnd = buffer.duration;
+    source.connect(loopGain);
+    loopOffset = ((offset % buffer.duration) + buffer.duration) % buffer.duration;
+    loopStartedAt = context.currentTime;
+    source.start(0, loopOffset);
+    loopSource = source;
+    masterPlayer.loop = false;
+    animateLoop();
+    updatePlaybackControls();
+}
+
+function loadLoopBuffer(source: string) {
+    const requestId = ++loopBufferRequestId;
+    loopBuffer = null;
+    loopLoad = masterWaveform.load(source).then(buffer => {
+        if (requestId === loopBufferRequestId) loopBuffer = buffer;
+        return buffer;
+    });
+    return requestId;
+}
+
 function setMasterPlayerSource(source: string, autoplay: boolean = false) {
     pendingMasterSeek = null;
+    stopLoop(false);
+    masterPlayer.loop = false;
+    masterPlayer.pause();
     masterPlayer.removeAttribute('aria-disabled');
     // Render filenames and RAM-preview URLs are content-versioned by the
     // backend. Preserving that URL lets the player and waveform request share
@@ -308,17 +422,31 @@ function setMasterPlayerSource(source: string, autoplay: boolean = false) {
     masterPlayer.src = source;
     runtimeLog(`Audio stream assigned: ${source}`, 'debug');
     masterPlayBtn.disabled = false;
+    masterLoopBtn.disabled = false;
     masterPlayer.load();
-    void masterWaveform.load(masterPlayer.src);
-    if (autoplay) masterPlayer.play().catch(error => console.error('Play failed', error));
+    const requestId = loadLoopBuffer(source);
+    updatePlaybackControls();
+    if (autoplay) {
+        if (loopEnabled) {
+            void playLoop(0, requestId);
+        } else {
+            masterPlayer.play().catch(error => console.error('Play failed', error));
+        }
+    }
 }
 
 function setPreviewCalculatingState() {
+    ++loopBufferRequestId;
+    loopBuffer = null;
+    loopLoad = Promise.resolve(null);
+    stopLoop(false);
+    masterPlayer.loop = false;
     masterPlayer.pause();
     masterPlayer.removeAttribute('src');
     masterPlayer.load();
     masterPlayer.setAttribute('aria-disabled', 'true');
     masterPlayBtn.disabled = true;
+    masterLoopBtn.disabled = true;
     masterWaveform.clear('Calculating preview...');
     updatePlaybackControls();
 }
@@ -326,17 +454,22 @@ function setPreviewCalculatingState() {
 function setPreviewFailedState() {
     masterPlayer.setAttribute('aria-disabled', 'true');
     masterPlayBtn.disabled = true;
+    masterLoopBtn.disabled = true;
     masterWaveform.clear('Preview failed');
     updatePlaybackControls();
 }
 
 masterPlayer.addEventListener('timeupdate', () => {
-    if (pendingMasterSeek === null && Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
+    if (!loopEnabled && pendingMasterSeek === null && Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
         masterWaveform.setPlayback(masterPlayer.currentTime, masterPlayer.duration);
     }
 });
 masterPlayer.addEventListener('loadedmetadata', () => {
     runtimeLog(`Audio stream metadata loaded (${masterPlayer.duration.toFixed(3)} s)`, 'debug');
+    if (loopEnabled) {
+        masterWaveform.setPlayback(loopTime(), masterPlayer.duration);
+        return;
+    }
     if (pendingMasterSeek !== null) {
         const targetTime = Math.min(pendingMasterSeek, masterPlayer.duration);
         masterPlayer.currentTime = targetTime;
@@ -351,25 +484,63 @@ masterPlayer.addEventListener('error', () => {
 });
 masterPlayer.addEventListener('seeked', () => {
     pendingMasterSeek = null;
-    if (Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
+    if (!loopEnabled && Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
         masterWaveform.setPlayback(masterPlayer.currentTime, masterPlayer.duration);
     }
 });
 masterPlayer.addEventListener('play', updatePlaybackControls);
 masterPlayer.addEventListener('pause', updatePlaybackControls);
 masterPlayer.addEventListener('ended', () => {
+    if (loopEnabled) return;
     masterWaveform.setPlayback(masterPlayer.duration, masterPlayer.duration);
     updatePlaybackControls();
 });
 
 masterPlayBtn.addEventListener('click', () => {
+    if (loopEnabled) {
+        if (loopSource || !masterPlayer.paused) {
+            if (loopSource) stopLoop(true);
+            else masterPlayer.pause();
+            updatePlaybackControls();
+        } else {
+            void playLoop(loopTime());
+        }
+        return;
+    }
     if (masterPlayer.paused) masterPlayer.play().catch(error => console.error('Play failed', error));
     else masterPlayer.pause();
+});
+
+masterLoopBtn.addEventListener('click', () => {
+    if (!loopEnabled) {
+        const currentTime = Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : 0;
+        const wasPlaying = !masterPlayer.paused && !masterPlayer.ended;
+        loopEnabled = true;
+        masterPlayer.loop = false;
+        masterPlayer.pause();
+        loopOffset = currentTime;
+        if (wasPlaying) void playLoop(currentTime);
+    } else {
+        const currentTime = loopTime();
+        const wasPlaying = loopSource !== null || !masterPlayer.paused && !masterPlayer.ended;
+        loopEnabled = false;
+        stopLoop(false);
+        masterPlayer.loop = false;
+        pendingMasterSeek = currentTime;
+        try {
+            masterPlayer.currentTime = currentTime;
+        } catch (error) {
+            console.error('Could not restore native playback position', error);
+        }
+        if (wasPlaying) masterPlayer.play().catch(error => console.error('Play failed', error));
+    }
+    updatePlaybackControls();
 });
 
 masterVolume.addEventListener('input', () => {
     masterPlayer.volume = Number(masterVolume.value);
     masterPlayer.muted = false;
+    syncLoopGain();
     updatePlaybackControls();
 });
 
@@ -381,6 +552,7 @@ masterMuteBtn.addEventListener('click', () => {
     } else {
         masterPlayer.muted = !masterPlayer.muted;
     }
+    syncLoopGain();
     updatePlaybackControls();
 });
 
@@ -865,6 +1037,19 @@ toggleLibraryBtn.addEventListener('click', () => {
     libraryMenu.open = false;
 });
 
+refreshLibraryBtn?.addEventListener('click', async () => {
+    libraryMenu.open = false;
+    toggleLibraryPanel('open');
+    clearLibraryCache();
+    window.dispatchEvent(new CustomEvent('request-library-refresh'));
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    const canvas = (window as any).editorCanvas as LGraphCanvas | undefined;
+    if (graph) {
+        await syncGraphSampleMetadataFromLibrary(graph, false).catch(() => {});
+        canvas?.setDirty(true, true);
+    }
+});
+
 function updateLibraryPreviewMenuItem() {
     const enabled = isLibraryPreviewEnabled();
     toggleLibraryPreviewBtn.textContent = `Auto-preview: ${enabled ? 'On' : 'Off'}`;
@@ -882,6 +1067,23 @@ updateLibraryPreviewMenuItem();
 window.addEventListener('toggle-properties-dock', (e: Event) => {
     const nodeId = (e as CustomEvent).detail?.nodeId;
     togglePropertiesDockMode(nodeId);
+});
+
+window.addEventListener('open-node-properties', (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    const nodeId = detail?.nodeId;
+    if (nodeId == null) return;
+    const graph = (window as any).editorGraph;
+    const targetNode = graph?.getNodeById(nodeId);
+    if (!targetNode) return;
+    const canvas = (window as any).editorCanvas as LGraphCanvas;
+    canvas?.selectNode?.(targetNode);
+    openParamWindow(targetNode, { forceOpen: true });
+    if (detail.startRandomMapping) {
+        setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('start-random-mapping', { detail: { nodeId } }));
+        }, 50);
+    }
 });
 
 window.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -934,7 +1136,8 @@ tempFilesSelect.addEventListener('change', (e) => {
     const val = (e.target as HTMLSelectElement).value;
     updatePlaybackTrackPresentation();
     if (val === 'RAM_PREVIEW') {
-        masterPlayer.play().catch(error => console.error('Play failed', error));
+        if (activeRamPreviewSource) setMasterPlayerSource(activeRamPreviewSource, true);
+        else masterPlayer.play().catch(error => console.error('Play failed', error));
     } else if (val) {
         setMasterPlayerSource(val, true);
     }
@@ -942,6 +1145,7 @@ tempFilesSelect.addEventListener('change', (e) => {
 
 let activeRamPreviewNodeId: number | null = null;
 let activeRamPreviewPayload: any = null;
+let activeRamPreviewSource: string | null = null;
 
 exportBtn.addEventListener('click', async () => {
     fileMenu.open = false;
@@ -1021,28 +1225,37 @@ async function updateTempRendersList(selectFilename?: string) {
                 tempFilesSelect.appendChild(opt);
             });
 
+            let selectedIndex = 0;
             if (selectFilename) {
                 for (let i = 0; i < tempFilesSelect.options.length; i++) {
-                    if (tempFilesSelect.options[i].textContent === selectFilename) {
-                        tempFilesSelect.selectedIndex = i;
+                    const optText = tempFilesSelect.options[i].textContent || '';
+                    if (optText === selectFilename || optText.includes(selectFilename) || selectFilename.includes(optText)) {
+                        selectedIndex = i;
                         break;
                     }
                 }
             }
 
-            // Update player src to currently selected
-            const selectedOpt = tempFilesSelect.options[tempFilesSelect.selectedIndex];
-            if (selectedOpt) {
-                setMasterPlayerSource(selectedOpt.value);
+            tempFilesSelect.selectedIndex = selectedIndex;
+            const selectedOpt = tempFilesSelect.options[selectedIndex];
+            if (selectedOpt && selectedOpt.value) {
+                tempFilesSelect.value = selectedOpt.value;
+                setMasterPlayerSource(selectedOpt.value, Boolean(selectFilename));
             }
             updatePlaybackTrackPresentation();
         } else {
             // No files left
             tempFilesSelect.innerHTML = '<option value="" disabled selected>No renders available</option>';
+            ++loopBufferRequestId;
+            loopBuffer = null;
+            loopLoad = Promise.resolve(null);
+            stopLoop(false);
+            masterPlayer.loop = false;
             masterPlayer.pause();
             masterPlayer.removeAttribute('src');
             masterPlayer.load();
             masterPlayBtn.disabled = true;
+            masterLoopBtn.disabled = true;
             masterWaveform.clear('Ready to render');
             updatePlaybackControls();
             updatePlaybackTrackPresentation();
@@ -1169,12 +1382,35 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
     const boxSelect = e.button === 0 && e.shiftKey && !e.ctrlKey;
     const additiveSelect = e.button === 0 && e.ctrlKey && !e.shiftKey;
 
-    // Dragging an occupied input fans out from the node that owns the input.
-    // LiteGraph normally disconnects that input before reconnecting it;
-    // preserve the incoming link and start a fresh connection from the
-    // parent's right-side output instead.
+    // Priority 1: Check if an action button on any node was clicked.
+    // Must be handled BEFORE LiteGraph's output slot hitbox detection
+    // which otherwise intercepts clicks near (x=48, y=18) as cable connection gestures.
     if (e.button === 0 && !e.shiftKey && !e.ctrlKey && this.graph) {
         const offset = this.convertEventToCanvasOffset(e);
+        const candidateNodes = (this.graph as any)._nodes || [];
+        for (let i = candidateNodes.length - 1; i >= 0; i--) {
+            const n = candidateNodes[i];
+            if (!n || n.flags?.collapsed || (n.flags as any)?.hidden || !Array.isArray(n.buttons) || n.buttons.length === 0) continue;
+
+            const localX = offset[0] - n.pos[0];
+            const localY = offset[1] - n.pos[1];
+            for (const btn of n.buttons) {
+                if (btn.checkHit(localX, localY, n)) {
+                    console.log(`[CanvasButton] Clicked '${btn.label}' (${btn.tooltip || 'button'}) on node #${n.id}`);
+                    btn.onClick(e);
+                    this.dirty_canvas = true;
+                    this.setDirty(true, true);
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return true;
+                }
+            }
+        }
+
+        // Dragging an occupied input fans out from the node that owns the input.
+        // LiteGraph normally disconnects that input before reconnecting it;
+        // preserve the incoming link and start a fresh connection from the
+        // parent's right-side output instead.
         const scale = this.ds?.scale || 1;
         const threshold = 10 / scale;
         const node = this.getNodeOnPos(offset[0], offset[1], (this.graph as any)._nodes, 0);
@@ -1402,7 +1638,7 @@ LiteGraph.NODE_TITLE_HEIGHT = 0;
 
 export interface TrackNodeData {
     id: number;
-    type: "track" | "sample" | "sequence" | "item_pool" | "sample_pool" | "arrangement" | "modulator" | "asset_filter" | "disabled";
+    type: "track" | "sample" | "sequence" | "item_pool" | "sample_pool" | "arrangement" | "modulator" | "asset_filter" | "random" | "disabled";
     name: string;
     filepath: string;
     sample_type?: string;
@@ -1745,10 +1981,9 @@ function syncArrangementLengthInheritance(graph?: LGraph) {
 function syncGraphHierarchy(graph?: LGraph) {
     const targetGraph = graph || ((window as any).editorGraph as LGraph);
     if (!targetGraph) return;
-
     for (const data of trackNodes.values()) {
         const node = targetGraph.getNodeById(data.id);
-        data.parentId = (data.type === 'modulator' || data.type === 'asset_filter')
+        data.parentId = ((node as any)?.isModifier || data.type === 'modulator' || data.type === 'asset_filter' || data.type === 'random')
             ? (node?.properties?.parentId ?? data.parentId ?? null)
             : null;
         data.children = [];
@@ -1760,19 +1995,14 @@ function syncGraphHierarchy(graph?: LGraph) {
             const link = links[linkId];
             if (!link) continue;
 
-            const childId = link.origin_id;
+            const childData = trackNodes.get(link.origin_id);
             const parentId = link.target_id;
-
-            const childData = trackNodes.get(childId);
-            const parentData = trackNodes.get(parentId);
-
-            if (childData) {
-                childData.parentId = parentId;
-            }
-            if (parentData) {
-                if (!parentData.children.includes(childId)) {
-                    parentData.children.push(childId);
+            if (childData && parentId != null) {
+                const parentData = trackNodes.get(parentId);
+                if (parentData && !parentData.children.includes(link.origin_id)) {
+                    parentData.children.push(link.origin_id);
                 }
+                childData.parentId = parentId;
             }
         }
     }
@@ -1800,13 +2030,14 @@ function updateGraphNodeCollapsing() {
         const lgraphNode = graph.getNodeById(nodeId);
         if (!lgraphNode) continue;
 
-        if (data.type === "modulator" || data.type === "asset_filter" || lgraphNode.type === "Audio/Modulator" || lgraphNode.type === "Audio/AssetFilter") {
+        if ((lgraphNode as any)?.isModifier || data.type === "modulator" || data.type === "asset_filter" || data.type === "random" || lgraphNode.type === "Audio/Modulator" || lgraphNode.type === "Audio/AssetFilter" || lgraphNode.type === "Audio/Random") {
             const parentId = data.parentId || lgraphNode.properties?.parentId;
 
             const isParentSelected = parentId != null && Boolean(selectedMap[parentId]);
             const isSelfSelected = Boolean(selectedMap[nodeId]);
+            const isSelfOpen = (activeParamNodeId === nodeId);
 
-            if (isParentSelected || isSelfSelected) {
+            if (isParentSelected || isSelfSelected || isSelfOpen) {
                 lgraphNode.flags.collapsed = false;
                 (lgraphNode as any).flags.hidden = false;
                 (lgraphNode as any).collapsedDotMode = false;
@@ -1814,10 +2045,6 @@ function updateGraphNodeCollapsing() {
                 lgraphNode.flags.collapsed = true;
                 (lgraphNode as any).flags.hidden = false;
                 (lgraphNode as any).collapsedDotMode = true;
-
-                if (activeParamNodeId === nodeId) {
-                    dockedPropertyPanels().forEach(panel => panel.api.close());
-                }
             }
         } else if (data.parentId === null) {
             lgraphNode.flags.collapsed = false;
@@ -1867,8 +2094,10 @@ function updatePanelToggleButtons() {
         const p = dv.getGroupPanel('library_panel');
         if (p) {
             libBtn.classList.add('active');
+            if (toggleLibraryBtn) toggleLibraryBtn.textContent = 'Close Library';
         } else {
             libBtn.classList.remove('active');
+            if (toggleLibraryBtn) toggleLibraryBtn.textContent = 'Open Library';
         }
     }
 
@@ -1919,7 +2148,7 @@ function toggleLibraryPanel(action: 'toggle' | 'open' | 'close' = 'toggle') {
 
 function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: boolean; location?: 'right' | 'floating' }) {
     if (!node || node.id == null) return;
-    if (node.type !== "Audio/Track" && node.type !== "Audio/Sample" && node.type !== "Audio/Sequence" && node.type !== "Audio/Arrangement" && node.type !== "Audio/Modulator" && node.type !== "Audio/AssetFilter") return;
+    if (node.type !== "Audio/Track" && node.type !== "Audio/Sample" && node.type !== "Audio/Sequence" && node.type !== "Audio/Arrangement" && node.type !== "Audio/Modulator" && node.type !== "Audio/AssetFilter" && node.type !== "Audio/Random" && !(node as any).isModifier) return;
 
     const dv = (window as any).dockview;
     if (!dv) return;
@@ -2098,9 +2327,20 @@ function addAssetFilterNode(parentId: number, openProperties: boolean = true) {
     return addModulatorNode(parentId, "asset_filter", openProperties);
 }
 
+function addRandomNode(parentId: number, openProperties: boolean = true) {
+    return addModulatorNode(parentId, "random", openProperties);
+}
+
+window.addEventListener('add-random-node', (e: any) => {
+    const parentId = e.detail?.parentId;
+    if (parentId != null) {
+        addRandomNode(parentId);
+    }
+});
+
 function addModulatorNode(
     parentId: number,
-    modifierKind: "modulator" | "asset_filter" = "modulator",
+    modifierKind: "modulator" | "asset_filter" | "random" = "modulator",
     openProperties: boolean = true
 ) {
     const graph = (window as any).editorGraph as LGraph;
@@ -2113,14 +2353,22 @@ function addModulatorNode(
 
     let modCount = 0;
     for (const data of trackNodes.values()) {
-        if ((data.type === "modulator" || data.type === "asset_filter") && data.parentId === parentId) {
+        if ((data.type === "modulator" || data.type === "asset_filter" || data.type === "random") && data.parentId === parentId) {
             modCount++;
         }
     }
 
-    const isAssetFilter = modifierKind === "asset_filter";
-    const modNode = LiteGraph.createNode(isAssetFilter ? "Audio/AssetFilter" : "Audio/Modulator");
-    const modName = isAssetFilter ? `Asset Pool ${modCount + 1}` : `Modulator ${modCount + 1}`;
+    let nodeType = "Audio/Modulator";
+    let modName = `Modulator ${modCount + 1}`;
+    if (modifierKind === "asset_filter") {
+        nodeType = "Audio/AssetFilter";
+        modName = `Asset Pool ${modCount + 1}`;
+    } else if (modifierKind === "random") {
+        nodeType = "Audio/Random";
+        modName = `Random ${modCount + 1}`;
+    }
+
+    const modNode = LiteGraph.createNode(nodeType);
     modNode.properties.node_name = modName;
     modNode.properties.node_type = modifierKind;
     modNode.properties.parentId = parentId;
@@ -2160,9 +2408,16 @@ function addModulatorNode(
     }
 
     updateGraphNodeCollapsing();
+    window.dispatchEvent(new CustomEvent('graph-connections-changed'));
+    if ((window as any).editorCanvas) {
+        (window as any).editorCanvas.setDirty(true, true);
+    }
     if (openProperties) openParamWindow(modNode);
     return modNode;
 }
+
+(window as any).addRandomNode = addRandomNode;
+(window as any).addModulatorNode = addModulatorNode;
 
 window.addEventListener('render-node', (e: any) => {
     const nodeId = e.detail?.nodeId;
@@ -2254,6 +2509,10 @@ function addChildNode(
 
     const parentData = trackNodes.get(parentId);
     if (!parentData) return;
+
+    if ((nodeType as string) === "random") {
+        return addRandomNode(parentId, openProperties);
+    }
 
     let typeStr = "Audio/Sample";
     let defaultName = "New Sample";
@@ -3056,6 +3315,9 @@ const dockview = new DockviewComponent(dockviewContainer, {
                 canvas.style.display = 'block';
                 canvas.style.backgroundColor = '#ffffff';
                 element.appendChild(canvas);
+                element.addEventListener('contextmenu', (e: MouseEvent) => {
+                    e.preventDefault();
+                });
 
                 requestAnimationFrame(async () => {
                     const graph = new LGraph();
@@ -3139,10 +3401,13 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         // visual metadata, not an audio graph link.
                         for (const node of nodesList) {
                             if (!node || (node.flags as any)?.hidden) continue;
-                            const isMod = node.type === "Audio/Modulator"
+                            const isMod = (node as any).isModifier
+                                || node.type === "Audio/Modulator"
                                 || node.type === "Audio/AssetFilter"
+                                || node.type === "Audio/Random"
                                 || node.properties?.node_type === "modulator"
-                                || node.properties?.node_type === "asset_filter";
+                                || node.properties?.node_type === "asset_filter"
+                                || node.properties?.node_type === "random";
 
                             if (!isMod) {
                                 if (node.flags?.collapsed) continue;
@@ -3181,11 +3446,13 @@ const dockview = new DockviewComponent(dockviewContainer, {
                                 ? node.pos[1] + 10
                                 : node.pos[1];
 
+                            const modColor = (node as any).nodeColor || node.color || "#a855f7";
+
                             ctx.beginPath();
                             ctx.moveTo(parentX, parentY);
                             ctx.lineTo(modX, modY);
                             ctx.lineWidth = 2.5;
-                            ctx.strokeStyle = "#a855f7";
+                            ctx.strokeStyle = modColor;
                             ctx.lineCap = "round";
                             ctx.stroke();
 
@@ -3197,16 +3464,19 @@ const dockview = new DockviewComponent(dockviewContainer, {
 
                                 ctx.beginPath();
                                 ctx.arc(modX, modY, 4.5, 0, Math.PI * 2);
-                                ctx.fillStyle = "#9333ea";
+                                ctx.fillStyle = modColor;
                                 ctx.fill();
                                 ctx.lineWidth = 1.5;
                                 ctx.strokeStyle = "#ffffff";
                                 ctx.stroke();
                             } else {
                                 ctx.beginPath();
-                                ctx.arc(modX, modY, 3.5, 0, Math.PI * 2);
-                                ctx.fillStyle = "#c084fc";
+                                ctx.arc(modX, modY, 4.5, 0, Math.PI * 2);
+                                ctx.fillStyle = modColor;
                                 ctx.fill();
+                                ctx.lineWidth = 1.5;
+                                ctx.strokeStyle = "#ffffff";
+                                ctx.stroke();
                             }
                         }
 
@@ -3218,6 +3488,10 @@ const dockview = new DockviewComponent(dockviewContainer, {
 
                     // Context Menu Override for Nodes & Canvas right-clicks
                     graphCanvas.processContextMenu = function (node: any, e: MouseEvent) {
+                        if (e) {
+                            e.preventDefault?.();
+                            e.stopPropagation?.();
+                        }
                         if (node) {
                             nodeContextMenu.show(e.clientX, e.clientY, node);
                         } else {
@@ -3231,6 +3505,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
 
                     canvas.addEventListener('contextmenu', (e: MouseEvent) => {
                         e.preventDefault();
+                        e.stopPropagation();
                         const offset = graphCanvas.convertEventToCanvasOffset(e);
                         const node = (graphCanvas as any).getNodeOnPos(offset[0], offset[1], (graph as any)._nodes, 0);
                         if (node) {
@@ -3420,10 +3695,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
             case 'properties-panel': {
                 const nodeId = options.params?.nodeId;
                 const graph = (window as any).editorGraph;
-                let node = (window as any)._currentlySelectedNode;
-                if (!node && graph && nodeId != null) {
-                    node = graph.getNodeById(nodeId);
-                }
+                let node = (graph && nodeId != null) ? graph.getNodeById(nodeId) : (window as any)._currentlySelectedNode;
                 const onClose = () => {
                     const dv = (window as any).dockview;
                     if (dv) {
@@ -3564,37 +3836,66 @@ window.addEventListener('refresh-asset-pool', async (event: Event) => {
 // are imported from ERMES serialization engine (./ermes/serializer and ./ermes/assetResolver).
 
 
+function formatApiError(status: number, errJson: any, rawText: string): string {
+    const detail = errJson?.detail;
+    if (!detail && rawText) return rawText;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+        return detail.map((e: any) => {
+            const loc = Array.isArray(e.loc) ? e.loc.filter((l: any) => l !== 'body').join('.') : (e.loc || '');
+            return `${loc ? loc + ': ' : ''}${e.msg || JSON.stringify(e)}`;
+        }).join('; ');
+    }
+    if (typeof detail === 'object' && detail !== null) {
+        return JSON.stringify(detail);
+    }
+    return `Status code ${status}`;
+}
+
 async function renderNode(nodeId: number) {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
 
+    const targetNode = graph.getNodeById(nodeId) as any;
+    if (targetNode?.renderBtn) {
+        targetNode.renderBtn.label = '…';
+        (window as any).editorCanvas?.setDirty?.(true, true);
+    }
+    masterWaveform.clear('Rendering to disk...');
+    masterPlayBtn.disabled = true;
+    updatePlaybackControls();
+
     const renderStartedAt = performance.now();
+    console.log(`[Render] Starting disk render (/api/render) for node #${nodeId}`);
     runtimeLog(`Disk render requested for node ${nodeId}`, 'common');
-    let libraryFiles: LibraryFile[];
     try {
-        libraryFiles = await loggedTask('Resolve graph asset metadata', () =>
-            syncGraphSampleMetadataFromLibrary(graph, true, nodeId)
-        );
-        await loggedTask('Resolve render asset pools', () =>
-            resolveAssignedAssetFilters(graph, nodeId, { kind: 'render', libraryFiles })
-        );
-    } catch (error) {
-        console.error('Asset Filter resolution failed', error);
-        const message = error instanceof Error ? error.message : String(error);
-        runtimeLog(`Disk render stopped: ${message}`, 'error');
-        alert(`Could not resolve the assigned Asset Filter: ${message}`);
-        return;
-    }
-    const payload = await loggedTask('Serialize render graph', () => serializeNodeSubtree(graph, nodeId));
-    if (!payload) {
-        runtimeLog('Disk render stopped: graph serialization returned no payload', 'error');
-        alert("Could not serialize node for rendering.");
-        return;
-    }
+        let libraryFiles: LibraryFile[];
+        try {
+            libraryFiles = await loggedTask('Resolve graph asset metadata', () =>
+                syncGraphSampleMetadataFromLibrary(graph, true, nodeId)
+            );
+            await loggedTask('Resolve render asset pools', () =>
+                resolveAssignedAssetFilters(graph, nodeId, { kind: 'render', libraryFiles })
+            );
+            await loggedTask('Resolve random modifiers', () =>
+                resolveAssignedRandomModifiers(graph, nodeId, { kind: 'render' })
+            );
+        } catch (error) {
+            console.error('Asset Filter resolution failed', error);
+            const message = error instanceof Error ? error.message : String(error);
+            runtimeLog(`Disk render stopped: ${message}`, 'error');
+            alert(`Could not resolve the assigned Asset Filter: ${message}`);
+            return;
+        }
+        const payload = await loggedTask('Serialize render graph', () => serializeNodeSubtree(graph, nodeId));
+        if (!payload) {
+            runtimeLog('Disk render stopped: graph serialization returned no payload', 'error');
+            alert("Could not serialize node for rendering.");
+            return;
+        }
 
-    payload.filename = `export_${nodeId}`;
+        payload.filename = `export_${nodeId}`;
 
-    try {
         const res = await loggedTask('Render audio on server', () =>
             fetch('/api/render', {
                 method: 'POST',
@@ -3602,15 +3903,16 @@ async function renderNode(nodeId: number) {
                 body: JSON.stringify(payload)
             })
         );
+
         if (!res.ok) {
-            let errorDetail = `Status code ${res.status}`;
+            let errJson: any = null;
+            let rawText = '';
             try {
-                const errJson = await res.json();
-                if (errJson.detail) errorDetail = errJson.detail;
+                errJson = await res.json();
             } catch {
-                const rawText = await res.text();
-                if (rawText) errorDetail = rawText;
+                try { rawText = await res.text(); } catch {}
             }
+            const errorDetail = formatApiError(res.status, errJson, rawText);
             throw new Error(`Render failed: ${errorDetail}`);
         }
         const data = await res.json();
@@ -3618,7 +3920,7 @@ async function renderNode(nodeId: number) {
 
         if (data.status === 'success' && data.filename) {
             await updateTempRendersList(data.filename);
-            masterPlayer.play().catch(e => console.error(e));
+            if (!loopEnabled) masterPlayer.play().catch(e => console.error(e));
             runtimeLog(`Disk render complete (${Math.round(performance.now() - renderStartedAt)} ms)`, 'common');
         } else {
             console.error("Render failed:", data);
@@ -3628,6 +3930,11 @@ async function renderNode(nodeId: number) {
         console.error("Error during render:", err);
         runtimeLog(`Disk render failed: ${(err as Error).message || String(err)}`, 'error');
         alert(`Error during render: ${(err as Error).message || err}`);
+    } finally {
+        if (targetNode?.renderBtn) {
+            targetNode.renderBtn.label = 'R';
+            (window as any).editorCanvas?.setDirty?.(true, true);
+        }
     }
 }
 
@@ -3652,6 +3959,7 @@ async function calculatePreview(
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) throw new Error('Graph is unavailable.');
     const previewStartedAt = performance.now();
+    console.log(`[Preview] Starting RAM preview (/api/preview) for node #${nodeId}`);
 
     try {
         const libraryFiles = await loggedTask('Resolve graph asset metadata', () =>
@@ -3663,6 +3971,12 @@ async function calculatePreview(
                     kind: 'preview',
                     globalPreview,
                     libraryFiles
+                })
+            );
+            await loggedTask('Resolve random modifiers', () =>
+                resolveAssignedRandomModifiers(graph, nodeId, {
+                    kind: 'preview',
+                    globalPreview
                 })
             );
         }
@@ -3696,14 +4010,14 @@ async function calculatePreview(
         );
 
         if (!res.ok) {
-            let errorDetail = `Status code ${res.status}`;
+            let errJson: any = null;
+            let rawText = '';
             try {
-                const errJson = await res.json();
-                if (errJson.detail) errorDetail = errJson.detail;
+                errJson = await res.json();
             } catch {
-                const rawText = await res.text();
-                if (rawText) errorDetail = rawText;
+                try { rawText = await res.text(); } catch {}
             }
+            const errorDetail = formatApiError(res.status, errJson, rawText);
             throw new Error(`RAM preview failed: ${errorDetail}`);
         }
 
@@ -3717,6 +4031,7 @@ async function calculatePreview(
             }
             activeRamPreviewNodeId = nodeId;
             activeRamPreviewPayload = payload;
+            activeRamPreviewSource = data.audio_url;
             previewRecalculateBtn.disabled = false;
 
             setMasterPlayerSource(data.audio_url, autoplay);

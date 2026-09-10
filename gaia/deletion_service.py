@@ -12,7 +12,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from . import crud, models, project_service, schemas, vaults
+from . import crud, models, paths, project_service, schemas, vaults
 
 
 class DeletionError(ValueError):
@@ -34,15 +34,11 @@ class StagedSnapshot:
 
     def cleanup(self) -> None:
         if self.staged.is_dir():
-            shutil.rmtree(self.staged, ignore_errors=True)
+            paths.safe_rmtree(self.staged)
         elif self.staged.exists():
-            try:
-                self.staged.unlink(missing_ok=True)
-            except OSError:
-                # The database deletion has already committed. A transient file
-                # lock must not turn a successful request into a false failure.
-                return
+            paths.safe_unlink(self.staged)
         _remove_empty_loose_file_parents(self.original.parent, self.loose_files_root)
+
 
 
 def _remove_empty_loose_file_parents(start: Path, files_root: Path) -> None:

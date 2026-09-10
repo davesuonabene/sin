@@ -16,6 +16,11 @@ export class NodeContextMenu {
         this.menuElement.className = 'td-node-context-menu sin-menu-surface';
         this.menuElement.style.display = 'none';
 
+        this.menuElement.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
         document.body.appendChild(this.menuElement);
 
         const dismissHandler = (e: Event) => {
@@ -27,8 +32,11 @@ export class NodeContextMenu {
         window.addEventListener('pointerdown', dismissHandler, true);
         window.addEventListener('click', dismissHandler, true);
         window.addEventListener('contextmenu', (e) => {
-            if (this.isVisible && !this.menuElement.contains(e.target as Node)) {
-                this.hide();
+            if (this.isVisible) {
+                e.preventDefault();
+                if (Date.now() - this.openTime > 150 && !this.menuElement.contains(e.target as Node)) {
+                    this.hide();
+                }
             }
         }, true);
 
@@ -87,6 +95,13 @@ export class NodeContextMenu {
                 }
             },
             {
+                id: 'random',
+                label: 'Add Random Mod',
+                action: (n) => {
+                    window.dispatchEvent(new CustomEvent('add-random-node', { detail: { parentId: n.id } }));
+                }
+            },
+            {
                 id: 'create-ghost',
                 label: 'Create Ghost',
                 action: (n) => {
@@ -123,16 +138,17 @@ export class NodeContextMenu {
             row.className = `ctx-menu-item sin-menu-item ${item.danger ? 'danger' : ''}`;
             row.textContent = item.label;
 
-            const handler = (e: Event) => {
+            row.onpointerdown = (e) => {
+                e.stopPropagation();
+            };
+
+            row.onclick = (e) => {
                 e.stopPropagation();
                 e.preventDefault();
                 const targetNode = this.targetNode;
                 this.hide();
                 if (targetNode) item.action(targetNode);
             };
-
-            row.onpointerdown = handler;
-            row.onclick = handler;
 
             this.menuElement.appendChild(row);
             });

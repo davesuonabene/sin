@@ -7,6 +7,7 @@ import { SequenceGridSection } from './components/SequenceGridSection';
 import { ArrangementTimelineSection } from './components/ArrangementTimelineSection';
 import { FxChainSection } from './components/FxChainSection';
 import { AssetPoolSection } from './components/AssetPoolSection';
+import { RandomDestinationsSection } from './components/RandomDestinationsSection';
 import { NEON_ICONS, NODE_SHAPES } from '../nodes/NodeVisuals';
 import { APPEARANCE_COLOR_PRESETS } from '../config/appearance';
 
@@ -41,6 +42,9 @@ export class SectionRendererFactory {
                 break;
             case 'pool_editor':
                 await AssetPoolSection.render(wrapper, node, windowContext);
+                break;
+            case 'random_panel':
+                await RandomDestinationsSection.render(wrapper, node, windowContext);
                 break;
             case 'waveform_crop':
                 await WaveformCropSection.render(wrapper, node, windowContext);

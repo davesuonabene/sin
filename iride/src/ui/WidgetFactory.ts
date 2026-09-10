@@ -55,6 +55,8 @@ export class WidgetFactory {
     ): HTMLDivElement {
         const row = document.createElement('div');
         row.className = 'td-param-row';
+        row.setAttribute('data-field-key', field.key);
+        row.setAttribute('data-param-label', field.label);
 
         const labelEl = document.createElement('div');
         labelEl.className = 'td-param-label';
@@ -668,9 +670,10 @@ export class WidgetFactory {
         diceBtn.type = 'button';
         diceBtn.className = 'asset-filter-add-button';
         diceBtn.title = 'Randomize seed';
-        diceBtn.textContent = '🎲';
+        diceBtn.textContent = 'Rnd';
         diceBtn.style.padding = '2px 6px';
-        diceBtn.style.fontSize = '12px';
+        diceBtn.style.fontSize = '10px';
+        diceBtn.style.fontWeight = '600';
         diceBtn.style.height = '26px';
 
         const commitValue = (val: number) => {

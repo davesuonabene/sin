@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from typing import List
 import os
 import re
+import sys
+import subprocess
 from pathlib import Path
 import uuid
 import json
@@ -332,25 +334,50 @@ def _analysis_attributes(db_item: models.Item, analysis: dict) -> dict:
     embedded_metadata = dict(analysis.get("audio_metadata") or {})
     if embedded_metadata:
         existing_metadata = dict(attributes.get("audio_metadata") or {})
-        attributes["audio_metadata"] = {**existing_metadata, **embedded_metadata}
+        if "title" not in existing_metadata and attributes.get("title"):
+            existing_metadata["title"] = attributes["title"]
+        merged_metadata = dict(embedded_metadata)
+        for k, v in existing_metadata.items():
+            if v is not None and (not isinstance(v, str) or v.strip() != ""):
+                merged_metadata[k] = v
+        attributes["audio_metadata"] = merged_metadata
     return attributes
 
 
 def _analysis_update_request(db_item: models.Item, analysis: dict) -> schemas.ItemUpdate:
-    values = {"tags": analysis.get("tags", [])}
+    existing_tags = [tag.name for tag in (getattr(db_item, "tags", []) or [])]
+    seen_tags = {t.casefold() for t in existing_tags}
+    merged_tags = list(existing_tags)
+    for tag in analysis.get("tags", []):
+        cleaned = tag.strip() if isinstance(tag, str) else ""
+        if cleaned and cleaned.casefold() not in seen_tags:
+            seen_tags.add(cleaned.casefold())
+            merged_tags.append(cleaned)
+    values = {"tags": merged_tags[:24]}
+
     if db_item.type == "sample":
-        values.update(
-            bpm=analysis.get("bpm"),
-            key=analysis.get("key"),
-            is_loop=bool(analysis.get("is_loop")),
-            attributes=_analysis_attributes(db_item, analysis),
-        )
+        sample_updates = {
+            "attributes": _analysis_attributes(db_item, analysis),
+        }
+        existing_bpm = getattr(db_item, "bpm", None)
+        if existing_bpm is None and analysis.get("bpm") is not None:
+            sample_updates["bpm"] = analysis.get("bpm")
+        existing_key = (getattr(db_item, "key", None) or "").strip()
+        if not existing_key and analysis.get("key"):
+            sample_updates["key"] = analysis.get("key")
+        sample_updates["is_loop"] = bool(getattr(db_item, "is_loop", False) or analysis.get("is_loop"))
+        values.update(sample_updates)
     elif db_item.type in {"audio", "track"}:
         values["attributes"] = _analysis_attributes(db_item, analysis)
         if db_item.type == "audio" and analysis.get("type") == "track":
             values["type"] = "track"
     elif db_item.type == "midi":
-        values.update(bpm=analysis.get("bpm"), key=analysis.get("key"))
+        existing_bpm = getattr(db_item, "bpm", None)
+        if existing_bpm is None and analysis.get("bpm") is not None:
+            values["bpm"] = analysis.get("bpm")
+        existing_key = (getattr(db_item, "key", None) or "").strip()
+        if not existing_key and analysis.get("key"):
+            values["key"] = analysis.get("key")
     return schemas.ItemUpdate(**values)
 
 
@@ -552,7 +579,15 @@ def _finalize_collection_analysis(db: Session, db_item: models.FolderItem, conte
     """Persist collection analysis without changing its user-selected classification."""
     contents = list(contents if contents is not None else (db_item.contents or []))
     db_item = crud.save_collection_contents(db, db_item, contents)
-    return crud.set_item_tags(db, db_item.id, _collection_tags(contents))
+    existing_tags = [t.name for t in (getattr(db_item, "tags", []) or [])]
+    seen_tags = {t.casefold() for t in existing_tags}
+    merged_tags = list(existing_tags)
+    for tag in _collection_tags(contents):
+        cleaned = tag.strip() if isinstance(tag, str) else ""
+        if cleaned and cleaned.casefold() not in seen_tags:
+            seen_tags.add(cleaned.casefold())
+            merged_tags.append(cleaned)
+    return crud.set_item_tags(db, db_item.id, _clean_tags(merged_tags))
 
 
 def _expand_collection_analysis_targets(db: Session, targets: list[dict]) -> tuple[list[dict], int]:
@@ -829,6 +864,62 @@ def read_item(item_id: int, db: Session = Depends(database.get_db)):
     if db_item is None:
         raise HTTPException(status_code=404, detail="Item not found")
     return db_item
+
+
+@router.get("/{item_id}/locate", response_model=schemas.ItemLocation)
+def locate_item_location(item_id: int, db: Session = Depends(database.get_db)):
+    location = crud.locate_item(db, item_id=item_id)
+    if not location:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return location
+
+
+def _open_file_in_os_file_manager(target_path: str):
+    abs_path = os.path.abspath(target_path)
+    if not os.path.exists(abs_path):
+        parent = os.path.dirname(abs_path)
+        if os.path.exists(parent):
+            abs_path = parent
+        else:
+            raise HTTPException(status_code=404, detail=f"Path not found on disk: {target_path}")
+
+    norm_path = os.path.normpath(abs_path)
+    if sys.platform == "win32":
+        if os.path.isfile(norm_path):
+            subprocess.Popen(f'explorer /select,"{norm_path}"')
+        else:
+            subprocess.Popen(f'explorer "{norm_path}"')
+    elif sys.platform == "darwin":
+        if os.path.isfile(norm_path):
+            subprocess.Popen(["open", "-R", norm_path])
+        else:
+            subprocess.Popen(["open", norm_path])
+    else:
+        target = norm_path if os.path.isdir(norm_path) else os.path.dirname(norm_path)
+        subprocess.Popen(["xdg-open", target])
+
+
+@router.post("/open-location")
+def open_item_location(
+    req: schemas.OpenLocationRequest,
+    db: Session = Depends(database.get_db),
+):
+    target_path = req.path
+    if req.item_id:
+        db_item = crud.get_item(db, item_id=req.item_id)
+        if db_item and db_item.absolute_path:
+            target_path = db_item.absolute_path
+
+    if not target_path:
+        raise HTTPException(status_code=400, detail="Item or path must be provided")
+
+    try:
+        _open_file_in_os_file_manager(target_path)
+        return {"status": "opened", "path": target_path}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not open file location: {exc}") from exc
 
 
 @router.get("/{item_id}/preview", response_model=schemas.Item)

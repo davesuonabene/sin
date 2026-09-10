@@ -73,6 +73,7 @@ export function serializeNodeSubtree(
             ? (nodeType === "arrangement" ? 4.0 : undefined)
             : resolveGlobalNumber(rawTotalBars, 'total_bars', 4.0);
         const section_points = nodeObj?.properties?.section_points ?? data?.section_points ?? (nodeType === "arrangement" ? [] : undefined);
+        const section_enabled = nodeObj?.properties?.section_enabled ?? data?.section_enabled ?? (nodeType === "arrangement" ? [] : undefined);
         const section_probability = nodeObj?.properties?.section_probability ?? data?.section_probability ?? (nodeType === "arrangement" ? [1.0] : undefined);
         const section_sample_start = nodeObj?.properties?.section_sample_start ?? data?.section_sample_start ?? (nodeType === "arrangement" ? [0.0] : undefined);
         const section_quant = nodeObj?.properties?.section_quant ?? data?.section_quant ?? (nodeType === "arrangement" ? ["none"] : undefined);
@@ -91,7 +92,10 @@ export function serializeNodeSubtree(
         let seed = includeDynamicPools
             ? (poolProperties?.seed ?? data?.seed ?? nodeObj?.properties?.seed)
             : (data?.seed ?? nodeObj?.properties?.seed);
-        const seed_mode = data?.seed_mode || nodeObj?.properties?.seed_mode || (nodeType === "sequence" ? "moving" : undefined);
+        const rawSeedMode = data?.seed_mode ?? nodeObj?.properties?.seed_mode;
+        const seed_mode = typeof rawSeedMode === 'string'
+            ? rawSeedMode
+            : (nodeType === "sequence" ? "moving" : undefined);
 
         const childrenIds: number[] = data?.children ? [...data.children] : [];
         if (nodeObj && nodeObj.inputs) {
@@ -161,6 +165,7 @@ export function serializeNodeSubtree(
             fade_ms: fadeMs,
             total_bars: total_bars,
             section_points: section_points,
+            section_enabled: section_enabled,
             section_probability: section_probability,
             section_sample_start: section_sample_start,
             section_quant: section_quant,

@@ -219,6 +219,16 @@ class Item(ItemBase):
     tags: List[Tag] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
+class ItemLocation(BaseModel):
+    item_id: int
+    vault_id: int
+    vault_name: str
+    ancestor_ids: List[int] = Field(default_factory=list)
+    folder_path: Optional[str] = None
+    title: Optional[str] = None
+    filename: Optional[str] = None
+    type: str
+
 class MoveItemsRequest(BaseModel):
     item_ids: List[int]
     vault_id: int
@@ -354,6 +364,11 @@ class FolderCreateRequest(BaseModel):
     reference_ids: Optional[List[int]] = None
 
 
+class OpenLocationRequest(BaseModel):
+    item_id: Optional[int] = None
+    path: Optional[str] = None
+
+
 class ItemDeleteLocator(BaseModel):
     kind: Literal["item"] = "item"
     item_id: int
@@ -432,12 +447,14 @@ class ProjectVersion(BaseModel):
     item: Item
     reference: ItemReference
     label: str
+    is_external: bool = False
 
 
 class ProjectTableRow(BaseModel):
     item: Item
     reference: ItemReference
     version_group: str
+    is_external: bool = False
     versions: List[ProjectVersion] = Field(default_factory=list)
 
 
@@ -581,3 +598,64 @@ class BatchAnalysisTarget(BaseModel):
 class BatchAnalysisRequest(BaseModel):
     targets: List[BatchAnalysisTarget] = Field(default_factory=list)
     item_ids: Optional[List[int]] = None
+
+
+class DiscoveredFile(BaseModel):
+    path: str
+    filename: str
+    relative_path: str
+    size_bytes: int
+    type: str
+    extension: str
+
+
+class MissingFile(BaseModel):
+    id: int
+    path: str
+    filename: str
+    relative_path: Optional[str] = None
+    type: str
+    size_bytes: Optional[int] = None
+    title: Optional[str] = None
+
+
+class MovedFileCandidate(BaseModel):
+    item_id: int
+    old_path: str
+    new_path: str
+    filename: str
+    size_bytes: int
+
+
+class VaultSyncStatus(BaseModel):
+    vault_id: int
+    vault_name: str
+    in_sync: bool
+    untracked: List[DiscoveredFile] = Field(default_factory=list)
+    missing: List[MissingFile] = Field(default_factory=list)
+    moved: List[MovedFileCandidate] = Field(default_factory=list)
+    total_discrepancies: int = 0
+
+
+class RelinkMovedPair(BaseModel):
+    item_id: int
+    new_path: str
+
+
+class VaultReconcileRequest(BaseModel):
+    add_untracked: Optional[List[str]] = None
+    add_all_untracked: bool = False
+    mark_missing: Optional[List[int]] = None
+    mark_all_missing: bool = False
+    purge_missing: Optional[List[int]] = None
+    relink_moved: Optional[List[RelinkMovedPair]] = None
+
+
+class VaultReconcileResponse(BaseModel):
+    vault_id: int
+    added_count: int = 0
+    marked_missing_count: int = 0
+    purged_count: int = 0
+    relinked_count: int = 0
+    in_sync: bool = True
+

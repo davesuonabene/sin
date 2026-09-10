@@ -285,6 +285,8 @@ export class SequenceGridSection {
             const label = document.createElement('div');
             label.className = 'td-seq-row-label';
             label.textContent = field.label;
+            label.dataset.rowFieldKey = field.key;
+            label.dataset.rowFieldLabel = field.label;
             grid.appendChild(label);
 
             stepParameters.forEach((parameters, stepIndex) => {
@@ -303,6 +305,7 @@ export class SequenceGridSection {
                     });
                     node.updateProperty('step_parameters', [...stepParameters]);
                     windowContext.refreshAudioPreview();
+                    windowContext?.applyOverlays?.();
                 };
                 const control = new StepValueControl({
                     field: field as FieldSchema<number>,
@@ -311,7 +314,12 @@ export class SequenceGridSection {
                 });
                 const input = control.input;
                 valueControls.set(input, control);
+                const stepKey = `step_parameters.${stepIndex}.${field.key}`;
+                const stepLabel = `Step ${stepIndex + 1} ${field.label}`;
+                control.element.dataset.fieldKey = stepKey;
+                control.element.dataset.paramLabel = stepLabel;
                 control.element.dataset.stepIndex = String(stepIndex);
+                control.element.dataset.stepNumber = String(stepIndex + 1);
                 control.element.classList.toggle('is-step-off', !sequence[stepIndex]);
                 input.dataset.fieldKey = field.key;
                 input.dataset.stepIndex = String(stepIndex);
@@ -343,6 +351,8 @@ export class SequenceGridSection {
                 }
             });
         }
+
+        windowContext?.applyOverlays?.();
     }
 
     private static getParameterFields(node: BaseNode): FieldSchema[] {

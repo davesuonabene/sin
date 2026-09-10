@@ -43,6 +43,7 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         force=True
     )
+    logging.getLogger("numba").setLevel(logging.WARNING)
 
     logger = logging.getLogger("iride")
     logger.info("==================================================")
