@@ -291,11 +291,28 @@ def _collection_tags(contents: list[dict]) -> list[str]:
     return tags
 
 
-def _get_collection_content(db_item, content_index: int):
+def _get_collection_content(db_item, content_index: int, db: Session | None = None):
     if not isinstance(db_item, models.FolderItem):
         raise HTTPException(status_code=400, detail="Item is not a collection")
     contents = getattr(db_item, "contents", []) or []
     content = next((entry for entry in contents if entry.get("index") == content_index), None)
+    if not content and db is not None:
+        child = db.query(models.Item).filter(models.Item.parent_id == db_item.id, models.Item.id == content_index).first()
+        if not child:
+            children = (
+                db.query(models.Item)
+                .filter(models.Item.parent_id == db_item.id)
+                .order_by(models.Item.absolute_path, models.Item.id)
+                .all()
+            )
+            if 0 <= content_index < len(children):
+                child = children[content_index]
+        if child:
+            content = crud._child_content(db_item, child, fallback_index=content_index)
+            candidate = os.path.abspath(child.absolute_path)
+            if os.path.isfile(candidate):
+                return content, candidate
+
     if not content:
         raise HTTPException(status_code=404, detail="Collection content not found")
 
@@ -1092,7 +1109,7 @@ def update_collection_content(item_id: int, content_index: int, req: schemas.Col
     db_item = crud.get_item(db, item_id=item_id)
     if not db_item:
         raise HTTPException(status_code=404, detail="Item not found")
-    content, _ = _get_collection_content(db_item, content_index)
+    content, _ = _get_collection_content(db_item, content_index, db=db)
     fields = _request_fields(req)
     extension = Path(content.get("filename", "")).suffix.lower()
     allowed_types = {"midi"} if extension in collection_importer.MIDI_EXTENSIONS else {"audio", "sample", "track"} if extension in collection_importer.AUDIO_EXTENSIONS else {"file"}
@@ -1124,12 +1141,12 @@ def update_collection_content(item_id: int, content_index: int, req: schemas.Col
                 _apply_item_update(child_item, schemas.ItemUpdate(**update_kwargs), db)
             db.refresh(db_item)
             crud._populate_item_fields(db_item)
-            content, _ = _get_collection_content(db_item, content_index)
-            if "title" in fields:
-                content["title"] = (req.title or "").strip() or text_analyzer.clean_title(content["filename"])
-                crud.save_collection_contents(db, db_item, db_item.contents)
-            if "favourite" in fields:
-                content["favourite"] = bool(req.favourite)
+            content, _ = _get_collection_content(db_item, content_index, db=db)
+            if getattr(db_item, "contents", None):
+                if "title" in fields:
+                    content["title"] = (req.title or "").strip() or text_analyzer.clean_title(content["filename"])
+                if "favourite" in fields:
+                    content["favourite"] = bool(req.favourite)
                 crud.save_collection_contents(db, db_item, db_item.contents)
             return content
 
@@ -1143,7 +1160,8 @@ def update_collection_content(item_id: int, content_index: int, req: schemas.Col
         elif field in {"type", "bpm", "key", "is_loop", *crud.TRACK_METADATA_FIELDS}:
             value = getattr(req, field)
             content[field] = value.strip() or None if isinstance(value, str) else value
-    crud.save_collection_contents(db, db_item, db_item.contents)
+    if getattr(db_item, "contents", None):
+        crud.save_collection_contents(db, db_item, db_item.contents)
     return content
 
 
@@ -1178,11 +1196,12 @@ def analyze_collection_content(item_id: int, content_index: int, db: Session = D
     db_item = crud.get_item(db, item_id=item_id)
     if not db_item:
         raise HTTPException(status_code=404, detail="Item not found")
-    content, _ = _get_collection_content(db_item, content_index)
+    content, _ = _get_collection_content(db_item, content_index, db=db)
     analyzed = _analyze_collection_content(db_item, content)
     _propagate_content_analysis(db, db_item, analyzed)
-    contents = [analyzed if entry.get("index") == content_index else entry for entry in db_item.contents]
-    crud.save_collection_contents(db, db_item, contents)
+    contents = [analyzed if entry.get("index") == content_index else entry for entry in (db_item.contents or [])]
+    if getattr(db_item, "contents", None):
+        crud.save_collection_contents(db, db_item, contents)
     return analyzed
 
 @router.get("/{item_id}/contents/{content_index}/stream")
@@ -1190,7 +1209,7 @@ def stream_collection_content(item_id: int, content_index: int, db: Session = De
     db_item = crud.get_item(db, item_id=item_id)
     if not db_item:
         raise HTTPException(status_code=404, detail="Item not found")
-    content, content_path = _get_collection_content(db_item, content_index)
+    content, content_path = _get_collection_content(db_item, content_index, db=db)
     if content.get("availability", "ready") != "ready":
         raise HTTPException(status_code=409, detail="Asset transfer is not ready")
     return FileResponse(path=content_path, media_type=content.get("mime_type") or "application/octet-stream")

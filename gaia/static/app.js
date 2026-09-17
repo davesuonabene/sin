@@ -531,19 +531,11 @@ function initializeGaiaLibrary() {
     }
 
     function collectionRowLayout(collection) {
-        if (isSamplePackCollection(collection)) {
-            const favW = Math.round(Number(state.mainColumnWidths.favourite || MAIN_COLUMN_DEFINITIONS.favourite.width));
-            return {
-                id: 'sample-pack',
-                columns: `${favW}px minmax(145px, 1.25fr) minmax(140px, 1fr) minmax(78px, .45fr) 58px 62px minmax(100px, .8fr) 78px`,
-                fields: ['favourite', 'name', 'path', 'type', 'bpm', 'key', 'tags', 'size'],
-            };
-        }
         return mainRowLayout();
     }
 
     function rowLayoutFor(entry, { nested = false } = {}) {
-        return nested ? collectionRowLayout(entry.collection) : mainRowLayout();
+        return mainRowLayout();
     }
 
     function renderRowHeader(header, layout, className) {
@@ -911,6 +903,7 @@ function initializeGaiaLibrary() {
             return {
                 kind: 'reference',
                 id: `${project.id}:reference:${activeReference.id}`,
+                itemId: Number(activeItem.id) || null,
                 type: activeItem.type,
                 title: activeItem.title || filename(activeItem.absolute_path),
                 path: activeItem.absolute_path,
@@ -1041,10 +1034,12 @@ function initializeGaiaLibrary() {
         ).map(group => ({
             kind: 'content',
             id: group.fileVersionGroup ? `version:${group.fileVersionGroup}` : `${collection.id}:${group.record.index}`,
+            itemId: Number(group.record.child_id) || null,
             type: group.record.type,
             title: group.fileVersionDisplayName || group.record.title || group.record.filename,
             path: group.record.relative_path,
             content: group.record,
+            item: group.record,
             collection,
             fileVersionGroup: group.fileVersionGroup,
             fileVersions: group.fileVersions,
@@ -1296,13 +1291,14 @@ function initializeGaiaLibrary() {
     }
 
     function numericItemId(entry) {
-        if (entry.kind === 'content') return Number(entry.content?.child_id) || null;
-        return Number(entry.item?.id) || null;
+        if (!entry) return null;
+        const id = entry.itemId ?? (entry.kind === 'content' ? (entry.content?.child_id || entry.item?.id) : entry.item?.id);
+        return id && Number.isFinite(Number(id)) ? Number(id) : null;
     }
 
     function entryFolderItemId(entry) {
         if (!entry) return null;
-        const raw = entry.item?.id ?? entry.content?.child_id ?? entry.folderItem?.child_id ?? entry.folderItem?.id ?? entry.folderItem?.item?.id ?? entry.collection?.id;
+        const raw = entry.itemId ?? entry.item?.id ?? entry.content?.child_id ?? entry.folderItem?.child_id ?? entry.folderItem?.id ?? entry.folderItem?.item?.id ?? entry.collection?.id;
         return raw && Number.isFinite(Number(raw)) ? Number(raw) : null;
     }
 
@@ -1412,17 +1408,18 @@ function initializeGaiaLibrary() {
     }
 
     function canEdit(entry, field) {
-        if (entry.kind === 'reference') return field === 'tags';
+        if (!entry) return false;
         if (field === 'tags') return true;
-        if (field === 'title') return entry.kind === 'asset' || entry.kind === 'content';
+        if (field === 'title') return true;
+        const type = entry.type || entry.item?.type || '';
         if (field === 'type') {
-            if (entry.kind === 'content') return ['audio', 'sample', 'track'].includes(entry.type);
-            return ['audio', 'sample', 'track'].includes(entry.type);
+            return ['audio', 'sample', 'track'].includes(type);
         }
-        if (field === 'bpm') return ['audio', 'sample', 'midi', 'multitrack'].includes(entry.type);
-        if (field === 'key') return ['audio', 'sample', 'midi', 'multitrack'].includes(entry.type);
+        if (field === 'bpm' || field === 'key') {
+            return ['audio', 'sample', 'midi', 'multitrack'].includes(type);
+        }
         if (['author', 'album', 'album_artist', 'release_year', 'genre', 'track_number', 'disc_number', 'comment'].includes(field)) {
-            return ['audio', 'sample', 'track'].includes(entry.type);
+            return ['audio', 'sample', 'track'].includes(type);
         }
         return false;
     }
@@ -1433,31 +1430,54 @@ function initializeGaiaLibrary() {
         if (field === 'bpm') return entryBpm(entry);
         if (field === 'key') return entryKey(entry);
         if (field === 'tags') {
-            if (entry.kind === 'reference') return (entry.reference?.tags || entry.reference?.attributes?.tags || []).join(', ');
+            if (entry.reference) {
+                return (entry.reference?.tags || entry.reference?.attributes?.tags || entryTags(entry) || []).join(', ');
+            }
             return entryTags(entry).join(', ');
         }
         return firstEntryValue(entry, field);
     }
 
     function updateEntryInState(entry, result) {
-        if (entry.kind === 'content') {
-            const collectionId = Number(entry.collection.id);
-            const contents = state.collectionContents.get(collectionId);
-            const index = contents?.findIndex(content => content.index === entry.content.index) ?? -1;
-            if (index >= 0) contents[index] = result;
-            return;
+        const itemId = Number(result.id || numericItemId(entry) || entry.itemId || entry.item?.id || entry.content?.child_id);
+        if (entry.title && result.title) entry.title = result.title;
+        if (entry.item) Object.assign(entry.item, result);
+        if (entry.content) Object.assign(entry.content, result);
+        if (entry.folderItem) Object.assign(entry.folderItem, result);
+
+        if (Number.isFinite(itemId)) {
+            const index = state.items.findIndex(item => Number(item.id) === itemId);
+            if (index >= 0) state.items[index] = { ...state.items[index], ...result };
         }
 
-        const itemId = Number(entry.item?.id);
-        const index = state.items.findIndex(item => Number(item.id) === itemId);
-        if (index >= 0) state.items[index] = result;
-        if (entry.kind === 'reference') {
-            const records = state.projectReferencedItems.get(Number(entry.collection.id)) || [];
+        if (entry.collection?.id) {
+            const collectionId = Number(entry.collection.id);
+            const contents = state.collectionContents.get(collectionId);
+            if (contents) {
+                const contentIdx = contents.findIndex(c => (itemId && Number(c.child_id) === itemId) || (c.index !== undefined && c.index === entry.content?.index));
+                if (contentIdx >= 0) contents[contentIdx] = { ...contents[contentIdx], ...result };
+            }
+        }
+
+        state.projectReferencedItems.forEach(records => {
             records.forEach(record => {
-                if (Number(record.item?.id) === itemId) record.item = result;
+                if (Number(record.item?.id) === itemId) record.item = { ...record.item, ...result };
                 (record.versions || []).forEach(version => {
-                    if (Number(version.item?.id) === itemId) version.item = result;
+                    if (Number(version.item?.id) === itemId) version.item = { ...version.item, ...result };
                 });
+            });
+        });
+
+        if (state.subfolderEntries) {
+            state.subfolderEntries.forEach(sub => {
+                if (Number(entryFolderItemId(sub)) === itemId) {
+                    if (result.title) {
+                        sub.title = result.title;
+                        sub.name = result.title;
+                        if (sub.subfolder) sub.subfolder.name = result.title;
+                    }
+                    if (sub.item) Object.assign(sub.item, result);
+                }
             });
         }
     }
@@ -1484,7 +1504,7 @@ function initializeGaiaLibrary() {
         if (['release_year', 'track_number', 'disc_number'].includes(field)) {
             value = rawValue === '' ? null : Number(rawValue);
         }
-        if (entry.kind === 'reference' && field === 'tags') {
+        if (entry.reference && field === 'tags' && entry.collection?.id) {
             const response = await fetch(`/projects/${entry.collection.id}/references/${entry.reference.id}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
@@ -1503,10 +1523,18 @@ function initializeGaiaLibrary() {
             renderAssets();
             return;
         }
-        if (field === 'title' && entry.kind === 'asset' && typeIsProject(entry.type)) stopPlayback();
-        const url = entry.kind === 'content'
-            ? `/items/${entry.collection.id}/contents/${entry.content.index}`
-            : `/items/${entry.item.id}`;
+        if (field === 'title' && (typeIsProject(entry.type) || entry.type === 'project')) stopPlayback();
+
+        const itemId = numericItemId(entry) || entry.itemId || entry.item?.id || entry.content?.child_id;
+        let url;
+        if (itemId) {
+            url = `/items/${itemId}`;
+        } else if (entry.collection?.id && entry.content?.index !== undefined) {
+            url = `/items/${entry.collection.id}/contents/${entry.content.index}`;
+        } else {
+            throw new Error('This entry cannot be updated directly.');
+        }
+
         const response = await fetch(url, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -1718,26 +1746,31 @@ function initializeGaiaLibrary() {
         return '<span class="collection-title-icon folder" aria-hidden="true" title="Folder"><svg viewBox="0 0 16 16"><path d="M1.5 3.5h4l1.5 2h7.5v7h-13z"/></svg></span>';
     }
 
-    function createRow(entry, { nested = false, subfolderDepth = 0 } = {}) {
+    function createRow(entry, { nested = false, subfolderDepth = 0, isSubfolder = false, subfolderKey = null } = {}) {
         const row = document.createElement('div');
         const availability = (entry.kind === 'content' ? entry.content?.availability : entry.item?.availability) || 'ready';
         const isExternalReference = isEntryExternalReference(entry);
         row.className = `asset-row${state.selectedEntryIds.has(entry.id) ? ' selected' : ''}${isExternalReference ? ' referenced-row' : ''}${availability !== 'ready' ? ' unavailable-row' : ''}`;
+        if (isSubfolder) row.classList.add('is-subfolder-row');
         const layout = rowLayoutFor(entry, { nested });
         row.classList.add(nested ? 'nested-row' : 'main-row', `row-layout-${layout.id}`);
         row.style.setProperty('--row-columns', layout.columns);
         if (layout.id === 'main') row.style.setProperty('--main-table-width', `${mainColumnMinimumWidth()}px`);
         row.setAttribute('role', 'listitem');
+        row.dataset.entryId = entry.id;
         row.setAttribute('aria-selected', String(state.selectedEntryIds.has(entry.id)));
         row.draggable = Boolean(numericItemId(entry)) && availability === 'ready';
         const isCollection = Boolean(
             (entry.kind === 'asset' && typeIsContainer(entry.type))
             || entry.type === 'collection'
+            || entry.type === 'folder'
             || typeIsContainer(entry.type)
             || entry.item?.attributes?.is_folder
             || entry.content?.attributes?.is_folder
+            || entry.kind === 'subfolder'
+            || isSubfolder
         );
-        if (isCollection) row.title = 'Click the title to preview the master · double-click the row to show contents';
+        if (isCollection) row.title = 'Click the title to preview · double-click to show contents';
         if (isExternalReference) {
             row.title = 'External linked file · points to file outside this project';
         } else if (entry.kind === 'reference') {
@@ -1750,12 +1783,17 @@ function initializeGaiaLibrary() {
             ? `<select class="file-version-selector" title="Select file version" aria-label="Select file version">${entry.fileVersions.map(version => `<option value="${escapeHtml(version.id)}" ${String(version.id) === String(numericItemId(entry) || `${entry.collection?.id || 'root'}:${entry.content?.index || ''}`) ? 'selected' : ''}>${escapeHtml(version.label)}</option>`).join('')}</select>`
             : '';
         const isExpandable = isCollection;
-        const isExpanded = isExpandable && (state.expandedCollections.has(entry.id) || (entry.item?.id && state.expandedCollections.has(String(entry.item.id))));
+        const resolvedSubfolderKey = subfolderKey || (isSubfolder ? `${entry.collection?.id}:${entry.path || entry.fullPath}` : null);
+        const isExpanded = isExpandable && (
+            resolvedSubfolderKey
+                ? state.expandedSubfolders.has(resolvedSubfolderKey)
+                : (state.expandedCollections.has(entry.id) || (entry.item?.id && state.expandedCollections.has(String(entry.item.id))))
+        );
         const expandToggle = isExpandable
             ? `<button class="item-expand-toggle-btn" type="button" title="${isExpanded ? 'Collapse contents' : 'Expand contents'}" aria-label="${isExpanded ? 'Collapse contents' : 'Expand contents'}" aria-expanded="${isExpanded}">${isExpanded ? '▾' : '▸'}</button>`
             : '';
         const folderIcon = isCollection ? getCollectionIcon(entry) : '';
-        const countVal = entry.item?.content_count ?? entry.content?.content_count;
+        const countVal = entry.contentCount ?? entry.item?.content_count ?? entry.content?.content_count;
         const countBadge = (isCollection && countVal !== undefined && countVal !== null)
             ? `<span class="collection-title-count">(${countVal})</span>`
             : '';
@@ -1776,7 +1814,9 @@ function initializeGaiaLibrary() {
         </div>`;
         const displayType = entryColumnValue(entry, 'type');
         const isFav = Boolean(entryColumnValue(entry, 'favourite'));
-        const favCell = `<button class="favourite-toggle-btn${isFav ? ' active' : ''}" type="button" data-field="favourite" title="${isFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isFav ? '★' : '☆'}</button>`;
+        const favCell = (isSubfolder && !entry.itemId)
+            ? '<span></span>'
+            : `<button class="favourite-toggle-btn${isFav ? ' active' : ''}" type="button" data-field="favourite" title="${isFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isFav ? '★' : '☆'}</button>`;
         const cells = {
             favourite: favCell,
             name: titleCell,
@@ -1818,7 +1858,16 @@ function initializeGaiaLibrary() {
         row.querySelector('.item-expand-toggle-btn')?.addEventListener('click', event => {
             event.stopPropagation();
             event.preventDefault();
-            toggleCollectionExpansion(entry);
+            if (resolvedSubfolderKey) {
+                if (state.expandedSubfolders.has(resolvedSubfolderKey)) {
+                    state.expandedSubfolders.delete(resolvedSubfolderKey);
+                } else {
+                    state.expandedSubfolders.add(resolvedSubfolderKey);
+                }
+                renderAssets();
+            } else {
+                toggleCollectionExpansion(entry);
+            }
         });
 
         let titlePreviewTimer = null;
@@ -1938,8 +1987,14 @@ function initializeGaiaLibrary() {
                 event.preventDefault();
                 event.stopPropagation();
                 try {
-                    const itemIds = JSON.parse(rawIds).map(Number).filter(id => Number.isFinite(id) && id !== Number(entry.item.id));
-                    if (itemIds.length) placeItemsDirectly(entry, [...new Set(itemIds)]);
+                    const currentId = Number(entry.itemId || entry.item?.id || entry.collection?.id);
+                    const itemIds = JSON.parse(rawIds).map(Number).filter(id => Number.isFinite(id) && id !== currentId);
+                    if (itemIds.length) {
+                        const targetFolder = isSubfolder || entry.kind === 'subfolder'
+                            ? (entry.subfolder?.fullPath || entry.path || entry.fullPath || entry.title)
+                            : undefined;
+                        placeItemsDirectly(entry, [...new Set(itemIds)], targetFolder ? { folder: targetFolder } : undefined);
+                    }
                 } catch (_error) {
                     window.alert('GAIA could not read the dragged items.');
                 }
@@ -1961,6 +2016,15 @@ function initializeGaiaLibrary() {
         });
         row.addEventListener('dblclick', event => {
             if (event.target.closest('button, input, select, textarea, .editable-cell')) return;
+            if (resolvedSubfolderKey) {
+                if (state.expandedSubfolders.has(resolvedSubfolderKey)) {
+                    state.expandedSubfolders.delete(resolvedSubfolderKey);
+                } else {
+                    state.expandedSubfolders.add(resolvedSubfolderKey);
+                }
+                renderAssets();
+                return;
+            }
             if (isCollection) {
                 toggleCollectionExpansion(entry);
                 return;
@@ -2093,127 +2157,15 @@ function initializeGaiaLibrary() {
                 collection: collection,
                 subfolder: subfolder,
                 folderItem: subfolder.folderItem || null,
+                itemId: folderItemId,
                 item: subfolder.folderItem?.item
-                    || (folderItemId ? { id: Number(folderItemId), vault_id: collection.vault_id, type: 'collection', attributes: { is_folder: true } } : { id: null, vault_id: collection.vault_id, type: 'folder', attributes: { is_folder: true } }),
+                    || (folderItemId ? { id: Number(folderItemId), vault_id: collection.vault_id, type: 'collection', attributes: { is_folder: true }, title: subfolder.name } : { id: null, vault_id: collection.vault_id, type: 'folder', attributes: { is_folder: true }, title: subfolder.name }),
                 content: subfolder.folderItem?.content || subfolder.folderItem || { child_id: folderItemId ? Number(folderItemId) : null, vault_id: collection.vault_id, attributes: { is_folder: true } },
+                contentCount: totalFiles,
             };
             state.subfolderEntries.set(folderEntryId, folderEntry);
 
-            const row = document.createElement('div');
-            row.className = 'subfolder-row';
-            row.dataset.entryId = folderEntryId;
-            row.setAttribute('role', 'listitem');
-            const isSelected = state.selectedEntryIds.has(folderEntryId);
-            row.classList.toggle('selected', isSelected);
-            row.setAttribute('aria-selected', String(isSelected));
-            row.style.setProperty('--row-columns', collectionLayout.columns);
-
-            const favPlaceholder = document.createElement('span');
-
-            const nameCell = document.createElement('div');
-            nameCell.className = 'subfolder-name-cell';
-            nameCell.style.paddingLeft = `${depth * 16 + 8}px`;
-
-            const toggle = document.createElement('button');
-            toggle.type = 'button';
-            toggle.className = 'subfolder-toggle';
-            toggle.setAttribute('aria-label', isExpanded ? 'Collapse folder' : 'Expand folder');
-            toggle.textContent = isExpanded ? '▾' : '▸';
-
-            const icon = document.createElement('span');
-            icon.className = 'subfolder-icon';
-            icon.setAttribute('aria-hidden', 'true');
-            icon.innerHTML = '<svg viewBox="0 0 16 16"><path d="M1.5 3.5h4l1.5 2h7.5v7h-13z"/></svg>';
-
-            const title = document.createElement('span');
-            title.className = 'subfolder-title';
-            title.textContent = subfolder.name;
-
-            const count = document.createElement('span');
-            count.className = 'subfolder-count';
-            count.textContent = `(${totalFiles})`;
-
-            nameCell.appendChild(toggle);
-            nameCell.appendChild(icon);
-            nameCell.appendChild(title);
-            nameCell.appendChild(count);
-
-            row.appendChild(favPlaceholder);
-            row.appendChild(nameCell);
-
-            for (let i = 2; i < collectionLayout.fields.length; i += 1) {
-                row.appendChild(document.createElement('span'));
-            }
-
-            const toggleSubfolder = () => {
-                if (state.expandedSubfolders.has(subfolderKey)) {
-                    state.expandedSubfolders.delete(subfolderKey);
-                } else {
-                    state.expandedSubfolders.add(subfolderKey);
-                }
-                renderAssets();
-            };
-
-            toggle.addEventListener('click', event => {
-                event.stopPropagation();
-                toggleSubfolder();
-            });
-
-            row.addEventListener('click', event => {
-                if (event.target.closest('.subfolder-toggle, button, input, select')) return;
-                selectEntry(folderEntry, event);
-                refreshSelectionPresentation();
-            });
-
-            row.addEventListener('dblclick', event => {
-                if (event.target.closest('.subfolder-toggle, button, input, select')) return;
-                toggleSubfolder();
-            });
-
-            row.addEventListener('contextmenu', event => {
-                event.preventDefault();
-                if (!state.selectedEntryIds.has(folderEntry.id)) {
-                    state.selectedEntryIds.clear();
-                    state.selectedEntryIds.add(folderEntry.id);
-                    state.selectionAnchorId = folderEntry.id;
-                    refreshSelectionPresentation();
-                }
-                state.contextEntry = folderEntry;
-                renderContextMenu();
-                contextMenu.classList.remove('hidden');
-                const width = contextMenu.offsetWidth || 180;
-                const height = contextMenu.offsetHeight || 120;
-                contextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
-                contextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
-            });
-
-            row.addEventListener('dragover', event => {
-                if (!Array.from(event.dataTransfer?.types || []).includes('application/x-gaia-item-ids')) return;
-                event.preventDefault();
-                event.stopPropagation();
-                event.dataTransfer.dropEffect = 'move';
-                row.classList.add('drop-target');
-            });
-            row.addEventListener('dragleave', event => {
-                if (!row.contains(event.relatedTarget)) row.classList.remove('drop-target');
-            });
-            row.addEventListener('drop', event => {
-                row.classList.remove('drop-target');
-                const rawIds = event.dataTransfer?.getData('application/x-gaia-item-ids');
-                if (!rawIds) return;
-                event.preventDefault();
-                event.stopPropagation();
-                try {
-                    const itemIds = JSON.parse(rawIds).map(Number).filter(id => Number.isFinite(id) && id !== Number(folderItemId));
-                    if (itemIds.length) {
-                        const targetFolder = subfolder.fullPath || folderEntry.path || folderEntry.title;
-                        placeItemsDirectly(folderEntry, [...new Set(itemIds)], { folder: targetFolder });
-                    }
-                } catch (_error) {
-                    window.alert('GAIA could not read the dragged items.');
-                }
-            });
-
+            const row = createRow(folderEntry, { nested: true, subfolderDepth: depth, isSubfolder: true, subfolderKey });
             container.appendChild(row);
 
             if (isExpanded) {
@@ -3481,48 +3433,7 @@ function initializeGaiaLibrary() {
     }
 
     function deletionTargetForEntry(entry) {
-        if (entry.kind === 'asset') {
-            const itemId = numericItemId(entry);
-            if (!itemId) return null;
-            return {
-                key: `item:${itemId}`,
-                label: entry.title || `Asset ${itemId}`,
-                locator: { kind: 'item', item_id: itemId },
-            };
-        }
-        if (entry.kind === 'subfolder') {
-            const id = entryFolderItemId(entry);
-            if (id) {
-                return {
-                    key: `item:${id}`,
-                    label: entry.title || `Folder ${id}`,
-                    locator: { kind: 'item', item_id: id },
-                };
-            }
-            return null;
-        }
-        if (entry.kind === 'content') {
-            const collectionId = Number(entry.collection?.id);
-            const contentIndex = Number(entry.content?.index);
-            const childId = Number(entry.content?.child_id || entry.item?.id);
-            if (entry.content?.attributes?.is_folder && Number.isFinite(childId)) {
-                return {
-                    key: `item:${childId}`,
-                    label: entry.title || `Folder ${childId}`,
-                    locator: { kind: 'item', item_id: childId },
-                };
-            }
-            if (!Number.isFinite(collectionId) || !Number.isInteger(contentIndex)) return null;
-            return {
-                key: `content:${collectionContentKey(collectionId, contentIndex)}`,
-                label: entry.title || entry.content?.filename || 'Nested file',
-                locator: {
-                    kind: 'content',
-                    collection_id: collectionId,
-                    content_index: contentIndex,
-                },
-            };
-        }
+        if (!entry) return null;
         if (entry.kind === 'reference') {
             const projectId = Number(entry.collection?.id);
             const referenceId = Number(entry.reference?.id);
@@ -3534,6 +3445,28 @@ function initializeGaiaLibrary() {
                     kind: 'reference',
                     project_id: projectId,
                     reference_id: referenceId,
+                },
+            };
+        }
+        const itemId = numericItemId(entry) || entryFolderItemId(entry);
+        if (itemId) {
+            return {
+                key: `item:${itemId}`,
+                label: entry.title || (entry.kind === 'subfolder' ? `Folder ${itemId}` : `Asset ${itemId}`),
+                locator: { kind: 'item', item_id: itemId },
+            };
+        }
+        if (entry.kind === 'content') {
+            const collectionId = Number(entry.collection?.id);
+            const contentIndex = Number(entry.content?.index);
+            if (!Number.isFinite(collectionId) || !Number.isInteger(contentIndex)) return null;
+            return {
+                key: `content:${collectionContentKey(collectionId, contentIndex)}`,
+                label: entry.title || entry.content?.filename || 'Nested file',
+                locator: {
+                    kind: 'content',
+                    collection_id: collectionId,
+                    content_index: contentIndex,
                 },
             };
         }
