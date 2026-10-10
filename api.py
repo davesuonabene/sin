@@ -41,6 +41,19 @@ def workspace_save_path(name: str) -> Path:
     return SAVES_DIR / f"{clean_name}.json"
 
 
+def _gaia_db_path() -> Optional[Path]:
+    """Resolve the authoritative SQLite database path for GAIA."""
+    for candidate in (
+        PROJECT_ROOT / "gaia.db",
+        PROJECT_ROOT / "gaia" / "gaia.db",
+        Path("gaia.db"),
+        Path("gaia") / "gaia.db",
+    ):
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.getLogger("numba").setLevel(logging.WARNING)
@@ -455,14 +468,12 @@ def _get_gaia_metadata(filepath: str) -> Dict[str, Any]:
     metadata: Dict[str, Any] = {"bpm": None, "key": None}
     if not filepath:
         return metadata
-    db_path = "gaia.db"
-    if not os.path.exists(db_path):
-        db_path = os.path.join("gaia", "gaia.db")
-    if not os.path.exists(db_path):
+    db_path = _gaia_db_path()
+    if not db_path:
         return metadata
     try:
         import sqlite3
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         target_abs = os.path.abspath(filepath)
@@ -546,8 +557,8 @@ def _resolve_library_references(references: Optional[List[Dict[str, Any]]]) -> D
         if raw_path:
             exact_paths.extend([str(raw_path), os.path.abspath(str(raw_path))])
 
-    db_path = "gaia.db" if os.path.exists("gaia.db") else os.path.join("gaia", "gaia.db")
-    if not os.path.exists(db_path):
+    db_path = _gaia_db_path()
+    if not db_path:
         return {"files": [], "missing": requested, "diagnostics": diagnostics(0, 0)}
 
     clauses: list[str] = []
@@ -1010,12 +1021,10 @@ def get_library(vault_id: Optional[int] = None):
         raw_items.clear()
 
     # Fallback to direct SQLite read
-    db_path = "gaia.db"
-    if not os.path.exists(db_path):
-        db_path = os.path.join("gaia", "gaia.db")
-    if os.path.exists(db_path):
+    db_path = _gaia_db_path()
+    if db_path:
         try:
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(str(db_path))
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             query = """
@@ -1345,25 +1354,7 @@ def parse_midi_endpoint(payload: MidiParseRequest):
     res = midi_parser.parse_midi_file(actual_path)
     return res
 
-class TypeUpdateRequest(BaseModel):
-    type: str
 
-@api_router.patch("/library/{file_id}/type", tags=["System"])
-def update_library_file_type(file_id: int, req: TypeUpdateRequest):
-    import urllib.request
-    import json
-    from fastapi import HTTPException
-    
-    try:
-        data = json.dumps({"type": req.type}).encode('utf-8')
-        request = urllib.request.Request(f"http://127.0.0.1:8001/items/{file_id}", data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
-        with urllib.request.urlopen(request, timeout=2.0) as response:
-            if response.status == 200:
-                return {"status": "success", "type": req.type}
-            raise HTTPException(status_code=response.status, detail="Failed to update type in Gaia")
-    except Exception as e:
-        logger.error(f"[API /library] Failed to update type in Gaia: {e}")
-        raise HTTPException(status_code=500, detail="Gaia API unreachable")
 
 class LibraryMetadataProposalRequest(BaseModel):
     """A SIN-side request to stage, never apply, GAIA metadata."""
@@ -1447,137 +1438,6 @@ def update_library_bpm(req: LibraryBpmUpdateRequest):
         )
     )
 
-    import urllib.request
-    import json
-    from fastapi import HTTPException
-
-    bpm_val = float(req.bpm)
-    if bpm_val < 20 or bpm_val > 400:
-        raise HTTPException(status_code=400, detail="BPM must be between 20 and 400")
-
-    gaia_updated = False
-    
-    # 1. Try GAIA HTTP API first
-    try:
-        file_id_str = str(req.file_id) if req.file_id is not None else ""
-        if file_id_str.startswith("collection:"):
-            parts = file_id_str.split(":")
-            if len(parts) == 3:
-                coll_id, content_idx = parts[1], parts[2]
-                url = f"http://127.0.0.1:8001/items/{coll_id}/contents/{content_idx}"
-                data = json.dumps({"bpm": int(round(bpm_val))}).encode('utf-8')
-                request = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
-                with urllib.request.urlopen(request, timeout=2.0) as response:
-                    if response.status in (200, 201):
-                        gaia_updated = True
-        elif file_id_str.isdigit():
-            item_id = int(file_id_str)
-            url = f"http://127.0.0.1:8001/items/{item_id}"
-            data = json.dumps({"bpm": int(round(bpm_val))}).encode('utf-8')
-            request = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
-            with urllib.request.urlopen(request, timeout=2.0) as response:
-                if response.status in (200, 201):
-                    gaia_updated = True
-        elif req.filepath:
-            search_url = "http://127.0.0.1:8001/items/?limit=10000"
-            request = urllib.request.Request(search_url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(request, timeout=2.0) as response:
-                if response.status == 200:
-                    items = json.loads(response.read().decode('utf-8'))
-                    target_abs_path = os.path.abspath(req.filepath)
-                    for item in items:
-                        item_abs = item.get("absolute_path")
-                        if item_abs and os.path.abspath(item_abs) == target_abs_path:
-                            item_id = item["id"]
-                            url = f"http://127.0.0.1:8001/items/{item_id}"
-                            data = json.dumps({"bpm": int(round(bpm_val))}).encode('utf-8')
-                            patch_req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
-                            with urllib.request.urlopen(patch_req, timeout=2.0) as patch_resp:
-                                if patch_resp.status in (200, 201):
-                                    gaia_updated = True
-                            break
-                        elif item.get("contents"):
-                            coll_id = item["id"]
-                            root = item.get("absolute_path") or ""
-                            for content in item.get("contents") or []:
-                                rel = content.get("relative_path") or ""
-                                candidate = os.path.abspath(os.path.join(root, rel))
-                                if candidate == target_abs_path:
-                                    c_idx = content.get("index")
-                                    url = f"http://127.0.0.1:8001/items/{coll_id}/contents/{c_idx}"
-                                    data = json.dumps({"bpm": int(round(bpm_val))}).encode('utf-8')
-                                    patch_req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
-                                    with urllib.request.urlopen(patch_req, timeout=2.0) as patch_resp:
-                                        if patch_resp.status in (200, 201):
-                                            gaia_updated = True
-                                    break
-                            if gaia_updated:
-                                break
-    except Exception as e:
-        logger.warning(f"[API /library/bpm] Gaia HTTP request failed/skipped: {e}")
-
-    # 2. If the companion HTTP process is unavailable, invoke GAIA's own
-    # service layer in-process. SIN never writes GAIA tables directly.
-    if not gaia_updated:
-        from gaia import crud, database, models, schemas
-        from gaia.routers import items as gaia_items
-
-        db = database.SessionLocal()
-        try:
-            file_id_str = str(req.file_id) if req.file_id is not None else ""
-            rounded_bpm = int(round(bpm_val))
-            if file_id_str.startswith("collection:"):
-                parts = file_id_str.split(":")
-                if len(parts) == 3:
-                    gaia_items.update_collection_content(
-                        int(parts[1]),
-                        int(parts[2]),
-                        schemas.CollectionContentUpdate(bpm=rounded_bpm),
-                        db,
-                    )
-                    gaia_updated = True
-            elif file_id_str.isdigit():
-                gaia_items.update_item(
-                    int(file_id_str),
-                    schemas.ItemUpdate(bpm=rounded_bpm),
-                    db,
-                )
-                gaia_updated = True
-            elif req.filepath:
-                target_abs = os.path.abspath(req.filepath)
-                item = crud.get_item_by_path(db, target_abs)
-                if item and not isinstance(item, models.FolderItem):
-                    gaia_items.update_item(
-                        item.id,
-                        schemas.ItemUpdate(bpm=rounded_bpm),
-                        db,
-                    )
-                    gaia_updated = True
-                else:
-                    for folder in db.query(models.FolderItem).all():
-                        folder = crud._populate_item_fields(folder)
-                        for content in folder.contents or []:
-                            candidate = os.path.abspath(
-                                os.path.join(folder.absolute_path, content.get("relative_path") or "")
-                            )
-                            if candidate == target_abs:
-                                gaia_items.update_collection_content(
-                                    folder.id,
-                                    content["index"],
-                                    schemas.CollectionContentUpdate(bpm=rounded_bpm),
-                                    db,
-                                )
-                                gaia_updated = True
-                                break
-                        if gaia_updated:
-                            break
-        except Exception as e:
-            logger.info(f"[API /library/bpm] Current GAIA ORM schema unavailable: {e}")
-        finally:
-            db.close()
-
-    return {"status": "success", "bpm": bpm_val, "updated": gaia_updated}
-
 
 class LibraryFavouriteUpdateRequest(BaseModel):
     filepath: Optional[str] = None
@@ -1597,135 +1457,6 @@ def update_library_favourite(req: LibraryFavouriteUpdateRequest):
         )
     )
 
-    import urllib.request
-    import json
-    from fastapi import HTTPException
-
-    gaia_updated = False
-
-    # 1. Try GAIA HTTP API first
-    try:
-        file_id_str = str(req.file_id) if req.file_id is not None else ""
-        if file_id_str.startswith("collection:"):
-            parts = file_id_str.split(":")
-            if len(parts) == 3:
-                coll_id, content_idx = parts[1], parts[2]
-                url = f"http://127.0.0.1:8001/items/{coll_id}/contents/{content_idx}"
-                data = json.dumps({"favourite": req.favourite}).encode('utf-8')
-                request = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
-                with urllib.request.urlopen(request, timeout=2.0) as response:
-                    if response.status in (200, 201):
-                        gaia_updated = True
-        elif file_id_str.isdigit():
-            item_id = int(file_id_str)
-            url = f"http://127.0.0.1:8001/items/{item_id}"
-            data = json.dumps({"favourite": req.favourite}).encode('utf-8')
-            request = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
-            with urllib.request.urlopen(request, timeout=2.0) as response:
-                if response.status in (200, 201):
-                    gaia_updated = True
-        elif req.filepath:
-            search_url = "http://127.0.0.1:8001/items/?limit=10000"
-            request = urllib.request.Request(search_url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(request, timeout=2.0) as response:
-                if response.status == 200:
-                    items = json.loads(response.read().decode('utf-8'))
-                    target_abs_path = os.path.abspath(req.filepath)
-                    for item in items:
-                        item_abs = item.get("absolute_path")
-                        if item_abs and os.path.abspath(item_abs) == target_abs_path:
-                            item_id = item["id"]
-                            url = f"http://127.0.0.1:8001/items/{item_id}"
-                            data = json.dumps({"favourite": req.favourite}).encode('utf-8')
-                            patch_req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
-                            with urllib.request.urlopen(patch_req, timeout=2.0) as patch_resp:
-                                if patch_resp.status in (200, 201):
-                                    gaia_updated = True
-                            break
-                        elif item.get("contents"):
-                            coll_id = item["id"]
-                            root = item.get("absolute_path") or ""
-                            for content in item.get("contents") or []:
-                                rel = content.get("relative_path") or ""
-                                candidate = os.path.abspath(os.path.join(root, rel))
-                                if candidate == target_abs_path:
-                                    c_idx = content.get("index")
-                                    url = f"http://127.0.0.1:8001/items/{coll_id}/contents/{c_idx}"
-                                    data = json.dumps({"favourite": req.favourite}).encode('utf-8')
-                                    patch_req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='PATCH')
-                                    with urllib.request.urlopen(patch_req, timeout=2.0) as patch_resp:
-                                        if patch_resp.status in (200, 201):
-                                            gaia_updated = True
-                                    break
-                            if gaia_updated:
-                                break
-    except Exception as e:
-        logger.warning(f"[API /library/favourite] Gaia HTTP request failed/skipped: {e}")
-
-    # 2. In-process fallback
-    if not gaia_updated:
-        from gaia import crud, database, models, schemas
-        from gaia.routers import items as gaia_items
-
-        db = database.SessionLocal()
-        try:
-            file_id_str = str(req.file_id) if req.file_id is not None else ""
-            if file_id_str.startswith("collection:"):
-                parts = file_id_str.split(":")
-                if len(parts) == 3:
-                    gaia_items.update_collection_content(
-                        int(parts[1]),
-                        int(parts[2]),
-                        schemas.CollectionContentUpdate(favourite=req.favourite),
-                        db,
-                    )
-                    gaia_updated = True
-            elif file_id_str.isdigit():
-                gaia_items.update_item(
-                    int(file_id_str),
-                    schemas.ItemUpdate(favourite=req.favourite),
-                    db,
-                )
-                gaia_updated = True
-            elif req.filepath:
-                target_abs = os.path.abspath(req.filepath)
-                item = crud.get_item_by_path(db, target_abs)
-                if item and not isinstance(item, models.FolderItem):
-                    gaia_items.update_item(
-                        item.id,
-                        schemas.ItemUpdate(favourite=req.favourite),
-                        db,
-                    )
-                    gaia_updated = True
-                else:
-                    for folder in db.query(models.FolderItem).all():
-                        folder = crud._populate_item_fields(folder)
-                        for content in folder.contents or []:
-                            candidate = os.path.abspath(
-                                os.path.join(folder.absolute_path, content.get("relative_path") or "")
-                            )
-                            if candidate == target_abs:
-                                gaia_items.update_collection_content(
-                                    folder.id,
-                                    int(content["index"]),
-                                    schemas.CollectionContentUpdate(favourite=req.favourite),
-                                    db,
-                                )
-                                gaia_updated = True
-                                break
-                        if gaia_updated:
-                            break
-        except Exception as e:
-            logger.error(f"[API /library/favourite] In-process update failed: {e}")
-            raise HTTPException(status_code=500, detail=str(e)) from e
-        finally:
-            db.close()
-
-    if not gaia_updated:
-        raise HTTPException(status_code=404, detail="Item not found to update favourite")
-
-    return {"status": "success", "favourite": req.favourite, "updated": gaia_updated}
-
 @api_router.get("/library/stream/{file_id}")
 def stream_library_file(file_id: str):
     from fastapi.responses import FileResponse
@@ -1733,14 +1464,11 @@ def stream_library_file(file_id: str):
     import sqlite3
     import json
     
-    db_path = "gaia.db"
-    if not os.path.exists(db_path):
-        db_path = os.path.join("gaia", "gaia.db")
-        
-    if not os.path.exists(db_path):
+    db_path = _gaia_db_path()
+    if not db_path:
         raise HTTPException(status_code=404, detail="Gaia DB not found")
         
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     if file_id.startswith("collection:"):

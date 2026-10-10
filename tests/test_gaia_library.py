@@ -25,7 +25,7 @@ from api import (
 from gaia import collection_importer, crud, deletion_service, import_jobs as import_jobs_module, midi_parser, models, profiles, project_service, reference_service, schemas, text_analyzer, vaults
 from gaia.import_jobs import ImportPreviewError, import_job_manager
 from gaia.routers import items as items_router, sin_proposals as sin_proposals_router
-from tests.support import GaiaTestCase
+from tests.support import GaiaTestCase, slow
 
 
 class TestGaiaLibrary(GaiaTestCase):
@@ -445,6 +445,52 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertEqual(child.attributes["import"]["source_path"], str(original.resolve()))
         self.assertNotEqual(Path(child.absolute_path), original.resolve())
 
+    def test_sample_pack_import_analyzes_files_as_samples(self):
+        source = self.temp_path / "sample-pack-source"
+        self.write_audio(source / "Loops", "Loop 120bpm C#min.wav", seconds=0.2)
+        preview = self.preview_import(source)
+        folder_node = next(n for n in preview["nodes"] if n["kind"] == "folder" and n["relative_path"] == ".")
+        self.assertEqual(folder_node["suggested_assignment"], "profile:sample_pack")
+
+        audio_entry = next(e for e in preview["entries"] if e["family"] == "audio")
+        job = self.start_import(
+            preview,
+            folder_assignments={".": "profile:sample_pack"},
+            item_types={str(audio_entry["index"]): "sample"},
+        )
+        self.assertEqual(job["status"], "completed")
+        collection = crud.get_item(self.db, job["result_items"][0]["id"])
+        self.assertEqual(collection.attributes.get("profile_id"), "sample_pack")
+        content = collection.contents[0]
+        self.assertEqual(content["type"], "sample")
+        child = crud.get_item(self.db, content["child_id"])
+        self.assertEqual(child.type, "sample")
+        self.assertEqual(child.bpm, 120)
+        self.assertEqual(child.key, "C#min")
+        self.assertTrue(child.is_loop)
+
+        browse_result = items_router.browse_import_source(str(source))
+        self.assertEqual(browse_result["path"], str(source.resolve()))
+        self.assertEqual(browse_result["parent"], str(source.resolve().parent))
+
+    def test_multitrack_detection_rejects_unequal_lengths_and_loop_packs(self):
+        unequal_folder = self.temp_path / "unequal-lengths-folder"
+        self.write_audio(unequal_folder, "Drums.wav", seconds=0.1)
+        self.write_audio(unequal_folder, "Bass.wav", seconds=0.8)
+        preview_unequal = self.preview_import(unequal_folder)
+        root_node = next(n for n in preview_unequal["nodes"] if n["kind"] == "folder" and n["relative_path"] == ".")
+        self.assertNotEqual(root_node["detected_assignment"], "type:multitrack")
+        self.assertEqual(root_node["suggested_assignment"], "profile:sample_pack")
+
+        loop_folder = self.temp_path / "loopmaster-pack"
+        self.write_audio(loop_folder, "Synth_Loop_01.wav", seconds=0.2)
+        self.write_audio(loop_folder, "Bass_Loop_01.wav", seconds=0.2)
+        preview_loop = self.preview_import(loop_folder)
+        loop_node = next(n for n in preview_loop["nodes"] if n["kind"] == "folder" and n["relative_path"] == ".")
+        self.assertNotEqual(loop_node["detected_assignment"], "type:multitrack")
+        self.assertEqual(loop_node["suggested_assignment"], "profile:sample_pack")
+
+    def test_import_preserves_loose_files(self):
         loose_source = self.temp_path / "normal-folder"
         loose_original = self.write_audio(loose_source / "Percussion" / "Closed Hats", "Hat.wav")
         loose_job = self.start_import(self.preview_import(loose_source), folder_assignments={})
@@ -472,6 +518,7 @@ class TestGaiaLibrary(GaiaTestCase):
         )
         self.assertEqual(updated.attributes["import"]["source_path"], str(loose_original.resolve()))
 
+    @slow("imports 1,001 real files to exercise post-copy batching (~16s)")
     def test_large_folder_import_batches_post_copy_work(self):
         source = self.temp_path / "large-folder"
         for index in range(1001):
@@ -1798,8 +1845,32 @@ class TestGaiaLibrary(GaiaTestCase):
         # Cleanup
         items_router.delete_drop_session(session_id)
 
+    def test_key_analysis_avoided_for_long_tracks_and_field_recordings(self):
+        """Key detection must be avoided for long tracks and field recordings, running only for tonal samples."""
+        from gaia import text_analyzer
+        from core.analyzers import KeyAnalyzer
+
+        # 1. Long track/recording (> 45s) without explicit key in name -> role is "none"
+        long_role = text_analyzer.key_role("Session_Track_01.wav", is_loop=False, tags=[], duration_seconds=120.0)
+        self.assertEqual(long_role, "none")
+        self.assertIsNone(KeyAnalyzer.from_audio_file("dummy.wav", known_duration=120.0))
+
+        # 2. Field recording / ambience -> role is "none"
+        field_role = text_analyzer.key_role("Rain_Field_Recording_Stereo.wav", is_loop=False, tags=["Ambience"], duration_seconds=15.0)
+        self.assertEqual(field_role, "none")
+
+        ambient_role = text_analyzer.key_role("Forest_Ambience_Binaural.wav", is_loop=False, tags=[], duration_seconds=20.0)
+        self.assertEqual(ambient_role, "none")
+
+        # 3. Short sample with tonal content -> role is "single_note" or "harmonic"
+        sample_bass_role = text_analyzer.key_role("Deep_Bass_Hit.wav", is_loop=False, tags=["Bass"], duration_seconds=2.0)
+        self.assertEqual(sample_bass_role, "single_note")
+
+        sample_loop_role = text_analyzer.key_role("Guitar_Melody_Loop_120.wav", is_loop=True, tags=["Guitar", "Loop"], duration_seconds=8.0)
+        self.assertEqual(sample_loop_role, "harmonic")
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

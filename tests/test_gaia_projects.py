@@ -1064,6 +1064,61 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertIsNone(reloaded_after.parent_id)
         self.assertTrue(Path(file1).is_file())
 
+    def test_move_collection_into_folder_streamable_and_previewable(self):
+        # Create a sample pack collection with a child sample
+        pack_path = vaults.vault_store(self.vault) / "DrumPack"
+        pack_path.mkdir(parents=True, exist_ok=True)
+        sub_dir = pack_path / "Kicks"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        kick_file = self.write_audio(sub_dir, "Kick01.wav")
+
+        pack = crud.create_item(
+            self.db,
+            schemas.CollectionItemCreate(
+                absolute_path=str(pack_path.resolve()),
+                vault_id=self.vault.id,
+                title="DrumPack",
+                source_kind="managed",
+                source_path=str(pack_path.resolve()),
+            ),
+        )
+        sample = crud.create_item(
+            self.db,
+            schemas.SampleItemCreate(
+                absolute_path=str(kick_file.resolve()),
+                vault_id=self.vault.id,
+                parent_id=pack.id,
+                file_hash="kick-hash",
+                size_bytes=kick_file.stat().st_size,
+                mime_type="audio/wav",
+            ),
+        )
+        crud.save_collection_contents(self.db, pack, [
+            {
+                "index": 0,
+                "relative_path": "Kicks/Kick01.wav",
+                "child_id": sample.id,
+                "type": "sample",
+                "streamable": True,
+            }
+        ])
+
+        # Create outer folder and move the pack into it
+        folder = project_service.create_folder(self.db, "AllPacks", vault_id=self.vault.id, item_ids=[pack.id])
+        reloaded_pack = crud.get_item(self.db, pack.id)
+        self.assertEqual(reloaded_pack.parent_id, folder.id)
+
+        # Test streaming via _get_collection_content
+        from gaia.routers.items import _get_collection_content
+        content, content_path = _get_collection_content(reloaded_pack, 0, db=self.db)
+        self.assertTrue(Path(content_path).is_file())
+        self.assertEqual(content["child_id"], sample.id)
+
+        # Test preview resolution for folder containing child collection
+        preview = reference_service.resolve_item_preview(self.db, folder.id)
+        self.assertIsNotNone(preview)
+        self.assertEqual(preview.id, sample.id)
+
 
 if __name__ == "__main__":
     unittest.main()

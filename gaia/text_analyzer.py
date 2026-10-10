@@ -117,9 +117,30 @@ def extract_key(text: str, allow_bare_note: bool = False) -> str | None:
     return None
 
 
-def key_role(text: str, is_loop: bool, tags: list[str]) -> str:
+_FIELD_RECORDING_WORDS = {
+    "field", "recording", "recordings", "ambience", "ambient", "foley",
+    "noise", "nature", "rain", "wind", "binaural", "hydrophone", "soundscape",
+    "drone", "room tone", "roomtone", "mic", "walk", "outdoor", "traffic",
+    "street", "atmosphere", "atmos", "background",
+}
+
+
+def key_role(text: str, is_loop: bool, tags: list[str], duration_seconds: float | None = None) -> str:
     """Return whether an asset is unpitched, a single pitch, or harmonic."""
+    # Long tracks and recordings do not have a single sample key
+    if duration_seconds is not None and duration_seconds > 45.0:
+        return "none"
+
+    searchable = _searchable(text)
+
+    # Field recordings, foley, ambience, or environmental sounds are unpitched
+    if any(re.search(rf"\b{re.escape(w)}\b", searchable) for w in _FIELD_RECORDING_WORDS):
+        return "none"
+
     tag_set = set(tags)
+    if "FX" in tag_set or "Ambience" in tag_set:
+        return "none"
+
     # 808s and bass sounds are tonal even when they live inside a generic
     # drum folder. Give their explicit instrument tag precedence over the
     # folder-level ``Drums`` classification.
@@ -127,13 +148,19 @@ def key_role(text: str, is_loop: bool, tags: list[str]) -> str:
         return "single_note"
     if tag_set.intersection(_DRUM_TAGS):
         return "none"
-    searchable = _searchable(text)
+
     explicitly_single = bool(re.search(r"\b(single[ -]?note|one[ -]?note|note|tone)\b", searchable))
     if explicitly_single:
         return "single_note"
     if not is_loop and tag_set.intersection(_TONAL_INSTRUMENT_TAGS):
         return "single_note"
-    return "harmonic"
+
+    # Harmonic key detection applies only to musical samples (loops or tonal instruments/melodies)
+    if is_loop or tag_set.intersection(_TONAL_INSTRUMENT_TAGS | {"Melody", "Chord", "Keys", "Guitar", "Synth", "Lead", "Pad", "Pluck"}):
+        return "harmonic"
+
+    # Default generic non-sample or non-melodic material to unpitched
+    return "none"
 
 
 def normalize_key_for_role(key: str | None, role: str) -> str | None:
@@ -209,9 +236,6 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
     is_midi = path.suffix.lower() in {".mid", ".midi"}
     is_loop = detect_is_loop(search_text, bool(bpm), path.suffix)
     tags = extract_tags(search_text, is_loop, bpm_range, is_midi)
-    role = key_role(search_text, is_loop, tags)
-    if role == "single_note" and "Single note" not in tags:
-        tags.append("Single note")
 
     if duration_seconds is None and path.is_file() and path.suffix.lower() in _AUDIO_FILE_EXTENSIONS:
         try:
@@ -221,6 +245,10 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
         except Exception:
             duration_seconds = None
 
+    role = key_role(search_text, is_loop, tags, duration_seconds=duration_seconds)
+    if role == "single_note" and "Single note" not in tags:
+        tags.append("Single note")
+
     # A duration is useful only after the name/folder has established that the
     # asset is a loop. This avoids assigning tempos to arbitrary one-shots.
     if bpm is None and is_loop and duration_seconds:
@@ -228,9 +256,18 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
         bpm = round(inferred) if inferred is not None else None
 
     key = extract_key(metadata_text, allow_bare_note=role == "single_note")
+    # Only run audio signal key detection if explicit key was not in filename/text,
+    # role is musical ('harmonic' or 'single_note'), duration is sample-length (<= 45s),
+    # and it is not a field recording.
     if key is None and role != "none" and path.is_file() and path.suffix.lower() in _AUDIO_FILE_EXTENSIONS:
-        from core.analyzers import KeyAnalyzer
-        key = KeyAnalyzer.from_audio_file(str(path), pitch_only=role == "single_note")
+        if duration_seconds is None or (0.5 <= duration_seconds <= 45.0):
+            from core.analyzers import KeyAnalyzer
+            key = KeyAnalyzer.from_audio_file(
+                str(path),
+                duration_limit=8.0,
+                pitch_only=role == "single_note",
+                known_duration=duration_seconds,
+            )
     key = normalize_key_for_role(key, role)
 
     return {

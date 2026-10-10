@@ -1,0 +1,1277 @@
+{
+  "format": "sin-graph",
+  "version": 1,
+  "settings": {
+    "bpm": 94,
+    "total_bars": 16,
+    "key": "Em"
+  },
+  "output": "master",
+  "nodes": [
+    {
+      "id": "gfunk-bass-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Warm Analog Bass Pool",
+        "selected_items": [
+          {
+            "id": 483
+          },
+          {
+            "id": 484
+          },
+          {
+            "id": 490
+          },
+          {
+            "id": 1727
+          },
+          {
+            "id": 1728
+          },
+          {
+            "id": 2072
+          },
+          {
+            "id": 2073
+          },
+          {
+            "id": 2074
+          },
+          {
+            "id": 2075
+          },
+          {
+            "id": 2076
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 0.3391
+      }
+    },
+    {
+      "id": "gfunk-bass-sample",
+      "type": "sample",
+      "properties": {
+        "node_name": "Analog Moog Sub Bass",
+        "sample_type": "one_shot",
+        "gain": 1.0,
+        "chain": [
+          {
+            "id": "pre_gain_bass",
+            "type": "gain",
+            "name": "Pre Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 0.707,
+              "gain_db": -3
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "gfunk-bass-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "G-Funk Walking Bass Line",
+        "sequence": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "step_parameters": [
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          }
+        ],
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "fade_ms": 0.0,
+        "seed": 94101,
+        "seed_mode": "moving"
+      }
+    },
+    {
+      "id": "gfunk-bass-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "G-Funk Bass Pattern Pool",
+        "selected_items": [
+          {
+            "id": 7274
+          },
+          {
+            "id": 7276
+          },
+          {
+            "id": 7279
+          },
+          {
+            "id": 7267
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "accepted_asset_type": "sequence_source",
+        "seed": 0.7123
+      }
+    },
+    {
+      "id": "gfunk-kick-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Punchy G-Funk Kick Pool",
+        "selected_items": [
+          {
+            "id": 352
+          },
+          {
+            "id": 353
+          },
+          {
+            "id": 354
+          },
+          {
+            "id": 355
+          },
+          {
+            "id": 356
+          },
+          {
+            "id": 357
+          },
+          {
+            "id": 358
+          },
+          {
+            "id": 359
+          },
+          {
+            "id": 360
+          },
+          {
+            "id": 361
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 0.2234
+      }
+    },
+    {
+      "id": "gfunk-kick-sample",
+      "type": "sample",
+      "properties": {
+        "node_name": "Low End Punch Kick",
+        "sample_type": "one_shot",
+        "gain": 0.0
+      }
+    },
+    {
+      "id": "gfunk-kick-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "West Coast Kick Groove",
+        "sequence": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "step_parameters": [
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.015,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          }
+        ],
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "fade_ms": 0.0,
+        "seed": 94102,
+        "seed_mode": "moving"
+      }
+    },
+    {
+      "id": "gfunk-kick-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Kick Pattern Pool",
+        "selected_items": [
+          {
+            "id": 7267
+          },
+          {
+            "id": 7272
+          },
+          {
+            "id": 7273
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "accepted_asset_type": "sequence_source",
+        "seed": 0.4431
+      }
+    },
+    {
+      "id": "gfunk-clap-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Crisp 90s Clap Pool",
+        "selected_items": [
+          {
+            "id": 127
+          },
+          {
+            "id": 128
+          },
+          {
+            "id": 129
+          },
+          {
+            "id": 130
+          },
+          {
+            "id": 131
+          },
+          {
+            "id": 132
+          },
+          {
+            "id": 133
+          },
+          {
+            "id": 134
+          },
+          {
+            "id": 135
+          },
+          {
+            "id": 136
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 0.1876
+      }
+    },
+    {
+      "id": "gfunk-clap-sample",
+      "type": "sample",
+      "properties": {
+        "node_name": "Stereo Handclap",
+        "sample_type": "one_shot",
+        "gain": -0.5
+      }
+    },
+    {
+      "id": "gfunk-clap-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Clap 2 and 4 Pocket",
+        "sequence": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0
+        ],
+        "step_parameters": [
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.008,
+            "velocity": 1.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          }
+        ],
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "fade_ms": 0.0,
+        "seed": 94103,
+        "seed_mode": "moving"
+      }
+    },
+    {
+      "id": "gfunk-clap-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Clap Pattern Pool",
+        "selected_items": [
+          {
+            "id": 7268
+          },
+          {
+            "id": 7270
+          },
+          {
+            "id": 7277
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "accepted_asset_type": "sequence_source",
+        "seed": 0.8872
+      }
+    },
+    {
+      "id": "gfunk-snare-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Acoustic Layer Snare Pool",
+        "selected_items": [
+          {
+            "id": 1083
+          },
+          {
+            "id": 1084
+          },
+          {
+            "id": 1085
+          },
+          {
+            "id": 1086
+          },
+          {
+            "id": 1087
+          },
+          {
+            "id": 1088
+          },
+          {
+            "id": 1089
+          },
+          {
+            "id": 1090
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 0.6543
+      }
+    },
+    {
+      "id": "gfunk-snare-sample",
+      "type": "sample",
+      "properties": {
+        "node_name": "Snappy Tight Snare",
+        "sample_type": "one_shot",
+        "gain": -2.0
+      }
+    },
+    {
+      "id": "gfunk-snare-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Snare Layer & Ghost Hits",
+        "sequence": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          1,
+          0,
+          0,
+          0
+        ],
+        "step_parameters": [
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.4,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.95,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          }
+        ],
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "fade_ms": 0.0,
+        "seed": 94104,
+        "seed_mode": "moving"
+      }
+    },
+    {
+      "id": "gfunk-hat-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Shaker & Closed Hat Pool",
+        "selected_items": [
+          {
+            "id": 929
+          },
+          {
+            "id": 1839
+          },
+          {
+            "id": 1840
+          },
+          {
+            "id": 3715
+          },
+          {
+            "id": 3722
+          },
+          {
+            "id": 260
+          },
+          {
+            "id": 261
+          },
+          {
+            "id": 262
+          },
+          {
+            "id": 263
+          },
+          {
+            "id": 264
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 0.4912
+      }
+    },
+    {
+      "id": "gfunk-hat-sample",
+      "type": "sample",
+      "properties": {
+        "node_name": "Swung Shaker Hat",
+        "sample_type": "one_shot",
+        "gain": -2.5
+      }
+    },
+    {
+      "id": "gfunk-hat-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Laid Back 16th Swing",
+        "sequence": [
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0
+        ],
+        "step_parameters": [
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.022,
+            "velocity": 0.6,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.022,
+            "velocity": 0.6,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.022,
+            "velocity": 0.6,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.022,
+            "velocity": 0.6,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          },
+          {
+            "probability": 100,
+            "offset": 0.0,
+            "velocity": 0.9,
+            "subdivisions": 1,
+            "subdivision_enabled": false
+          }
+        ],
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "fade_ms": 0.0,
+        "seed": 94105,
+        "seed_mode": "moving"
+      }
+    },
+    {
+      "id": "gfunk-hat-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Hat Pattern Pool",
+        "selected_items": [
+          {
+            "id": 7269
+          },
+          {
+            "id": 7271
+          },
+          {
+            "id": 7281
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "accepted_asset_type": "sequence_source",
+        "seed": 0.6128
+      }
+    },
+    {
+      "id": "gfunk-drum-bus",
+      "type": "track",
+      "properties": {
+        "node_name": "West Coast Drum Bus",
+        "mix_mode": "sum",
+        "bpm": "global",
+        "total_bars": "global",
+        "gain": 0.0,
+        "fx_modules": [
+          {
+            "type": "compressor",
+            "threshold_db": -10.0,
+            "ratio": 2.8,
+            "attack_ms": 30.0,
+            "release_ms": 180.0
+          },
+          {
+            "type": "saturation",
+            "drive": 0.15,
+            "color": 0.7
+          }
+        ]
+      }
+    },
+    {
+      "id": "gfunk-bass-bus",
+      "type": "track",
+      "properties": {
+        "node_name": "G-Funk Analog Bass Bus",
+        "mix_mode": "sum",
+        "bpm": "global",
+        "total_bars": "global",
+        "gain": 0.5,
+        "fx_modules": [
+          {
+            "type": "eq",
+            "low_gain_db": 2.5,
+            "low_freq_hz": 60.0,
+            "mid_gain_db": -1.5,
+            "mid_freq_hz": 400.0,
+            "high_gain_db": -5.0,
+            "high_freq_hz": 3200.0
+          },
+          {
+            "type": "saturation",
+            "drive": 0.2,
+            "color": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "id": "master",
+      "type": "track",
+      "role": "master",
+      "properties": {
+        "node_name": "Master Output",
+        "mix_mode": "sum",
+        "bpm": "global",
+        "total_bars": "global",
+        "chain": [
+          {
+            "id": "master-gain",
+            "type": "gain",
+            "name": "Master Gain",
+            "enabled": true,
+            "params": {
+              "gain": 0.65
+            }
+          },
+          {
+            "id": "master-limiter",
+            "type": "limiter",
+            "name": "Master Ceiling",
+            "enabled": true,
+            "params": {
+              "threshold": -0.2
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "gfunk-bass-sample",
+      "to": "gfunk-bass-seq",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-kick-sample",
+      "to": "gfunk-kick-seq",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-clap-sample",
+      "to": "gfunk-clap-seq",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-snare-sample",
+      "to": "gfunk-snare-seq",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-hat-sample",
+      "to": "gfunk-hat-seq",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-bass-seq",
+      "to": "gfunk-bass-bus",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-kick-seq",
+      "to": "gfunk-drum-bus",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-clap-seq",
+      "to": "gfunk-drum-bus",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-snare-seq",
+      "to": "gfunk-drum-bus",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-hat-seq",
+      "to": "gfunk-drum-bus",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-drum-bus",
+      "to": "master",
+      "type": "audio"
+    },
+    {
+      "from": "gfunk-bass-bus",
+      "to": "master",
+      "type": "audio"
+    }
+  ],
+  "attachments": [
+    {
+      "owner": "gfunk-bass-sample",
+      "modifier": "gfunk-bass-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "gfunk-bass-seq",
+      "modifier": "gfunk-bass-pattern-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "gfunk-kick-sample",
+      "modifier": "gfunk-kick-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "gfunk-kick-seq",
+      "modifier": "gfunk-kick-pattern-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "gfunk-clap-sample",
+      "modifier": "gfunk-clap-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "gfunk-clap-seq",
+      "modifier": "gfunk-clap-pattern-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "gfunk-snare-sample",
+      "modifier": "gfunk-snare-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "gfunk-hat-sample",
+      "modifier": "gfunk-hat-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "gfunk-hat-seq",
+      "modifier": "gfunk-hat-pattern-pool",
+      "type": "asset_pool"
+    }
+  ]
+}

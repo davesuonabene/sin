@@ -629,14 +629,14 @@ def resolve_item_preview(
         profile_preview = _profile_preview_item(db, item)
         if profile_preview:
             return profile_preview
-        return next(
-            (
-                child
-                for child in sorted(item.children, key=lambda value: value.absolute_path.casefold())
-                if child.type in {"audio", "track", "sample"}
-            ),
-            None,
-        )
+        for child in sorted(item.children, key=lambda value: value.absolute_path.casefold()):
+            if child.type in {"audio", "track", "sample"}:
+                return child
+            if isinstance(child, models.FolderItem):
+                nested = resolve_item_preview(db, child.id, visited)
+                if nested:
+                    return nested
+        return None
 
     return item if item.type in {"audio", "track", "sample"} else None
 

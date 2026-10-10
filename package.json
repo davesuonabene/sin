@@ -8,12 +8,20 @@
     "start": "python run.py",
     "dev": "python run.py",
     "serve": "python cli.py serve",
+    "sin": "python -B cli.py",
+    "render": "python -B cli.py render",
     "test": "python -B tests/run.py && npm --prefix editor test",
+    "test:quick": "python -B tests/run.py",
+    "test:full": "python -B tests/run.py full && npm --prefix editor test",
+    "test:changed": "python -B tests/run.py --changed",
     "test:python": "python -B tests/run.py",
+    "test:core": "python -B tests/run.py core",
+    "test:gaia": "python -B tests/run.py gaia",
+    "test:projects": "python -B tests/run.py projects",
+    "test:cli": "python -B tests/run.py cli",
     "test:frontend": "npm --prefix editor test",
     "build:editor": "npm --prefix editor run build",
     "build:sin": "npm --prefix editor run build",
-    "build:frontend": "npm --prefix editor run build",
-    "build:iride": "npm --prefix editor run build"
+    "build:frontend": "npm --prefix editor run build"
   }
 }

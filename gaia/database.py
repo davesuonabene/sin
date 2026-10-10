@@ -106,6 +106,10 @@ def migrate_performance_indexes() -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+        if "playlist_items" in table_names:
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_playlist_items_playlist ON playlist_items (playlist_id, position)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_playlist_items_item ON playlist_items (item_id)"))
+
 
 
 def migrate_vault_locations() -> None:

@@ -13,7 +13,7 @@ export function serializeNodeSubtree(
     trackNodesMap?: Map<number, any>,
     options: SerializationOptions = {}
 ): any {
-    const trackNodes = trackNodesMap || (window as any).trackNodes || new Map();
+    const trackNodes = trackNodesMap || (typeof window !== 'undefined' ? (window as any).trackNodes : undefined) || new Map();
     const includeDynamicPools = options.includeDynamicPools !== false;
     const globalParameters = graph?.extra?.global_parameters || { bpm: 120, total_bars: 4, key: 'C' };
     const modulatorsByParent = new Map<number, Array<[number, any]>>();
@@ -33,7 +33,7 @@ export function serializeNodeSubtree(
         const data = trackNodes.get(nodeId);
         const nodeObj = graph.getNodeById(nodeId);
         if (!data && !nodeObj) return null;
-        if (typeof (window as any).syncGhostTrackData === 'function') {
+        if (typeof window !== 'undefined' && typeof (window as any).syncGhostTrackData === 'function') {
             (window as any).syncGhostTrackData(nodeObj, data);
         }
         if (data?.type === 'disabled' || nodeObj?.properties?.disabled || nodeObj?.type === 'Audio/Disabled') {

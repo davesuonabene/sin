@@ -661,3 +661,47 @@ class VaultReconcileResponse(BaseModel):
     relinked_count: int = 0
     in_sync: bool = True
 
+
+# Playlists
+class PlaylistBase(BaseModel):
+    name: str
+
+
+class PlaylistCreate(PlaylistBase):
+    pass
+
+
+class PlaylistUpdate(BaseModel):
+    name: str
+
+
+class PlaylistItemAddRequest(BaseModel):
+    item_ids: List[int]
+
+
+class PlaylistItemReorderRequest(BaseModel):
+    item_ids: List[int]
+
+
+class PlaylistSummary(BaseModel):
+    id: int
+    name: str
+    item_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlaylistItemSummary(ItemSummary):
+    position: int = 0
+
+
+class PlaylistDetail(BaseModel):
+    id: int
+    name: str
+    item_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+    items: List[PlaylistItemSummary] = Field(default_factory=list)
+    model_config = ConfigDict(from_attributes=True)
+

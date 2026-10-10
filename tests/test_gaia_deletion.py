@@ -7,7 +7,7 @@ from fastapi import BackgroundTasks
 
 from gaia import crud, deletion_service, models, project_service, reference_service, schemas, vaults
 from gaia.routers import items as items_router
-from tests.support import GaiaTestCase
+from tests.support import GaiaTestCase, slow
 
 
 class TestGaiaDeletion(GaiaTestCase):
@@ -187,6 +187,7 @@ class TestGaiaDeletion(GaiaTestCase):
         self.assertIsNone(crud.get_item(self.db, artifact.id))
         self.assertFalse(Path(project.absolute_path).exists())
 
+    @slow("creates 1,000+ rows to guard SQLite bound-parameter limits (~5s)")
     def test_batch_can_delete_more_than_one_thousand_root_items(self):
         records = [
             {

@@ -143,7 +143,23 @@ def rewrite_managed_paths(
     preserve_source_paths: bool = False,
 ) -> None:
     """Keep all stored managed paths accurate after a normal vault move."""
-    item_rows = connection.execute(text("SELECT id, absolute_path, metadata_json FROM items")).mappings().all()
+    if not operations:
+        return
+
+    clauses = []
+    params = {}
+    for i, op in enumerate(operations):
+        src = op["source"]
+        params[f"s_{i}"] = src
+        params[f"sp_{i}"] = f"{src}%"
+        clauses.append(f"absolute_path = :s_{i} OR absolute_path LIKE :sp_{i}")
+
+    where_sql = " OR ".join(clauses)
+    item_rows = connection.execute(
+        text(f"SELECT id, absolute_path, metadata_json FROM items WHERE {where_sql}"),
+        params,
+    ).mappings().all()
+
     for row in item_rows:
         absolute_path = _replace_path(row["absolute_path"], operations)
         metadata_json = row["metadata_json"]
@@ -161,9 +177,22 @@ def rewrite_managed_paths(
                 {"id": row["id"], "absolute_path": absolute_path, "metadata_json": rewritten_metadata},
             )
 
+    col_clauses = []
+    col_params = {}
+    for i, op in enumerate(operations):
+        src = op["source"]
+        col_params[f"s_{i}"] = src
+        col_params[f"sp_{i}"] = f"{src}%"
+        src_esc = json.dumps(src)[1:-1]
+        col_params[f"se_{i}"] = f"%{src_esc}%"
+        col_clauses.append(f"source_path = :s_{i} OR source_path LIKE :sp_{i} OR manifest_json LIKE :se_{i}")
+
+    col_where = " OR ".join(col_clauses)
     collection_rows = connection.execute(
-        text("SELECT id, source_path, manifest_json FROM collection_items")
+        text(f"SELECT id, source_path, manifest_json FROM collection_items WHERE {col_where}"),
+        col_params,
     ).mappings().all()
+
     for row in collection_rows:
         source_path = row["source_path"] if preserve_source_paths else _replace_path(row["source_path"], operations)
         manifest_json = row["manifest_json"]
@@ -181,7 +210,19 @@ def rewrite_managed_paths(
                 {"id": row["id"], "source_path": source_path, "manifest_json": rewritten_manifest},
             )
 
-    multitrack_rows = connection.execute(text("SELECT id, stems_json FROM multitrack_items")).mappings().all()
+    mt_clauses = []
+    mt_params = {}
+    for i, op in enumerate(operations):
+        src_esc = json.dumps(op["source"])[1:-1]
+        mt_params[f"se_{i}"] = f"%{src_esc}%"
+        mt_clauses.append(f"stems_json LIKE :se_{i}")
+
+    mt_where = " OR ".join(mt_clauses)
+    multitrack_rows = connection.execute(
+        text(f"SELECT id, stems_json FROM multitrack_items WHERE {mt_where}"),
+        mt_params,
+    ).mappings().all()
+
     for row in multitrack_rows:
         if not row["stems_json"]:
             continue

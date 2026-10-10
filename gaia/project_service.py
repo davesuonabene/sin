@@ -635,6 +635,7 @@ def place_items(
     moved_items = _top_level_selection(ordered_items)
     if any(isinstance(item, models.ProjectItem) for item in moved_items):
         raise ValueError("Projects must remain directly inside their owning vault")
+
     target_vault = vaults.get_vault(db, target.vault_id)
     if not target_vault:
         raise ValueError("Target vault not found")
@@ -704,11 +705,17 @@ def place_items(
                 moves.append((source, destination))
                 operations.append({"source": str(source), "target": str(destination)})
 
-            stack = [item]
+            stack = [(item, destination)]
             while stack:
-                current = stack.pop()
+                current, current_dest = stack.pop()
                 current.vault_id = target.vault_id
-                stack.extend(current.children)
+                current.absolute_path = str(current_dest.resolve())
+                for child in getattr(current, "children", []) or []:
+                    try:
+                        child_rel = Path(child.absolute_path).resolve().relative_to(source)
+                        stack.append((child, destination / child_rel))
+                    except ValueError:
+                        stack.append((child, destination / Path(child.absolute_path).name))
             item.parent_id = target.id
             if context_project_id:
                 refs = db.query(models.ItemReference).filter(
@@ -806,6 +813,7 @@ def place_items(
         if operations:
             vaults.rewrite_managed_paths(db.connection(), operations)
         db.commit()
+        db.expire_all()
     except Exception:
         db.rollback()
         for source, destination in reversed(moves):

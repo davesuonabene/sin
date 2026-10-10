@@ -17,7 +17,7 @@ export function parseBpmFromFilename(filename: string): number | null {
 }
 
 export function advanceAssetPoolSeed(modifierNode: any, trackNodesMap?: Map<number, any>) {
-    const trackNodes = trackNodesMap || (window as any).trackNodes;
+    const trackNodes = trackNodesMap || (typeof window !== 'undefined' ? (window as any).trackNodes : undefined);
     if (modifierNode?.properties?.playbackMode === 'Sequential') {
         const length = Math.max(1, modifierNode.properties.selected_items?.length || 0);
         const storedIndex = Number(modifierNode.properties.sequence_index);
@@ -119,17 +119,17 @@ export async function resolveAssetFilterNode(
     resolvedLibraryFiles?: any[]
 ): Promise<string> {
     if (!modifierNode?.properties || modifierNode.properties.output_type !== 'asset_path') return '';
-    const log = (window as any).runtimeLog as ((message: string, level?: string) => void) | undefined;
+    const log = typeof window !== 'undefined' ? (window as any).runtimeLog as ((message: string, level?: string) => void) | undefined : undefined;
     const resolutionStartedAt = Date.now();
     const poolName = modifierNode.properties.node_name || modifierNode.title || `Pool ${modifierNode.id ?? ''}`;
     log?.(`Resolving ${poolName}`, 'debug');
     const previousPath = modifierNode.properties.output_value || '';
     const acceptedType = modifierNode.properties.accepted_asset_type;
-    const fetchLibrary = (window as any).fetchLibrary;
-    const findLibraryFileById = (window as any).findLibraryFileById;
-    const findLibraryFile = (window as any).findLibraryFile;
-    const findLibraryFileForPoolLocator = (window as any).findLibraryFileForPoolLocator;
-    const resolveLibraryAssets = (window as any).resolveLibraryAssets;
+    const fetchLibrary = typeof window !== 'undefined' ? (window as any).fetchLibrary : undefined;
+    const findLibraryFileById = typeof window !== 'undefined' ? (window as any).findLibraryFileById : undefined;
+    const findLibraryFile = typeof window !== 'undefined' ? (window as any).findLibraryFile : undefined;
+    const findLibraryFileForPoolLocator = typeof window !== 'undefined' ? (window as any).findLibraryFileForPoolLocator : undefined;
+    const resolveLibraryAssets = typeof window !== 'undefined' ? (window as any).resolveLibraryAssets : undefined;
     const libraryFiles = resolvedLibraryFiles || (
         typeof resolveLibraryAssets === 'function'
             ? await resolveLibraryAssets(modifierNode.properties.selected_items || [])
@@ -242,7 +242,7 @@ export async function resolveAssetFilterNode(
 
     if (ownerNode?.properties) {
         if (ownerNode.type === 'Audio/Sequence' && assetPath) {
-            const applySequence = (window as any).applyLibraryItemToSequence;
+            const applySequence = typeof window !== 'undefined' ? (window as any).applyLibraryItemToSequence : undefined;
             if (typeof applySequence === 'function') {
                 await applySequence(ownerNode, {
                     id: libraryItemId,
@@ -280,7 +280,7 @@ export async function resolveAssignedAssetFilters(
     request: AssetResolutionRequest = { kind: 'preview' },
     trackNodesMap?: Map<number, any>
 ) {
-    const trackNodes = trackNodesMap || (window as any).trackNodes;
+    const trackNodes = trackNodesMap || (typeof window !== 'undefined' ? (window as any).trackNodes : undefined);
     const visited = new Set<number>();
     const visit = async (nodeId: number) => {
         if (visited.has(nodeId)) return;

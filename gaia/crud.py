@@ -1,5 +1,6 @@
 import json
 import os
+import datetime
 from pathlib import Path
 from sqlalchemy import delete, func, insert, or_, update
 from sqlalchemy.orm import Session, aliased, selectin_polymorphic, selectinload
@@ -443,7 +444,7 @@ def get_collection_contents_page(
     if not collection:
         return None
     safe_offset = max(0, int(offset))
-    safe_limit = max(1, min(int(limit), 1000))
+    safe_limit = None if int(limit) <= 0 else min(int(limit), 100000)
     needle = (query or "").strip()
     manifest_contents = _manifest_contents(collection)
     manifest_by_path = {
@@ -499,7 +500,7 @@ def get_collection_contents_page(
                     for field in ("title", "filename", "relative_path", "tags")
                 ).casefold()
             ]
-        page = contents[safe_offset:safe_offset + safe_limit]
+        page = contents[safe_offset:] if safe_limit is None else contents[safe_offset:safe_offset + safe_limit]
         total = len(contents)
     else:
         child_query = db.query(models.Item).filter(models.Item.parent_id.in_(folder_ids))
@@ -518,16 +519,18 @@ def get_collection_contents_page(
                 .distinct()
             )
         total = child_query.count()
-        children = (
+        query_part = (
             child_query
             .options(selectinload(models.Item.tags))
             .order_by(models.Item.absolute_path, models.Item.id)
             .offset(safe_offset)
-            .limit(safe_limit)
-            .all()
         )
+        if safe_limit is not None:
+            query_part = query_part.limit(safe_limit)
+        children = query_part.all()
+
         index_by_id: dict[int, int] = {}
-        if not manifest_by_path and children:
+        if not manifest_by_path and children and needle:
             ranked_children = (
                 db.query(
                     models.Item.id.label("child_id"),
@@ -560,9 +563,9 @@ def get_collection_contents_page(
     return {
         "contents": page,
         "offset": safe_offset,
-        "limit": safe_limit,
+        "limit": safe_limit if safe_limit is not None else total,
         "total": total,
-        "has_more": safe_offset + len(page) < total,
+        "has_more": False if safe_limit is None else (safe_offset + len(page) < total),
     }
 
 def create_item(db: Session, item: schemas.ItemCreate, *, commit: bool = True, flush: bool = True):
@@ -741,6 +744,20 @@ def delete_item(db: Session, item_id: int, *, commit: bool = True):
     )
     if item_external_references:
         raise ValueError("Item is referenced by a project; remove those references before deleting it")
+
+    is_folder_bin = (
+        getattr(db_item, "type", None) == "folder"
+        or bool((getattr(db_item, "attributes", None) or {}).get("is_folder"))
+        or ("is_folder" in str(getattr(db_item, "metadata_json", "")))
+    )
+    if is_folder_bin:
+        child_items = db.query(models.Item).filter(models.Item.parent_id == db_item.id).all()
+        parent_item = get_item(db, db_item.parent_id) if db_item.parent_id else None
+        for child in child_items:
+            child.parent_id = db_item.parent_id
+            child.parent = parent_item
+        db.flush()
+        subtree_ids = {db_item.id}
 
     # Descendants that are referenced outside this subtree/owning project must be preserved,
     # rather than failing container/folder deletion or deleting active external project references.
@@ -1047,4 +1064,183 @@ def locate_item(db: Session, item_id: int) -> dict | None:
         "filename": fname,
         "type": target.type or "file",
     }
+
+
+def get_playlists(db: Session) -> list[dict]:
+    """Return all playlists with their item counts."""
+    rows = (
+        db.query(
+            models.Playlist,
+            func.count(models.PlaylistItem.id).label("item_count"),
+        )
+        .outerjoin(models.PlaylistItem, models.PlaylistItem.playlist_id == models.Playlist.id)
+        .group_by(models.Playlist.id)
+        .order_by(models.Playlist.name.asc())
+        .all()
+    )
+    result = []
+    for playlist, count in rows:
+        result.append({
+            "id": playlist.id,
+            "name": playlist.name,
+            "item_count": count,
+            "created_at": playlist.created_at,
+            "updated_at": playlist.updated_at,
+        })
+    return result
+
+
+def get_playlist(db: Session, playlist_id: int) -> models.Playlist | None:
+    return db.query(models.Playlist).filter(models.Playlist.id == playlist_id).first()
+
+
+def get_playlist_by_name(db: Session, name: str) -> models.Playlist | None:
+    return db.query(models.Playlist).filter(func.lower(models.Playlist.name) == name.strip().lower()).first()
+
+
+def create_playlist(db: Session, name: str) -> models.Playlist:
+    playlist = models.Playlist(name=name.strip())
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    return playlist
+
+
+def update_playlist(db: Session, playlist_id: int, name: str) -> models.Playlist | None:
+    playlist = get_playlist(db, playlist_id)
+    if not playlist:
+        return None
+    playlist.name = name.strip()
+    db.commit()
+    db.refresh(playlist)
+    return playlist
+
+
+def delete_playlist(db: Session, playlist_id: int) -> bool:
+    playlist = get_playlist(db, playlist_id)
+    if not playlist:
+        return False
+    db.delete(playlist)
+    db.commit()
+    return True
+
+
+def add_playlist_items(db: Session, playlist_id: int, item_ids: list[int]) -> list[models.PlaylistItem]:
+    playlist = get_playlist(db, playlist_id)
+    if not playlist:
+        raise ValueError("Playlist not found")
+
+    existing_ids = {
+        row[0]
+        for row in db.query(models.PlaylistItem.item_id)
+        .filter(models.PlaylistItem.playlist_id == playlist_id)
+        .all()
+    }
+
+    max_pos = (
+        db.query(func.max(models.PlaylistItem.position))
+        .filter(models.PlaylistItem.playlist_id == playlist_id)
+        .scalar()
+    )
+    next_pos = (max_pos + 1) if max_pos is not None else 0
+
+    added = []
+    valid_items = {
+        item.id
+        for item in db.query(models.Item.id).filter(models.Item.id.in_(item_ids)).all()
+    }
+
+    for item_id in item_ids:
+        if item_id in valid_items and item_id not in existing_ids:
+            entry = models.PlaylistItem(
+                playlist_id=playlist_id,
+                item_id=item_id,
+                position=next_pos,
+            )
+            db.add(entry)
+            existing_ids.add(item_id)
+            added.append(entry)
+            next_pos += 1
+
+    if added:
+        playlist.updated_at = datetime.datetime.utcnow()
+        db.commit()
+
+    return added
+
+
+def remove_playlist_item(db: Session, playlist_id: int, item_id: int) -> bool:
+    entry = (
+        db.query(models.PlaylistItem)
+        .filter(
+            models.PlaylistItem.playlist_id == playlist_id,
+            models.PlaylistItem.item_id == item_id,
+        )
+        .first()
+    )
+    if not entry:
+        return False
+    db.delete(entry)
+    playlist = get_playlist(db, playlist_id)
+    if playlist:
+        playlist.updated_at = datetime.datetime.utcnow()
+    db.commit()
+    return True
+
+
+def reorder_playlist_items(db: Session, playlist_id: int, item_ids: list[int]) -> bool:
+    playlist = get_playlist(db, playlist_id)
+    if not playlist:
+        return False
+
+    entries = (
+        db.query(models.PlaylistItem)
+        .filter(models.PlaylistItem.playlist_id == playlist_id)
+        .all()
+    )
+    entry_map = {e.item_id: e for e in entries}
+
+    for pos, item_id in enumerate(item_ids):
+        if item_id in entry_map:
+            entry_map[item_id].position = pos
+
+    playlist.updated_at = datetime.datetime.utcnow()
+    db.commit()
+    return True
+
+
+def get_playlist_items(db: Session, playlist_id: int) -> list[dict]:
+    """Return serialized item summaries for all entries in the playlist in order."""
+    entries = (
+        db.query(models.PlaylistItem)
+        .filter(models.PlaylistItem.playlist_id == playlist_id)
+        .order_by(models.PlaylistItem.position.asc(), models.PlaylistItem.id.asc())
+        .all()
+    )
+    if not entries:
+        return []
+
+    item_ids = [e.item_id for e in entries]
+    db_items = (
+        db.query(models.Item)
+        .options(
+            selectin_polymorphic(models.Item, ITEM_POLYMORPHIC_TYPES),
+            selectinload(models.Item.tags),
+        )
+        .filter(models.Item.id.in_(item_ids))
+        .all()
+    )
+    items_by_id = {item.id: item for item in db_items}
+
+    result = []
+    for entry in entries:
+        item = items_by_id.get(entry.item_id)
+        if not item:
+            continue
+        summary = item_summary(item)
+        summary["position"] = entry.position
+        result.append(summary)
+
+    return result
+
 

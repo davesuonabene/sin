@@ -1,0 +1,1916 @@
+{
+  "version": 2,
+  "savedAt": "2026-10-10T12:00:00.000Z",
+  "graph": {
+    "last_node_id": 22,
+    "last_link_id": 12,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Warm Analog Bass Pool",
+          "selected_items": [
+            {
+              "id": 483
+            },
+            {
+              "id": 484
+            },
+            {
+              "id": 490
+            },
+            {
+              "id": 1727
+            },
+            {
+              "id": 1728
+            },
+            {
+              "id": 2072
+            },
+            {
+              "id": 2073
+            },
+            {
+              "id": 2074
+            },
+            {
+              "id": 2075
+            },
+            {
+              "id": 2076
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.3391,
+          "node_type": "asset_filter",
+          "parentId": 2
+        }
+      },
+      {
+        "id": 2,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              1
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Analog Moog Sub Bass",
+          "sample_type": "one_shot",
+          "gain": 1.0,
+          "chain": [
+            {
+              "id": "pre_gain_bass",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.707,
+                "gain_db": -3
+              }
+            }
+          ],
+          "node_type": "sample",
+          "asset_modifier_id": 1
+        }
+      },
+      {
+        "id": 3,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 1
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              6
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "G-Funk Walking Bass Line",
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "fade_ms": 0.0,
+          "seed": 94101,
+          "seed_mode": "moving",
+          "node_type": "sequence",
+          "asset_modifier_id": 4
+        }
+      },
+      {
+        "id": 4,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "G-Funk Bass Pattern Pool",
+          "selected_items": [
+            {
+              "id": 7274
+            },
+            {
+              "id": 7276
+            },
+            {
+              "id": 7279
+            },
+            {
+              "id": 7267
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "accepted_asset_type": "sequence_source",
+          "seed": 0.7123,
+          "node_type": "asset_filter",
+          "parentId": 3
+        }
+      },
+      {
+        "id": 5,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Punchy G-Funk Kick Pool",
+          "selected_items": [
+            {
+              "id": 352
+            },
+            {
+              "id": 353
+            },
+            {
+              "id": 354
+            },
+            {
+              "id": 355
+            },
+            {
+              "id": 356
+            },
+            {
+              "id": 357
+            },
+            {
+              "id": 358
+            },
+            {
+              "id": 359
+            },
+            {
+              "id": 360
+            },
+            {
+              "id": 361
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.2234,
+          "node_type": "asset_filter",
+          "parentId": 6
+        }
+      },
+      {
+        "id": 6,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              2
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Low End Punch Kick",
+          "sample_type": "one_shot",
+          "gain": 0.0,
+          "node_type": "sample",
+          "asset_modifier_id": 5
+        }
+      },
+      {
+        "id": 7,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 2
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              7
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "West Coast Kick Groove",
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.015,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "fade_ms": 0.0,
+          "seed": 94102,
+          "seed_mode": "moving",
+          "node_type": "sequence",
+          "asset_modifier_id": 8
+        }
+      },
+      {
+        "id": 8,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Kick Pattern Pool",
+          "selected_items": [
+            {
+              "id": 7267
+            },
+            {
+              "id": 7272
+            },
+            {
+              "id": 7273
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "accepted_asset_type": "sequence_source",
+          "seed": 0.4431,
+          "node_type": "asset_filter",
+          "parentId": 7
+        }
+      },
+      {
+        "id": 9,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          440
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Crisp 90s Clap Pool",
+          "selected_items": [
+            {
+              "id": 127
+            },
+            {
+              "id": 128
+            },
+            {
+              "id": 129
+            },
+            {
+              "id": 130
+            },
+            {
+              "id": 131
+            },
+            {
+              "id": 132
+            },
+            {
+              "id": 133
+            },
+            {
+              "id": 134
+            },
+            {
+              "id": 135
+            },
+            {
+              "id": 136
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.1876,
+          "node_type": "asset_filter",
+          "parentId": 10
+        }
+      },
+      {
+        "id": 10,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          440
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 9,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              3
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Stereo Handclap",
+          "sample_type": "one_shot",
+          "gain": -0.5,
+          "node_type": "sample",
+          "asset_modifier_id": 9
+        }
+      },
+      {
+        "id": 11,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          440
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 10,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 3
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              8
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Clap 2 and 4 Pocket",
+          "sequence": [
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.008,
+              "velocity": 1.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "fade_ms": 0.0,
+          "seed": 94103,
+          "seed_mode": "moving",
+          "node_type": "sequence",
+          "asset_modifier_id": 12
+        }
+      },
+      {
+        "id": 12,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          440
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 11,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Clap Pattern Pool",
+          "selected_items": [
+            {
+              "id": 7268
+            },
+            {
+              "id": 7270
+            },
+            {
+              "id": 7277
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "accepted_asset_type": "sequence_source",
+          "seed": 0.8872,
+          "node_type": "asset_filter",
+          "parentId": 11
+        }
+      },
+      {
+        "id": 13,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          600
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 12,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Acoustic Layer Snare Pool",
+          "selected_items": [
+            {
+              "id": 1083
+            },
+            {
+              "id": 1084
+            },
+            {
+              "id": 1085
+            },
+            {
+              "id": 1086
+            },
+            {
+              "id": 1087
+            },
+            {
+              "id": 1088
+            },
+            {
+              "id": 1089
+            },
+            {
+              "id": 1090
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.6543,
+          "node_type": "asset_filter",
+          "parentId": 14
+        }
+      },
+      {
+        "id": 14,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          600
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 13,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              4
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Snappy Tight Snare",
+          "sample_type": "one_shot",
+          "gain": -2.0,
+          "node_type": "sample",
+          "asset_modifier_id": 13
+        }
+      },
+      {
+        "id": 15,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          600
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 14,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 4
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              9
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Snare Layer & Ghost Hits",
+          "sequence": [
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.4,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "fade_ms": 0.0,
+          "seed": 94104,
+          "seed_mode": "moving",
+          "node_type": "sequence"
+        }
+      },
+      {
+        "id": 16,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 15,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Shaker & Closed Hat Pool",
+          "selected_items": [
+            {
+              "id": 929
+            },
+            {
+              "id": 1839
+            },
+            {
+              "id": 1840
+            },
+            {
+              "id": 3715
+            },
+            {
+              "id": 3722
+            },
+            {
+              "id": 260
+            },
+            {
+              "id": 261
+            },
+            {
+              "id": 262
+            },
+            {
+              "id": 263
+            },
+            {
+              "id": 264
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.4912,
+          "node_type": "asset_filter",
+          "parentId": 17
+        }
+      },
+      {
+        "id": 17,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 16,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              5
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Swung Shaker Hat",
+          "sample_type": "one_shot",
+          "gain": -2.5,
+          "node_type": "sample",
+          "asset_modifier_id": 16
+        }
+      },
+      {
+        "id": 18,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 17,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 5
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              10
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Laid Back 16th Swing",
+          "sequence": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.022,
+              "velocity": 0.6,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.022,
+              "velocity": 0.6,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.022,
+              "velocity": 0.6,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.022,
+              "velocity": 0.6,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "probability": 100,
+              "offset": 0.0,
+              "velocity": 0.9,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "fade_ms": 0.0,
+          "seed": 94105,
+          "seed_mode": "moving",
+          "node_type": "sequence",
+          "asset_modifier_id": 19
+        }
+      },
+      {
+        "id": 19,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 18,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Hat Pattern Pool",
+          "selected_items": [
+            {
+              "id": 7269
+            },
+            {
+              "id": 7271
+            },
+            {
+              "id": 7281
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "accepted_asset_type": "sequence_source",
+          "seed": 0.6128,
+          "node_type": "asset_filter",
+          "parentId": 18
+        }
+      },
+      {
+        "id": 20,
+        "type": "Audio/Track",
+        "pos": [
+          880,
+          520
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 19,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 7
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 8
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 9
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 10
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              11
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "West Coast Drum Bus",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "total_bars": "global",
+          "gain": 0.0,
+          "fx_modules": [
+            {
+              "type": "compressor",
+              "threshold_db": -10.0,
+              "ratio": 2.8,
+              "attack_ms": 30.0,
+              "release_ms": 180.0
+            },
+            {
+              "type": "saturation",
+              "drive": 0.15,
+              "color": 0.7
+            }
+          ],
+          "node_type": "track"
+        }
+      },
+      {
+        "id": 21,
+        "type": "Audio/Track",
+        "pos": [
+          880,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 20,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 6
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              12
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "G-Funk Analog Bass Bus",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "total_bars": "global",
+          "gain": 0.5,
+          "fx_modules": [
+            {
+              "type": "eq",
+              "low_gain_db": 2.5,
+              "low_freq_hz": 60.0,
+              "mid_gain_db": -1.5,
+              "mid_freq_hz": 400.0,
+              "high_gain_db": -5.0,
+              "high_freq_hz": 3200.0
+            },
+            {
+              "type": "saturation",
+              "drive": 0.2,
+              "color": 0.6
+            }
+          ],
+          "node_type": "track"
+        }
+      },
+      {
+        "id": 22,
+        "type": "Audio/Track",
+        "pos": [
+          1160,
+          320
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 21,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 11
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 12
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": null,
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "Master Output",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "total_bars": "global",
+          "chain": [
+            {
+              "id": "master-gain",
+              "type": "gain",
+              "name": "Master Gain",
+              "enabled": true,
+              "params": {
+                "gain": 0.65
+              }
+            },
+            {
+              "id": "master-limiter",
+              "type": "limiter",
+              "name": "Master Ceiling",
+              "enabled": true,
+              "params": {
+                "threshold": -0.2
+              }
+            }
+          ],
+          "node_type": "track"
+        }
+      }
+    ],
+    "links": [
+      [
+        1,
+        2,
+        0,
+        3,
+        0,
+        "audio"
+      ],
+      [
+        2,
+        6,
+        0,
+        7,
+        0,
+        "audio"
+      ],
+      [
+        3,
+        10,
+        0,
+        11,
+        0,
+        "audio"
+      ],
+      [
+        4,
+        14,
+        0,
+        15,
+        0,
+        "audio"
+      ],
+      [
+        5,
+        17,
+        0,
+        18,
+        0,
+        "audio"
+      ],
+      [
+        6,
+        3,
+        0,
+        21,
+        0,
+        "audio"
+      ],
+      [
+        7,
+        7,
+        0,
+        20,
+        0,
+        "audio"
+      ],
+      [
+        8,
+        11,
+        0,
+        20,
+        1,
+        "audio"
+      ],
+      [
+        9,
+        15,
+        0,
+        20,
+        2,
+        "audio"
+      ],
+      [
+        10,
+        18,
+        0,
+        20,
+        3,
+        "audio"
+      ],
+      [
+        11,
+        20,
+        0,
+        22,
+        0,
+        "audio"
+      ],
+      [
+        12,
+        21,
+        0,
+        22,
+        1,
+        "audio"
+      ]
+    ],
+    "groups": [],
+    "config": {
+      "links_ontop": true
+    },
+    "extra": {
+      "global_parameters": {
+        "bpm": 94,
+        "total_bars": 16,
+        "key": "Em"
+      },
+      "main_preview": {
+        "node_id": 22,
+        "mode": "auto"
+      }
+    },
+    "version": 0.4
+  }
+}

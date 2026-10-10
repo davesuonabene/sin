@@ -2,11 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-import uvicorn
 import os
 
 from . import import_jobs, models, database, profiles, vaults
-from .routers import items, media_edits, tags, projects, sin_proposals, vaults as vault_router
+from .routers import items, media_edits, tags, projects, sin_proposals, vaults as vault_router, playlists
 
 # Migrate the removed SamplePack subtype before ORM mappings query legacy rows.
 database.migrate_sample_pack_profiles()
@@ -44,6 +43,7 @@ app.include_router(tags.router)
 app.include_router(projects.router)
 app.include_router(sin_proposals.router)
 app.include_router(vault_router.router)
+app.include_router(playlists.router)
 
 # Mount static files
 static_path = os.path.join(os.path.dirname(__file__), "static")
@@ -55,5 +55,6 @@ def read_root():
     return FileResponse(os.path.join(static_path, "index.html"))
 
 if __name__ == "__main__":
+    import uvicorn
     # Run the server on port 8001 to keep it isolated from the main app
     uvicorn.run("gaia.main:app", host="127.0.0.1", port=8001, reload=True)

@@ -95,6 +95,8 @@ function initializeGaiaLibrary() {
         playingKey: null,
         vaults: [],
         selectedVaultId: null,
+        playlists: [],
+        selectedPlaylistId: null,
         vaultSyncStatus: null,
         isCheckingSync: false,
         importVaultId: null,
@@ -102,6 +104,9 @@ function initializeGaiaLibrary() {
         importFolderAssignments: new Map(),
         importItemTypes: new Map(),
         importExcludedIndexes: new Set(),
+        importSelectedRows: new Set(),
+        importSelectionAnchor: null,
+        importUpperExpanded: false,
         importTransferMode: 'copy',
         skipTrackAnalysis: false,
         importCollapsedFolders: new Set(),
@@ -129,6 +134,9 @@ function initializeGaiaLibrary() {
         projectCreationImportContext: null,
         pendingPlacement: null,
         collectionContents: new Map(),
+        collectionContentsTotal: new Map(),
+        collectionCacheAccessOrder: [],
+        pendingNestedLoads: new Map(),
         collectionContentPaging: new Map(),
         collectionContentsLoading: new Set(),
         collectionContentsErrors: new Map(),
@@ -224,6 +232,23 @@ function initializeGaiaLibrary() {
     const selectionMoveSubmenu = document.getElementById('selection-move-submenu');
     const selectionMoveTrigger = document.getElementById('selection-move-trigger');
     const moveTargetOptions = document.getElementById('move-target-options');
+    const selectionPlaylistSubmenu = document.getElementById('selection-playlist-submenu');
+    const selectionPlaylistTrigger = document.getElementById('selection-playlist-trigger');
+    const playlistTargetOptions = document.getElementById('playlist-target-options');
+    const removeFromPlaylistButton = document.getElementById('remove-from-playlist-button');
+    const playlistMenuCreateButton = document.getElementById('playlist-menu-create');
+    const playlistMenuRenameButton = document.getElementById('playlist-menu-rename');
+    const playlistMenuDeleteButton = document.getElementById('playlist-menu-delete');
+    const contextPlaylistOptions = document.getElementById('context-playlist-options');
+    const playlistDialog = document.getElementById('playlist-dialog');
+    const playlistForm = document.getElementById('playlist-form');
+    const playlistNameInput = document.getElementById('playlist-name-input');
+    const playlistDialogTitle = document.getElementById('playlist-dialog-title');
+    const playlistDialogHelp = document.getElementById('playlist-dialog-help');
+    const playlistDialogResult = document.getElementById('playlist-dialog-result');
+    const playlistDialogClose = document.getElementById('playlist-dialog-close');
+    const playlistDialogCancel = document.getElementById('playlist-dialog-cancel');
+    const playlistDialogSubmit = document.getElementById('playlist-dialog-submit');
     const analyzeSelectionButton = document.getElementById('analyze-selection');
     const deleteSelectionButton = document.getElementById('delete-selection');
     const selectionTypeActions = document.getElementById('selection-type-actions');
@@ -701,7 +726,7 @@ function initializeGaiaLibrary() {
             try {
                 const itemIds = JSON.parse(rawIds).map(Number).filter(id => Number.isFinite(id) && id !== Number(collection.id));
                 if (itemIds.length) {
-                    placeItemsDirectly({ item: collection, collection: collection, title: collection.title || collection.name }, [...new Set(itemIds)], { folder: '' });
+                    placeItemsDirectly({ item: collection, collection: collection, title: collection.title || collection.name }, [...new Set(itemIds)], { folder: '', mode: 'move' });
                 }
             } catch (_error) {
                 window.alert('GAIA could not read the dragged items.');
@@ -965,6 +990,9 @@ function initializeGaiaLibrary() {
     function resetNestedLibraryCaches() {
         state.collectionContentControllers.forEach(controller => controller.abort());
         state.collectionContents.clear();
+        state.collectionContentsTotal?.clear();
+        state.collectionCacheAccessOrder = [];
+        state.pendingNestedLoads?.clear();
         state.collectionContentPaging.clear();
         state.collectionContentsErrors.clear();
         state.collectionContentsLoading.clear();
@@ -976,35 +1004,117 @@ function initializeGaiaLibrary() {
         state.projectReferenceControllers.clear();
     }
 
+    const FIRST_CHUNK_LIMIT = 150;
+    const NEXT_CHUNK_LIMIT = 250;
+    const MAX_CACHED_COLLECTIONS = 100;
+
+    function touchCollectionCache(collectionId) {
+        const numericId = Number(collectionId);
+        if (!Number.isFinite(numericId)) return;
+        if (!state.collectionCacheAccessOrder) state.collectionCacheAccessOrder = [];
+        const idx = state.collectionCacheAccessOrder.indexOf(numericId);
+        if (idx >= 0) state.collectionCacheAccessOrder.splice(idx, 1);
+        state.collectionCacheAccessOrder.push(numericId);
+
+        if (state.collectionContents.size > MAX_CACHED_COLLECTIONS) {
+            for (let i = 0; i < state.collectionCacheAccessOrder.length; i++) {
+                const candidateId = state.collectionCacheAccessOrder[i];
+                const isExpanded = state.expandedCollections.has(String(candidateId)) || state.expandedCollections.has(candidateId);
+                if (!isExpanded && !state.collectionContentsLoading.has(candidateId)) {
+                    state.collectionContents.delete(candidateId);
+                    state.collectionContentsTotal?.delete(candidateId);
+                    state.collectionCacheAccessOrder.splice(i, 1);
+                    break;
+                }
+            }
+        }
+    }
+
+    function queuePendingNestedLoad(parentId, childId) {
+        const pId = Number(parentId);
+        const cId = Number(childId);
+        if (!Number.isFinite(pId) || !Number.isFinite(cId)) return;
+        if (!state.pendingNestedLoads) state.pendingNestedLoads = new Map();
+        if (!state.pendingNestedLoads.has(pId)) {
+            state.pendingNestedLoads.set(pId, new Set());
+        }
+        state.pendingNestedLoads.get(pId).add(cId);
+    }
+
+    function triggerPendingNestedLoads(parentId) {
+        const pId = Number(parentId);
+        if (!Number.isFinite(pId) || !state.pendingNestedLoads?.has(pId)) return;
+        const childIds = Array.from(state.pendingNestedLoads.get(pId));
+        state.pendingNestedLoads.delete(pId);
+        for (const childId of childIds) {
+            if (state.expandedCollections.has(String(childId)) || state.expandedCollections.has(childId)) {
+                loadCollectionContents(childId);
+            }
+        }
+    }
+
     async function loadCollectionContents(collectionId, { reset = false } = {}) {
         const numericId = Number(collectionId);
         if (!Number.isFinite(numericId)) return;
         if (!reset && state.collectionContentsLoading.has(numericId)) return;
-        const currentPage = state.collectionContentPaging.get(numericId);
-        if (!reset && currentPage && !currentPage.hasMore) return;
 
-        const offset = reset ? 0 : currentPage?.nextOffset || 0;
+        touchCollectionCache(numericId);
+
+        let currentContents = reset ? [] : (state.collectionContents.get(numericId) || []);
+        const totalKnown = reset ? undefined : state.collectionContentsTotal?.get(numericId);
+
+        if (!reset && state.collectionContents.has(numericId) && totalKnown !== undefined && currentContents.length >= totalKnown) {
+            return;
+        }
+
         const requestedQuery = state.collectionContentQuery;
         state.collectionContentControllers.get(numericId)?.abort();
         const controller = new AbortController();
         state.collectionContentControllers.set(numericId, controller);
         state.collectionContentsLoading.add(numericId);
         state.collectionContentsErrors.delete(numericId);
+        if (reset) {
+            state.collectionContents.delete(numericId);
+            state.collectionContentsTotal?.delete(numericId);
+        }
         renderAssets();
+
         try {
-            const querySuffix = requestedQuery ? `&query=${encodeURIComponent(requestedQuery)}` : '';
-            const response = await fetch(`/items/${numericId}/contents-page?offset=${offset}&limit=250${querySuffix}`, { signal: controller.signal });
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(result.detail || 'Could not load collection contents');
-            if (requestedQuery !== state.collectionContentQuery) return;
-            const incoming = Array.isArray(result.contents) ? result.contents : [];
-            const existing = reset ? [] : (state.collectionContents.get(numericId) || []);
-            state.collectionContents.set(numericId, existing.concat(incoming));
-            state.collectionContentPaging.set(numericId, {
-                nextOffset: offset + incoming.length,
-                hasMore: Boolean(result.has_more),
-                total: Number(result.total) || existing.length + incoming.length,
-            });
+            let offset = reset ? 0 : currentContents.length;
+            let hasMore = true;
+            let isFirstChunk = (offset === 0);
+
+            while (hasMore && !controller.signal.aborted) {
+                const chunkLimit = isFirstChunk ? FIRST_CHUNK_LIMIT : NEXT_CHUNK_LIMIT;
+                const querySuffix = requestedQuery ? `&query=${encodeURIComponent(requestedQuery)}` : '';
+                const response = await fetch(`/items/${numericId}/contents-page?offset=${offset}&limit=${chunkLimit}${querySuffix}`, { signal: controller.signal });
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(result.detail || 'Could not load collection contents');
+                if (requestedQuery !== state.collectionContentQuery || controller.signal.aborted) return;
+
+                const incoming = Array.isArray(result.contents) ? result.contents : [];
+                if (isFirstChunk && offset === 0) {
+                    currentContents = incoming;
+                } else {
+                    currentContents = currentContents.concat(incoming);
+                }
+                state.collectionContents.set(numericId, currentContents);
+                if (typeof result.total === 'number') {
+                    if (!state.collectionContentsTotal) state.collectionContentsTotal = new Map();
+                    state.collectionContentsTotal.set(numericId, result.total);
+                }
+                state.collectionContentPaging.delete(numericId);
+
+                offset = currentContents.length;
+                hasMore = Boolean(result.has_more) && (incoming.length > 0) && (typeof result.total === 'number' ? offset < result.total : true);
+                isFirstChunk = false;
+
+                renderAssets();
+
+                if (!hasMore || incoming.length === 0) {
+                    break;
+                }
+            }
         } catch (error) {
             if (error?.name === 'AbortError') return;
             state.collectionContentsErrors.set(numericId, error.message || 'Could not load collection contents');
@@ -1012,10 +1122,21 @@ function initializeGaiaLibrary() {
             if (state.collectionContentControllers.get(numericId) === controller) {
                 state.collectionContentControllers.delete(numericId);
                 state.collectionContentsLoading.delete(numericId);
+                triggerPendingNestedLoads(numericId);
             }
             renderFilterUI();
             renderAssets();
         }
+    }
+
+    function offloadCollectionContents(collectionId) {
+        const numericId = Number(collectionId);
+        if (!Number.isFinite(numericId)) return;
+        state.collectionContentControllers.get(numericId)?.abort();
+        state.collectionContentControllers.delete(numericId);
+        state.collectionContentsLoading.delete(numericId);
+        state.collectionContentsErrors.delete(numericId);
+        // Preserves loaded contents in memory cache so re-opening is instantaneous
     }
 
     function collectionContentEntries(collection) {
@@ -1305,6 +1426,12 @@ function initializeGaiaLibrary() {
         return raw && Number.isFinite(Number(raw)) ? Number(raw) : null;
     }
 
+    function entryNumericId(entry) {
+        if (!entry) return null;
+        const raw = entry.kind === 'subfolder' ? entryFolderItemId(entry) : (numericItemId(entry) || Number(entry.collection?.id) || null);
+        return raw && Number.isFinite(Number(raw)) ? Number(raw) : null;
+    }
+
     function dragPayload(entry) {
         const item = entry.kind === 'content' ? entry.content : entry.item;
         const collection = entry.kind === 'content' ? entry.collection : null;
@@ -1329,8 +1456,13 @@ function initializeGaiaLibrary() {
     }
 
     function streamUrl(entry) {
-        if (entry.kind === 'content') return `/items/${entry.collection.id}/contents/${entry.content.index}/stream`;
-        return `/items/${entry.item.id}/stream`;
+        const id = numericItemId(entry) || entry.itemId || entry.content?.child_id;
+        if (id) return `/items/${id}/stream`;
+        if (entry.kind === 'content' && entry.collection?.id != null && entry.content?.index != null) {
+            return `/items/${entry.collection.id}/contents/${entry.content.index}/stream`;
+        }
+        if (entry.item?.id) return `/items/${entry.item.id}/stream`;
+        return '';
     }
 
     function canPreview(entry) {
@@ -1352,11 +1484,12 @@ function initializeGaiaLibrary() {
     }
 
     async function previewContainer(entry) {
-        if (!entry.item?.id) return;
+        const targetId = entry.item?.id || entry.itemId || entry.content?.child_id || entry.collection?.id;
+        if (!targetId) return;
         if (window.gaiaMediaEditor?.requestTarget?.(entry)) return;
         if (window.gaiaTransport?.requestPlay?.(entry)) return;
         try {
-            const response = await fetch(`/items/${entry.item.id}/preview`);
+            const response = await fetch(`/items/${targetId}/preview`);
             const result = await response.json().catch(() => ({}));
             if (!response.ok || !result?.id) return;
             const previewEntry = itemEntry(result, `preview:${entry.id}:${result.id}`);
@@ -1719,13 +1852,16 @@ function initializeGaiaLibrary() {
     function toggleCollectionExpansion(entry) {
         const id = entry.id;
         const itemId = entry.item?.id ? String(entry.item.id) : (entry.content?.child_id ? String(entry.content.child_id) : null);
+        const targetId = entry.item?.id || (entry.content?.child_id ? Number(entry.content.child_id) : null);
         if (state.expandedCollections.has(id) || (itemId && state.expandedCollections.has(itemId))) {
             state.expandedCollections.delete(id);
             if (itemId) state.expandedCollections.delete(itemId);
+            if (targetId) {
+                offloadCollectionContents(targetId);
+            }
         } else {
             state.expandedCollections.add(id);
             if (itemId) state.expandedCollections.add(itemId);
-            const targetId = entry.item?.id || (entry.content?.child_id ? Number(entry.content.child_id) : null);
             if (targetId) {
                 loadCollectionContents(targetId);
                 if (typeIsProject(entry.type)) loadProjectReferencedItems(targetId);
@@ -1862,10 +1998,21 @@ function initializeGaiaLibrary() {
             event.stopPropagation();
             event.preventDefault();
             if (resolvedSubfolderKey) {
+                const folderItemId = entryFolderItemId(entry);
                 if (state.expandedSubfolders.has(resolvedSubfolderKey)) {
                     state.expandedSubfolders.delete(resolvedSubfolderKey);
+                    if (folderItemId) state.expandedCollections.delete(String(folderItemId));
                 } else {
                     state.expandedSubfolders.add(resolvedSubfolderKey);
+                    if (folderItemId) {
+                        state.expandedCollections.add(String(folderItemId));
+                        const parentCollectionId = Number(entry.collection?.id);
+                        if (parentCollectionId && state.collectionContentsLoading.has(parentCollectionId)) {
+                            queuePendingNestedLoad(parentCollectionId, folderItemId);
+                        } else {
+                            loadCollectionContents(folderItemId);
+                        }
+                    }
                 }
                 renderAssets();
             } else {
@@ -2028,7 +2175,7 @@ function initializeGaiaLibrary() {
                     const targetFolder = isSubfolder || entry.kind === 'subfolder'
                         ? (entry.subfolder?.fullPath || entry.path || entry.fullPath || entry.title)
                         : undefined;
-                    placeItemsDirectly(entry, [...new Set(itemIds)], targetFolder ? { folder: targetFolder } : undefined);
+                    placeItemsDirectly(entry, [...new Set(itemIds)], { folder: targetFolder, mode: 'move' });
                 }
             } catch (_error) {
                 window.alert('GAIA could not read the dragged items.');
@@ -2165,12 +2312,27 @@ function initializeGaiaLibrary() {
         return count;
     }
 
+    function createRollingCursorIndicator({ depth = 0 } = {}) {
+        const indicator = document.createElement('div');
+        indicator.className = 'rolling-cursor-indicator';
+        indicator.setAttribute('aria-hidden', 'true');
+        if (depth > 0) {
+            indicator.style.paddingLeft = `${depth * 16 + 28}px`;
+        }
+        const line = document.createElement('div');
+        line.className = 'rolling-cursor-line';
+        indicator.appendChild(line);
+        return indicator;
+    }
+
     function renderCollectionTree(node, collection, collectionLayout, container, depth = 0) {
         const collectionId = Number(collection.id);
 
         const sortedSubfolders = Array.from(node.subfolders.values()).sort((a, b) =>
             a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
         );
+
+        const fragment = document.createDocumentFragment();
 
         sortedSubfolders.forEach(subfolder => {
             const subfolderKey = `${collectionId}:${subfolder.fullPath}`;
@@ -2200,24 +2362,40 @@ function initializeGaiaLibrary() {
             state.subfolderEntries.set(folderEntryId, folderEntry);
 
             const row = createRow(folderEntry, { nested: true, subfolderDepth: depth, isSubfolder: true, subfolderKey });
-            container.appendChild(row);
+            fragment.appendChild(row);
 
             if (isExpanded) {
-                if (subfolder.files.length === 0 && subfolder.subfolders.size === 0) {
-                    const emptyRow = document.createElement('div');
-                    emptyRow.className = 'empty-subfolder-hint';
-                    emptyRow.style.paddingLeft = `${(depth + 1) * 16 + 28}px`;
-                    emptyRow.textContent = 'This folder is empty';
-                    container.appendChild(emptyRow);
+                const parentLoading = state.collectionContentsLoading.has(collectionId);
+                if (parentLoading) {
+                    fragment.appendChild(createRollingCursorIndicator({ depth: depth + 1 }));
+                } else if (folderItemId && state.collectionContents.has(folderItemId)) {
+                    const nestedContents = collectionContentEntries({ id: folderItemId, vault_id: collection.vault_id, contents: state.collectionContents.get(folderItemId) });
+                    const nestedTree = buildCollectionTree(nestedContents);
+                    renderCollectionTree(nestedTree, { id: folderItemId, vault_id: collection.vault_id }, collectionLayout, fragment, depth + 1);
+                    if (folderItemId && state.collectionContentsLoading.has(folderItemId)) {
+                        fragment.appendChild(createRollingCursorIndicator({ depth: depth + 1 }));
+                    }
+                } else if (subfolder.files.length === 0 && subfolder.subfolders.size === 0) {
+                    if (folderItemId && state.collectionContentsLoading.has(folderItemId)) {
+                        fragment.appendChild(createRollingCursorIndicator({ depth: depth + 1 }));
+                    } else {
+                        const emptyRow = document.createElement('div');
+                        emptyRow.className = 'empty-subfolder-hint';
+                        emptyRow.style.paddingLeft = `${(depth + 1) * 16 + 28}px`;
+                        emptyRow.textContent = 'This folder is empty';
+                        fragment.appendChild(emptyRow);
+                    }
                 } else {
-                    renderCollectionTree(subfolder, collection, collectionLayout, container, depth + 1);
+                    renderCollectionTree(subfolder, collection, collectionLayout, fragment, depth + 1);
                 }
             }
         });
 
         node.files.forEach(content => {
-            container.appendChild(createEntry(content, { nested: true, subfolderDepth: depth }));
+            fragment.appendChild(createEntry(content, { nested: true, subfolderDepth: depth }));
         });
+
+        container.appendChild(fragment);
     }
 
     function renderLibraryStatus(entries = visibleEntries()) {
@@ -2240,11 +2418,15 @@ function initializeGaiaLibrary() {
     function renderAssets() {
         state.subfolderEntries?.clear();
         const entries = visibleEntries();
-        assetList.innerHTML = '';
         renderMoveBar();
 
+        const fragment = document.createDocumentFragment();
+
         if (!entries.length) {
-            assetList.innerHTML += '<div class="empty">No assets match this view.</div>';
+            const emptyEl = document.createElement('div');
+            emptyEl.className = 'empty';
+            emptyEl.textContent = 'No assets match this view.';
+            fragment.appendChild(emptyEl);
         } else {
             entries.forEach(entry => {
                 const wrapper = createEntry(entry);
@@ -2261,30 +2443,23 @@ function initializeGaiaLibrary() {
                     if (displayedContents.length) contentContainer.appendChild(createCollectionHeader(entry.item));
                     const tree = buildCollectionTree(displayedContents);
                     renderCollectionTree(tree, entry.item, collectionLayout, contentContainer, 0);
+                    const loadingReferences = state.projectReferencesLoading.has(Number(entry.item.id));
+                    const loadingContents = state.collectionContentsLoading.has(collectionId);
+                    const error = state.collectionContentsErrors.get(collectionId);
                     if (!displayedContents.length) {
-                        const loadingReferences = state.projectReferencesLoading.has(Number(entry.item.id));
-                        const loadingContents = state.collectionContentsLoading.has(collectionId);
-                        const error = state.collectionContentsErrors.get(collectionId);
-                        contentContainer.innerHTML = `<div class="empty">${loadingContents ? 'Loading collection contents…' : error ? escapeHtml(error) : loadingReferences ? 'Loading referenced files…' : filteringIsActive() ? 'No files in this collection match the active filter.' : 'This folder is empty.'}</div>`;
-                    }
-                    const page = state.collectionContentPaging.get(collectionId);
-                    if (page?.hasMore) {
-                        const loadMore = document.createElement('button');
-                        loadMore.type = 'button';
-                        loadMore.className = 'secondary collection-load-more';
-                        loadMore.textContent = state.collectionContentsLoading.has(collectionId)
-                            ? 'Loading…'
-                            : `Load more (${Math.max(0, page.total - page.nextOffset)} remaining)`;
-                        loadMore.disabled = state.collectionContentsLoading.has(collectionId);
-                        loadMore.addEventListener('click', event => {
-                            event.stopPropagation();
-                            loadCollectionContents(collectionId);
-                        });
-                        contentContainer.appendChild(loadMore);
+                        if (loadingContents || loadingReferences) {
+                            contentContainer.appendChild(createRollingCursorIndicator({ depth: 0 }));
+                        } else if (error) {
+                            contentContainer.innerHTML = `<div class="empty">${escapeHtml(error)}</div>`;
+                        } else {
+                            contentContainer.innerHTML = `<div class="empty">${filteringIsActive() ? 'No files in this collection match the active filter.' : 'This folder is empty.'}</div>`;
+                        }
+                    } else if (loadingContents || loadingReferences) {
+                        contentContainer.appendChild(createRollingCursorIndicator({ depth: 0 }));
                     }
                     wrapper.appendChild(contentContainer);
                 }
-                assetList.appendChild(wrapper);
+                fragment.appendChild(wrapper);
             });
         }
 
@@ -2322,7 +2497,8 @@ function initializeGaiaLibrary() {
                 window.alert('GAIA could not read the dragged items.');
             }
         });
-        assetList.appendChild(endSpacer);
+
+        assetList.replaceChildren(fragment, endSpacer);
 
         renderLibraryStatus(entries);
     }
@@ -3154,9 +3330,13 @@ function initializeGaiaLibrary() {
         renderAssets();
     }
 
-    async function placeItemsDirectly(targetEntry, itemIds, { folder = undefined, mode = 'reference' } = {}) {
+    async function placeItemsDirectly(targetEntry, itemIds, { folder = undefined, mode = undefined } = {}) {
         const uniqueItemIds = [...new Set((itemIds || []).map(Number).filter(id => Number.isFinite(id) && id > 0))];
         if (!uniqueItemIds.length) return;
+
+        const isVault = Boolean(targetEntry?.isVault);
+        const isProject = !isVault && typeIsProject(targetEntry.item?.type || targetEntry.type);
+        const resolvedMode = mode || (isProject ? 'reference' : 'move');
 
         const entryByItemId = new Map();
         allEntries().forEach(candidate => {
@@ -3170,7 +3350,6 @@ function initializeGaiaLibrary() {
             if (entry?.collection?.id) sourceCollectionIds.add(Number(entry.collection.id));
         });
 
-        const isVault = Boolean(targetEntry?.isVault);
         const rawTargetId = isVault ? targetEntry.vault?.id : (targetEntry.item?.id || targetEntry.collection?.id);
         const targetId = Number(rawTargetId);
         if (!Number.isFinite(targetId) || targetId <= 0) return;
@@ -3188,7 +3367,7 @@ function initializeGaiaLibrary() {
 
             const payload = {
                 item_ids: uniqueItemIds,
-                mode,
+                mode: resolvedMode,
             };
             if (sourceCollectionIds.size) {
                 payload.source_context_ids = Array.from(sourceCollectionIds);
@@ -3433,33 +3612,94 @@ function initializeGaiaLibrary() {
                 selectionMoveTrigger.setAttribute('aria-expanded', 'false');
             }
             selectionMoveSubmenu?.classList.remove('is-open');
+            if (selectionPlaylistTrigger) {
+                selectionPlaylistTrigger.disabled = true;
+                selectionPlaylistTrigger.setAttribute('aria-expanded', 'false');
+            }
+            selectionPlaylistSubmenu?.classList.remove('is-open');
             if (analyzeSelectionButton) analyzeSelectionButton.disabled = true;
             if (deleteSelectionButton) deleteSelectionButton.disabled = true;
             moveTargetOptions?.replaceChildren();
+            playlistTargetOptions?.replaceChildren();
+            if (removeFromPlaylistButton) removeFromPlaylistButton.classList.add('hidden');
             renderSelectionTypeActions([]);
             return;
         }
         moveCount.textContent = `${selectedCount} selected`;
         if (selectionMoveTrigger) selectionMoveTrigger.disabled = false;
+        if (selectionPlaylistTrigger) selectionPlaylistTrigger.disabled = false;
         if (analyzeSelectionButton) analyzeSelectionButton.disabled = false;
         if (deleteSelectionButton) deleteSelectionButton.disabled = !selectedEntries.some(deletionTargetForEntry);
-        if (moveTargetOptions) moveTargetOptions.replaceChildren();
-        state.vaults.forEach(vault => {
-            const option = document.createElement('button');
-            option.type = 'button';
-            option.className = 'app-menu-item sin-menu-item';
-            option.setAttribute('role', 'menuitem');
-            option.textContent = vault.name;
-            option.disabled = vault.id === state.selectedVaultId;
-            option.title = option.disabled ? 'Already in this vault' : `Move selected assets to ${vault.name}`;
-            option.addEventListener('click', async event => {
-                event.stopPropagation();
-                selectionMoveSubmenu?.classList.remove('is-open');
-                selectionMoveTrigger?.setAttribute('aria-expanded', 'false');
-                await moveSelectedEntriesToVault(vault.id);
+
+        if (moveTargetOptions) {
+            moveTargetOptions.replaceChildren();
+            state.vaults.forEach(vault => {
+                const option = document.createElement('button');
+                option.type = 'button';
+                option.className = 'app-menu-item sin-menu-item';
+                option.setAttribute('role', 'menuitem');
+                option.textContent = vault.name;
+                option.disabled = vault.id === state.selectedVaultId;
+                option.title = option.disabled ? 'Already in this vault' : `Move selected assets to ${vault.name}`;
+                option.addEventListener('click', async event => {
+                    event.stopPropagation();
+                    selectionMoveSubmenu?.classList.remove('is-open');
+                    selectionMoveTrigger?.setAttribute('aria-expanded', 'false');
+                    await moveSelectedEntriesToVault(vault.id);
+                });
+                moveTargetOptions.appendChild(option);
             });
-            moveTargetOptions?.appendChild(option);
-        });
+        }
+
+        if (playlistTargetOptions) {
+            playlistTargetOptions.replaceChildren();
+            const newPlBtn = document.createElement('button');
+            newPlBtn.type = 'button';
+            newPlBtn.className = 'app-menu-item sin-menu-item';
+            newPlBtn.setAttribute('role', 'menuitem');
+            newPlBtn.textContent = '＋ New playlist…';
+            newPlBtn.addEventListener('click', event => {
+                event.stopPropagation();
+                closeAppMenus();
+                const itemIds = getSelectedNumericItemIds();
+                openPlaylistDialog('create', itemIds);
+            });
+            playlistTargetOptions.appendChild(newPlBtn);
+
+            if (state.playlists && state.playlists.length) {
+                const divider = document.createElement('div');
+                divider.className = 'app-menu-divider sin-menu-divider';
+                playlistTargetOptions.appendChild(divider);
+
+                state.playlists.forEach(pl => {
+                    const option = document.createElement('button');
+                    option.type = 'button';
+                    option.className = 'app-menu-item sin-menu-item';
+                    option.setAttribute('role', 'menuitem');
+                    option.textContent = pl.name;
+                    option.title = `Add selected assets to ${pl.name}`;
+                    option.addEventListener('click', async event => {
+                        event.stopPropagation();
+                        closeAppMenus();
+                        const itemIds = getSelectedNumericItemIds();
+                        if (itemIds.length) {
+                            await addItemsToPlaylist(pl.id, itemIds);
+                        }
+                    });
+                    playlistTargetOptions.appendChild(option);
+                });
+            }
+        }
+
+        if (removeFromPlaylistButton) {
+            if (state.selectedPlaylistId !== null) {
+                removeFromPlaylistButton.classList.remove('hidden');
+                removeFromPlaylistButton.textContent = selectedCount > 1 ? `Remove (${selectedCount}) from playlist` : 'Remove from playlist';
+            } else {
+                removeFromPlaylistButton.classList.add('hidden');
+            }
+        }
+
         renderSelectionTypeActions(selectedEntries);
     }
 
@@ -3914,6 +4154,10 @@ function initializeGaiaLibrary() {
         }
     }
 
+    function closeContextMenu() {
+        contextMenu?.classList.add('hidden');
+    }
+
     function renderContextMenu() {
         if (!contextMenu) return;
 
@@ -4024,6 +4268,53 @@ function initializeGaiaLibrary() {
             }
         }
 
+        if (contextPlaylistOptions) {
+            contextPlaylistOptions.replaceChildren();
+            const plHeader = document.createElement('div');
+            plHeader.style.cssText = 'padding: 4px 10px; font-size: 11px; opacity: 0.6; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;';
+            plHeader.textContent = 'Add to playlist';
+            contextPlaylistOptions.appendChild(plHeader);
+
+            const newPlBtn = document.createElement('button');
+            newPlBtn.type = 'button';
+            newPlBtn.className = 'app-menu-item sin-menu-item';
+            newPlBtn.setAttribute('role', 'menuitem');
+            newPlBtn.textContent = '＋ New playlist…';
+            newPlBtn.addEventListener('click', event => {
+                event.stopPropagation();
+                closeContextMenu();
+                const selectedIds = getSelectedNumericItemIds();
+                const singleId = entryNumericId(state.contextEntry);
+                const targetIds = (state.contextEntry && state.selectedEntryIds.has(state.contextEntry.id))
+                    ? selectedIds
+                    : (singleId ? [singleId] : (selectedIds.length ? selectedIds : []));
+                openPlaylistDialog('create', targetIds);
+            });
+            contextPlaylistOptions.appendChild(newPlBtn);
+
+            if (state.playlists && state.playlists.length) {
+                state.playlists.forEach(pl => {
+                    const opt = document.createElement('button');
+                    opt.type = 'button';
+                    opt.className = 'app-menu-item sin-menu-item';
+                    opt.setAttribute('role', 'menuitem');
+                    opt.textContent = pl.name;
+                    opt.addEventListener('click', async event => {
+                        event.stopPropagation();
+                        closeContextMenu();
+                        const selectedIds = getSelectedNumericItemIds();
+                        const singleId = entryNumericId(state.contextEntry);
+                        const targetIds = (state.contextEntry && state.selectedEntryIds.has(state.contextEntry.id))
+                            ? selectedIds
+                            : (singleId ? [singleId] : (selectedIds.length ? selectedIds : []));
+                        if (targetIds.length) {
+                            await addItemsToPlaylist(pl.id, targetIds);
+                        }
+                    });
+                    contextPlaylistOptions.appendChild(opt);
+                });
+            }
+        }
     }
 
     function openFolderDialog({ parentEntry = null, itemIds = [], referenceIds = [] } = {}) {
@@ -4072,6 +4363,136 @@ function initializeGaiaLibrary() {
         return state.vaults.find(vault => vault.id === state.selectedVaultId);
     }
 
+    function selectedPlaylist() {
+        if (state.selectedPlaylistId === null) return null;
+        return state.playlists.find(pl => pl.id === state.selectedPlaylistId) || null;
+    }
+
+    async function loadPlaylists({ signal } = {}) {
+        try {
+            const res = await fetch('/playlists/', { signal });
+            if (!res.ok) return [];
+            state.playlists = await res.json();
+            return state.playlists;
+        } catch (err) {
+            if (err.name !== 'AbortError') console.error('Failed to load playlists:', err);
+            return [];
+        }
+    }
+
+    let pendingPlaylistAddIds = [];
+    let playlistDialogMode = 'create';
+
+    function openPlaylistDialog(mode = 'create', itemIds = []) {
+        playlistDialogMode = mode;
+        pendingPlaylistAddIds = (itemIds || []).map(Number).filter(id => Number.isFinite(id) && id > 0);
+        const pl = selectedPlaylist();
+        if (mode === 'rename' && !pl) return;
+
+        if (playlistDialogTitle) playlistDialogTitle.textContent = mode === 'rename' ? 'Rename playlist' : 'New playlist';
+        if (playlistDialogSubmit) playlistDialogSubmit.textContent = mode === 'rename' ? 'Save changes' : 'Create playlist';
+        if (playlistNameInput) {
+            playlistNameInput.value = mode === 'rename' ? pl.name : '';
+            playlistNameInput.select();
+        }
+        playlistDialogResult?.classList.add('hidden');
+        playlistDialog?.showModal();
+        playlistNameInput?.focus();
+    }
+
+    async function handlePlaylistFormSubmit(event) {
+        event.preventDefault();
+        const name = playlistNameInput?.value?.trim();
+        if (!name) return;
+
+        try {
+            if (playlistDialogMode === 'create') {
+                const res = await fetch('/playlists/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Could not create playlist');
+                }
+                const created = await res.json();
+                const addIds = [...pendingPlaylistAddIds];
+                pendingPlaylistAddIds = [];
+                if (addIds.length) {
+                    await fetch(`/playlists/${created.id}/items`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ item_ids: addIds }),
+                    });
+                }
+                playlistDialog?.close();
+                await loadPlaylists();
+                state.selectedVaultId = null;
+                state.selectedPlaylistId = created.id;
+                renderVaultMenu();
+                await loadLibrary({ force: true, resetNested: true });
+            } else if (playlistDialogMode === 'rename') {
+                const pl = selectedPlaylist();
+                if (!pl) return;
+                const res = await fetch(`/playlists/${pl.id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Could not rename playlist');
+                }
+                playlistDialog?.close();
+                await loadPlaylists();
+                renderVaultMenu();
+            }
+        } catch (err) {
+            if (playlistDialogResult) {
+                playlistDialogResult.textContent = err.message;
+                playlistDialogResult.classList.remove('hidden');
+            }
+        }
+    }
+
+    async function addItemsToPlaylist(playlistId, itemIds) {
+        if (!itemIds || !itemIds.length) return;
+        try {
+            const res = await fetch(`/playlists/${playlistId}/items`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ item_ids: itemIds }),
+            });
+            if (!res.ok) throw new Error('Failed to add items to playlist');
+            const data = await res.json();
+            await loadPlaylists();
+            renderVaultMenu();
+            if (summary) {
+                const count = data.added_count;
+                summary.textContent = `Added ${count} ${count === 1 ? 'item' : 'items'} to playlist`;
+            }
+        } catch (err) {
+            console.error('Error adding to playlist:', err);
+        }
+    }
+
+    async function deleteActivePlaylist() {
+        const pl = selectedPlaylist();
+        if (!pl) return;
+        if (!confirm(`Are you sure you want to delete the playlist "${pl.name}"?\n(Assets inside vaults will not be deleted)`)) return;
+        try {
+            const res = await fetch(`/playlists/${pl.id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Failed to delete playlist');
+            state.selectedPlaylistId = null;
+            await loadPlaylists();
+            renderVaultMenu();
+            await loadLibrary({ force: true, resetNested: true });
+        } catch (err) {
+            console.error('Error deleting playlist:', err);
+        }
+    }
+
     function closeVaultMenu() {
         vaultMenu?.classList.add('hidden');
         vaultPicker?.setAttribute('aria-expanded', 'false');
@@ -4080,13 +4501,19 @@ function initializeGaiaLibrary() {
     function renderVaultMenu() {
         if (!vaultMenuList) return;
         const activeVault = selectedVault();
-        const showAll = state.selectedVaultId === null;
-        if (activeVaultName) activeVaultName.textContent = activeVault?.name || 'Show all';
+        const activePlaylist = selectedPlaylist();
+        const showAll = state.selectedVaultId === null && state.selectedPlaylistId === null;
+        if (activeVaultName) {
+            if (activePlaylist) activeVaultName.textContent = `Playlist: ${activePlaylist.name}`;
+            else activeVaultName.textContent = activeVault?.name || 'Show all';
+        }
         if (vaultMenuDeleteButton) {
             vaultMenuDeleteButton.disabled = !activeVault || state.vaults.length <= 1;
             vaultMenuDeleteButton.title = state.vaults.length <= 1 ? 'The last vault cannot be deleted' : 'Delete active vault';
         }
         if (vaultMenuOptionsButton) vaultMenuOptionsButton.disabled = !activeVault;
+        if (playlistMenuRenameButton) playlistMenuRenameButton.disabled = !activePlaylist;
+        if (playlistMenuDeleteButton) playlistMenuDeleteButton.disabled = !activePlaylist;
 
         vaultMenuList.replaceChildren();
         const addOption = (value, label, selected) => {
@@ -4100,6 +4527,7 @@ function initializeGaiaLibrary() {
             option.append(text);
             option.addEventListener('click', event => {
                 event.stopPropagation();
+                state.selectedPlaylistId = null;
                 state.selectedVaultId = value;
                 closeVaultMenu();
                 reconcileFilterSelection();
@@ -4114,6 +4542,30 @@ function initializeGaiaLibrary() {
             vaultMenuList.appendChild(option);
         };
 
+        const addPlaylistOption = (playlistId, label, selected) => {
+            const option = document.createElement('button');
+            option.type = 'button';
+            option.className = `vault-menu-option sin-menu-item${selected ? ' active' : ''}`;
+            option.setAttribute('role', 'option');
+            option.setAttribute('aria-selected', String(selected));
+            const text = document.createElement('span');
+            text.textContent = `♪ ${label}`;
+            option.append(text);
+            option.addEventListener('click', event => {
+                event.stopPropagation();
+                state.selectedVaultId = null;
+                state.selectedPlaylistId = playlistId;
+                closeVaultMenu();
+                reconcileFilterSelection();
+                renderVaults();
+                renderFilterUI();
+                renderAssets();
+                loadLibrary({ force: true, resetNested: true });
+            });
+
+            vaultMenuList.appendChild(option);
+        };
+
         addOption(null, 'Show all', showAll);
         if (state.vaults.length) {
             const divider = document.createElement('div');
@@ -4121,7 +4573,35 @@ function initializeGaiaLibrary() {
             divider.setAttribute('aria-hidden', 'true');
             vaultMenuList.appendChild(divider);
         }
-        state.vaults.forEach(vault => addOption(vault.id, vault.name, vault.id === state.selectedVaultId));
+        state.vaults.forEach(vault => addOption(vault.id, vault.name, state.selectedPlaylistId === null && vault.id === state.selectedVaultId));
+
+        const plDivider = document.createElement('div');
+        plDivider.className = 'vault-menu-divider sin-menu-divider';
+        plDivider.setAttribute('aria-hidden', 'true');
+        vaultMenuList.appendChild(plDivider);
+
+        const header = document.createElement('div');
+        header.style.cssText = 'padding: 4px 10px; font-size: 11px; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;';
+        header.textContent = 'Playlists';
+        vaultMenuList.appendChild(header);
+
+        if (state.playlists && state.playlists.length) {
+            state.playlists.forEach(pl => addPlaylistOption(pl.id, `${pl.name} (${pl.item_count})`, state.selectedPlaylistId === pl.id));
+        }
+
+        const newPlOption = document.createElement('button');
+        newPlOption.type = 'button';
+        newPlOption.className = 'vault-menu-option sin-menu-item';
+        newPlOption.setAttribute('role', 'option');
+        const newPlText = document.createElement('span');
+        newPlText.textContent = '＋ New playlist…';
+        newPlOption.append(newPlText);
+        newPlOption.addEventListener('click', event => {
+            event.stopPropagation();
+            closeVaultMenu();
+            openPlaylistDialog('create');
+        });
+        vaultMenuList.appendChild(newPlOption);
     }
 
     function openVaultDialog(mode) {
@@ -4577,6 +5057,9 @@ function initializeGaiaLibrary() {
                 const vaultsPromise = state.vaults.length
                     ? Promise.resolve(state.vaults)
                     : loadVaults({ signal: controller.signal });
+                const playlistsPromise = state.playlists.length
+                    ? Promise.resolve(state.playlists)
+                    : loadPlaylists({ signal: controller.signal });
                 const typesPromise = state.types.length
                     ? Promise.resolve(state.types)
                     : fetch('/items/types', { signal: controller.signal }).then(async response => {
@@ -4587,11 +5070,17 @@ function initializeGaiaLibrary() {
                     ? '&vault_preview=quick'
                     : `&vault_id=${encodeURIComponent(state.selectedVaultId)}`;
                 const querySuffix = requestedQuery ? `&query=${encodeURIComponent(requestedQuery)}` : '';
-                const itemsPromise = fetch(`/items/summaries?limit=10000${vaultScope}${querySuffix}`, { signal: controller.signal }).then(async response => {
-                    if (!response.ok) throw new Error('GAIA could not load the library');
-                    return response.json();
-                });
-                const [loadedTypes, loadedItems] = await Promise.all([typesPromise, itemsPromise, vaultsPromise]).then(values => [values[0], values[1]]);
+                const itemsPromise = (state.selectedPlaylistId !== null)
+                    ? fetch(`/playlists/${state.selectedPlaylistId}`, { signal: controller.signal }).then(async response => {
+                        if (!response.ok) throw new Error('GAIA could not load the playlist');
+                        const data = await response.json();
+                        return data.items || [];
+                    })
+                    : fetch(`/items/summaries?limit=10000${vaultScope}${querySuffix}`, { signal: controller.signal }).then(async response => {
+                        if (!response.ok) throw new Error('GAIA could not load the library');
+                        return response.json();
+                    });
+                const [loadedTypes, loadedItems] = await Promise.all([typesPromise, itemsPromise, vaultsPromise, playlistsPromise]).then(values => [values[0], values[1]]);
                 if (state.libraryLoadController !== controller) return;
                 state.types = loadedTypes;
                 state.items = loadedItems;
@@ -4620,6 +5109,7 @@ function initializeGaiaLibrary() {
                 if (!requestedQuery) reconcileFilterSelection();
                 renderFilterUI();
                 renderAssets();
+                renderVaultMenu();
                 state.items
                     .filter(item => typeIsContainer(item.type) && (
                         state.expandedCollections.has(String(item.id)) || (requestedQuery && item.matches_query)
@@ -4892,6 +5382,8 @@ function initializeGaiaLibrary() {
         });
         selectionMoveSubmenu?.classList.remove('is-open');
         selectionMoveTrigger?.setAttribute('aria-expanded', 'false');
+        selectionPlaylistSubmenu?.classList.remove('is-open');
+        selectionPlaylistTrigger?.setAttribute('aria-expanded', 'false');
     }
 
     appMenuBar?.addEventListener('click', event => {
@@ -4911,9 +5403,72 @@ function initializeGaiaLibrary() {
         event.stopPropagation();
         if (selectionMoveTrigger.disabled) return;
         const isOpen = selectionMoveSubmenu?.classList.contains('is-open');
+        selectionPlaylistSubmenu?.classList.remove('is-open');
+        selectionPlaylistTrigger?.setAttribute('aria-expanded', 'false');
         selectionMoveSubmenu?.classList.toggle('is-open', !isOpen);
         selectionMoveTrigger.setAttribute('aria-expanded', String(!isOpen));
     });
+
+    selectionPlaylistTrigger?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (selectionPlaylistTrigger.disabled) return;
+        const isOpen = selectionPlaylistSubmenu?.classList.contains('is-open');
+        selectionMoveSubmenu?.classList.remove('is-open');
+        selectionMoveTrigger?.setAttribute('aria-expanded', 'false');
+        selectionPlaylistSubmenu?.classList.toggle('is-open', !isOpen);
+        selectionPlaylistTrigger.setAttribute('aria-expanded', String(!isOpen));
+    });
+
+    selectionMoveSubmenu?.addEventListener('mouseenter', () => {
+        if (!selectionMoveTrigger?.disabled) {
+            selectionPlaylistSubmenu?.classList.remove('is-open');
+            selectionPlaylistTrigger?.setAttribute('aria-expanded', 'false');
+            selectionMoveSubmenu?.classList.add('is-open');
+            selectionMoveTrigger?.setAttribute('aria-expanded', 'true');
+        }
+    });
+
+    selectionPlaylistSubmenu?.addEventListener('mouseenter', () => {
+        if (!selectionPlaylistTrigger?.disabled) {
+            selectionMoveSubmenu?.classList.remove('is-open');
+            selectionMoveTrigger?.setAttribute('aria-expanded', 'false');
+            selectionPlaylistSubmenu?.classList.add('is-open');
+            selectionPlaylistTrigger?.setAttribute('aria-expanded', 'true');
+        }
+    });
+
+    removeFromPlaylistButton?.addEventListener('click', async () => {
+        if (state.selectedPlaylistId === null) return;
+        const selected = getSelectedEntries();
+        for (const entry of selected) {
+            const itemId = entryNumericId(entry);
+            if (itemId) {
+                await fetch(`/playlists/${state.selectedPlaylistId}/items/${itemId}`, { method: 'DELETE' });
+            }
+        }
+        await loadPlaylists();
+        await loadLibrary({ force: true });
+    });
+
+    playlistMenuCreateButton?.addEventListener('click', () => {
+        closeAppMenus();
+        openPlaylistDialog('create');
+    });
+    playlistMenuRenameButton?.addEventListener('click', () => {
+        closeAppMenus();
+        openPlaylistDialog('rename');
+    });
+    playlistMenuDeleteButton?.addEventListener('click', () => {
+        closeAppMenus();
+        deleteActivePlaylist();
+    });
+    playlistDialogClose?.addEventListener('click', () => playlistDialog?.close());
+    playlistDialogCancel?.addEventListener('click', () => playlistDialog?.close());
+    playlistDialog?.addEventListener('click', event => {
+        if (event.target === playlistDialog) playlistDialog.close();
+    });
+    playlistForm?.addEventListener('submit', handlePlaylistFormSubmit);
 
     listHeader?.addEventListener('contextmenu', event => {
         event.preventDefault();
@@ -5584,7 +6139,7 @@ function initializeGaiaLibrary() {
 
     function setImportBusy(busy) {
         importDialogClose.disabled = busy;
-        importCancel.disabled = busy;
+        if (importCancel) importCancel.disabled = busy;
         importSubmit.disabled = busy;
         sourcePath.disabled = busy;
         chooseSourcePath.disabled = busy;
@@ -5592,8 +6147,8 @@ function initializeGaiaLibrary() {
         importVaultName.disabled = busy;
         importVaultCreateSubmit.disabled = busy;
         importVaultCreateCancel.disabled = busy;
-        openImportButton.disabled = busy || Boolean(state.importJobId);
-        openImportButton.title = busy || state.importJobId ? 'An import is already running' : 'Import assets';
+        openImportButton.disabled = busy || Boolean(state.importJobActiveTransfer);
+        openImportButton.title = busy || state.importJobActiveTransfer ? 'An import file transfer is in progress' : 'Import assets';
     }
 
     function resetImportFlow() {
@@ -5601,6 +6156,9 @@ function initializeGaiaLibrary() {
         state.importFolderAssignments = new Map();
         state.importItemTypes = new Map();
         state.importExcludedIndexes = new Set();
+        state.importSelectedRows.clear();
+        state.importSelectionAnchor = null;
+        state.importUpperExpanded = false;
         state.importTransferMode = 'copy';
         state.skipTrackAnalysis = false;
         state.importCollapsedFolders = new Set();
@@ -5611,7 +6169,8 @@ function initializeGaiaLibrary() {
         importPreviewStep.replaceChildren();
         importHeadingSource.classList.add('hidden');
         importHeadingSource.replaceChildren();
-        importSubmit.textContent = 'Inspect source';
+        importSubmit.textContent = 'Inspect';
+        importDialog?.classList.add('is-initial');
         renderVaults();
         setImportBusy(false);
     }
@@ -5620,9 +6179,57 @@ function initializeGaiaLibrary() {
         return displayType || typeLabel(type);
     }
 
-    function folderAssignmentOptions(preview, selected) {
+    function getImportRowKey(node) {
+        return node.kind === 'folder' ? `folder:${node.relative_path}` : `file:${node.index}`;
+    }
+
+    function isFolderUnderSamplePack(folderPath) {
+        if (!state.importFolderAssignments || !folderPath) return false;
+        for (const [assignedPath, assignment] of state.importFolderAssignments.entries()) {
+            if (assignment === 'profile:sample_pack' && assignedPath !== folderPath) {
+                if (assignedPath === '.' && folderPath !== '.') return true;
+                if (folderPath.startsWith(`${assignedPath}/`)) return true;
+            }
+        }
+        return false;
+    }
+
+    function folderAssignmentOptions(preview, selected, node) {
         const isIgnore = selected === 'action:ignore';
-        return `<option value="action:contain" ${!isIgnore ? 'selected' : ''}>Container</option><option value="action:ignore" ${isIgnore ? 'selected' : ''}>Ignore</option>`;
+        const isUnderSamplePack = isFolderUnderSamplePack(node?.relative_path);
+        const isSamplePack = !isUnderSamplePack && selected === 'profile:sample_pack';
+        const isMultitrack = selected === 'type:multitrack';
+        const isZoomH4 = selected === 'profile:zoom_h4';
+
+        const prefix = !node || node.relative_path === '.' ? '' : `${node.relative_path}/`;
+        const entriesInFolder = (preview?.entries || []).filter(entry =>
+            !prefix || entry.relative_path.startsWith(prefix)
+        );
+        const hasMedia = entriesInFolder.some(entry => entry.family === 'audio' || entry.family === 'midi');
+        const audioCount = entriesInFolder.filter(entry => entry.family === 'audio').length;
+        const isPossibleSamplePack = !isUnderSamplePack && (
+            node?.suggested_assignment === 'profile:sample_pack' ||
+            node?.detected_assignment === 'profile:sample_pack' ||
+            isSamplePack ||
+            hasMedia
+        );
+        const isPossibleMultitrack = node?.detected_assignment === 'type:multitrack' ||
+            node?.suggested_assignment === 'type:multitrack' ||
+            isMultitrack ||
+            audioCount >= 2;
+
+        let html = `<option value="action:contain" ${(!isSamplePack && (selected === 'action:contain' || isUnderSamplePack)) ? 'selected' : ''}>Container</option>`;
+        if (isPossibleSamplePack) {
+            html += `<option value="profile:sample_pack" ${isSamplePack ? 'selected' : ''}>Sample pack</option>`;
+        }
+        if (isPossibleMultitrack) {
+            html += `<option value="type:multitrack" ${isMultitrack ? 'selected' : ''}>Multitrack</option>`;
+        }
+        if (node?.detected_assignment === 'profile:zoom_h4' || isZoomH4) {
+            html += `<option value="profile:zoom_h4" ${isZoomH4 ? 'selected' : ''}>Zoom H4</option>`;
+        }
+        html += `<option value="action:ignore" ${isIgnore ? 'selected' : ''}>Ignore</option>`;
+        return html;
     }
 
     function fileTypeOptions(entry, selected) {
@@ -5658,7 +6265,11 @@ function initializeGaiaLibrary() {
 
     function renderImportFilters(preview) {
         const options = importFilterOptions(preview);
-        return `<section class="import-preview-section import-filter-section"><div class="import-section-heading"><div><h3>Bulk exclusions</h3><p class="import-filter-help">Exclude file families or extensions from this import. The source remains untouched.</p></div><div class="import-filter-actions"><button id="import-keep-audio" class="secondary compact" type="button">Keep audio only</button><button id="import-include-all" class="secondary compact" type="button">Include all</button></div></div><div class="import-filter-groups"><div class="import-filter-group"><span>File types</span><div class="import-filter-chips">${options.types.map(option => importFilterControl(preview, 'type', option)).join('')}</div></div><div class="import-filter-group"><span>Extensions</span><div class="import-filter-chips">${options.extensions.map(option => importFilterControl(preview, 'extension', option)).join('')}</div></div></div></section>`;
+        const hasTypes = options.types && options.types.length > 0;
+        const hasExtensions = options.extensions && options.extensions.length > 0;
+        if (!hasTypes && !hasExtensions) return '';
+
+        return `<section class="import-filter-section"><div class="import-section-heading"><div><h3>Bulk exclusions</h3><p class="import-filter-help">Exclude file families or extensions from this import. The source remains untouched.</p></div><div class="import-filter-actions"><button id="import-keep-audio" class="secondary compact" type="button">Keep audio only</button><button id="import-include-all" class="secondary compact" type="button">Include all</button></div></div><div class="import-filter-groups">${hasTypes ? `<div class="import-filter-group"><span>File types</span><div class="import-filter-chips">${options.types.map(option => importFilterControl(preview, 'type', option)).join('')}</div></div>` : ''}${hasExtensions ? `<div class="import-filter-group"><span>Extensions</span><div class="import-filter-chips">${options.extensions.map(option => importFilterControl(preview, 'extension', option)).join('')}</div></div>` : ''}</div></section>`;
     }
 
     function importNodeSort(left, right) {
@@ -5709,9 +6320,13 @@ function initializeGaiaLibrary() {
 
         const includedCount = preview.file_count - state.importExcludedIndexes.size;
         const remainingArtifacts = (preview.entries || []).filter(entry => entry.artifact && !state.importExcludedIndexes.has(entry.index));
-        importHeadingSource.innerHTML = `<div class="import-heading-source-copy"><h3>${escapeHtml(preview.title)}</h3><p>${escapeHtml(preview.source_path)}</p></div><div class="import-preview-stats"><span>${escapeHtml(preview.source_kind)}</span><span>${preview.folder_count || 0} folders</span><span>${includedCount}/${preview.file_count} files</span><span>${escapeHtml(formatSize(preview.size_bytes))}</span><span>${preview.inspection_ms || 0} ms</span></div>`;
+        const toggleUpperLabel = state.importUpperExpanded ? 'Hide options ▴' : 'Show options ▾';
+        importHeadingSource.innerHTML = `<div class="import-heading-source-copy"><h3>${escapeHtml(preview.title)}</h3><p>${escapeHtml(preview.source_path)}</p></div><div class="import-preview-stats"><span>${escapeHtml(preview.source_kind)}</span><span>${preview.folder_count || 0} folders</span><span>${includedCount}/${preview.file_count} files</span><span>${escapeHtml(formatSize(preview.size_bytes))}</span><span>${preview.inspection_ms || 0} ms</span></div><div class="import-heading-actions"><button id="import-upper-toggle" class="secondary compact" type="button" aria-expanded="${state.importUpperExpanded}">${toggleUpperLabel}</button><button id="import-heading-change" class="secondary compact" type="button">Change source</button></div>`;
         importHeadingSource.classList.remove('hidden');
-        const rows = [...(preview.nodes || [])].sort(importNodeSort).filter(node => !hiddenByCollapsedFolder(node)).map(node => {
+        const visibleNodes = [...(preview.nodes || [])].sort(importNodeSort).filter(node => !hiddenByCollapsedFolder(node));
+        const rows = visibleNodes.map(node => {
+            const rowKey = getImportRowKey(node);
+            const isSelected = state.importSelectedRows.has(rowKey);
             if (node.kind === 'folder') {
                 const selected = state.importFolderAssignments.get(node.relative_path) || 'action:contain';
                 const collapsed = state.importCollapsedFolders.has(node.relative_path);
@@ -5722,10 +6337,10 @@ function initializeGaiaLibrary() {
                 const warning = node.warning_count
                     ? `<span class="import-folder-warning" title="${escapeHtml(`${node.warning_count} flagged file${node.warning_count === 1 ? '' : 's'}: ${(node.warning_messages || []).join(', ')}`)}">⚠<span>${node.warning_count}</span></span>`
                     : '';
-                return `<div class="import-tree-row folder" style="--import-depth:${Number(node.depth) || 0}">
+                return `<div class="import-tree-row folder${isSelected ? ' is-selected' : ''}" data-import-row-key="${escapeHtml(rowKey)}" style="--import-depth:${Number(node.depth) || 0}">
                     <div class="import-tree-name"><input type="checkbox" class="import-folder-checkbox" data-import-folder-include="${escapeHtml(node.relative_path)}" aria-label="Include folder ${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}"><button class="import-folder-toggle" type="button" data-import-collapse="${escapeHtml(node.relative_path)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}" aria-expanded="${!collapsed}">${collapsed ? '▸' : '▾'}</button><span class="import-tree-label"><strong>${escapeHtml(node.relative_path === '.' ? preview.title : node.name)}</strong>${reason}</span>${warning}</div>
                     <div class="import-tree-detection">${detection}</div>
-                    <select data-import-folder="${escapeHtml(node.relative_path)}">${folderAssignmentOptions(preview, selected)}</select>
+                    <select data-import-folder="${escapeHtml(node.relative_path)}">${folderAssignmentOptions(preview, selected, node)}</select>
                     <span class="import-tree-size">${node.relative_path === '.' ? escapeHtml(formatSize(preview.size_bytes)) : '—'}</span>
                 </div>`;
             }
@@ -5737,7 +6352,7 @@ function initializeGaiaLibrary() {
                 node.profile_role ? `<span class="import-role-badge ${escapeHtml(node.profile_role)}" title="${escapeHtml(node.profile_role_reason)}">${escapeHtml(node.profile_role === 'mixdown' ? 'Mixdown' : 'Source channel')}</span>` : '',
                 !node.artifact && !node.profile_role ? `<span class="import-family">${escapeHtml(node.family)}</span>` : '',
             ].filter(Boolean).join('');
-            return `<div class="import-tree-row file${excluded ? ' excluded' : ''}" style="--import-depth:${Number(node.depth) || 0}">
+            return `<div class="import-tree-row file${excluded ? ' excluded' : ''}${isSelected ? ' is-selected' : ''}" data-import-row-key="${escapeHtml(rowKey)}" style="--import-depth:${Number(node.depth) || 0}">
                 <div class="import-tree-name" title="${escapeHtml(node.relative_path)}"><input type="checkbox" data-import-include="${node.index}" ${excluded ? '' : 'checked'} aria-label="Include ${escapeHtml(node.filename)}"><span class="import-tree-label">${escapeHtml(node.filename)}</span></div>
                 <div class="import-tree-detection">${inspection}</div>
                 <select data-import-item="${node.index}" ${locked ? 'disabled' : ''}>${fileTypeOptions(node, selected)}</select>
@@ -5759,13 +6374,73 @@ function initializeGaiaLibrary() {
         }[state.importTransferMode];
         const startLabel = state.importTransferMode === 'move' ? 'Move files and import' : 'Start background import';
         const hasAudioEntries = (preview.entries || []).some(entry => (entry.family || '') === 'audio');
+
+        const selectedFolderCount = [...state.importSelectedRows].filter(k => k.startsWith('folder:')).length;
+        const selectedFileCount = [...state.importSelectedRows].filter(k => k.startsWith('file:')).length;
+        let bulkToolbarHtml = '';
+        if (state.importSelectedRows.size > 0) {
+            let countText = '';
+            if (selectedFolderCount > 0 && selectedFileCount > 0) {
+                countText = `${selectedFolderCount} folder${selectedFolderCount > 1 ? 's' : ''}, ${selectedFileCount} file${selectedFileCount > 1 ? 's' : ''} selected`;
+            } else if (selectedFolderCount > 0) {
+                countText = `${selectedFolderCount} folder${selectedFolderCount > 1 ? 's' : ''} selected`;
+            } else {
+                countText = `${selectedFileCount} file${selectedFileCount > 1 ? 's' : ''} selected`;
+            }
+
+            bulkToolbarHtml = `
+                <div class="import-bulk-toolbar">
+                    <div class="import-bulk-summary">
+                        <span class="import-bulk-badge">${countText}</span>
+                    </div>
+                    <div class="import-bulk-actions">
+                        ${selectedFolderCount > 0 ? `
+                            <div class="import-bulk-group">
+                                <span class="import-bulk-group-label">Set folders:</span>
+                                <button id="bulk-folder-sample-pack" class="secondary compact" type="button" title="Set selected folders as Sample pack (audio files will be marked as samples)">Sample pack</button>
+                                <button id="bulk-folder-container" class="secondary compact" type="button" title="Set selected folders as Container">Container</button>
+                                <button id="bulk-folder-multitrack" class="secondary compact" type="button" title="Set selected folders as Multitrack">Multitrack</button>
+                                <button id="bulk-folder-ignore" class="secondary compact" type="button" title="Ignore selected folders">Ignore</button>
+                            </div>
+                        ` : ''}
+                        ${selectedFileCount > 0 ? `
+                            <div class="import-bulk-group">
+                                <span class="import-bulk-group-label">Set files:</span>
+                                <button id="bulk-file-sample" class="secondary compact" type="button" title="Set selected audio files to Sample">Sample</button>
+                                <button id="bulk-file-track" class="secondary compact" type="button" title="Set selected audio files to Track">Track</button>
+                                <button id="bulk-file-audio" class="secondary compact" type="button" title="Set selected audio files to Audio">Audio</button>
+                                <button id="bulk-file-toggle-include" class="secondary compact" type="button" title="Toggle include/exclude for selected files">Toggle include</button>
+                            </div>
+                        ` : ''}
+                        <button id="bulk-deselect-all" class="secondary compact import-bulk-deselect" type="button">Deselect all</button>
+                    </div>
+                </div>
+            `;
+        }
+
         importPreviewStep.innerHTML = `
-            ${preview.warnings?.length ? `<div class="import-warning-box"><strong>Inspection warnings</strong>${preview.warnings.map(warning => `<div>${escapeHtml(warning)}</div>`).join('')}</div>` : ''}
-            ${renderImportFilters(preview)}
-            ${conflictPanel}
-            <section class="import-transfer-choice"><label for="import-transfer-mode"><strong>File handling</strong></label><select id="import-transfer-mode"><option value="move" ${state.importTransferMode === 'move' ? 'selected' : ''}>Move files into vault</option><option value="copy" ${state.importTransferMode === 'copy' ? 'selected' : ''}>Copy files into vault</option><option value="keep" ${state.importTransferMode === 'keep' ? 'selected' : ''} ${preview.source_kind === 'zip' ? 'disabled' : ''}>Keep files in original position (reference)</option></select><p>${escapeHtml(transferHelp)}</p></section>
-            ${hasAudioEntries ? `<label class="import-analysis-choice"><input id="import-skip-track-analysis" type="checkbox" ${state.skipTrackAnalysis ? 'checked' : ''}><span><strong>Skip analysis for tracks</strong><small>Import rows assigned the Track type using inspection only; BPM, key, duration, and embedded metadata will remain empty until analyzed later.</small></span></label>` : ''}
-            <section class="import-preview-section"><div class="import-section-heading"><h3>Inspected folders and files</h3><button id="import-exclude-artifacts" class="secondary compact" type="button" ${remainingArtifacts.length ? '' : 'disabled'}>Exclude flagged artifacts${remainingArtifacts.length ? ` (${remainingArtifacts.length})` : ''}</button></div><div class="import-tree-head"><span>Name</span><span>Inspection</span><span>Type or profile</span><span>Size</span></div><div class="import-tree">${rows || '<div class="empty">No files were found.</div>'}</div></section>
+            <div id="import-preview-upper" class="import-preview-upper${state.importUpperExpanded ? '' : ' is-collapsed'}">
+                ${preview.warnings?.length ? `<div class="import-warning-box"><strong>Inspection warnings</strong>${preview.warnings.map(warning => `<div>${escapeHtml(warning)}</div>`).join('')}</div>` : ''}
+                ${renderImportFilters(preview)}
+                ${conflictPanel}
+                <section class="import-transfer-choice"><label for="import-transfer-mode"><strong>File handling</strong></label><select id="import-transfer-mode"><option value="move" ${state.importTransferMode === 'move' ? 'selected' : ''}>Move files into vault</option><option value="copy" ${state.importTransferMode === 'copy' ? 'selected' : ''}>Copy files into vault</option><option value="keep" ${state.importTransferMode === 'keep' ? 'selected' : ''} ${preview.source_kind === 'zip' ? 'disabled' : ''}>Keep files in original position (reference)</option></select><p>${escapeHtml(transferHelp)}</p></section>
+                ${hasAudioEntries ? `<label class="import-analysis-choice"><input id="import-skip-track-analysis" type="checkbox" ${state.skipTrackAnalysis ? 'checked' : ''}><span><strong>Skip analysis for tracks</strong><small>Import rows assigned the Track type using inspection only; BPM, key, duration, and embedded metadata will remain empty until analyzed later.</small></span></label>` : ''}
+            </div>
+            <section class="import-table-section">
+                <div class="import-section-heading">
+                    <div>
+                        <h3>Inspected folders and files</h3>
+                    </div>
+                    <div class="import-heading-actions">
+                        <button id="import-select-all-folders" class="secondary compact" type="button">Select all folders</button>
+                        <button id="import-select-all-files" class="secondary compact" type="button">Select all files</button>
+                        <button id="import-exclude-artifacts" class="secondary compact" type="button" ${remainingArtifacts.length ? '' : 'disabled'}>Exclude flagged artifacts${remainingArtifacts.length ? ` (${remainingArtifacts.length})` : ''}</button>
+                    </div>
+                </div>
+                ${bulkToolbarHtml}
+                <div class="import-tree-head"><span>Name</span><span>Inspection</span><span>Type or profile</span><span>Size</span></div>
+                <div class="import-tree">${rows || '<div class="empty">No files were found.</div>'}</div>
+            </section>
             <div class="dialog-actions"><button id="import-preview-back" class="secondary" type="button">Choose another source</button><button id="import-job-start" class="primary" type="button" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button></div>`;
         importPreviewStep.querySelectorAll('input[data-import-folder-include]').forEach(checkbox => {
             const folderPath = checkbox.dataset.importFolderInclude;
@@ -5803,24 +6478,115 @@ function initializeGaiaLibrary() {
             else state.importCollapsedFolders.add(path);
             renderImportPreview();
         }));
+
+        importPreviewStep.querySelectorAll('.import-tree-row').forEach(row => {
+            row.addEventListener('click', event => {
+                if (event.target.closest('input, select, button, a')) return;
+                const rowKey = row.dataset.importRowKey;
+                if (!rowKey) return;
+                const additive = event.ctrlKey || event.metaKey;
+                if (event.shiftKey && state.importSelectionAnchor) {
+                    const visibleKeys = visibleNodes.map(getImportRowKey);
+                    const start = visibleKeys.indexOf(state.importSelectionAnchor);
+                    const end = visibleKeys.indexOf(rowKey);
+                    if (start >= 0 && end >= 0) {
+                        if (!additive) state.importSelectedRows.clear();
+                        const [first, last] = start < end ? [start, end] : [end, start];
+                        visibleKeys.slice(first, last + 1).forEach(k => state.importSelectedRows.add(k));
+                    } else {
+                        state.importSelectedRows.clear();
+                        state.importSelectedRows.add(rowKey);
+                    }
+                } else if (additive) {
+                    if (state.importSelectedRows.has(rowKey)) {
+                        state.importSelectedRows.delete(rowKey);
+                    } else {
+                        state.importSelectedRows.add(rowKey);
+                    }
+                    state.importSelectionAnchor = rowKey;
+                } else {
+                    state.importSelectedRows.clear();
+                    state.importSelectedRows.add(rowKey);
+                    state.importSelectionAnchor = rowKey;
+                }
+                renderImportPreview();
+            });
+        });
+
         importPreviewStep.querySelectorAll('[data-import-folder]').forEach(select => select.addEventListener('change', () => {
-            state.importFolderAssignments.set(select.dataset.importFolder, select.value);
+            const folderPath = select.dataset.importFolder;
+            const assignment = select.value;
+            const selectedFolderPaths = [...state.importSelectedRows]
+                .filter(k => k.startsWith('folder:'))
+                .map(k => k.slice(7));
+            const targetFolders = selectedFolderPaths.includes(folderPath)
+                ? selectedFolderPaths
+                : [folderPath];
+
+            targetFolders.forEach(targetPath => {
+                state.importFolderAssignments.set(targetPath, assignment);
+                if (assignment === 'profile:sample_pack') {
+                    // Descendant subfolders inside a sample pack are containers (no nested sample packs)
+                    for (const otherPath of state.importFolderAssignments.keys()) {
+                        if (otherPath !== targetPath && (targetPath === '.' || otherPath.startsWith(`${targetPath}/`))) {
+                            state.importFolderAssignments.set(otherPath, 'action:contain');
+                        }
+                    }
+                    (preview.entries || []).forEach(entry => {
+                        if (targetPath === '.' || entry.relative_path.startsWith(`${targetPath}/`)) {
+                            if (entry.family === 'audio' || (entry.allowed_types || []).includes('sample')) {
+                                state.importItemTypes.set(entry.index, 'sample');
+                            }
+                        }
+                    });
+                } else if (assignment === 'action:contain') {
+                    (preview.entries || []).forEach(entry => {
+                        if (targetPath === '.' || entry.relative_path.startsWith(`${targetPath}/`)) {
+                            if (entry.family === 'audio') {
+                                state.importItemTypes.set(entry.index, entry.type || 'track');
+                            }
+                        }
+                    });
+                }
+            });
             renderImportPreview();
         }));
         importPreviewStep.querySelectorAll('[data-import-folder-include]').forEach(input => input.addEventListener('change', () => {
             const folderPath = input.dataset.importFolderInclude;
-            const descendants = (preview.entries || []).filter(entry =>
-                folderPath === '.' || entry.relative_path === folderPath || entry.relative_path.startsWith(`${folderPath}/`)
-            );
-            if (input.checked) {
-                descendants.forEach(entry => state.importExcludedIndexes.delete(entry.index));
-            } else {
-                descendants.forEach(entry => state.importExcludedIndexes.add(entry.index));
-            }
+            const isChecked = input.checked;
+            const selectedFolderPaths = [...state.importSelectedRows]
+                .filter(k => k.startsWith('folder:'))
+                .map(k => k.slice(7));
+            const targetFolders = selectedFolderPaths.includes(folderPath)
+                ? selectedFolderPaths
+                : [folderPath];
+
+            targetFolders.forEach(targetPath => {
+                const descendants = (preview.entries || []).filter(entry =>
+                    targetPath === '.' || entry.relative_path === targetPath || entry.relative_path.startsWith(`${targetPath}/`)
+                );
+                if (isChecked) {
+                    descendants.forEach(entry => state.importExcludedIndexes.delete(entry.index));
+                } else {
+                    descendants.forEach(entry => state.importExcludedIndexes.add(entry.index));
+                }
+            });
             renderImportPreview();
         }));
         importPreviewStep.querySelectorAll('[data-import-item]').forEach(select => select.addEventListener('change', () => {
-            state.importItemTypes.set(Number(select.dataset.importItem), select.value);
+            const itemIndex = Number(select.dataset.importItem);
+            const value = select.value;
+            const selectedFileIndexes = [...state.importSelectedRows]
+                .filter(k => k.startsWith('file:'))
+                .map(k => Number(k.slice(5)));
+            const targetIndexes = selectedFileIndexes.includes(itemIndex)
+                ? selectedFileIndexes
+                : [itemIndex];
+
+            targetIndexes.forEach(targetIdx => {
+                state.importItemTypes.set(targetIdx, value);
+            });
+            renderImportPreview();
         }));
         importPreviewStep.querySelectorAll('[data-import-exclude-type], [data-import-exclude-extension]').forEach(input => input.addEventListener('change', () => {
             const kind = input.hasAttribute('data-import-exclude-type') ? 'type' : 'extension';
@@ -5835,8 +6601,18 @@ function initializeGaiaLibrary() {
         }));
         importPreviewStep.querySelectorAll('[data-import-include]').forEach(input => input.addEventListener('change', () => {
             const index = Number(input.dataset.importInclude);
-            if (input.checked) state.importExcludedIndexes.delete(index);
-            else state.importExcludedIndexes.add(index);
+            const isChecked = input.checked;
+            const selectedFileIndexes = [...state.importSelectedRows]
+                .filter(k => k.startsWith('file:'))
+                .map(k => Number(k.slice(5)));
+            const targetIndexes = selectedFileIndexes.includes(index)
+                ? selectedFileIndexes
+                : [index];
+
+            targetIndexes.forEach(targetIdx => {
+                if (isChecked) state.importExcludedIndexes.delete(targetIdx);
+                else state.importExcludedIndexes.add(targetIdx);
+            });
             renderImportPreview();
         }));
         importPreviewStep.querySelector('#import-exclude-artifacts')?.addEventListener('click', () => {
@@ -5851,11 +6627,143 @@ function initializeGaiaLibrary() {
             state.importExcludedIndexes.clear();
             renderImportPreview();
         });
+
+        importPreviewStep.querySelector('#bulk-folder-sample-pack')?.addEventListener('click', () => {
+            const folderPaths = [...state.importSelectedRows]
+                .filter(k => k.startsWith('folder:'))
+                .map(k => k.slice(7));
+            folderPaths.forEach(folderPath => {
+                state.importFolderAssignments.set(folderPath, 'profile:sample_pack');
+                for (const otherPath of state.importFolderAssignments.keys()) {
+                    if (otherPath !== folderPath && (folderPath === '.' || otherPath.startsWith(`${folderPath}/`))) {
+                        state.importFolderAssignments.set(otherPath, 'action:contain');
+                    }
+                }
+                (preview.entries || []).forEach(entry => {
+                    if (folderPath === '.' || entry.relative_path.startsWith(`${folderPath}/`)) {
+                        if (entry.family === 'audio' || (entry.allowed_types || []).includes('sample')) {
+                            state.importItemTypes.set(entry.index, 'sample');
+                        }
+                    }
+                });
+            });
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#bulk-folder-container')?.addEventListener('click', () => {
+            const folderPaths = [...state.importSelectedRows]
+                .filter(k => k.startsWith('folder:'))
+                .map(k => k.slice(7));
+            folderPaths.forEach(folderPath => {
+                state.importFolderAssignments.set(folderPath, 'action:contain');
+                (preview.entries || []).forEach(entry => {
+                    if (folderPath === '.' || entry.relative_path.startsWith(`${folderPath}/`)) {
+                        if (entry.family === 'audio') {
+                            state.importItemTypes.set(entry.index, entry.type || 'track');
+                        }
+                    }
+                });
+            });
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#bulk-folder-multitrack')?.addEventListener('click', () => {
+            const folderPaths = [...state.importSelectedRows]
+                .filter(k => k.startsWith('folder:'))
+                .map(k => k.slice(7));
+            folderPaths.forEach(folderPath => {
+                state.importFolderAssignments.set(folderPath, 'type:multitrack');
+            });
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#bulk-folder-ignore')?.addEventListener('click', () => {
+            const folderPaths = [...state.importSelectedRows]
+                .filter(k => k.startsWith('folder:'))
+                .map(k => k.slice(7));
+            folderPaths.forEach(folderPath => {
+                state.importFolderAssignments.set(folderPath, 'action:ignore');
+            });
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#bulk-file-sample')?.addEventListener('click', () => {
+            const fileIndexes = [...state.importSelectedRows]
+                .filter(k => k.startsWith('file:'))
+                .map(k => Number(k.slice(5)));
+            fileIndexes.forEach(idx => {
+                const entry = (preview.entries || []).find(e => e.index === idx);
+                if (entry && (entry.family === 'audio' || (entry.allowed_types || []).includes('sample'))) {
+                    state.importItemTypes.set(idx, 'sample');
+                }
+            });
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#bulk-file-track')?.addEventListener('click', () => {
+            const fileIndexes = [...state.importSelectedRows]
+                .filter(k => k.startsWith('file:'))
+                .map(k => Number(k.slice(5)));
+            fileIndexes.forEach(idx => {
+                const entry = (preview.entries || []).find(e => e.index === idx);
+                if (entry && (entry.family === 'audio' || (entry.allowed_types || []).includes('track'))) {
+                    state.importItemTypes.set(idx, 'track');
+                }
+            });
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#bulk-file-audio')?.addEventListener('click', () => {
+            const fileIndexes = [...state.importSelectedRows]
+                .filter(k => k.startsWith('file:'))
+                .map(k => Number(k.slice(5)));
+            fileIndexes.forEach(idx => {
+                state.importItemTypes.set(idx, 'audio');
+            });
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#bulk-file-toggle-include')?.addEventListener('click', () => {
+            const fileIndexes = [...state.importSelectedRows]
+                .filter(k => k.startsWith('file:'))
+                .map(k => Number(k.slice(5)));
+            const anyExcluded = fileIndexes.some(idx => state.importExcludedIndexes.has(idx));
+            fileIndexes.forEach(idx => {
+                if (anyExcluded) state.importExcludedIndexes.delete(idx);
+                else state.importExcludedIndexes.add(idx);
+            });
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#bulk-deselect-all')?.addEventListener('click', () => {
+            state.importSelectedRows.clear();
+            state.importSelectionAnchor = null;
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#import-select-all-folders')?.addEventListener('click', () => {
+            visibleNodes.filter(node => node.kind === 'folder').forEach(node => {
+                state.importSelectedRows.add(getImportRowKey(node));
+            });
+            renderImportPreview();
+        });
+
+        importPreviewStep.querySelector('#import-select-all-files')?.addEventListener('click', () => {
+            visibleNodes.filter(node => node.kind !== 'folder').forEach(node => {
+                state.importSelectedRows.add(getImportRowKey(node));
+            });
+            renderImportPreview();
+        });
         importPreviewStep.querySelector('#import-conflict-action')?.addEventListener('change', event => {
             state.importConflictAction = event.target.value || null;
             renderImportPreview();
         });
         importPreviewStep.querySelector('#import-preview-back')?.addEventListener('click', resetImportFlow);
+        importHeadingSource.querySelector('#import-upper-toggle')?.addEventListener('click', () => {
+            state.importUpperExpanded = !state.importUpperExpanded;
+            renderImportPreview();
+        });
+        importHeadingSource.querySelector('#import-heading-change')?.addEventListener('click', resetImportFlow);
         importPreviewStep.querySelector('#import-job-start')?.addEventListener('click', startImportJob);
         const newTree = importPreviewStep.querySelector('.import-tree');
         if (newTree) {
@@ -5926,9 +6834,11 @@ function initializeGaiaLibrary() {
         importProgressCancel.textContent = job.status === 'cancelling' ? 'Cancelling…' : 'Cancel';
         importProgressResults.classList.toggle('hidden', active);
         importProgressDismiss.classList.toggle('hidden', active);
+        const transferActive = active && ['queued', 'revalidating', 'registering', 'transferring'].includes(job.phase);
+        state.importJobActiveTransfer = transferActive;
         if (projectImportAdd) projectImportAdd.disabled = active;
-        openImportButton.disabled = active;
-        openImportButton.title = active ? 'An import is already running' : 'Import assets';
+        openImportButton.disabled = transferActive;
+        openImportButton.title = transferActive ? 'An import file transfer is in progress' : 'Import assets';
     }
 
     function renderImportPollingIssue(message) {
@@ -5972,10 +6882,10 @@ function initializeGaiaLibrary() {
             renderImportJob(job);
             if (
                 job.status === 'running'
-                && Number(job.registration_completed || 0) >= Number(job.registration_total || job.total || 0)
-                && state.importRegisteredJobId !== job.job_id
+                && (job.phase === 'analyzing' || job.files_ready || Number(job.staging_completed || 0) >= Number(job.staging_total || job.total || 0))
+                && state.importFilesReadyJobId !== job.job_id
             ) {
-                state.importRegisteredJobId = job.job_id;
+                state.importFilesReadyJobId = job.job_id;
                 await loadLibrary({ force: true, resetNested: true });
             }
             if (['completed', 'failed', 'cancelled', 'stale'].includes(job.status)) {
@@ -6160,19 +7070,54 @@ function initializeGaiaLibrary() {
     function openInspectTableForPreview(preview, vaultId) {
         state.importVaultId = vaultId;
         state.importPreview = preview;
-        state.importFolderAssignments = new Map(
-            (preview.nodes || [])
-                .filter(node => node.kind === 'folder')
-                .map(node => [node.relative_path, 'action:contain']),
-        );
-        state.importItemTypes = new Map((preview.entries || []).map(entry => [entry.index, entry.type]));
+        const sortedFolders = (preview.nodes || [])
+            .filter(node => node.kind === 'folder')
+            .sort((a, b) => (Number(a.depth) || 0) - (Number(b.depth) || 0));
+
+        const samplePackRoots = new Set();
+        state.importFolderAssignments = new Map();
+        for (const folder of sortedFolders) {
+            const fpath = folder.relative_path;
+            const isUnderSamplePack = [...samplePackRoots].some(root =>
+                root === '.' ? fpath !== '.' : fpath.startsWith(`${root}/`)
+            );
+            if (isUnderSamplePack) {
+                state.importFolderAssignments.set(fpath, 'action:contain');
+            } else if (folder.detected_assignment) {
+                state.importFolderAssignments.set(fpath, folder.detected_assignment);
+                if (folder.detected_assignment === 'profile:sample_pack') {
+                    samplePackRoots.add(fpath);
+                }
+            } else if (folder.suggested_assignment === 'profile:sample_pack') {
+                state.importFolderAssignments.set(fpath, 'profile:sample_pack');
+                samplePackRoots.add(fpath);
+            } else {
+                state.importFolderAssignments.set(fpath, 'action:contain');
+            }
+        }
+        state.importItemTypes = new Map((preview.entries || []).map(entry => {
+            let initialType = entry.type;
+            const isUnderSamplePack = (preview.nodes || []).some(folder =>
+                folder.kind === 'folder' &&
+                state.importFolderAssignments.get(folder.relative_path) === 'profile:sample_pack' &&
+                (folder.relative_path === '.' || entry.relative_path.startsWith(`${folder.relative_path}/`))
+            );
+            if (isUnderSamplePack && (entry.family === 'audio' || (entry.allowed_types || []).includes('sample'))) {
+                initialType = 'sample';
+            }
+            return [entry.index, initialType];
+        }));
         state.importExcludedIndexes = new Set();
+        state.importSelectedRows.clear();
+        state.importSelectionAnchor = null;
         state.importTransferMode = 'copy';
         state.skipTrackAnalysis = false;
         state.importCollapsedFolders = new Set(
             (preview.nodes || []).filter(node => node.kind === 'folder').map(node => node.relative_path),
         );
         state.importConflictAction = preview.conflicts?.length ? null : 'skip';
+        state.importUpperExpanded = true;
+        importDialog?.classList.remove('is-initial');
         importSourceStep.classList.add('hidden');
         importPreviewStep.classList.remove('hidden');
         renderVaults();
@@ -6341,7 +7286,7 @@ function initializeGaiaLibrary() {
     }
 
     openImportButton?.addEventListener('click', () => {
-        if (state.importJobId) return;
+        if (state.importJobActiveTransfer) return;
         state.importVaultId = state.selectedVaultId ?? state.importVaultId ?? state.vaults[0]?.id ?? null;
         renderVaults();
         resetImportFlow();
@@ -6349,6 +7294,7 @@ function initializeGaiaLibrary() {
     });
     importDialogClose?.addEventListener('click', () => importDialog?.close());
     importCancel?.addEventListener('click', () => importDialog?.close());
+    document.getElementById('version-delete-close')?.addEventListener('click', () => versionDeleteDialog?.close());
     importSummaryClose?.addEventListener('click', () => importSummaryDialog?.close());
     importSummaryDone?.addEventListener('click', () => importSummaryDialog?.close());
     importProgressCancel?.addEventListener('click', cancelImportJob);
@@ -6376,13 +7322,23 @@ function initializeGaiaLibrary() {
         return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
     }
 
+    function getParentDirectoryPath(dirPath) {
+        if (!dirPath) return null;
+        const clean = dirPath.replace(/[\\/]+$/, '');
+        const lastSep = Math.max(clean.lastIndexOf('\\'), clean.lastIndexOf('/'));
+        if (lastSep < 0) return null;
+        let parent = clean.slice(0, lastSep);
+        if (/^[a-zA-Z]:$/.test(parent)) parent += '\\';
+        return parent || null;
+    }
+
     function renderSourcePicker(result) {
         const choosingVaultPath = Boolean(state.vaultPathPickerMode);
         state.sourcePickerDirectory = result.path;
-        state.sourcePickerParent = result.parent;
+        state.sourcePickerParent = result.parent || getParentDirectoryPath(result.path);
         state.sourcePickerSelection = choosingVaultPath ? null : result.selected_path || null;
         sourcePickerLocation.value = result.path;
-        sourcePickerUp.disabled = !result.parent;
+        sourcePickerUp.disabled = !state.sourcePickerParent;
 
         sourcePickerLocations.innerHTML = (result.locations || []).map(location => {
             const active = String(location.path).toLocaleLowerCase() === String(result.path).toLocaleLowerCase();
@@ -6437,13 +7393,15 @@ function initializeGaiaLibrary() {
             if (!response.ok) throw new Error(result.detail || 'Could not open that location');
             renderSourcePicker(result);
         } catch (error) {
+            const fallback = getParentDirectoryPath(sourcePickerLocation?.value?.trim() || path);
             state.sourcePickerDirectory = null;
-            state.sourcePickerParent = null;
+            state.sourcePickerParent = fallback;
             state.sourcePickerSelection = null;
             sourcePickerList.innerHTML = '<div class="source-picker-empty">Location unavailable.</div>';
             sourcePickerResult.textContent = error.message;
             sourcePickerResult.className = 'inline-error';
             sourcePickerChoose.disabled = true;
+            sourcePickerUp.disabled = !fallback;
         }
     }
 
@@ -6491,7 +7449,7 @@ function initializeGaiaLibrary() {
         sourcePath.value = path;
         sourcePickerDialog.close();
         importResult.className = 'result hidden';
-        importSubmit.focus();
+        inspectImportSource();
     }
 
     async function inspectImportSource() {
@@ -6532,7 +7490,8 @@ function initializeGaiaLibrary() {
         state.vaultPathPickerMode = null;
     });
     sourcePickerUp.addEventListener('click', () => {
-        if (state.sourcePickerParent) loadSourcePicker(state.sourcePickerParent);
+        const target = state.sourcePickerParent || getParentDirectoryPath(state.sourcePickerDirectory || sourcePickerLocation.value.trim());
+        if (target) loadSourcePicker(target);
     });
     sourcePickerLocationForm.addEventListener('submit', event => {
         event.preventDefault();

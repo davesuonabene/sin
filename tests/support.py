@@ -15,6 +15,34 @@ from sqlalchemy.orm import sessionmaker
 from gaia import collection_importer, database, models, paths, vaults
 
 
+SLOW_ENV = "SIN_TEST_SLOW"
+INTEGRATION_ENV = "SIN_TEST_INTEGRATION"
+
+
+def slow(reason: str):
+    """Skip a test unless the full tier is requested (`run.py --slow` / `full`).
+
+    Reserve this for scale or stress regressions that are expensive by design;
+    every slow test must still pass before a commit or release.
+    """
+    return unittest.skipUnless(
+        os.environ.get(SLOW_ENV) == "1",
+        f"slow: {reason} (run with --slow)",
+    )
+
+
+def integration(reason: str):
+    """Skip a test unless local-machine checks are requested (`run.py integration`).
+
+    Integration tests read the developer's real GAIA database, vault files, or
+    presets. They are never required for a clean checkout to pass.
+    """
+    return unittest.skipUnless(
+        os.environ.get(INTEGRATION_ENV) == "1",
+        f"integration: {reason} (run with --integration)",
+    )
+
+
 @contextmanager
 def working_directory(path: Path):
     previous = Path.cwd()

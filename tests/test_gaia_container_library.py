@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 
 import api
+from tests.support import GaiaTestCase, integration
 
 
 class GaiaContainerLibraryTestCase(unittest.TestCase):
+    @integration("reads the developer's real GAIA library")
     def test_get_library_populates_project_references_and_subfolders(self):
         """Verify get_library retrieves projects with referenced items and folder categorization."""
         res = api.get_library()
@@ -32,6 +34,7 @@ class GaiaContainerLibraryTestCase(unittest.TestCase):
                 self.assertIsNotNone(item.get("id"))
                 self.assertIsNotNone(item.get("stream_url"))
 
+    @integration("reads the developer's real GAIA database")
     def test_get_library_sqlite_fallback_populates_references(self):
         """Verify direct SQLite read populates project item references when Gaia API is offline."""
         with patch("urllib.request.urlopen", side_effect=OSError("Gaia API offline")):
@@ -106,6 +109,28 @@ class GaiaContainerLibraryTestCase(unittest.TestCase):
 
                 nested_item = next(c for c in contents if c.get("id") == 1002)
                 self.assertEqual(nested_item["folder"], "drums")
+
+
+class GaiaLibraryFallbackHermeticTestCase(GaiaTestCase):
+    def test_sqlite_fallback_reads_isolated_gaia_database(self):
+        """The offline SQLite path lists items from whichever GAIA database it is given."""
+        from gaia import models
+
+        audio_path = self.write_audio(self.asset_store, "fixture-kick.wav")
+        sample = models.SampleItem(absolute_path=str(audio_path), vault_id=self.vault.id, bpm=120, key="C")
+        sample.tags.append(models.Tag(name="Kick"))
+        self.db.add(sample)
+        self.db.commit()
+
+        with (
+            patch("urllib.request.urlopen", side_effect=OSError("Gaia API offline")),
+            patch.object(api, "_gaia_db_path", return_value=self.temp_path / "test.db"),
+        ):
+            files = api.get_library().get("files", [])
+
+        listed = next((f for f in files if f.get("id") == sample.id), None)
+        self.assertIsNotNone(listed, f"fixture sample missing from fallback listing: {files}")
+        self.assertEqual(Path(listed["absolute_path"]).name, "fixture-kick.wav")
 
 
 if __name__ == "__main__":

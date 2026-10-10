@@ -40,6 +40,8 @@ beat_generator.db
 
 # Frontend & Web Build Outputs
 static/
+editor/node_modules/
+editor/dist/
 frontend/node_modules/
 frontend/dist/
 .vite/
@@ -58,11 +60,13 @@ frontend/dist/
 .DS_Store
 Thumbs.db
 
-# Logs & Temp
+# Logs, Temp & Runtime State
 *.log
 .runtime/
 tmp/
+temp_renders/
+saves/.current-stage.json
+*.asd
 *.zip
-*.DS_Store
 *.jpg
 /assets

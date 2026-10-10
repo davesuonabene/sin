@@ -87,6 +87,7 @@ class BatchAnalysisTaskManager:
     def _run_batch(self, task_id: str, targets: list):
         db = database.SessionLocal()
         analyzed_collection_ids = set()
+        pending_collection_contents = {}
         try:
             for target in targets:
                 with self._lock:
@@ -115,8 +116,12 @@ class BatchAnalysisTaskManager:
 
                         analyzed = _analyze_collection_content(db_item, content)
                         _propagate_content_analysis(db, db_item, analyzed)
-                        contents = [analyzed if entry.get("index") == content_index else entry for entry in (db_item.contents or [])]
-                        crud.save_collection_contents(db, db_item, contents)
+                        if db_item.id not in pending_collection_contents:
+                            pending_collection_contents[db_item.id] = list(db_item.contents or [])
+                        pending_collection_contents[db_item.id] = [
+                            analyzed if entry.get("index") == content_index else entry
+                            for entry in pending_collection_contents[db_item.id]
+                        ]
                         analyzed_collection_ids.add(db_item.id)
 
                         with self._lock:
@@ -169,7 +174,8 @@ class BatchAnalysisTaskManager:
                 for collection_id in analyzed_collection_ids:
                     collection = crud.get_item(db, collection_id)
                     if isinstance(collection, models.FolderItem):
-                        _finalize_collection_analysis(db, collection)
+                        final_contents = pending_collection_contents.get(collection_id)
+                        _finalize_collection_analysis(db, collection, contents=final_contents)
 
             with self._lock:
                 task = self._tasks.get(task_id)
@@ -316,6 +322,11 @@ def _get_collection_content(db_item, content_index: int, db: Session | None = No
 
     if not content:
         raise HTTPException(status_code=404, detail="Collection content not found")
+
+    if db is not None and content.get("child_id"):
+        child = db.query(models.Item).filter(models.Item.id == content["child_id"]).first()
+        if child and child.absolute_path and os.path.isfile(child.absolute_path):
+            return content, os.path.abspath(child.absolute_path)
 
     relative_path = content.get("relative_path", "")
     candidate = os.path.abspath(os.path.join(db_item.absolute_path, relative_path))
@@ -807,6 +818,8 @@ def _source_browser_locations() -> list[dict]:
 @router.get("/import/browse-source")
 def browse_import_source(path: str | None = None):
     """List one local directory for GAIA's in-app source picker."""
+    if path and len(path) == 2 and path[1] == ":" and path[0].isalpha():
+        path = f"{path}\\"
     requested = Path(path).expanduser() if path else Path.home()
     try:
         requested = requested.resolve(strict=True)

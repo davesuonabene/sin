@@ -20,20 +20,28 @@ Use this skill when you need to inspect GAIA vaults, query audio items, resolve 
    - If port 8001 is offline, read `gaia.db` using sqlite3 in read-only mode (`SELECT * FROM items WHERE vault_id = ?`).
 3. **Submitting Metadata Proposals**:
    - Never mutate `gaia.db` rows directly from the editor.
-   - Post proposed metadata changes (BPM, key, tags) to:
+   - Post proposed metadata changes (BPM, key, favourite) to:
      `POST http://127.0.0.1:8001/sin-proposals/`
-     Payload schema:
+     Payload schema (`SinMetadataProposalCreate`):
      ```json
      {
-       "item_id": 352,
+       "asset_ref": "352",
+       "absolute_path": "C:/web-projects/sin/assets/vaults/default-vault/samples/Kick.wav",
        "field": "bpm",
        "proposed_value": 128.0,
-       "original_value": 120.0,
-       "confidence": 1.0,
-       "source_context": "sin_node_inspector"
+       "previous_value": 120.0,
+       "source_node_id": 12
      }
      ```
+   - Proposals are reviewed and accepted in GAIA via `POST /sin-proposals/{id}/accept`.
 4. **Physical Vault Boundaries**:
    - Physically managed files are in `assets/vaults/<storage_key>/`.
    - External references (`keep` mode) are strictly read-only.
    - Folders are logical bins and do not move files on disk.
+5. **Horizontal Playlists**:
+   - Query available playlists:
+     `GET http://127.0.0.1:8001/playlists/`
+   - Retrieve playlist items across vaults:
+     `GET http://127.0.0.1:8001/playlists/{id}`
+   - Playlists are horizontal, decoupled item pointer collections that span vaults without altering file residency or database vault ownership.
+

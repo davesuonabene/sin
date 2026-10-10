@@ -88,6 +88,13 @@ class DeletionContext:
             return None
         if not snapshot.exists():
             return None
+        if (
+            getattr(item, "type", None) == "folder"
+            or bool((getattr(item, "attributes", None) or {}).get("is_folder"))
+            or ("is_folder" in str(getattr(item, "metadata_json", "")))
+        ):
+            # Organizational folders are logical bins; deleting them dissolves the container, not files.
+            return None
         if isinstance(item, models.FolderItem) != snapshot.is_dir():
             return None
 

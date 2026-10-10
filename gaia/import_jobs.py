@@ -17,9 +17,12 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from typing import Any, Callable, Iterable
-
 from sqlalchemy.orm import Session
+
+try:
+    import soundfile as sf
+except ImportError:
+    sf = None
 
 from . import (
     collection_importer,
@@ -300,16 +303,72 @@ def _annotate_h4_roles(entries: list[dict[str, Any]]) -> None:
         )
 
 
-def _looks_like_multitrack(entries: list[dict[str, Any]]) -> bool:
-    role_pattern = re.compile(r"(?:^|[_\s-])(drums?|bass|vocals?|guitars?|keys?|synth|percussion|stems?)(?=$|[_\s.-])", re.I)
-    roles = {
-        match.group(1).casefold()
-        for entry in entries
-        if entry["family"] == "audio"
-        for match in [role_pattern.search(Path(entry["filename"]).stem)]
-        if match
-    }
-    return len(roles) >= 2
+def _looks_like_multitrack(entries: list[dict[str, Any]], source: Path | None = None) -> bool:
+    audio_entries = [entry for entry in entries if entry.get("family") == "audio"]
+    if len(audio_entries) < 2:
+        return False
+
+    # Check for loop/sample/one-shot keywords: multitrack stems are synchronized song parts,
+    # not sample-library loops or one-shots.
+    sample_loop_pattern = re.compile(
+        r"(?:^|[_\s.-])(loops?|samples?|one[-_]?shots?|hits?|fills?|riffs?|stabs?|chops?|s?fx)(?=$|[_\s.-])",
+        re.I,
+    )
+    if any(sample_loop_pattern.search(Path(entry["filename"]).stem) for entry in audio_entries):
+        return False
+
+    # Check duration variance if files exist on disk
+    durations: list[float] = []
+    if source and source.is_dir() and sf is not None:
+        for entry in audio_entries:
+            dur = entry.get("duration_seconds")
+            if dur is None:
+                file_path = source / entry["relative_path"]
+                if file_path.is_file():
+                    try:
+                        info = sf.info(str(file_path))
+                        dur = round(float(info.duration), 4)
+                        entry["duration_seconds"] = dur
+                    except Exception:
+                        pass
+            if dur is not None and dur > 0:
+                durations.append(dur)
+
+    if len(durations) >= 2:
+        max_dur = max(durations)
+        min_dur = min(durations)
+        variance = max_dur - min_dur
+        # Multitrack stems must share equal playback duration (within 0.5s tolerance or 10%)
+        if variance > 0.5 or (min_dur > 0 and (max_dur / min_dur) > 1.10):
+            return False
+    elif not durations:
+        # Fallback to file sizes if all files share the same extension (e.g. uncompressed WAV)
+        exts = {entry.get("extension") for entry in audio_entries}
+        sizes = [entry.get("size_bytes") for entry in audio_entries if entry.get("size_bytes")]
+        if len(exts) == 1 and len(sizes) >= 2:
+            min_size = min(sizes)
+            max_size = max(sizes)
+            if min_size > 0 and (max_size / min_size) > 1.35:
+                return False
+
+    # Check stem roles: each file in a multitrack represents a distinct instrument role
+    role_pattern = re.compile(
+        r"(?:^|[_\s-])(drums?|bass|vocals?|guitars?|keys?|synth|percussion|stems?)(?=$|[_\s.-])",
+        re.I,
+    )
+    roles = set()
+    matching_count = 0
+    for entry in audio_entries:
+        match = role_pattern.search(Path(entry["filename"]).stem)
+        if match:
+            roles.add(match.group(1).casefold())
+            matching_count += 1
+
+    # Multitrack detection requires at least 2 distinct roles and >= 75% of files to be stems
+    if len(roles) < 2 or matching_count < max(2, int(len(audio_entries) * 0.75)):
+        return False
+
+    return True
 
 
 def _available_profiles() -> list[dict[str, Any]]:
@@ -332,12 +391,22 @@ def _available_profiles() -> list[dict[str, Any]]:
     ]
 
 
-def _classify_folders(nodes: list[dict[str, Any]], entries: list[dict[str, Any]]) -> None:
-    folders = [node for node in nodes if node["kind"] == "folder"]
+def _classify_folders(nodes: list[dict[str, Any]], entries: list[dict[str, Any]], source: Path | None = None) -> None:
+    folders = sorted([node for node in nodes if node["kind"] == "folder"], key=lambda n: n.get("depth", 0))
+    sample_pack_roots: set[str] = set()
+
     for folder in folders:
-        prefix = "" if folder["relative_path"] == "." else folder["relative_path"] + "/"
-        direct = [entry for entry in entries if entry["parent_path"] == folder["relative_path"]]
-        descendants = [entry for entry in entries if folder["relative_path"] == "." or entry["relative_path"].startswith(prefix)]
+        fpath = folder["relative_path"]
+        prefix = "" if fpath == "." else fpath + "/"
+        direct = [entry for entry in entries if entry["parent_path"] == fpath]
+        descendants = [entry for entry in entries if fpath == "." or entry["relative_path"].startswith(prefix)]
+
+        # Nested sample packs inside an already identified sample pack are not permitted
+        is_under_sample_pack = any(
+            (root == "." and fpath != ".") or (root != "." and fpath.startswith(f"{root}/"))
+            for root in sample_pack_roots
+        )
+
         h4_roles = _h4_roles(direct)
         if len(h4_roles) >= 2 and ({"mic", "lr"} & h4_roles):
             _annotate_h4_roles(direct)
@@ -346,19 +415,31 @@ def _classify_folders(nodes: list[dict[str, Any]], entries: list[dict[str, Any]]
                 detection_label="Zoom H4",
                 detection_reason=f"Timestamped Zoom tracks detected ({', '.join(sorted(h4_roles))}).",
             )
-        elif _looks_like_multitrack(direct):
+        elif _looks_like_multitrack(direct, source=source):
             folder.update(
                 detected_assignment="type:multitrack",
                 detection_label="Multitrack",
                 detection_reason="Distinct stem-role filenames were detected.",
             )
+
         media_count = sum(entry["family"] in {"audio", "midi"} for entry in descendants)
-        if not folder["detected_assignment"] and media_count >= 3 and media_count >= max(1, len(descendants)) * 0.5:
-            folder.update(
-                suggested_assignment="profile:sample_pack",
-                detection_label="Possible sample pack",
-                detection_reason="Most files are audio or MIDI; confirm the Sample pack profile if appropriate.",
+        # Only suggest sample pack if NOT inside another sample pack, and only when sensible:
+        if not folder.get("detected_assignment") and not is_under_sample_pack:
+            name_lower = folder.get("name", "").lower()
+            pack_keywords = {"pack", "kit", "sample", "samples", "loop", "loops", "drum", "sound", "oneshot", "one_shot"}
+            has_pack_name = any(kw in name_lower for kw in pack_keywords)
+            is_sample_candidate = (
+                (fpath == "." and media_count >= 1 and media_count >= max(1, len(descendants)) * 0.5)
+                or (has_pack_name and media_count >= 1 and media_count >= max(1, len(descendants)) * 0.5)
             )
+            if is_sample_candidate:
+                folder.update(
+                    suggested_assignment="profile:sample_pack",
+                    detection_label="Possible sample pack",
+                    detection_reason="Media collection detected; subfolders will be organized as containers.",
+                )
+                sample_pack_roots.add(fpath)
+
         artifact_entries = [entry for entry in descendants if entry["artifact"]]
         folder["warning_count"] = len(artifact_entries)
         folder["warning_messages"] = sorted({entry["artifact_reason"] for entry in artifact_entries if entry["artifact_reason"]})
@@ -391,7 +472,7 @@ def create_preview(source_path: str, vault_id: int | None, db: Session) -> dict[
     if source == store or store in source.parents or source in store.parents:
         raise ImportPreviewError("Choose a source outside the destination vault's managed asset store")
     entries, nodes = _scan_source(source, source_kind)
-    _classify_folders(nodes, entries)
+    _classify_folders(nodes, entries, source=source if source_kind == "folder" else None)
     profile_options = _available_profiles()
     type_counts: dict[str, int] = {}
     extension_counts: dict[str, int] = {}
@@ -867,7 +948,7 @@ class ImportJobManager:
         self._lock = threading.RLock()
         self._previews: dict[str, dict[str, Any]] = {}
         self._jobs: dict[str, dict[str, Any]] = {}
-        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gaia-import")
+        self._executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="gaia-import")
 
     def _prune(self) -> None:
         now = time.time()
@@ -1284,10 +1365,20 @@ class ImportJobManager:
                     if transfer_mode == "move" and preview["source_kind"] == "zip":
                         Path(preview["source_path"]).unlink()
 
+                # Stage 2 complete: all files are verified and ready in the vault.
+                self._update(
+                    task,
+                    staging_completed=task["staging_total"],
+                    staging_bytes_completed=task["staging_bytes_total"],
+                    files_ready=True,
+                )
+
                 # Stage 3: analyze one ready file at a time. A failed analysis
                 # never invalidates a successfully published or referenced file.
                 self._update(task, phase="analyzing", completed=0, current_title="")
                 from .routers.items import _analysis_update_request, _apply_item_update
+
+                collection_updates: dict[int, list[dict[str, Any]]] = {}
 
                 for record in registered_entries:
                     if self._cancelled(task):
@@ -1340,23 +1431,17 @@ class ImportJobManager:
                             updated = _apply_item_update(item, _analysis_update_request(item, item_analysis), db)
 
                         if record["parent_id"] is not None:
-                            parent = crud.get_item(db, record["parent_id"])
-                            contents = []
-                            for content in parent.contents or []:
-                                if content.get("child_id") == record["item_id"]:
-                                    replacement = {
-                                        **content,
-                                        **analyzed_entry,
-                                        "index": record["content_index"],
-                                        "relative_path": record["manifest_relative_path"],
-                                        "child_id": record["item_id"],
-                                        "storage_mode": updated.storage_mode,
-                                        "availability": updated.availability,
-                                    }
-                                    contents.append(replacement)
-                                else:
-                                    contents.append(content)
-                            crud.save_collection_contents(db, parent, contents)
+                            parent_id = record["parent_id"]
+                            if parent_id not in collection_updates:
+                                collection_updates[parent_id] = []
+                            collection_updates[parent_id].append({
+                                **analyzed_entry,
+                                "index": record["content_index"],
+                                "relative_path": record["manifest_relative_path"],
+                                "child_id": record["item_id"],
+                                "storage_mode": updated.storage_mode,
+                                "availability": updated.availability,
+                            })
                     except Exception as exc:
                         db.rollback()
                         item = crud.get_item(db, record["item_id"])
@@ -1373,6 +1458,26 @@ class ImportJobManager:
                                 f"Automatic analysis failed for {record['entry']['filename']}: {exc}. The file is ready and can be analyzed later."
                             )
                     analyzed(record["entry"]["filename"])
+
+                # Batch persist parent collection manifests once instead of after every child file
+                for parent_id, replacements in collection_updates.items():
+                    try:
+                        parent = crud.get_item(db, parent_id)
+                        if parent and parent.contents:
+                            replacement_by_id = {c["child_id"]: c for c in replacements}
+                            new_contents = [
+                                {**content, **replacement_by_id[content["child_id"]]}
+                                if content.get("child_id") in replacement_by_id
+                                else content
+                                for content in parent.contents
+                            ]
+                            crud.save_collection_contents(db, parent, new_contents)
+                            db.commit()
+                    except Exception as exc:
+                        with self._lock:
+                            task["warnings"].append(
+                                f"Failed to batch update manifest for collection {parent_id}: {exc}"
+                            )
 
                 # Multitrack metadata describes the container as a whole and
                 # must be computed after every stem is available.  Keep this

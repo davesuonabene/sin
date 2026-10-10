@@ -708,16 +708,29 @@ class ItemPoolObject(AudioObject):
                 try:
                     import sqlite3
                     import json
-                    conn = sqlite3.connect("gaia.db")
-                    c = conn.cursor()
-                    c.execute("SELECT absolute_path, metadata_json FROM items WHERE id = ?", (int(item["id"]),))
-                    row = c.fetchone()
-                    conn.close()
-                    if row and row[0]:
-                        filepath = row[0]
-                        if not item.get("bpm") and row[1]:
-                            meta = json.loads(row[1]) if row[1] else {}
-                            item["bpm"] = meta.get("bpm")
+                    from pathlib import Path
+                    db_candidates = [
+                        Path.cwd() / "gaia.db",
+                        Path(__file__).resolve().parents[1] / "gaia.db",
+                        Path(__file__).resolve().parents[1] / "gaia" / "gaia.db",
+                    ]
+                    db_path = next((p for p in db_candidates if p.is_file()), None)
+                    if db_path:
+                        conn = sqlite3.connect(str(db_path))
+                        c = conn.cursor()
+                        c.execute("SELECT absolute_path, metadata_json FROM items WHERE id = ?", (int(item["id"]),))
+                        row = c.fetchone()
+                        conn.close()
+                        if row and row[0]:
+                            cand_path = Path(row[0])
+                            if not cand_path.is_file():
+                                proj_root = Path(__file__).resolve().parents[1]
+                                if (proj_root / cand_path).is_file():
+                                    cand_path = proj_root / cand_path
+                            filepath = str(cand_path)
+                            if not item.get("bpm") and row[1]:
+                                meta = json.loads(row[1]) if row[1] else {}
+                                item["bpm"] = meta.get("bpm")
                 except Exception:
                     pass
 

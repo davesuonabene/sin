@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Table, Boolean, Float, Text, Index, text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Table, Boolean, Float, Text, Index, text, UniqueConstraint
 from sqlalchemy.orm import relationship
 import json
 import datetime
@@ -266,3 +266,35 @@ Index(
     SinMetadataProposal.field,
     SinMetadataProposal.status,
 )
+
+
+class Playlist(Base):
+    """A horizontal, vault-agnostic collection of arbitrary items."""
+
+    __tablename__ = "playlists"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    entries = relationship("PlaylistItem", back_populates="playlist", cascade="all, delete-orphan", order_by="PlaylistItem.position")
+
+
+class PlaylistItem(Base):
+    """An ordered pointer from a playlist to an arbitrary GAIA item."""
+
+    __tablename__ = "playlist_items"
+    __table_args__ = (
+        UniqueConstraint("playlist_id", "item_id", name="uq_playlist_item"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    playlist_id = Column(Integer, ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+    position = Column(Integer, default=0, nullable=False)
+    added_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    playlist = relationship("Playlist", back_populates="entries")
+    item = relationship("Item")
+
