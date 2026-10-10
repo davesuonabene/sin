@@ -1480,6 +1480,13 @@ def cleanup_stale_staging() -> None:
             paths.safe_rmtree(candidate)
         else:
             paths.safe_unlink(candidate)
+    drops_root = paths.gaia_home() / "staging" / "drops"
+    if drops_root.is_dir():
+        for candidate in drops_root.iterdir():
+            if candidate.is_dir():
+                paths.safe_rmtree(candidate)
+            else:
+                paths.safe_unlink(candidate)
 
 
 

@@ -4,7 +4,7 @@
  * schema limit truncation, seed management, and graph traversal.
  */
 
-import { type FieldSchema } from '../../iride/src/fields/FieldSchema.ts';
+import { type FieldSchema } from '../../editor/src/fields/FieldSchema.ts';
 
 export type RandomRefreshMode = 'local' | 'parent' | 'ancestor' | 'global' | 'off';
 
@@ -60,7 +60,7 @@ export function normalizeRandomRefreshMode(value: unknown): RandomRefreshMode {
         case 'fixed':
             return 'off';
         default:
-            return 'parent';
+            return 'global';
     }
 }
 
@@ -249,6 +249,47 @@ export function applyRandomModulation(
             continue;
         }
 
+        // Check if destination targets all steps in step_parameters (e.g. paramKey is 'velocity', 'offset', 'probability', 'subdivisions')
+        if (Array.isArray(ownerNode.properties?.step_parameters) && ['velocity', 'offset', 'probability', 'subdivisions'].includes(dest.paramKey)) {
+            const fieldKey = dest.paramKey;
+            const factorGen = options.randomFactorGenerator || Math.random;
+            if (!dest.baseValueArray || !Array.isArray(dest.baseValueArray) || dest.baseValueArray.length !== ownerNode.properties.step_parameters.length) {
+                dest.baseValueArray = ownerNode.properties.step_parameters.map((s: any) => Number(s?.[fieldKey] ?? 0));
+            }
+            const baseValues: number[] = dest.baseValueArray || [];
+            for (let i = 0; i < ownerNode.properties.step_parameters.length; i++) {
+                const stepObj = ownerNode.properties.step_parameters[i];
+                if (stepObj && stepObj[fieldKey] !== undefined) {
+                    const stepBase = baseValues[i] ?? Number(stepObj[fieldKey]);
+                    const factor = factorGen();
+                    const newVal = evaluateRelativeRandomValue(
+                        stepBase,
+                        dest.minPercent,
+                        dest.maxPercent,
+                        {
+                            schemaMin: field?.min !== undefined ? Number(field.min) : undefined,
+                            schemaMax: field?.max !== undefined ? Number(field.max) : undefined,
+                            step: dest.step !== undefined ? dest.step : (field?.step !== undefined ? Number(field.step) : undefined),
+                            randomFactor: factor
+                        }
+                    );
+                    stepObj[fieldKey] = newVal;
+                    if (fieldKey === 'subdivisions') {
+                        stepObj.subdivision_enabled = newVal > 1;
+                    }
+                }
+            }
+            if (typeof ownerNode.updateProperty === 'function') {
+                ownerNode.updateProperty('step_parameters', [...ownerNode.properties.step_parameters]);
+            }
+            const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
+            if (cachedNode) {
+                cachedNode.step_parameters = ownerNode.properties.step_parameters.map((s: any) => ({ ...s }));
+            }
+            updatedAny = true;
+            continue;
+        }
+
         const currentProp = ownerNode.properties?.[dest.paramKey];
 
         const isArrayProp = Array.isArray(currentProp);
@@ -348,6 +389,30 @@ export function restoreBaseValues(modifierNode: any, ownerNode: any): void {
             continue;
         }
 
+        // Handle all steps restoration when targeting 'velocity', 'offset', 'probability', 'subdivisions'
+        if (Array.isArray(ownerNode.properties?.step_parameters) && ['velocity', 'offset', 'probability', 'subdivisions'].includes(dest.paramKey)) {
+            const fieldKey = dest.paramKey;
+            if (dest.baseValueArray && Array.isArray(dest.baseValueArray)) {
+                for (let i = 0; i < ownerNode.properties.step_parameters.length; i++) {
+                    const stepObj = ownerNode.properties.step_parameters[i];
+                    if (stepObj && dest.baseValueArray[i] !== undefined) {
+                        stepObj[fieldKey] = dest.baseValueArray[i];
+                        if (fieldKey === 'subdivisions') {
+                            stepObj.subdivision_enabled = dest.baseValueArray[i] > 1;
+                        }
+                    }
+                }
+                if (typeof ownerNode.updateProperty === 'function') {
+                    ownerNode.updateProperty('step_parameters', [...ownerNode.properties.step_parameters]);
+                }
+                const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
+                if (cachedNode) {
+                    cachedNode.step_parameters = ownerNode.properties.step_parameters.map((s: any) => ({ ...s }));
+                }
+            }
+            continue;
+        }
+
         if (dest.baseValueArray && Array.isArray(dest.baseValueArray)) {
             if (typeof ownerNode.updateProperty === 'function') {
                 ownerNode.updateProperty(dest.paramKey, [...dest.baseValueArray]);
@@ -379,19 +444,20 @@ export async function resolveAssignedRandomModifiers(
     const trackNodes = trackNodesMap || (typeof window !== 'undefined' ? (window as any).trackNodes : undefined);
     const visited = new Set<number>();
 
+    const allGraphNodes = (graph?._nodes || graph?.nodes || []) as any[];
+
     const visit = async (nodeId: number) => {
         if (visited.has(nodeId)) return;
         visited.add(nodeId);
 
-        const node = graph?.getNodeById?.(nodeId);
+        const node = graph?.getNodeById?.(nodeId) || allGraphNodes.find((n: any) => n?.id === nodeId);
         const data = trackNodes?.get(nodeId);
 
         // Find all attached RANDOM modifier nodes
         const candidateModifiers: any[] = [];
 
         // Check assigned parentId references across all graph nodes
-        const allNodes = (graph?._nodes || []) as any[];
-        for (const candidate of allNodes) {
+        for (const candidate of allGraphNodes) {
             const isRandom = candidate?.type === 'Audio/Random'
                 || candidate?.properties?.node_type === 'random'
                 || (candidate?.isModifier && candidate?.modifierKind === 'random');
@@ -422,8 +488,17 @@ export async function resolveAssignedRandomModifiers(
 
         const adjacentIds: number[] = [...(data?.children || [])];
         for (const input of node?.inputs || []) {
-            const link = input.link != null ? (graph as any).links?.[input.link] : null;
-            if (link?.origin_id != null && !adjacentIds.includes(link.origin_id)) adjacentIds.push(link.origin_id);
+            if (input?.link == null) continue;
+            let originId: number | null = null;
+            const links = (graph as any)?.links;
+            if (Array.isArray(links)) {
+                const link = links.find((l: any) => (Array.isArray(l) ? l[0] : l?.id) === input.link) || links[input.link];
+                originId = Array.isArray(link) ? link[1] : (link?.origin_id ?? null);
+            } else if (links) {
+                const link = links[input.link];
+                originId = Array.isArray(link) ? link[1] : (link?.origin_id ?? null);
+            }
+            if (originId != null && !adjacentIds.includes(originId)) adjacentIds.push(originId);
         }
         await Promise.all(adjacentIds.map(childId => visit(childId)));
     };

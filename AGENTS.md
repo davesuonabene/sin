@@ -12,10 +12,10 @@ Folders everywhere in GAIA (both within vaults and inside projects) are logical 
 
 ## Node architecture and polymorphism
 
-All node-specific rendering, styling, badge identifiers, default property initialization, and property inspector tab configurations must be encapsulated directly within `BaseNode` subclasses in `iride/src/nodes/`.
+All node-specific rendering, styling, badge identifiers, default property initialization, and property inspector tab configurations must be encapsulated directly within `BaseNode` subclasses in `editor/src/nodes/`.
 
 - When creating or modifying a node type, extend `BaseNode` and declare static class metadata (`defaultColor`, `defaultIcon`, `badgeLabel`, `nodeType`, `defaultTab`, `tabs`, and `fields`). `BaseNode` resolves dynamic fallbacks through its getters.
-- Do not add external `if (node.type === ...)` switches in `iride/src/main.ts` or `iride/src/ui/PropertiesWindow.ts`. Delegate to node instance methods and getters such as `node.drawCanvas(ctx, canvas)`, `node.badgeLabel`, `node.propertiesTabs`, and `node.defaultPropertiesTab`.
+- Do not add external `if (node.type === ...)` switches in `editor/src/main.ts` or `editor/src/ui/PropertiesWindow.ts`. Delegate to node instance methods and getters such as `node.drawCanvas(ctx, canvas)`, `node.badgeLabel`, `node.propertiesTabs`, and `node.defaultPropertiesTab`.
 - All frontend canvas node implementations inherit from `BaseNode` for consistent hit testing, action overlays, and drawing contracts.
 
 ## Parameter fields and inspector widgets

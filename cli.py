@@ -1,12 +1,12 @@
 import typer
 
-app = typer.Typer(help="IRIDE node editor CLI")
+app = typer.Typer(help="SIN node editor CLI")
 
 
 @app.callback()
 def callback():
     """
-    IRIDE node editor CLI tool.
+    SIN node editor CLI tool.
     """
     pass
 
@@ -19,7 +19,7 @@ def serve(
     debug: bool = typer.Option(True, "--debug/--no-debug", help="Enable debug logging"),
 ):
     """
-    Launch IRIDE and its audio-rendering API with debug terminal output.
+    Launch SIN and its audio-rendering API with debug terminal output.
     """
     import uvicorn
     import logging
@@ -31,7 +31,7 @@ def serve(
         force=True
     )
     logging.getLogger("numba").setLevel(logging.WARNING)
-    typer.echo(f"Starting IRIDE server on http://{host}:{port} (log level: {log_level})...")
+    typer.echo(f"Starting SIN server on http://{host}:{port} (log level: {log_level})...")
     uvicorn.run("api:app", host=host, port=port, reload=reload, log_level=log_level)
 
 

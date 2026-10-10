@@ -1,7 +1,7 @@
 # Node editor agent contract
 
 This document records the smallest useful contract for translating a natural-
-language music request into an IRIDE graph. It is intentionally separate from
+language music request into a SIN graph. It is intentionally separate from
 the runtime implementation so it can later become a skill or agent resource.
 
 ## What the agent can do today

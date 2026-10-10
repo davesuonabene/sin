@@ -57,7 +57,7 @@ def place_items_in_vault(
     db: Session = Depends(database.get_db),
 ):
     try:
-        return vaults.place_items_in_vault(db, vault_id, req.item_ids, req.mode)
+        return vaults.place_items_in_vault(db, vault_id, req.item_ids, req.mode, source_context_ids=req.source_context_ids)
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

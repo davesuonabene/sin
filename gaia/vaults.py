@@ -402,6 +402,7 @@ def place_items_in_vault(
     vault_id: int,
     item_ids: list[int],
     mode: str = "copy",
+    source_context_ids: list[int] | None = None,
 ) -> dict:
     """Place items directly at the root level of a vault via copy, reference, or move."""
     if mode not in {"copy", "reference", "move"}:
@@ -417,7 +418,35 @@ def place_items_in_vault(
         raise ValueError("One or more items no longer exist")
 
     if mode == "move":
-        move_items_to_vault(db, unique_ids, target_vault.id, mode="move")
+        for item in items:
+            if item.vault_id == target_vault.id and item.parent_id is not None:
+                old_parent_id = item.parent_id
+                item.parent_id = None
+                attrs = dict(item.attributes or {})
+                if "folder" in attrs:
+                    attrs.pop("folder", None)
+                    item.attributes = attrs
+                db.query(models.ItemReference).filter(
+                    models.ItemReference.context_id == old_parent_id,
+                    models.ItemReference.to_item_id == item.id,
+                ).delete(synchronize_session=False)
+
+        if source_context_ids:
+            from . import project_service
+            for src_id in source_context_ids:
+                db.query(models.ItemReference).filter(
+                    models.ItemReference.context_id == src_id,
+                    models.ItemReference.to_item_id.in_(unique_ids),
+                ).delete(synchronize_session=False)
+                try:
+                    project_service.sync_project_manifest(db, src_id)
+                except Exception:
+                    pass
+
+        other_vault_ids = [item.id for item in items if item.vault_id != target_vault.id]
+        if other_vault_ids:
+            move_items_to_vault(db, other_vault_ids, target_vault.id, mode="move")
+        db.commit()
         return {
             "vault_id": target_vault.id,
             "mode": mode,

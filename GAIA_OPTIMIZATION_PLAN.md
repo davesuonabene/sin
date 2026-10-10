@@ -10,7 +10,7 @@ This plan covers the complete optimization space. Work is divided into:
 - **Next** — useful improvements after the first optimization pass is measured.
 - **Future** — complex, invasive, or lower-value improvements that should not delay the primary work.
 
-GAIA remains the sole library manager. SIN/IRIDE remains a read-only consumer of GAIA assets.
+GAIA remains the sole library manager. The SIN editor remains a read-only consumer of GAIA assets.
 
 ## Baseline diagnosis
 

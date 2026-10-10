@@ -1676,6 +1676,130 @@ class TestGaiaLibrary(GaiaTestCase):
         deep_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%deep.wav")).first()
         self.assertEqual(deep_item.parent_id, deep_col.id)
 
+    def test_drop_file_endpoint_stages_file_and_folder_tree(self):
+        class MockRequest:
+            def __init__(self, data: bytes):
+                self.data = data
+
+            async def stream(self):
+                yield self.data
+
+        session_id = "test-drop-session-1"
+
+        # 1. Drop a single file
+        file_content = b"fake audio content"
+        data = asyncio.run(
+            items_router.drop_import_file(
+                MockRequest(file_content),
+                session_id=session_id,
+                filename="sample.wav",
+            )
+        )
+        self.assertTrue(Path(data["staged_path"]).is_file())
+        self.assertEqual(Path(data["staged_path"]).read_bytes(), file_content)
+
+        # 2. Drop files in a folder structure
+        folder_data = asyncio.run(
+            items_router.drop_import_file(
+                MockRequest(file_content),
+                session_id=session_id,
+                filename="kick.wav",
+                relative_path="MyPack/Drums/kick.wav",
+            )
+        )
+        staged_kick = Path(folder_data["staged_path"])
+        self.assertTrue(staged_kick.is_file())
+        self.assertEqual(staged_kick.name, "kick.wav")
+        self.assertEqual(staged_kick.parent.name, "Drums")
+
+        # 3. Clean up session
+        del_resp = items_router.delete_drop_session(session_id)
+        self.assertEqual(del_resp, {"status": "ok"})
+        self.assertFalse(Path(data["staged_root"]).exists())
+
+    def test_drop_single_audio_file_can_be_previewed_and_imported(self):
+        class MockRequest:
+            def __init__(self, data: bytes):
+                self.data = data
+
+            async def stream(self):
+                yield self.data
+
+        session_id = "test-drop-session-audio"
+
+        temp_audio = self.write_audio(self.temp_path / "dropsrc", "dropped_sample.wav")
+        audio_bytes = temp_audio.read_bytes()
+
+        drop_data = asyncio.run(
+            items_router.drop_import_file(
+                MockRequest(audio_bytes),
+                session_id=session_id,
+                filename="dropped_sample.wav",
+            )
+        )
+        staged_path = drop_data["staged_path"]
+
+        # Preview and start import directly like the frontend single-file flow
+        preview = self.preview_import(staged_path)
+        self.assertEqual(preview["source_kind"], "file")
+        self.assertEqual(len(preview["entries"]), 1)
+
+        job = self.start_import(preview, transfer_mode="copy")
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["imported"], 1)
+
+        # Asset is now in vault and database
+        item = crud.get_item(self.db, job["result_items"][0]["id"])
+        self.assertEqual(item.storage_mode, "managed")
+        self.assertTrue(Path(item.absolute_path).exists())
+
+        # Cleanup staging session
+        items_router.delete_drop_session(session_id)
+
+    def test_drop_folder_tree_can_be_previewed_as_container(self):
+        class MockRequest:
+            def __init__(self, data: bytes):
+                self.data = data
+
+            async def stream(self):
+                yield self.data
+
+        session_id = "test-drop-session-folder"
+
+        temp_audio1 = self.write_audio(self.temp_path / "dropfolder", "kick.wav")
+        temp_audio2 = self.write_audio(self.temp_path / "dropfolder", "snare.wav")
+
+        drop1 = asyncio.run(
+            items_router.drop_import_file(
+                MockRequest(temp_audio1.read_bytes()),
+                session_id=session_id,
+                filename="kick.wav",
+                relative_path="MyPack/Drums/kick.wav",
+            )
+        )
+        drop2 = asyncio.run(
+            items_router.drop_import_file(
+                MockRequest(temp_audio2.read_bytes()),
+                session_id=session_id,
+                filename="snare.wav",
+                relative_path="MyPack/Drums/snare.wav",
+            )
+        )
+        staged_folder = Path(drop1["staged_root"]) / "MyPack"
+
+        # Preview inspects the folder as a container (folder inspect table flow)
+        preview = self.preview_import(staged_folder)
+        self.assertEqual(preview["source_kind"], "folder")
+        self.assertEqual(preview["file_count"], 2)
+        folder_names = [n["name"] for n in preview["nodes"] if n["kind"] == "folder"]
+        self.assertIn("MyPack", folder_names)
+        self.assertIn("Drums", folder_names)
+
+        # Cleanup
+        items_router.delete_drop_session(session_id)
+
+
 
 if __name__ == "__main__":
     unittest.main()
+

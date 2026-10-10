@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Starts IRIDE and GAIA using the project virtual environment.
+    Starts SIN and GAIA using the project virtual environment.
 
 .DESCRIPTION
-    IRIDE is compiled into static/ and served by its API on port 8000. GAIA is
+    SIN is compiled into static/ and served by its API on port 8000. GAIA is
     served on port 8001. Stable mode is the default. Pass -Reload explicitly to
-    enable Uvicorn reloaders and the IRIDE build watcher.
+    enable Uvicorn reloaders and the SIN build watcher.
 
     Child services run hidden and write logs under .runtime/. The launcher opens
     both browser pages after their health checks pass and owns every child process
@@ -63,7 +63,7 @@ function Resolve-Npm {
     }
 
     if ($null -eq $npmCommand) {
-        throw "npm is required to start the IRIDE frontend."
+        throw "npm is required to start the SIN frontend."
     }
 
     return $npmCommand.Source
@@ -114,7 +114,7 @@ function Assert-PortAvailable {
     param([Parameter(Mandatory = $true)][int]$Port)
 
     if (Test-TcpPort -Port $Port) {
-        throw "Port $Port is already in use. Close the existing IRIDE/GAIA launcher before starting another copy."
+        throw "Port $Port is already in use. Close the existing SIN/GAIA launcher before starting another copy."
     }
 }
 
@@ -216,16 +216,16 @@ try {
     Assert-PortAvailable -Port 8000
     Assert-PortAvailable -Port 8001
 
-    if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot "iride\node_modules"))) {
-        throw "IRIDE frontend dependencies are missing. Run: npm --prefix iride install"
+    if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot "editor\node_modules"))) {
+        throw "SIN frontend dependencies are missing. Run: npm --prefix editor install"
     }
 
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
 
-    Write-Host "Building IRIDE for http://127.0.0.1:8000..."
-    & $npm --silent --prefix iride run build -- --logLevel error
+    Write-Host "Building SIN for http://127.0.0.1:8000..."
+    & $npm --silent --prefix editor run build -- --logLevel error
     if ($LASTEXITCODE -ne 0) {
-        throw "IRIDE frontend build failed."
+        throw "SIN frontend build failed."
     }
 
     $mainApiArguments = @("run.py", "--no-reload", "--log-level", "info")
@@ -241,11 +241,11 @@ try {
         $gaiaArguments += "--reload"
     }
 
-    $irideProcess = Start-ManagedProcess `
-        -Name "IRIDE on http://127.0.0.1:8000" `
+    $sinProcess = Start-ManagedProcess `
+        -Name "SIN on http://127.0.0.1:8000" `
         -FilePath $python `
         -ArgumentList $mainApiArguments `
-        -LogName "iride"
+        -LogName "sin"
 
     $gaiaProcess = Start-ManagedProcess `
         -Name "GAIA Library on http://127.0.0.1:8001" `
@@ -255,19 +255,19 @@ try {
 
     if ($Reload) {
         Start-ManagedProcess `
-            -Name "IRIDE frontend build watcher" `
+            -Name "SIN frontend build watcher" `
             -FilePath $npm `
-            -ArgumentList @("--silent", "--prefix", "iride", "run", "build:watch", "--", "--logLevel", "error") `
-            -LogName "iride-build" | Out-Null
+            -ArgumentList @("--silent", "--prefix", "editor", "run", "build:watch", "--", "--logLevel", "error") `
+            -LogName "sin-build" | Out-Null
     }
 
-    Wait-ForService -Name "IRIDE" -Url "http://127.0.0.1:8000/api/health" -Process $irideProcess
+    Wait-ForService -Name "SIN" -Url "http://127.0.0.1:8000/api/health" -Process $sinProcess
     Wait-ForService -Name "GAIA" -Url "http://127.0.0.1:8001/" -Process $gaiaProcess
 
     Write-Host ""
-    Write-Host "IRIDE and GAIA are ready."
+    Write-Host "SIN and GAIA are ready."
     Write-Host "Hot reload: $Reload"
-    Write-Host "IRIDE + API:  http://127.0.0.1:8000"
+    Write-Host "SIN + API:    http://127.0.0.1:8000"
     Write-Host "GAIA Manager: http://127.0.0.1:8001"
     Write-Host "Logs:         $RuntimeRoot"
     Write-Host "Press Ctrl+C to stop both services."
@@ -295,7 +295,7 @@ try {
 } finally {
     if ($StartedProcesses.Count -gt 0) {
         Write-Host ""
-        Write-Host "Stopping IRIDE and GAIA..."
+        Write-Host "Stopping SIN and GAIA..."
         foreach ($started in $StartedProcesses) {
             Stop-ProcessTree -ProcessId $started.Process.Id
         }

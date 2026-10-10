@@ -1,6 +1,6 @@
-# IRIDE + GAIA
+# SIN + GAIA
 
-IRIDE is the audio-node workspace. GAIA is its standalone library manager: it owns importing, indexing, organizing, previewing, and relating library assets. IRIDE only reads GAIA assets for use in nodes. SIN remains the repository and audio-engine name, not a separate frontend.
+SIN is the audio-node workspace and editor. GAIA is its standalone library manager: it owns importing, indexing, organizing, previewing, and relating library assets. The SIN editor only reads GAIA assets for use in nodes. IRIDE will be a future project.
 
 ## Run
 
@@ -17,15 +17,15 @@ places the official GPL Rubber Band 4.0 executable inside `.venv`, so it stays
 isolated to this checkout. To use a system-managed executable instead, set
 `SIN_RUBBERBAND_EXECUTABLE` to its full path.
 
-IRIDE and its API share port `8000`. Build the frontend, then start the server:
+SIN and its API share port `8000`. Build the frontend, then start the server:
 
 ```bash
-npm run build:iride
+npm run build:editor
 python run.py
 ```
 
-On Windows, double-click `start-all.cmd`. It performs one IRIDE build, starts
-the two stable services, waits for both health checks, and opens IRIDE and GAIA
+On Windows, double-click `start-all.cmd`. It performs one SIN build, starts
+the two stable services, waits for both health checks, and opens SIN and GAIA
 in the default browser. Keep its launcher window open; press Ctrl+C there to
 stop both services. Service logs are written under `.runtime/`.
 
@@ -46,15 +46,15 @@ Stable mode is the default. For explicit development hot reload on Windows, use:
 ```
 
 On Linux or macOS, pass `--reload` to `start-all.sh`. Reload mode adds the
-IRIDE build watcher; stable mode has only the IRIDE and GAIA server processes.
+SIN build watcher; stable mode has only the SIN and GAIA server processes.
 
-The standalone Vite server is still available for isolated frontend debugging with `npm --prefix iride run dev:standalone`; it is not part of the normal stack.
+The standalone Vite server is still available for isolated frontend debugging with `npm --prefix editor run dev:standalone`; it is not part of the normal stack.
 
-Run the full test suite or build the IRIDE client with:
+Run the full test suite or build the SIN client with:
 
 ```bash
 npm test
-npm run build:iride
+npm run build:editor
 ```
 
 ## GAIA library layout
@@ -84,8 +84,8 @@ The `assets/`, `.gaia/`, and `gaia.db` paths are local library data and are inte
 
 ## Repository structure
 
-- `api.py`, `core/`, `run.py` — IRIDE API and DSP engine.
+- `api.py`, `core/`, `run.py` — SIN API and DSP engine.
 - `gaia/` — GAIA API, library model, asset importers, profiles, projects, and references.
-- `iride/` — TypeScript/Vite source for the node editor.
-- `gaia/static/` — GAIA manager source; `static/` — generated IRIDE build served on port 8000.
-- `tests/` and `iride/tests/` — backend and frontend tests.
+- `editor/` — TypeScript/Vite source for the SIN node editor.
+- `gaia/static/` — GAIA manager source; `static/` — generated SIN editor build served on port 8000.
+- `tests/` and `editor/tests/` — backend and frontend tests.

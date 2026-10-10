@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GAIA Library</title>
-    <link rel="stylesheet" href="/static/styles.css?v=54">
+    <link rel="stylesheet" href="/static/styles.css?v=55">
     <link rel="stylesheet" href="/static/menu-system.css?v=1">
 </head>
 <body>
@@ -165,6 +165,13 @@
                             </div>
                         </div>
                         <div id="asset-list" class="asset-list" role="list"></div>
+                        <div id="asset-drop-overlay" class="asset-drop-overlay hidden" aria-hidden="true">
+                            <div class="asset-drop-overlay-box">
+                                <span class="asset-drop-overlay-icon" aria-hidden="true">⇩</span>
+                                <div id="asset-drop-overlay-title" class="asset-drop-overlay-title">Drop files or folder here</div>
+                                <div class="asset-drop-overlay-desc">Drop a single file to import and analyze directly, or drop a folder to inspect</div>
+                            </div>
+                        </div>
                     </section>
                 </div>
             </section>
@@ -629,6 +636,6 @@
     </dialog>
 
 <script src="/static/media-editor.js?v=41"></script>
-    <script src="/static/app.js?v=78"></script>
+    <script src="/static/app.js?v=79"></script>
 </body>
 </html>

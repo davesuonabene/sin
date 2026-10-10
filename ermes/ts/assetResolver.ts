@@ -60,7 +60,7 @@ export function normalizeAssetRefreshMode(value: unknown): AssetRefreshMode {
         case 'fixed':
             return 'off';
         default:
-            return 'parent';
+            return 'global';
     }
 }
 

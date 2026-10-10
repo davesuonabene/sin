@@ -2628,7 +2628,7 @@ function addChildNode(
         section_points: nodeType === "arrangement" ? [] : undefined,
         section_probability: nodeType === "arrangement" ? [1.0] : undefined,
         section_sample_start: nodeType === "arrangement" ? [0.0] : undefined,
-        section_quant: nodeType === "arrangement" ? ["none"] : undefined,
+        section_quant: nodeType === "arrangement" ? ["auto"] : undefined,
         section_quant_anchor: nodeType === "arrangement" ? ["start"] : undefined,
         parentId: parentId,
         children: []

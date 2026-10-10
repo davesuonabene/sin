@@ -1,6 +1,6 @@
 # Canonical graph schema
 
-IRIDE stores workspaces in LiteGraph's runtime format under `saves/`. The
+The SIN editor stores workspaces in LiteGraph's runtime format under `saves/`. The
 canonical graph schema is a smaller authoring format for generating or
 modifying those workspaces safely.
 

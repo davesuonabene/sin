@@ -58,6 +58,8 @@ class AudioNodeModel(BaseModel):
     stretch_mode: Optional[str] = "time_stretch"
     stretch_factor: float = 1.0
     stretch_algorithm: Optional[str] = "rubberband"
+    key_match_mode: Optional[str] = "off"
+    key_match_algorithm: Optional[str] = "nearest"
     chain: List[FxModuleModel] = []
     modulators: Optional[List[Dict[str, Any]]] = None
     children: List['AudioNodeModel'] = []

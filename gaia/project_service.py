@@ -420,7 +420,14 @@ def _top_level_selection(items: list[models.Item]) -> list[models.Item]:
     return result
 
 
-def place_items(db: Session, target_id: int, item_ids: list[int], mode: str, folder: str | None = None) -> dict:
+def place_items(
+    db: Session,
+    target_id: int,
+    item_ids: list[int],
+    mode: str,
+    folder: str | None = None,
+    source_context_ids: list[int] | None = None,
+) -> dict:
     """Place library items in a folder by physical move or generic link."""
     target = db.query(models.FolderItem).filter(models.FolderItem.id == target_id).first()
     if not target:
@@ -782,6 +789,18 @@ def place_items(db: Session, target_id: int, item_ids: list[int], mode: str, fol
                     item.attributes = attrs
 
         target.content_count = _count_folder_contents(db, target.id, context_project_id, folder_label)
+
+        if source_context_ids:
+            for src_id in source_context_ids:
+                if src_id != target.id and src_id != context_project_id:
+                    db.query(models.ItemReference).filter(
+                        models.ItemReference.context_id == src_id,
+                        models.ItemReference.to_item_id.in_(unique_ids),
+                    ).delete(synchronize_session=False)
+                    try:
+                        sync_project_manifest(db, src_id)
+                    except Exception:
+                        pass
 
         db.flush()
         if operations:

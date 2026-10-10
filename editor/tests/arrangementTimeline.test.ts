@@ -58,3 +58,40 @@ test('draws an arrangement source after its attached pool resolves a duration', 
         (globalThis as any).window = previousWindow;
     }
 });
+
+test('resolves sequence duration in bars correctly (16 steps * 0.25 beat = 1 bar)', () => {
+    const previousWindow = (globalThis as any).window;
+    const sequenceNode = {
+        id: 10,
+        type: 'Audio/Sequence',
+        title: 'Sequence Pattern',
+        properties: {
+            node_name: '808 Sequence',
+            sequence: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+            step_length: 0.25
+        }
+    };
+    const arrangement = {
+        type: 'Audio/Arrangement',
+        inputs: [{ link: 25 }],
+        properties: { target_bpm: 120 }
+    };
+    const nodes = new Map([[10, sequenceNode]]);
+
+    try {
+        (globalThis as any).window = {
+            editorGraph: {
+                links: { 25: { origin_id: 10 } },
+                getNodeById: (id: number) => nodes.get(id),
+                extra: { global_parameters: { beats_per_bar: 4 } }
+            }
+        };
+
+        const source = resolveArrangementSourceVisual(arrangement);
+        assert.equal(source?.label, '808 Sequence');
+        assert.equal(source?.kind, 'sequence');
+        assert.equal(source?.bars, 1);
+    } finally {
+        (globalThis as any).window = previousWindow;
+    }
+});

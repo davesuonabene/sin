@@ -59,7 +59,10 @@ export function resolveArrangementSourceVisual(node: SourceNode): ArrangementSou
     if (source.type === 'Audio/Sequence') {
         const length = Array.isArray(properties.sequence) ? properties.sequence.length : 0;
         const stepLength = numberOrNull(properties.step_length) ?? 0;
-        const bars = length * stepLength;
+        const beatsPerBar = numberOrNull(properties.beats_per_bar)
+            ?? numberOrNull(graph?.extra?.global_parameters?.beats_per_bar)
+            ?? 4;
+        const bars = beatsPerBar > 0 ? (length * stepLength) / beatsPerBar : 0;
         return bars > 0 ? { bars, label, kind: 'sequence' } : null;
     }
 
@@ -97,7 +100,18 @@ export function resolveArrangementSourceVisual(node: SourceNode): ArrangementSou
     let timeRate = stretchFactor;
 
     if (sampleType !== 'one_shot' && sampleType !== 'oneshot' && stretchMode !== 'off') {
-        timeRate *= targetBpm / Math.max(0.0001, originalBpm);
+        const directRate = targetBpm / Math.max(0.0001, originalBpm);
+        let bestRate = directRate;
+        let bestDist = Math.abs(Math.log2(Math.max(0.0001, bestRate)));
+        for (const k of [2.0, 0.5]) {
+            const candidate = (targetBpm * k) / Math.max(0.0001, originalBpm);
+            const dist = Math.abs(Math.log2(Math.max(0.0001, candidate)));
+            if (dist < bestDist) {
+                bestRate = candidate;
+                bestDist = dist;
+            }
+        }
+        timeRate *= bestRate;
     }
     if (stretchMode === 'pitch_shift' || stretchMode === 'repitch' || stretchMode === 'varispeed') {
         const semitones = (numberOrNull(properties.transpose) ?? 0) + (numberOrNull(properties.cents) ?? 0) / 100;

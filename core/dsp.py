@@ -21,6 +21,8 @@ def process_sample_transform(
     stretch_algorithm: str = StretchAlgorithm.RUBBERBAND.value,
     sample_type: str = "loop",
     fast_preview: bool = False,
+    key_match_mode: str = "off",
+    key_match_algorithm: str = "nearest",
 ) -> np.ndarray:
     """
     Applies pitch transposition and time-stretching transformations to audio array.
@@ -32,6 +34,8 @@ def process_sample_transform(
     - stretch_factor: speed/duration multiplier (e.g. 0.5 = half speed / double duration, 2.0 = 2x speed)
     - stretch_algorithm: a Rubber Band material preset, or 'librosa' for a legacy saved node
     - sample_type: 'loop' or 'one_shot' / 'oneshot'
+    - key_match_mode: 'off', 'follow', or 'lead'
+    - key_match_algorithm: 'nearest' / 'auto', 'higher' / 'up', 'lower' / 'down', or 'off' / 'direct'
     """
     transform_started_at = perf_counter()
     input_frame_count = int(audio_data.shape[-1])
@@ -52,7 +56,41 @@ def process_sample_transform(
         orig = float(original_bpm or 120.0)
         tgt = float(target_bpm or 120.0)
         if orig > 0 and tgt > 0 and orig != tgt:
-            bpm_rate = tgt / orig
+            algo = str(key_match_algorithm or "nearest").lower().strip()
+            match_mode = str(key_match_mode or "off").lower().strip()
+            direct_rate = tgt / orig
+            if match_mode not in ("follow", "lead") or algo in ("off", "direct"):
+                bpm_rate = direct_rate
+            elif abs(np.log2(direct_rate)) < 0.35:
+                # Direct rate is already within natural tempo range (within ~25%)
+                bpm_rate = direct_rate
+            else:
+                # Octave candidate multipliers:
+                # k = 1.0: direct target tempo
+                # k = 2.0: double tempo (faster / shift upwards)
+                # k = 0.5: half tempo (slower / shift downwards)
+                candidates = [
+                    (direct_rate, 1.0),
+                    (direct_rate * 2.0, 2.0),
+                    (direct_rate * 0.5, 0.5),
+                ]
+                valid_candidates = [(r, k) for (r, k) in candidates if r > 0]
+                if algo in ("higher", "up"):
+                    # Prefer shifting upward (rate >= 1.0)
+                    up_candidates = [(r, k) for (r, k) in valid_candidates if r >= 1.0]
+                    if up_candidates:
+                        bpm_rate = min(up_candidates, key=lambda c: abs(np.log2(c[0])))[0]
+                    else:
+                        bpm_rate = max(valid_candidates, key=lambda c: c[0])[0]
+                elif algo in ("lower", "down"):
+                    # Prefer shifting downward (rate <= 1.0)
+                    down_candidates = [(r, k) for (r, k) in valid_candidates if r <= 1.0]
+                    if down_candidates:
+                        bpm_rate = min(down_candidates, key=lambda c: abs(np.log2(c[0])))[0]
+                    else:
+                        bpm_rate = min(valid_candidates, key=lambda c: c[0])[0]
+                else:  # "nearest" / "auto"
+                    bpm_rate = min(valid_candidates, key=lambda c: abs(np.log2(c[0])))[0]
 
     total_time_rate = bpm_rate * factor
 

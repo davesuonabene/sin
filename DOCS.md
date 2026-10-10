@@ -1,6 +1,6 @@
 # SIN Architecture & Technical Documentation
 
-This document maintains high-level structural notes on how data, classes, execution pipelines, and components operate within the SIN platform. It outlines the 3-component architecture (**IRIDE**, **ERMES**, and **GAIA**) and serves as the authoritative blueprint for development, refactoring, and component integration.
+This document maintains high-level structural notes on how data, classes, execution pipelines, and components operate within the SIN platform. It outlines the architecture of **SIN** (the node editor workspace), **ERMES** (serialization engine), and **GAIA** (asset manager & backend). Note: IRIDE will be a future project.
 
 ---
 
@@ -10,7 +10,7 @@ The SIN platform is divided into three distinct, specialized subsystem layers:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        IRIDE (Node Frontend)                           │
+│                         SIN (Node Editor Frontend)                     │
 │   Canvas UI, BaseNode Polymorphism, Inspector Panels & UI Widgets      │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ Visual Graph State
@@ -34,7 +34,7 @@ The SIN platform is divided into three distinct, specialized subsystem layers:
 
 | Subsystem | Folder / Location | Responsibilities | Key Modules |
 | :--- | :--- | :--- | :--- |
-| **IRIDE** | `iride/` | Visual graph editing, drag-and-drop links, LiteGraph canvas rendering, polymorphic `BaseNode` classes, parameter field schemas, inspector UI controls. | `nodes/*`, `fields/*`, `ui/*`, `main.ts` |
+| **SIN Editor** | `editor/` | Visual graph editing, drag-and-drop links, LiteGraph canvas rendering, polymorphic `BaseNode` classes, parameter field schemas, inspector UI controls. | `nodes/*`, `fields/*`, `ui/*`, `main.ts` |
 | **ERMES** | `ermes/` | Interop & serialization engine. Pre-serialization node subtree traversal (`visit`), random seed generation, dynamic asset pool resolution, Pydantic schemas, payload compilation. | `ermes/ts/*` (TS engine), `ermes/py/*` (Python models) |
 | **GAIA** | `gaia/` & `core/` | Python backend platform housing **GAIA Asset Library Vaults** (asset indexing, SQLite database, metadata extraction) and **GAIA Audio DSP Engine** (synthesis renderers, FX chains, pitch shifting, `AudioObject` trees, WAV rendering). | `gaia/*` (Vaults/DB), `core/*` (DSP Engine), `api.py` |
 
@@ -63,7 +63,7 @@ sin/
 │       ├── schemas.py        # Ermes AudioNodeModel & FxModuleModel Pydantic schemas
 │       └── validator.py      # Backend payload validator & graph constructor
 │
-└── iride/                    # [IRIDE Node Frontend]
+└── editor/                   # [SIN Node Editor Frontend]
     ├── src/
     │   ├── nodes/            # BaseNode hierarchy & polymorphic custom nodes
     │   ├── fields/           # FieldSchema & NodePanelSchema declarations
@@ -75,31 +75,31 @@ sin/
 
 ---
 
-## 3. Node Editor & Subtree Traversal (IRIDE ➔ ERMES)
+## 3. Node Editor & Subtree Traversal (SIN ➔ ERMES)
 
-Before graph data is transmitted to the backend for preview or DSP rendering, **IRIDE** delegates state processing to **ERMES**.
+Before graph data is transmitted to the backend for preview or DSP rendering, **SIN** delegates state processing to **ERMES**.
 
 ### 3.1 Core Classes & Roles
 
-#### **Frontend Canvas & Nodes (`iride/src/nodes/`)**
-* **[`BaseNode`](file:///c:/web-projects/sin/iride/src/nodes/BaseNode.ts)**: Abstract base class extending `LiteGraph.LGraphNode`.
+#### **Frontend Canvas & Nodes (`editor/src/nodes/`)**
+* **[`BaseNode`](file:///c:/web-projects/sin/editor/src/nodes/BaseNode.ts)**: Abstract base class extending `LiteGraph.LGraphNode`.
   * Declares static metadata defaults (`defaultColor`, `defaultIcon`, `badgeLabel`, `nodeType`, `defaultTab`, `tabs`) and dynamic fallback getters (`nodeColor`, `nodeIcon`, `badgeLabel`, `nodeType`, `propertiesTabs`, `defaultPropertiesTab`).
   * Encapsulates square canvas node rendering (`drawCanvas()`) with sub-methods (`drawSelectionRing()`, `drawBody()`, `drawIcon()`, `drawSlots()`, `drawBadges()`, `drawNameBadge()`).
-  * Integrates canvas action buttons ([`CanvasButton`](file:///c:/web-projects/sin/iride/src/ui/CanvasButton.ts)).
+  * Integrates canvas action buttons ([`CanvasButton`](file:///c:/web-projects/sin/editor/src/ui/CanvasButton.ts)).
 * **Concrete Node Implementations**:
-  * **[`SampleNode`](file:///c:/web-projects/sin/iride/src/nodes/SampleNode.ts)** (`Audio/Sample`): Audio sample playback unit.
-  * **[`SequenceNode`](file:///c:/web-projects/sin/iride/src/nodes/SequenceNode.ts)** (`Audio/Sequence`): Step sequencer pattern generator.
-  * **[`TrackNode`](file:///c:/web-projects/sin/iride/src/nodes/TrackNode.ts)** (`Audio/Track`): Track mixing & output routing node.
-  * **[`ArrangementNode`](file:///c:/web-projects/sin/iride/src/nodes/ArrangementNode.ts)** (`Audio/Arrangement`): Timeline arrangement & section quantizer.
-  * **[`AssetFilterNode`](file:///c:/web-projects/sin/iride/src/nodes/AssetFilterNode.ts)** (`Audio/AssetFilter`): Asset Pool filter modifier.
-  * **[`DisabledNode`](file:///c:/web-projects/sin/iride/src/nodes/DisabledNode.ts)** (`Audio/Disabled`): Bypass state indicator node.
+  * **[`SampleNode`](file:///c:/web-projects/sin/editor/src/nodes/SampleNode.ts)** (`Audio/Sample`): Audio sample playback unit.
+  * **[`SequenceNode`](file:///c:/web-projects/sin/editor/src/nodes/SequenceNode.ts)** (`Audio/Sequence`): Step sequencer pattern generator.
+  * **[`TrackNode`](file:///c:/web-projects/sin/editor/src/nodes/TrackNode.ts)** (`Audio/Track`): Track mixing & output routing node.
+  * **[`ArrangementNode`](file:///c:/web-projects/sin/editor/src/nodes/ArrangementNode.ts)** (`Audio/Arrangement`): Timeline arrangement & section quantizer.
+  * **[`AssetFilterNode`](file:///c:/web-projects/sin/editor/src/nodes/AssetFilterNode.ts)** (`Audio/AssetFilter`): Asset Pool filter modifier.
+  * **[`DisabledNode`](file:///c:/web-projects/sin/editor/src/nodes/DisabledNode.ts)** (`Audio/Disabled`): Bypass state indicator node.
 
-#### **UI Controls, Panel Schemas & Component Renderers (`iride/src/fields/` & `iride/src/ui/`)**
-* **[`FieldSchema`](file:///c:/web-projects/sin/iride/src/fields/FieldSchema.ts)**: Declarative parameter schema interface (`key`, `label`, `type`, `default`, `min`, `max`, `step`, `unit`, `options`).
-* **[`NodePanelSchema`](file:///c:/web-projects/sin/iride/src/fields/NodePanelSchema.ts)**: Declarative inspector layout blueprint interface.
-* **[`SectionRendererFactory`](file:///c:/web-projects/sin/iride/src/ui/SectionRendererFactory.ts)**: Reusable UI component builder.
-* **[`WidgetFactory`](file:///c:/web-projects/sin/iride/src/ui/WidgetFactory.ts)**: Centralized field widget builder service (`.td-param-row`).
-* **[`PropertiesWindow`](file:///c:/web-projects/sin/iride/src/ui/PropertiesWindow.ts)**: Inspector host resolving `node.getPanelSchema()`.
+#### **UI Controls, Panel Schemas & Component Renderers (`editor/src/fields/` & `editor/src/ui/`)**
+* **[`FieldSchema`](file:///c:/web-projects/sin/editor/src/fields/FieldSchema.ts)**: Declarative parameter schema interface (`key`, `label`, `type`, `default`, `min`, `max`, `step`, `unit`, `options`).
+* **[`NodePanelSchema`](file:///c:/web-projects/sin/editor/src/fields/NodePanelSchema.ts)**: Declarative inspector layout blueprint interface.
+* **[`SectionRendererFactory`](file:///c:/web-projects/sin/editor/src/ui/SectionRendererFactory.ts)**: Reusable UI component builder.
+* **[`WidgetFactory`](file:///c:/web-projects/sin/editor/src/ui/WidgetFactory.ts)**: Centralized field widget builder service (`.td-param-row`).
+* **[`PropertiesWindow`](file:///c:/web-projects/sin/editor/src/ui/PropertiesWindow.ts)**: Inspector host resolving `node.getPanelSchema()`.
 
 ---
 
@@ -172,6 +172,6 @@ Each project keeps one `files/edit/current.json` document. It carries the editor
 ## 6. Architectural Compliance Rules
 
 As outlined in `AGENTS.md`:
-1. **GAIA Library Ownership**: GAIA is the sole library-management application. IRIDE is a read-only consumer of GAIA assets (browsing, previewing, and using assets in nodes).
-2. **Polymorphic Node Architecture**: All node rendering, styling, badges, default properties, and panel schemas are encapsulated within `BaseNode` subclasses in `nodes/`. External `if (node.type === ...)` conditionals are strictly prohibited.
+1. **GAIA Library Ownership**: GAIA is the sole library-management application. The SIN editor is a read-only consumer of GAIA assets (browsing, previewing, and using assets in nodes).
+2. **Polymorphic Node Architecture**: All node rendering, styling, badges, default properties, and panel schemas are encapsulated within `BaseNode` subclasses in `editor/src/nodes/`. External `if (node.type === ...)` conditionals are strictly prohibited.
 3. **Declarative Fields & Widget Factory**: Node parameters must be declared via `FieldSchema[]` arrays and rendered via `WidgetFactory.createRow()`.

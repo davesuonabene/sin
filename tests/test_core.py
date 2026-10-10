@@ -9,7 +9,7 @@ import numpy as np
 import soundfile as sf
 from fastapi import HTTPException
 from starlette.requests import Request
-import api as iride_api
+import api as sin_api
 
 from api import (
     AudioNodeModel,
@@ -334,6 +334,28 @@ class TestGraphRendering(AudioFixtureTestCase):
         arrangement.render(system)
         self.assertEqual(parent_pool.render_count, 4)
 
+    def test_sequence_loops_across_total_bars(self):
+        system = System(bpm=60.0, sample_rate=100)
+        impulse = AudioObject(
+            audio_data=np.ones(10, dtype=np.float32),
+            sample_type="one_shot",
+            stretch_mode="off",
+        )
+        seq = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        looped_sequence = SequenceObject(
+            sequence=seq,
+            step_length=0.25,
+            total_bars=4.0,
+            play_mode="trigger",
+        )
+        looped_sequence.add_child(impulse, 0.0)
+        out = looped_sequence.render(system)
+        self.assertEqual(out.shape[-1], 1600)
+        self.assertEqual(out[0], 1.0)
+        self.assertEqual(out[400], 1.0)
+        self.assertEqual(out[800], 1.0)
+        self.assertEqual(out[1200], 1.0)
+
         pool = ItemPoolObject(
             selected_items=[{"id": index, "absolute_path": f"{name}.wav"}
                             for index, name in enumerate(("one", "two", "three"), start=1)],
@@ -356,7 +378,7 @@ class TestGraphRendering(AudioFixtureTestCase):
             [item["absolute_path"] for item in explicit_pool.current_pool],
             ["kick-one.wav", "kick-two.wav"],
         )
-        with patch.object(iride_api, "get_library", return_value={
+        with patch.object(sin_api, "get_library", return_value={
             "files": [{
                 "id": 352,
                 "absolute_path": "gaia-kick.wav",
@@ -376,7 +398,7 @@ class TestGraphRendering(AudioFixtureTestCase):
                     selected_items=[{"id": 999999, "absolute_path": "stale-wrong-file.wav"}],
                     playbackMode="Sequential",
                 ))
-        with patch.object(iride_api, "get_library", return_value={
+        with patch.object(sin_api, "get_library", return_value={
             "files": [{"id": 41, "absolute_path": "loop.wav", "bpm": 140.0}]
         }):
             resolved = resolve_pool(
@@ -389,7 +411,7 @@ class TestGraphRendering(AudioFixtureTestCase):
 
         # The editor has already refreshed these exact IDs in one batch. Pool
         # selection must not rebuild the full library or decode audio metadata.
-        with patch.object(iride_api, "get_library", side_effect=AssertionError("full library loaded")):
+        with patch.object(sin_api, "get_library", side_effect=AssertionError("full library loaded")):
             resolved_snapshot = resolve_pool(PoolResolveRequest(
                 selected_items=[{"id": 41, "absolute_path": "already-resolved.wav"}],
                 playbackMode="Sequential",
@@ -467,6 +489,21 @@ class TestGraphRendering(AudioFixtureTestCase):
         legacy_disabled = ArrangementObject(section_enabled=[False])
         self.assertEqual(legacy_disabled.get_section_probability(0), 0.0)
 
+        # An arrangement with default quant fills all bars and sections with repetitions
+        default_arrangement = ArrangementObject(total_bars=4.0)
+        default_arrangement.add_child(AudioObject(
+            audio_data=np.ones(100, dtype=np.float32),
+            sample_type="loop",
+            stretch_mode="off",
+            total_bars=1.0,
+        ), 0.0)
+        full_output = default_arrangement.render(system)
+        self.assertEqual(full_output.shape[-1], 800)
+        self.assertTrue(np.all(full_output[0:100] == 1.0))
+        self.assertTrue(np.all(full_output[200:300] == 1.0))
+        self.assertTrue(np.all(full_output[400:500] == 1.0))
+        self.assertTrue(np.all(full_output[600:700] == 1.0))
+
 
 class TestApiAudioFlow(AudioFixtureTestCase):
     @classmethod
@@ -541,12 +578,12 @@ class TestApiAudioFlow(AudioFixtureTestCase):
 
 class TestCurrentStagePersistence(unittest.TestCase):
     def test_current_stage_is_replaced_atomically_and_can_be_loaded(self):
-        original_saves_dir = iride_api.SAVES_DIR
-        original_stage_path = iride_api.STAGE_SAVE_PATH
+        original_saves_dir = sin_api.SAVES_DIR
+        original_stage_path = sin_api.STAGE_SAVE_PATH
         with tempfile.TemporaryDirectory(prefix="sin-current-stage-") as directory:
             stage_dir = Path(directory) / "saves"
-            iride_api.SAVES_DIR = stage_dir
-            iride_api.STAGE_SAVE_PATH = stage_dir / ".current-stage.json"
+            sin_api.SAVES_DIR = stage_dir
+            sin_api.STAGE_SAVE_PATH = stage_dir / ".current-stage.json"
             try:
                 first_stage = {"version": 2, "graph": {"nodes": [], "links": []}}
                 second_stage = {"version": 2, "graph": {"nodes": [{"id": 7}], "links": []}}
@@ -558,8 +595,8 @@ class TestCurrentStagePersistence(unittest.TestCase):
                 self.assertEqual(load_current_stage()["stage"], second_stage)
                 self.assertFalse((stage_dir / ".current-stage.tmp").exists())
             finally:
-                iride_api.SAVES_DIR = original_saves_dir
-                iride_api.STAGE_SAVE_PATH = original_stage_path
+                sin_api.SAVES_DIR = original_saves_dir
+                sin_api.STAGE_SAVE_PATH = original_stage_path
 
 
 if __name__ == "__main__":

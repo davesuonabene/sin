@@ -39,7 +39,9 @@ class AudioObject(BaseObject):
         cents: float = 0.0,
         stretch_mode: str = "time_stretch",
         stretch_factor: float = 1.0,
-        stretch_algorithm: str = "rubberband"
+        stretch_algorithm: str = "rubberband",
+        key_match_mode: str = "off",
+        key_match_algorithm: str = "nearest"
     ) -> None:
         super().__init__(name=name, data=data)
         self.audio_data = audio_data if audio_data is not None else None
@@ -63,6 +65,8 @@ class AudioObject(BaseObject):
         self.stretch_mode: str = str(stretch_mode or "time_stretch")
         self.stretch_factor: float = float(stretch_factor or 1.0)
         self.stretch_algorithm: str = str(stretch_algorithm or "rubberband")
+        self.key_match_mode: str = str(key_match_mode or "off").lower().strip()
+        self.key_match_algorithm: str = str(key_match_algorithm or "nearest").lower().strip()
 
         # Children stored as list of (start_beat: float, child_object: AudioObject) tuples
         self.children: List[Tuple[float, AudioObject]] = []
@@ -159,7 +163,16 @@ class AudioObject(BaseObject):
                 stretch_algorithm=self.stretch_algorithm,
                 sample_type=self.sample_type,
                 fast_preview=system is not None and system.render_mode == "preview",
+                key_match_algorithm=self.key_match_algorithm,
             )
+
+            loop_sample = kwargs.get("loop", True)
+            if loop_sample and self.sample_type == "loop" and self.total_bars is not None and self.total_bars > 0 and system is not None:
+                target_samples = system.beat_to_samples(self.total_bars * 4.0)
+                if data_to_render.shape[-1] > 0 and data_to_render.shape[-1] < target_samples:
+                    reps = int(np.ceil(target_samples / data_to_render.shape[-1]))
+                    tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
+                    data_to_render = tiled[..., :target_samples]
 
             return self.apply_chain(data_to_render, system)
 
@@ -270,7 +283,10 @@ class SampleObject(AudioObject):
         cents: float = 0.0,
         stretch_mode: str = "time_stretch",
         stretch_factor: float = 1.0,
-        stretch_algorithm: str = "rubberband"
+        stretch_algorithm: str = "rubberband",
+        total_bars: Optional[float] = None,
+        key_match_mode: str = "off",
+        key_match_algorithm: str = "nearest"
     ) -> None:
         super().__init__(
             name=name,
@@ -287,7 +303,10 @@ class SampleObject(AudioObject):
             cents=cents,
             stretch_mode=stretch_mode,
             stretch_factor=stretch_factor,
-            stretch_algorithm=stretch_algorithm
+            stretch_algorithm=stretch_algorithm,
+            total_bars=total_bars,
+            key_match_mode=key_match_mode,
+            key_match_algorithm=key_match_algorithm
         )
 
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
@@ -335,11 +354,21 @@ class SampleObject(AudioObject):
                 stretch_algorithm=self.stretch_algorithm,
                 sample_type=self.sample_type,
                 fast_preview=system is not None and system.render_mode == "preview",
+                key_match_mode=self.key_match_mode,
+                key_match_algorithm=self.key_match_algorithm,
             )
         except Exception as e:
             import logging
             logging.getLogger("beat_generator.core").error(f"Error transforming sample '{self.filepath}': {e}")
             return np.zeros(0, dtype=np.float32)
+
+        loop_sample = kwargs.get("loop", True)
+        if loop_sample and self.sample_type == "loop" and self.total_bars is not None and self.total_bars > 0 and system is not None:
+            target_samples = system.beat_to_samples(self.total_bars * 4.0)
+            if data_to_render.shape[-1] > 0 and data_to_render.shape[-1] < target_samples:
+                reps = int(np.ceil(target_samples / data_to_render.shape[-1]))
+                tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
+                data_to_render = tiled[..., :target_samples]
 
         return self.apply_chain(data_to_render, system)
 
@@ -372,7 +401,11 @@ class SequenceObject(AudioObject):
         cents: float = 0.0,
         stretch_mode: str = "time_stretch",
         stretch_factor: float = 1.0,
-        stretch_algorithm: str = "rubberband"
+        stretch_algorithm: str = "rubberband",
+        total_bars: Optional[float] = None,
+        loop: bool = True,
+        key_match_mode: str = "off",
+        key_match_algorithm: str = "nearest"
     ) -> None:
         super().__init__(
             name=name,
@@ -389,12 +422,16 @@ class SequenceObject(AudioObject):
             cents=cents,
             stretch_mode=stretch_mode,
             stretch_factor=stretch_factor,
-            stretch_algorithm=stretch_algorithm
+            stretch_algorithm=stretch_algorithm,
+            total_bars=total_bars,
+            key_match_mode=key_match_mode,
+            key_match_algorithm=key_match_algorithm
         )
         self.sequence: List[int] = sequence if sequence is not None else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
         self.step_length: float = float(step_length)
         self.step_parameters: List[Dict[str, Any]] = step_parameters or []
         self.play_mode: str = str(play_mode).lower() if play_mode else "gate"
+        self.loop: bool = bool(loop)
         try:
             parsed_fade_ms = float(fade_ms)
         except (TypeError, ValueError):
@@ -487,53 +524,65 @@ class SequenceObject(AudioObject):
         pattern_duration_beats = len(self.sequence) * self.step_length
         pattern_samples = system.beat_to_samples(pattern_duration_beats)
 
-        rendered_steps = []
-        max_end_sample = pattern_samples
-
-        if self.seed_mode == "moving":
-            seed_str = f"{self.seed}_{iteration}"
+        loop_pattern = kwargs.get("loop", True) and getattr(self, "loop", True)
+        if loop_pattern and self.total_bars is not None and self.total_bars > 0 and pattern_duration_beats > 0:
+            total_duration_beats = self.total_bars * 4.0
+            num_repeats = max(1, int(np.ceil(total_duration_beats / pattern_duration_beats)))
+            timeline_samples = system.beat_to_samples(total_duration_beats)
+            max_end_sample = timeline_samples
         else:
-            seed_str = str(self.seed)
-        eff_seed = int(hashlib.md5(seed_str.encode()).hexdigest(), 16) & 0xFFFFFFFF
-        rng = np.random.default_rng(eff_seed)
-        for step_idx, step_val in enumerate(self.sequence):
-            if step_val == 1:
-                params = self._step_parameters(step_idx)
-                if rng.random() * 100.0 >= params["probability"]:
-                    continue
+            num_repeats = 1
+            timeline_samples = None
+            max_end_sample = pattern_samples
 
-                repeats = params["subdivisions"]
-                base_beat = (step_idx + params["offset"]) * self.step_length
-                # Quantize once at the parent step boundaries, then partition that
-                # exact integer sample range. Converting every fractional beat and
-                # slot independently can round them differently and drift triggers
-                # away from equal positions inside the step.
-                step_start_sample = system.beat_to_samples(base_beat)
-                step_end_sample = system.beat_to_samples(base_beat + self.step_length)
-                step_samples = max(repeats, step_end_sample - step_start_sample)
-                subdivision_boundaries = [
-                    step_start_sample + round(step_samples * idx / repeats)
-                    for idx in range(repeats + 1)
-                ]
-                for subdivision_idx in range(repeats):
-                    start_sample = subdivision_boundaries[subdivision_idx]
-                    slot_end_sample = subdivision_boundaries[subdivision_idx + 1]
-                    slot_samples = max(1, slot_end_sample - start_sample)
-                    audio = first_child.render(system, **kwargs) if is_dynamic else cached_child_audio
-                    audio = audio * params["velocity"]
+        rendered_steps = []
 
-                    if start_sample < 0:
-                        skipped_samples = -start_sample
-                        audio = audio[..., skipped_samples:]
-                        start_sample = 0
+        for rep in range(num_repeats):
+            rep_beat_offset = rep * pattern_duration_beats
+            if timeline_samples is not None and system.beat_to_samples(rep_beat_offset) >= timeline_samples:
+                break
 
-                    if self.play_mode == "gate":
-                        audio = audio[..., :slot_samples]
+            if self.seed_mode == "moving":
+                seed_str = f"{self.seed}_{iteration}_{rep}"
+            else:
+                seed_str = str(self.seed)
+            eff_seed = int(hashlib.md5(seed_str.encode()).hexdigest(), 16) & 0xFFFFFFFF
+            rng = np.random.default_rng(eff_seed)
 
-                    if audio.shape[-1] == 0:
+            for step_idx, step_val in enumerate(self.sequence):
+                if step_val == 1:
+                    params = self._step_parameters(step_idx)
+                    if rng.random() * 100.0 >= params["probability"]:
                         continue
 
-                    rendered_steps.append((start_sample, audio))
+                    repeats = params["subdivisions"]
+                    base_beat = rep_beat_offset + (step_idx + params["offset"]) * self.step_length
+                    step_start_sample = system.beat_to_samples(base_beat)
+                    step_end_sample = system.beat_to_samples(base_beat + self.step_length)
+                    step_samples = max(repeats, step_end_sample - step_start_sample)
+                    subdivision_boundaries = [
+                        step_start_sample + round(step_samples * idx / repeats)
+                        for idx in range(repeats + 1)
+                    ]
+                    for subdivision_idx in range(repeats):
+                        start_sample = subdivision_boundaries[subdivision_idx]
+                        slot_end_sample = subdivision_boundaries[subdivision_idx + 1]
+                        slot_samples = max(1, slot_end_sample - start_sample)
+                        audio = first_child.render(system, **kwargs) if is_dynamic else cached_child_audio
+                        audio = audio * params["velocity"]
+
+                        if start_sample < 0:
+                            skipped_samples = -start_sample
+                            audio = audio[..., skipped_samples:]
+                            start_sample = 0
+
+                        if self.play_mode == "gate":
+                            audio = audio[..., :slot_samples]
+
+                        if audio.shape[-1] == 0:
+                            continue
+
+                        rendered_steps.append((start_sample, audio))
 
         # Monophonic voice cutting: a subsequent trigger truncates any playing sample tail
         voice_cut_steps = []
@@ -575,6 +624,13 @@ class SequenceObject(AudioObject):
             end_sample = start_sample + audio.shape[-1]
             master_buffer[..., start_sample:end_sample] += audio
 
+        if timeline_samples is not None:
+            fitted_buffer = np.zeros((*master_buffer.shape[:-1], timeline_samples), dtype=np.float32)
+            copy_samples = min(timeline_samples, master_buffer.shape[-1])
+            if copy_samples > 0:
+                fitted_buffer[..., :copy_samples] = master_buffer[..., :copy_samples]
+            master_buffer = fitted_buffer
+
         return self.apply_chain(master_buffer, system)
 
 
@@ -601,7 +657,10 @@ class ItemPoolObject(AudioObject):
         cents: float = 0.0,
         stretch_mode: str = "time_stretch",
         stretch_factor: float = 1.0,
-        stretch_algorithm: str = "rubberband"
+        stretch_algorithm: str = "rubberband",
+        total_bars: Optional[float] = None,
+        key_match_mode: str = "off",
+        key_match_algorithm: str = "nearest"
     ) -> None:
         super().__init__(
             name=name,
@@ -617,7 +676,10 @@ class ItemPoolObject(AudioObject):
             cents=cents,
             stretch_mode=stretch_mode,
             stretch_factor=stretch_factor,
-            stretch_algorithm=stretch_algorithm
+            stretch_algorithm=stretch_algorithm,
+            total_bars=total_bars,
+            key_match_mode=key_match_mode,
+            key_match_algorithm=key_match_algorithm
         )
         self.selected_items = selected_items or []
         self.playback_mode = playback_mode or "Random"
@@ -642,6 +704,23 @@ class ItemPoolObject(AudioObject):
             if item.get("id") is None:
                 raise ValueError(f"Asset Pool item {index} is missing its GAIA id")
             filepath = item.get("absolute_path") or item.get("filepath") or item.get("path")
+            if not filepath and item.get("id") is not None:
+                try:
+                    import sqlite3
+                    import json
+                    conn = sqlite3.connect("gaia.db")
+                    c = conn.cursor()
+                    c.execute("SELECT absolute_path, metadata_json FROM items WHERE id = ?", (int(item["id"]),))
+                    row = c.fetchone()
+                    conn.close()
+                    if row and row[0]:
+                        filepath = row[0]
+                        if not item.get("bpm") and row[1]:
+                            meta = json.loads(row[1]) if row[1] else {}
+                            item["bpm"] = meta.get("bpm")
+                except Exception:
+                    pass
+
             if not filepath:
                 raise ValueError(f"Asset Pool item {index} has no resolved asset path")
             self.current_pool.append({
@@ -740,6 +819,8 @@ class ItemPoolObject(AudioObject):
             float(self.stretch_factor),
             str(self.stretch_algorithm),
             str(self.sample_type),
+            str(self.key_match_mode),
+            str(self.key_match_algorithm),
             str(system.render_mode) if system is not None else "offline",
         )
         data_to_render = get_runtime_cache(transform_cache_key)
@@ -756,6 +837,8 @@ class ItemPoolObject(AudioObject):
                 stretch_algorithm=self.stretch_algorithm,
                 sample_type=self.sample_type,
                 fast_preview=system is not None and system.render_mode == "preview",
+                key_match_mode=self.key_match_mode,
+                key_match_algorithm=self.key_match_algorithm,
             )
             set_runtime_cache(transform_cache_key, data_to_render)
         else:
@@ -764,6 +847,14 @@ class ItemPoolObject(AudioObject):
                 trace_runtime(f"DSP transform cache hit: {os.path.basename(filepath)}")
                 set_runtime_cache(trace_marker, True)
             
+        loop_sample = kwargs.get("loop", True)
+        if loop_sample and self.sample_type == "loop" and self.total_bars is not None and self.total_bars > 0 and system is not None:
+            target_samples = system.beat_to_samples(self.total_bars * 4.0)
+            if data_to_render.shape[-1] > 0 and data_to_render.shape[-1] < target_samples:
+                reps = int(np.ceil(target_samples / data_to_render.shape[-1]))
+                tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
+                data_to_render = tiled[..., :target_samples]
+
         return self.apply_chain(data_to_render, system)
 
 # Backward-compatible import for saved projects and external integrations.
@@ -794,7 +885,7 @@ class ArrangementObject(AudioObject):
         section_sample_start: Optional[List[float]] = None,
         section_quant: Optional[List[str]] = None,
         section_quant_anchor: Optional[List[str]] = None,
-        quant: Optional[Union[str, float]] = "none",
+        quant: Optional[Union[str, float]] = "auto",
         quant_anchor: str = "start"
     ) -> None:
         super().__init__(
@@ -821,9 +912,9 @@ class ArrangementObject(AudioObject):
             legacy_probability = max(0.0, min(1.0, float(probability)))
         except (TypeError, ValueError):
             legacy_probability = 1.0
-        legacy_quant = "none" if quant is None else str(quant).lower()
-        if legacy_quant in ("", "global", "inherit"):
-            legacy_quant = "none"
+        legacy_quant = "auto" if quant is None else str(quant).lower()
+        if legacy_quant in ("", "global", "inherit", "continuous"):
+            legacy_quant = "auto"
         legacy_anchor = "end" if quant_anchor == "end" else "start"
 
         raw_probability = list(section_probability) if section_probability is not None else []
@@ -903,9 +994,9 @@ class ArrangementObject(AudioObject):
 
     def get_section_quant_samples(self, section_index: int, child: AudioObject, audio: np.ndarray, system: System) -> Optional[int]:
         s_quant = self.get_section_quant(section_index)
-        if s_quant in ("", "none", "off"):
+        if s_quant in ("", "none", "off", "once"):
             return None
-        if s_quant == "auto":
+        if s_quant in ("auto", "continuous"):
             return self.get_child_loop_samples(child, audio, system)
         if s_quant == "bar":
             s_quant = "1.0"
@@ -970,7 +1061,9 @@ class ArrangementObject(AudioObject):
             if getattr(child, "is_dynamic", False):
                 cached_audios.append(None)
             else:
-                audio = child.render(system, **kwargs)
+                child_kwargs = dict(kwargs)
+                child_kwargs["loop"] = False
+                audio = child.render(system, **child_kwargs)
                 cached_audios.append(audio)
 
         observed_channel_shapes = [
@@ -1001,7 +1094,9 @@ class ArrangementObject(AudioObject):
                 _, child = self.children[child_idx]
 
                 if audio is None:
-                    audio = child.render(system, iteration=iteration_count, **kwargs)
+                    child_kwargs = dict(kwargs)
+                    child_kwargs["loop"] = False
+                    audio = child.render(system, iteration=iteration_count, **child_kwargs)
                     observed_channel_shapes.append(audio.shape[:-1])
                 iteration_count += 1
                 if audio.shape[-1] == 0:

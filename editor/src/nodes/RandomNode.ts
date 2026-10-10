@@ -66,7 +66,7 @@ export class RandomNode extends BaseNode {
         this.properties.color = this.properties.color || "#ec4899";
         this.properties.icon = this.properties.icon || "shuffle";
         this.properties.shape = this.properties.shape || "diamond";
-        this.properties.refresh_mode = this.properties.refresh_mode || "parent";
+        this.properties.refresh_mode = this.properties.refresh_mode || "global";
         this.properties.seed = this.properties.seed ?? 0;
         if (!Array.isArray(this.properties.destinations)) {
             this.properties.destinations = [];

@@ -308,12 +308,13 @@ export class SampleNode extends BaseNode {
         const matchTranspose = this.properties?.key_match_mode === 'follow'
             ? Number(this.properties?.key_match_transpose) || 0
             : 0;
-        if (matchTranspose === 0) return model;
 
         return {
             ...model,
-            key: this.properties?.key_match_target || model.key,
-            transpose: (Number(model.transpose) || 0) + matchTranspose
+            key: matchTranspose !== 0 ? (this.properties?.key_match_target || model.key) : model.key,
+            transpose: (Number(model.transpose) || 0) + matchTranspose,
+            key_match_mode: this.properties?.key_match_mode || 'off',
+            key_match_algorithm: this.properties?.key_match_algorithm || 'nearest'
         };
     }
 

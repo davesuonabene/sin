@@ -166,8 +166,68 @@ h2 { font-size: 18px; }
 .add-import { display: inline-grid; width: 32px; min-width: 32px; height: 32px; min-height: 32px; padding: 0; place-items: center; border-radius: 3px; font-size: 20px; font-weight: 400; line-height: 1; }
 
 .library-layout { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 14px; }
-.asset-panel { width: 100%; }
-.asset-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 3px; }
+.asset-panel { position: relative; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; transition: outline-color .15s ease, background-color .15s ease; }
+.asset-panel.file-drop-active { outline: 2px dashed var(--accent); outline-offset: -2px; }
+
+.asset-drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--surface) 80%, var(--accent) 20%);
+    backdrop-filter: blur(4px);
+    border: 2px dashed var(--accent);
+    border-radius: 3px;
+    box-sizing: border-box;
+}
+
+.asset-drop-overlay.hidden {
+    display: none !important;
+}
+
+.asset-drop-overlay-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    text-align: center;
+    padding: 24px 36px;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+}
+
+.asset-drop-overlay-icon {
+    font-size: 32px;
+    line-height: 1;
+    color: var(--accent);
+    display: inline-block;
+    animation: dropBounce 1s infinite alternate ease-in-out;
+}
+
+.asset-drop-overlay-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text, #fff);
+    letter-spacing: -0.01em;
+}
+
+.asset-drop-overlay-desc {
+    font-size: 12px;
+    color: var(--faint, #888);
+    max-width: 320px;
+    line-height: 1.4;
+}
+
+@keyframes dropBounce {
+    from { transform: translateY(-3px); }
+    to { transform: translateY(3px); }
+}
+
 
 .toolbar-icon { display: block; transform: translateY(-.5px); }
 .selection-count { flex: 0 0 auto; padding: 0 3px; color: var(--accent); font-size: 10.5px; font-weight: 700; white-space: nowrap; }
@@ -314,7 +374,7 @@ h2 { font-size: 18px; }
     text-shadow: 0 0 6px color-mix(in srgb, var(--palette-amber-500) 55%, transparent);
 }
 .collection-row-header { background: var(--app-surface-subtle); }
-.asset-list { min-height: 120px; max-height: calc(100dvh - 196px); overflow-x: auto; overflow-y: auto; scrollbar-color: var(--scrollbar-thumb) var(--app-surface-subtle); scrollbar-width: thin; }
+.asset-list { display: flex; flex-direction: column; min-height: 120px; max-height: calc(100dvh - 196px); overflow-x: auto; overflow-y: auto; scrollbar-color: var(--scrollbar-thumb) var(--app-surface-subtle); scrollbar-width: thin; }
 .asset-list::-webkit-scrollbar { width: 9px; height: 9px; }
 .asset-list::-webkit-scrollbar-track { background: var(--app-surface-subtle); }
 .asset-list::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 5px; }
@@ -327,6 +387,10 @@ h2 { font-size: 18px; }
 .asset-row.selected { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .asset-row.dragging { opacity: .55; }
 .asset-row.drop-target { background: var(--app-accent-a16); outline: 1px solid var(--app-accent-a62); outline-offset: -1px; box-shadow: inset 3px 0 0 var(--accent); }
+.asset-row.drop-between-before { box-shadow: inset 0 2px 0 0 var(--accent); }
+.asset-row.drop-between-after { box-shadow: inset 0 -2px 0 0 var(--accent); }
+.asset-list-end-spacer { flex: 1 0 96px; min-height: 96px; width: max(100%, var(--main-table-width, 0px)); min-width: 100%; cursor: default; box-sizing: border-box; transition: background-color 0.15s ease, outline-color 0.15s ease; }
+.asset-list-end-spacer.drop-target { background: var(--app-accent-a16); outline: 1px dashed var(--app-accent-a62); outline-offset: -2px; }
 .asset-title { min-width: 0; display: flex; align-items: center; gap: 6px; font-weight: 600; overflow: hidden; }
 .asset-title-text, .path-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-title-text { flex: 0 1 auto; min-width: 0; cursor: pointer; text-underline-offset: 2px; }

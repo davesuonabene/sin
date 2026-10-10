@@ -16,10 +16,11 @@ export type GraphNodeType =
     | 'track'
     | 'asset_filter'
     | 'modulator'
+    | 'random'
     | 'disabled';
 export type GraphNodeRole = 'master';
 export type GraphConnectionType = 'audio';
-export type GraphAttachmentType = 'asset_pool' | 'modulator';
+export type GraphAttachmentType = 'asset_pool' | 'modulator' | 'random';
 export type GraphAssetId = string | number;
 
 /**
@@ -138,6 +139,7 @@ const LITE_GRAPH_NODE_TYPES: Record<GraphNodeType, string> = {
     track: 'Audio/Track',
     asset_filter: 'Audio/AssetFilter',
     modulator: 'Audio/Modulator',
+    random: 'Audio/Random',
     disabled: 'Audio/Disabled'
 };
 
@@ -148,6 +150,7 @@ const DEFAULT_NODE_NAMES: Record<GraphNodeType, string> = {
     track: 'Track',
     asset_filter: 'Asset Pool',
     modulator: 'Modulator',
+    random: 'Random',
     disabled: 'Disabled Node'
 };
 
@@ -162,6 +165,7 @@ function isGraphNodeType(value: unknown): value is GraphNodeType {
         || value === 'track'
         || value === 'asset_filter'
         || value === 'modulator'
+        || value === 'random'
         || value === 'disabled';
 }
 
@@ -422,8 +426,8 @@ export function validateGraphDocument(
         if (typeof modifier !== 'string' || !nodesById.has(modifier)) {
             errors.push(`Attachment ${index} refers to an unknown modifier node.`);
         }
-        if (type !== 'asset_pool' && type !== 'modulator') {
-            errors.push(`Attachment ${index} must have type "asset_pool" or "modulator".`);
+        if (type !== 'asset_pool' && type !== 'modulator' && type !== 'random') {
+            errors.push(`Attachment ${index} must have type "asset_pool", "modulator", or "random".`);
         }
         if (typeof owner !== 'string' || typeof modifier !== 'string') return;
         const key = `${owner}->${modifier}:${String(type)}`;
@@ -437,14 +441,14 @@ export function validateGraphDocument(
         const ownerNode = nodesById.get(owner);
         const modifierNode = nodesById.get(modifier);
         if (ownerNode && modifierNode) {
-            const expectedModifierType = type === 'asset_pool' ? 'asset_filter' : 'modulator';
+            const expectedModifierType = type === 'asset_pool' ? 'asset_filter' : (type === 'random' ? 'random' : 'modulator');
             if (modifierNode.type !== expectedModifierType) {
                 errors.push(`Attachment "${key}" requires a ${expectedModifierType} modifier.`);
             }
             if (type === 'asset_pool' && ownerNode.type !== 'sample' && ownerNode.type !== 'sequence') {
                 errors.push(`Asset pool "${modifier}" may only attach to a sample or sequence node.`);
             }
-            if (ownerNode.type === 'asset_filter' || ownerNode.type === 'modulator' || ownerNode.type === 'disabled') {
+            if (ownerNode.type === 'asset_filter' || ownerNode.type === 'modulator' || ownerNode.type === 'random' || ownerNode.type === 'disabled') {
                 errors.push(`Node "${owner}" cannot own a ${String(type)} attachment.`);
             }
         }
@@ -524,21 +528,170 @@ function propertiesForLiteGraphNode(
             const modifierId = numericIds.get(attachment.modifier);
             if (modifierId !== undefined) properties.asset_modifier_id = modifierId;
         }
-        if (attachment.modifier === node.id && attachment.type === 'modulator') {
+        if (attachment.modifier === node.id && (attachment.type === 'modulator' || attachment.type === 'random')) {
             const ownerId = numericIds.get(attachment.owner);
             if (ownerId !== undefined) properties.parentId = ownerId;
         }
     }
 
     if (node.type === 'disabled') properties.disabled = true;
+    if (node.type === 'sequence') {
+        if (properties.total_bars === undefined) properties.total_bars = 'global';
+        if (Array.isArray(properties.steps)) {
+            if (properties.sequence === undefined) {
+                properties.sequence = properties.steps.map((s: any) => (s && s.active) ? 1 : 0);
+            }
+            if (properties.step_parameters === undefined) {
+                properties.step_parameters = properties.steps.map((s: any) => {
+                    const rawVel = s?.velocity;
+                    const vel = rawVel != null ? (rawVel > 1 ? rawVel / 127 : rawVel) : 1;
+                    const rawProb = s?.probability;
+                    const prob = rawProb != null ? (rawProb <= 1 ? rawProb * 100 : rawProb) : 100;
+                    return {
+                        offset: Number(s?.offset || 0),
+                        velocity: Number(vel),
+                        probability: Number(prob),
+                        subdivisions: Number(s?.subdivisions || 1),
+                        subdivision_enabled: Boolean(s?.subdivisions && s.subdivisions > 1),
+                    };
+                });
+            }
+        }
+    }
+    if (node.type === 'arrangement') {
+        if (properties.section_quant === undefined) properties.section_quant = ['auto'];
+    }
     if (node.type === 'asset_filter') {
         properties.modifier_kind = 'asset_filter';
         properties.output_type = properties.output_type || 'asset_path';
         if (properties.selected_items === undefined) properties.selected_items = [];
-        if (properties.refresh_mode === undefined) properties.refresh_mode = 'parent';
+        if (properties.refresh_mode === undefined) properties.refresh_mode = 'global';
         if (properties.playbackMode === undefined) properties.playbackMode = 'Random';
     }
+    if (node.type === 'random') {
+        properties.node_type = 'random';
+        properties.modifier_kind = 'random';
+        if (properties.refresh_mode === undefined) properties.refresh_mode = 'global';
+        if (!Array.isArray(properties.destinations)) properties.destinations = [];
+    }
     return properties;
+}
+
+/** Compute structured topological layout for nodes lacking explicit canvas coordinates. */
+export function computeAutoLayoutPositions(document: GraphDocument): Map<string, [number, number]> {
+    const positions = new Map<string, [number, number]>();
+    const nodes = document.nodes;
+    const connections = document.connections;
+    const attachments = document.attachments || [];
+
+    let allHavePositions = true;
+    for (const node of nodes) {
+        if (node.position) {
+            positions.set(node.id, [node.position[0], node.position[1]]);
+        } else {
+            allHavePositions = false;
+        }
+    }
+    if (allHavePositions) return positions;
+
+    const modifierToOwner = new Map<string, string>();
+    const ownerToModifiers = new Map<string, string[]>();
+    for (const att of attachments) {
+        modifierToOwner.set(att.modifier, att.owner);
+        const list = ownerToModifiers.get(att.owner) || [];
+        list.push(att.modifier);
+        ownerToModifiers.set(att.owner, list);
+    }
+
+    const incoming = new Map<string, string[]>();
+    const outgoing = new Map<string, string[]>();
+    for (const conn of connections) {
+        const inc = incoming.get(conn.to) || [];
+        inc.push(conn.from);
+        incoming.set(conn.to, inc);
+
+        const out = outgoing.get(conn.from) || [];
+        out.push(conn.to);
+        outgoing.set(conn.from, out);
+    }
+
+    const audioNodes = nodes.filter(n => !modifierToOwner.has(n.id));
+    const sourceNodes = audioNodes.filter(n => (incoming.get(n.id) || []).length === 0);
+
+    const rowSpacing = 160;
+    const startY = 100;
+    const colSpacing = 280;
+    const sourceX = 320;
+
+    const nodeY = new Map<string, number>();
+    sourceNodes.forEach((src, rowIndex) => {
+        nodeY.set(src.id, startY + rowIndex * rowSpacing);
+    });
+
+    const nodeCol = new Map<string, number>();
+    for (const src of sourceNodes) nodeCol.set(src.id, 1);
+
+    let changed = true;
+    let iteration = 0;
+    while (changed && iteration < 20) {
+        changed = false;
+        iteration++;
+        for (const conn of connections) {
+            const fromCol = nodeCol.get(conn.from) ?? 1;
+            const currentToCol = nodeCol.get(conn.to) ?? 1;
+            if (fromCol + 1 > currentToCol) {
+                nodeCol.set(conn.to, fromCol + 1);
+                changed = true;
+            }
+        }
+    }
+
+    const outputId = document.output;
+    const maxCol = Math.max(1, ...[...nodeCol.values()]);
+    if (outputId && nodeCol.has(outputId)) {
+        nodeCol.set(outputId, Math.max(maxCol, (nodeCol.get(outputId) || 1)));
+    }
+
+    const remainingNodes = audioNodes.filter(n => !nodeY.has(n.id));
+    remainingNodes.sort((a, b) => (nodeCol.get(a.id) || 0) - (nodeCol.get(b.id) || 0));
+    for (const node of remainingNodes) {
+        const inc = incoming.get(node.id) || [];
+        const knownYs = inc.map(id => nodeY.get(id)).filter((y): y is number => y !== undefined);
+        if (knownYs.length > 0) {
+            const avgY = knownYs.reduce((sum, y) => sum + y, 0) / knownYs.length;
+            nodeY.set(node.id, avgY);
+        } else {
+            const nextRow = nodeY.size;
+            nodeY.set(node.id, startY + nextRow * rowSpacing);
+        }
+    }
+
+    for (const node of audioNodes) {
+        if (positions.has(node.id)) continue;
+        const col = nodeCol.get(node.id) || 1;
+        const x = sourceX + (col - 1) * colSpacing;
+        const y = nodeY.get(node.id) ?? startY;
+        positions.set(node.id, [x, y]);
+    }
+
+    for (const [modifierId, ownerId] of modifierToOwner.entries()) {
+        if (positions.has(modifierId)) continue;
+        const ownerPos = positions.get(ownerId) || [sourceX, startY];
+        const modifiers = ownerToModifiers.get(ownerId) || [modifierId];
+        const modIndex = modifiers.indexOf(modifierId);
+        const x = ownerPos[0] - 220;
+        const y = ownerPos[1] + (modIndex * 90);
+        positions.set(modifierId, [x, y]);
+    }
+
+    for (const node of nodes) {
+        if (!positions.has(node.id)) {
+            const nextY = startY + positions.size * rowSpacing;
+            positions.set(node.id, [sourceX, nextY]);
+        }
+    }
+
+    return positions;
 }
 
 /** Convert a validated canonical document into the editor's LiteGraph shape. */
@@ -549,6 +702,7 @@ export function graphDocumentToWorkspacePreset(
     const validation = validateGraphDocument(document);
     if (!validation.valid) throw new Error(`Invalid graph document: ${validation.errors.join(' ')}`);
 
+    const autoPositions = computeAutoLayoutPositions(document);
     const numericIds = new Map<string, number>();
     document.nodes.forEach((node, index) => numericIds.set(node.id, index + 1));
     const attachments = document.attachments || [];
@@ -586,7 +740,7 @@ export function graphDocumentToWorkspacePreset(
                     : input;
             });
         const links = outgoingLinks.get(numericId) || null;
-        const position = node.position || [index * 260, 180];
+        const position = node.position || autoPositions.get(node.id) || [index * 260, 180];
         const outputs = ['track', 'sample', 'sequence', 'arrangement'].includes(node.type)
             ? [{ name: 'Audio', type: 'audio', links, slot_index: 0 }]
             : [];

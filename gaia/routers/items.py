@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
@@ -6,7 +6,7 @@ import os
 import re
 import sys
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import uuid
 import json
 import datetime
@@ -20,6 +20,7 @@ from .. import (
     models,
     database,
     integrity,
+    paths,
     text_analyzer,
     midi_parser,
     multitrack_analyzer,
@@ -714,6 +715,56 @@ def cancel_import_job(job_id: str):
     return task
 
 
+@router.post("/import/drop-file")
+async def drop_import_file(
+    request: Request,
+    session_id: str,
+    filename: str,
+    relative_path: str = "",
+):
+    """Receive streamed bytes of a dropped file and save it in a temporary staging session."""
+    clean_session = re.sub(r"[^a-zA-Z0-9_-]", "_", session_id).strip("_")
+    if not clean_session:
+        raise HTTPException(status_code=400, detail="Invalid session_id")
+    clean_filename = Path(filename).name
+    if not clean_filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    staging_dir = paths.gaia_home() / "staging" / "drops" / clean_session
+    if relative_path:
+        rel = PurePosixPath(relative_path.replace("\\", "/"))
+        safe_parts = [p for p in rel.parts if p not in ("..", ".", "", "/")]
+        target_path = staging_dir.joinpath(*safe_parts) if safe_parts else staging_dir / clean_filename
+    else:
+        target_path = staging_dir / clean_filename
+
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(target_path, "wb") as f:
+            async for chunk in request.stream():
+                f.write(chunk)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to stage dropped file: {exc}") from exc
+
+    return {
+        "staged_path": str(target_path.resolve()),
+        "staged_root": str(staging_dir.resolve()),
+        "filename": clean_filename,
+    }
+
+
+@router.delete("/import/drop-session/{session_id}")
+def delete_drop_session(session_id: str):
+    """Clean up a temporary staging session once an import job is queued or cancelled."""
+    clean_session = re.sub(r"[^a-zA-Z0-9_-]", "_", session_id).strip("_")
+    if clean_session:
+        session_dir = paths.gaia_home() / "staging" / "drops" / clean_session
+        if session_dir.is_dir():
+            paths.safe_rmtree(session_dir)
+    return {"status": "ok"}
+
+
+
 def _source_browser_locations() -> list[dict]:
     """Return useful local shortcuts without invoking an operating-system picker."""
     home = Path.home().resolve()
@@ -871,7 +922,14 @@ def place_items_in_folder(
     db: Session = Depends(database.get_db),
 ):
     try:
-        return project_service.place_items(db, folder_id, req.item_ids, req.mode, folder=req.folder)
+        return project_service.place_items(
+            db,
+            folder_id,
+            req.item_ids,
+            req.mode,
+            folder=req.folder,
+            source_context_ids=req.source_context_ids,
+        )
     except (ValueError, OSError, reference_service.ReferenceError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -47,7 +47,7 @@ export class ArrangementNode extends BaseNode {
         { key: 'total_bars', label: 'Total Length', type: 'float', default: 4.0, min: 0.25, max: 128, step: 0.25, unit: 'bars', tab: 'ARRANGEMENT' },
         { key: 'section_probability', label: 'Probability', type: 'float', default: 1.0, min: 0, max: 1, step: 0.05, tab: 'ARRANGEMENT', description: 'Playback probability for the selected section.' },
         { key: 'section_sample_start', label: 'Sample Start', type: 'slider', default: 0.0, min: 0, max: 1, step: 0.01, tab: 'ARRANGEMENT', description: 'Normalized source position for the selected section.' },
-        { key: 'section_quant', label: 'Quantize', type: 'select', default: 'none', options: [{ value: 'none', label: 'Continuous' }, { value: 'auto', label: 'Source Length' }, { value: 'bar', label: 'Bar' }, { value: '0.5', label: 'Half Bar' }, { value: 'beat', label: 'Beat' }], tab: 'ARRANGEMENT', description: 'Retrigger interval for the selected section.' },
+        { key: 'section_quant', label: 'Quantize', type: 'select', default: 'auto', options: [{ value: 'auto', label: 'Continuous' }, { value: 'bar', label: 'Bar' }, { value: '0.5', label: 'Half Bar' }, { value: 'beat', label: 'Beat' }, { value: 'none', label: 'Once' }], tab: 'ARRANGEMENT', description: 'Retrigger interval for the selected section.' },
         { key: 'section_quant_anchor', label: 'Anchor', type: 'select', default: 'start', options: [{ value: 'start', label: 'Start' }, { value: 'end', label: 'End' }], tab: 'ARRANGEMENT', description: 'Align each section trigger to the start or end of its quant cell.' },
         { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'ARRANGEMENT' }
     ];
@@ -78,7 +78,7 @@ export class ArrangementNode extends BaseNode {
             section_points: [],
             section_probability: [1.0],
             section_sample_start: [0.0],
-            section_quant: ["none"],
+            section_quant: ["auto"],
             section_quant_anchor: ["start"],
             seed: Math.random(),
             start_beat: 0,
@@ -127,6 +127,10 @@ export class ArrangementNode extends BaseNode {
      */
     migrateLegacySectionSettings(): ArrangementSectionStructure {
         const structure = this.getSectionStructure();
+        if (Array.isArray(this.properties.section_quant) && this.properties.section_quant.length > 0 && this.properties.section_quant.every(q => q === 'none' || q === 'global' || q === 'inherit')) {
+            structure.quant = structure.quant.map(() => 'auto');
+            this.updateSectionStructure(structure);
+        }
         if (!this.hasLegacySectionSettings()) return structure;
         this.updateSectionStructure(structure);
         delete this.properties.probability;
@@ -152,8 +156,8 @@ export class ArrangementNode extends BaseNode {
                 .map(value => Math.max(0, Math.min(1, Number(value) || 0))),
             sampleStart: this.resizeSectionValues(structure.sampleStart, sectionCount, 0.0)
                 .map(value => Math.max(0, Math.min(1, Number(value) || 0))),
-            quant: this.resizeSectionValues(structure.quant, sectionCount, 'none')
-                .map(quant => this.normalizeQuant(quant, 'none')),
+            quant: this.resizeSectionValues(structure.quant, sectionCount, 'auto')
+                .map(quant => this.normalizeQuant(quant, 'auto')),
             quantAnchor: this.resizeSectionValues(structure.quantAnchor, sectionCount, 'start')
                 .map(anchor => anchor === 'end' ? 'end' : 'start')
         };
@@ -193,7 +197,7 @@ export class ArrangementNode extends BaseNode {
     updateSectionQuant(sectionIndex: number, value: string): void {
         const structure = this.getSectionStructure();
         if (sectionIndex < 0 || sectionIndex >= structure.quant.length) return;
-        structure.quant[sectionIndex] = this.normalizeQuant(value, 'none');
+        structure.quant[sectionIndex] = this.normalizeQuant(value, 'auto');
         this.updateSectionStructure(structure);
     }
 
@@ -236,7 +240,7 @@ export class ArrangementNode extends BaseNode {
     }
 
     private legacyQuant(): string {
-        return this.normalizeQuant(this.properties.quant, 'none');
+        return this.normalizeQuant(this.properties.quant, 'auto');
     }
 
     private legacyAnchor(): ArrangementSectionAnchor {
@@ -246,6 +250,7 @@ export class ArrangementNode extends BaseNode {
     private normalizeQuant(value: unknown, fallback: string): string {
         const normalized = String(value ?? '').trim().toLowerCase();
         if (!normalized || normalized === 'global' || normalized === 'inherit') return fallback;
+        if (normalized === 'continuous') return 'auto';
         return normalized;
     }
 

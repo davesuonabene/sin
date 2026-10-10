@@ -24,7 +24,7 @@ SAVES_DIR = PROJECT_ROOT / "saves"
 # alongside named workspace presets, but is hidden from the preset list.
 STAGE_SAVE_PATH = SAVES_DIR / ".current-stage.json"
 
-logger = logging.getLogger("iride.api")
+logger = logging.getLogger("sin.api")
 # Suppress noisy numba internal bytecode and compiler debug logging
 logging.getLogger("numba").setLevel(logging.WARNING)
 
@@ -44,18 +44,18 @@ def workspace_save_path(name: str) -> Path:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.getLogger("numba").setLevel(logging.WARNING)
-    logger.info("Initializing IRIDE server lifespan...")
+    logger.info("Initializing SIN server lifespan...")
 
     SAVES_DIR.mkdir(exist_ok=True)
     if not (STATIC_DIR / "index.html").is_file():
-        logger.warning("IRIDE frontend is not built. Run: npm --prefix iride run build")
+        logger.warning("SIN frontend is not built. Run: npm --prefix editor run build")
     yield
-    logger.info("Shutting down IRIDE server lifespan...")
+    logger.info("Shutting down SIN server lifespan...")
 
 
 app = FastAPI(
-    title="IRIDE API",
-    description="Node editor, workspace, and audio-rendering API for IRIDE",
+    title="SIN API",
+    description="Node editor, workspace, and audio-rendering API for SIN",
     version="0.1.0",
     lifespan=lifespan
 )
@@ -71,7 +71,7 @@ def health_check():
     logger.debug("Health check requested.")
     return {
         "status": "ok",
-        "service": "iride-api",
+        "service": "sin-api",
         "version": "0.1.0"
     }
 
@@ -786,7 +786,7 @@ def resolve_pool(payload: PoolResolveRequest):
 def get_library(vault_id: Optional[int] = None):
     """
     Fetch library from Gaia API, or fallback to Gaia SQLite db if offline.
-    GAIA owns analysis; IRIDE only returns already-indexed metadata.
+    GAIA owns analysis; SIN only returns already-indexed metadata.
     """
     import urllib.request
     import json
@@ -1870,8 +1870,8 @@ app.mount(
     name="temp_renders",
 )
 
-# IRIDE is built into static/ and served with the API on the same port.
-app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True, check_dir=False), name="iride")
+# SIN is built into static/ and served with the API on the same port.
+app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True, check_dir=False), name="sin")
 
 if __name__ == "__main__":
     import uvicorn

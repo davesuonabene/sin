@@ -1,7 +1,7 @@
 :root {
     color-scheme: light;
 
-    /* Shared primitives: GAIA and IRIDE both consume this file. */
+    /* Shared primitives: GAIA and SIN both consume this file. */
     --palette-white: #ffffff;
     --palette-slate-50: #f8fafc;
     --palette-slate-100: #f1f5f9;
@@ -122,7 +122,7 @@
     --app-surface-translucent: rgb(255 255 255 / 96%);
     --app-surface-translucent-soft: rgb(248 250 252 / 92%);
 
-    /* Asset identities are shared by the GAIA app and IRIDE's GAIA browser. */
+    /* Asset identities are shared by the GAIA app and SIN's GAIA browser. */
     --asset-audio: var(--palette-emerald-500);
     --asset-audio-soft: var(--palette-emerald-50);
     --asset-loop: var(--palette-sky-600);

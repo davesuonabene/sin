@@ -70,13 +70,13 @@ export function serializeNodeSubtree(
         const fadeMs = nodeObj?.properties?.fade_ms ?? data?.fade_ms ?? (nodeType === "sequence" ? 0 : undefined);
         const rawTotalBars = nodeObj?.properties?.total_bars ?? data?.total_bars;
         const total_bars = rawTotalBars == null
-            ? (nodeType === "arrangement" ? 4.0 : undefined)
+            ? (nodeType === "arrangement" ? 4.0 : (nodeType === "sequence" || (nodeType === "sample" && (nodeObj?.properties?.sample_type === "loop" || data?.sample_type === "loop")) ? resolveGlobalNumber(globalParameters.total_bars, 'total_bars', 4.0) : undefined))
             : resolveGlobalNumber(rawTotalBars, 'total_bars', 4.0);
         const section_points = nodeObj?.properties?.section_points ?? data?.section_points ?? (nodeType === "arrangement" ? [] : undefined);
         const section_enabled = nodeObj?.properties?.section_enabled ?? data?.section_enabled ?? (nodeType === "arrangement" ? [] : undefined);
         const section_probability = nodeObj?.properties?.section_probability ?? data?.section_probability ?? (nodeType === "arrangement" ? [1.0] : undefined);
         const section_sample_start = nodeObj?.properties?.section_sample_start ?? data?.section_sample_start ?? (nodeType === "arrangement" ? [0.0] : undefined);
-        const section_quant = nodeObj?.properties?.section_quant ?? data?.section_quant ?? (nodeType === "arrangement" ? ["none"] : undefined);
+        const section_quant = nodeObj?.properties?.section_quant ?? data?.section_quant ?? (nodeType === "arrangement" ? ["auto"] : undefined);
         const section_quant_anchor = nodeObj?.properties?.section_quant_anchor ?? data?.section_quant_anchor ?? (nodeType === "arrangement" ? ["start"] : undefined);
 
         const poolProperties = assignedModifier?.properties;
@@ -139,6 +139,8 @@ export function serializeNodeSubtree(
         const stretch_mode = data?.stretch_mode || nodeObj?.properties?.stretch_mode || "time_stretch";
         const stretch_factor = data?.stretch_factor ?? nodeObj?.properties?.stretch_factor ?? 1.0;
         const stretch_algorithm = data?.stretch_algorithm || nodeObj?.properties?.stretch_algorithm || "rubberband";
+        const key_match_mode = data?.key_match_mode || nodeObj?.properties?.key_match_mode || "off";
+        const key_match_algorithm = data?.key_match_algorithm || nodeObj?.properties?.key_match_algorithm || "nearest";
 
         const model = {
             node_name: name,
@@ -158,6 +160,8 @@ export function serializeNodeSubtree(
             stretch_mode: stretch_mode,
             stretch_factor: stretch_factor,
             stretch_algorithm: stretch_algorithm,
+            key_match_mode: key_match_mode,
+            key_match_algorithm: key_match_algorithm,
             sequence: sequence,
             step_parameters: stepParameters,
             step_length: stepLength,

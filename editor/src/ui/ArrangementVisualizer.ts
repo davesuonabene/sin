@@ -245,7 +245,7 @@ export class ArrangementVisualizer {
             points = [...this.options.sectionPoints, snapped].sort((a, b) => a - b);
             nextProbability.splice(splitSection + 1, 0, nextProbability[splitSection] ?? 1);
             nextSampleStart.splice(splitSection + 1, 0, nextSampleStart[splitSection] ?? 0);
-            nextQuant.splice(splitSection + 1, 0, nextQuant[splitSection] ?? 'none');
+            nextQuant.splice(splitSection + 1, 0, nextQuant[splitSection] ?? 'auto');
             nextAnchor.splice(splitSection + 1, 0, nextAnchor[splitSection] ?? 'start');
         }
 
@@ -295,13 +295,14 @@ export class ArrangementVisualizer {
 
     private quantLabel(quant: string) {
         switch (quant) {
-            case 'auto': return 'source length';
+            case 'auto':
+            case 'continuous': return 'continuous';
             case 'bar': return '1 bar';
             case '0.5': return '½ bar';
             case 'beat': return 'beat';
             case 'none':
             case 'off':
-            case '': return 'continuous';
+            case 'once': return 'once';
             default: return `${quant} bars`;
         }
     }
@@ -398,9 +399,10 @@ export class ArrangementVisualizer {
     }
 
     private quantInterval(quant: string, sourceBars: number): number | null {
-        if (quant === 'none' || quant === 'off' || !quant) return null;
-        if (quant === 'auto') return sourceBars;
+        if (quant === 'none' || quant === 'off' || quant === 'once') return null;
+        if (quant === 'auto' || quant === 'continuous' || !quant) return sourceBars;
         if (quant === 'bar') return 1;
+        if (quant === '0.5') return 0.5;
         if (quant === 'beat') return 0.25;
         const value = Number.parseFloat(quant);
         return Number.isFinite(value) && value > 0 ? value : null;

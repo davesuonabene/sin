@@ -114,6 +114,8 @@ def build_node_object(node_data: Any) -> AudioObject:
     stretch_mode = _get_val(node_data, "stretch_mode", "time_stretch")
     stretch_factor = _get_val(node_data, "stretch_factor", 1.0)
     stretch_algorithm = _get_val(node_data, "stretch_algorithm", "rubberband")
+    key_match_mode = _get_val(node_data, "key_match_mode", "off")
+    key_match_algorithm = _get_val(node_data, "key_match_algorithm", "nearest")
 
     if node_type == "sequence":
         sequence = _get_val(node_data, "sequence", None) or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
@@ -138,7 +140,10 @@ def build_node_object(node_data: Any) -> AudioObject:
             cents=cents,
             stretch_mode=stretch_mode,
             stretch_factor=stretch_factor,
-            stretch_algorithm=stretch_algorithm
+            stretch_algorithm=stretch_algorithm,
+            total_bars=_get_val(node_data, "total_bars", None),
+            key_match_mode=key_match_mode,
+            key_match_algorithm=key_match_algorithm
         )
 
     elif node_type == "arrangement":
@@ -159,7 +164,7 @@ def build_node_object(node_data: Any) -> AudioObject:
             section_sample_start=_get_val(node_data, "section_sample_start", None),
             section_quant=_get_val(node_data, "section_quant", None),
             section_quant_anchor=_get_val(node_data, "section_quant_anchor", None),
-            quant=_get_val(node_data, "quant", "none"),
+            quant=_get_val(node_data, "quant", "auto"),
             quant_anchor=_get_val(node_data, "quant_anchor", "start")
         )
     elif node_type == "sample":
@@ -167,7 +172,8 @@ def build_node_object(node_data: Any) -> AudioObject:
         selected_items = _get_val(node_data, "selected_items", []) or []
         if selected_items and refresh_mode in {
             "local", "local_refresh", "self_render",
-            "parent", "parent_refresh", "parent_render"
+            "parent", "parent_refresh", "parent_render",
+            "global", "global_refresh"
         }:
             obj = ItemPoolObject(
                 name=node_name,
@@ -184,7 +190,10 @@ def build_node_object(node_data: Any) -> AudioObject:
                 cents=cents,
                 stretch_mode=stretch_mode,
                 stretch_factor=stretch_factor,
-                stretch_algorithm=stretch_algorithm
+                stretch_algorithm=stretch_algorithm,
+                total_bars=_get_val(node_data, "total_bars", None),
+                key_match_mode=key_match_mode,
+                key_match_algorithm=key_match_algorithm
             )
         else:
             obj = SampleObject(
@@ -199,7 +208,10 @@ def build_node_object(node_data: Any) -> AudioObject:
                 cents=cents,
                 stretch_mode=stretch_mode,
                 stretch_factor=stretch_factor,
-                stretch_algorithm=stretch_algorithm
+                stretch_algorithm=stretch_algorithm,
+                total_bars=_get_val(node_data, "total_bars", None),
+                key_match_mode=key_match_mode,
+                key_match_algorithm=key_match_algorithm
             )
     else:
         obj = AudioObject(
@@ -216,7 +228,9 @@ def build_node_object(node_data: Any) -> AudioObject:
             cents=cents,
             stretch_mode=stretch_mode,
             stretch_factor=stretch_factor,
-            stretch_algorithm=stretch_algorithm
+            stretch_algorithm=stretch_algorithm,
+            key_match_mode=key_match_mode,
+            key_match_algorithm=key_match_algorithm
         )
 
     children = _get_val(node_data, "children", []) or []

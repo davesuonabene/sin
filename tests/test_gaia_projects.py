@@ -1047,8 +1047,26 @@ class TestGaiaProjects(GaiaTestCase):
                 self.db,
             )
 
+    def test_place_items_in_vault_unparents_nested_item(self):
+        folder = project_service.create_folder(self.db, "Perx", vault_id=self.vault.id)
+        file1 = self.write_audio(self.asset_store / "loose_samples", "Clap.wav")
+        item1 = self.register_audio(file1)
+        project_service.place_items(self.db, folder.id, [item1.id], mode="move")
+
+        reloaded = self.db.query(models.Item).filter(models.Item.id == item1.id).first()
+        self.assertEqual(reloaded.parent_id, folder.id)
+
+        # Place directly in vault root with move mode
+        vaults.place_items_in_vault(self.db, self.vault.id, [item1.id], mode="move")
+
+        reloaded_after = self.db.query(models.Item).filter(models.Item.id == item1.id).first()
+        self.assertIsNotNone(reloaded_after)
+        self.assertIsNone(reloaded_after.parent_id)
+        self.assertTrue(Path(file1).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

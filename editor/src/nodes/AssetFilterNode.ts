@@ -74,7 +74,7 @@ export class AssetFilterNode extends ModulatorNode {
             output_value: "",
             selected_items: [],
             playbackMode: "Random",
-            refresh_mode: "parent",
+            refresh_mode: "global",
             sequence_index: -1,
             seed: 0,
             color: "#7c3aed",

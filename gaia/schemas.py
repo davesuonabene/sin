@@ -353,6 +353,7 @@ class FolderPlacementRequest(BaseModel):
     item_ids: List[int] = Field(default_factory=list)
     mode: Literal["move", "reference", "copy"] = "reference"
     folder: Optional[str] = None
+    source_context_ids: Optional[List[int]] = None
 
 
 
@@ -362,6 +363,7 @@ class FolderCreateRequest(BaseModel):
     parent_id: Optional[int] = None
     item_ids: Optional[List[int]] = None
     reference_ids: Optional[List[int]] = None
+
 
 
 class OpenLocationRequest(BaseModel):
