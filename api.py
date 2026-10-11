@@ -179,6 +179,7 @@ def preview_graph_ram(payload: AudioNodeModel):
                     "audio_url": f"/api/preview/stream/{node_key}?v={payload_fingerprint}",
                     "filename": cached_preview["filename"],
                     "runtime_log": runtime_entries,
+                    "manifest": cached_preview.get("manifest", {"nodes": {}}),
                     "cached": True,
                 }
 
@@ -210,6 +211,38 @@ def preview_graph_ram(payload: AudioNodeModel):
                 f"({(perf_counter() - encode_started_at) * 1000.0:.1f} ms)"
             )
 
+            manifest = getattr(sys, "manifest", {"nodes": {}})
+            # Encode and store intermediate node stems in RAM_PREVIEW_STORE
+            node_stems = getattr(sys, "_node_stems", {})
+            for stem_id, stem_audio in node_stems.items():
+                # Avoid duplicate encoding if this stem is already the primary preview target
+                if node_key == str(stem_id) or node_key == f"export_{stem_id}" or node_key.endswith(f"_{stem_id}"):
+                    if stem_id in manifest["nodes"]:
+                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{node_key}?v={payload_fingerprint}"
+                    continue
+
+                try:
+                    s_buf = io.BytesIO()
+                    sf.write(
+                        s_buf,
+                        np.moveaxis(stem_audio, -1, 0) if stem_audio.ndim > 1 else stem_audio,
+                        sys.sample_rate,
+                        format='WAV'
+                    )
+                    s_bytes = s_buf.getvalue()
+                    stem_key = f"stem_{node_key}_{stem_id}"
+                    RAM_PREVIEW_STORE[stem_key] = {
+                        "wav_bytes": s_bytes,
+                        "filename": f"stem_{stem_id}.wav",
+                        "node_name": f"Node_{stem_id}",
+                        "sample_rate": sys.sample_rate,
+                        "payload_fingerprint": payload_fingerprint,
+                    }
+                    if stem_id in manifest["nodes"]:
+                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
+                except Exception as stem_err:
+                    logger.warning(f"Failed to encode intermediate stem {stem_id}: {stem_err}")
+
             RAM_PREVIEW_STORE[node_key] = {
                 "wav_bytes": bytes_data,
                 "filename": out_filename,
@@ -217,6 +250,7 @@ def preview_graph_ram(payload: AudioNodeModel):
                 "sample_rate": sys.sample_rate,
                 "payload": payload_snapshot,
                 "payload_fingerprint": payload_fingerprint,
+                "manifest": manifest,
             }
             trace_runtime(f"RAM preview stored: {node_key}", "common")
 
@@ -227,6 +261,7 @@ def preview_graph_ram(payload: AudioNodeModel):
                 "audio_url": f"/api/preview/stream/{node_key}?v={payload_fingerprint}",
                 "filename": out_filename,
                 "runtime_log": runtime_entries,
+                "manifest": manifest,
                 "cached": False,
             }
     except Exception as e:
@@ -301,6 +336,147 @@ def stream_ram_preview(node_id: str, request: Request):
             "Content-Range": f"bytes {start}-{end}/{total_size}",
         },
     )
+
+@api_router.post("/preview/clear", tags=["Preview"])
+def clear_ram_preview_cache():
+    from core.dag_cache import GLOBAL_DAG_CACHE
+    logger.info(f"[API /preview] Wiping RAM preview store ({len(RAM_PREVIEW_STORE)} entries cleared)")
+    RAM_PREVIEW_STORE.clear()
+    GLOBAL_DAG_CACHE.clear()
+    return {"status": "success", "cleared": True}
+
+
+class InvalidateNodesRequest(BaseModel):
+    node_ids: Optional[list[Any]] = None
+    node_id: Optional[Any] = None
+
+
+@api_router.post("/preview/invalidate", tags=["Preview"])
+def invalidate_graph_nodes(payload: InvalidateNodesRequest):
+    from core.dag_cache import GLOBAL_DAG_CACHE
+    invalidated_all: set[str] = set()
+    ids_to_process = []
+    if payload.node_ids:
+        ids_to_process.extend(payload.node_ids)
+    if payload.node_id is not None:
+        ids_to_process.append(payload.node_id)
+    for nid in ids_to_process:
+        inv = GLOBAL_DAG_CACHE.invalidate_downstream(nid)
+        invalidated_all.update(inv)
+    logger.info(f"[API /preview/invalidate] Invalidated {len(invalidated_all)} nodes downstream: {invalidated_all}")
+    return {"status": "success", "invalidated": list(invalidated_all)}
+
+
+@api_router.post("/preview/stream-progressive", tags=["Preview"])
+def preview_graph_progressive(payload: AudioNodeModel):
+    import base64
+    import io
+    from fastapi.responses import StreamingResponse
+    from core.dag_cache import compute_waveform_peaks
+
+    def generate_chunks():
+        try:
+            sys = System(bpm=payload.bpm, render_mode="preview")
+            renderer = get_renderer_for_node(payload.node_type)
+            full_audio = renderer.render(payload, sys)
+            payload_snapshot = (
+                payload.model_dump(mode="json")
+                if hasattr(payload, "model_dump")
+                else payload.dict()
+            )
+            payload_fingerprint = hashlib.sha1(
+                json.dumps(payload_snapshot, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()[:16]
+            node_key = payload.filename or payload.node_name or "preview"
+
+            bpm = float(sys.bpm or payload.bpm or 120.0)
+            samples_per_bar = sys.samples_per_bar
+            seconds_per_bar = sys.seconds_per_bar
+            manifest = getattr(sys, "manifest", {"nodes": {}})
+
+            if full_audio.size == 0:
+                full_audio = np.zeros(samples_per_bar, dtype=np.float32)
+
+            total_samples = full_audio.shape[-1]
+            total_bars = max(1, int(np.ceil(total_samples / max(1, samples_per_bar))))
+            if payload.total_bars is not None and float(payload.total_bars) > 0:
+                total_bars = max(1, int(np.ceil(float(payload.total_bars))))
+
+            # Store full rendered WAV in RAM_PREVIEW_STORE for instant loops & zero-latency replays
+            wav_io = io.BytesIO()
+            sf.write(
+                wav_io,
+                np.moveaxis(full_audio, -1, 0) if full_audio.ndim > 1 else full_audio,
+                sys.sample_rate,
+                format='WAV'
+            )
+            bytes_data = wav_io.getvalue()
+            out_filename = f"{node_key}.wav"
+
+            RAM_PREVIEW_STORE[node_key] = {
+                "wav_bytes": bytes_data,
+                "filename": out_filename,
+                "node_name": payload.node_name,
+                "sample_rate": sys.sample_rate,
+                "payload": payload_snapshot,
+                "payload_fingerprint": payload_fingerprint,
+                "manifest": manifest,
+            }
+
+            # Stream progressive bar chunks
+            for bar_idx in range(total_bars):
+                start_sample = bar_idx * samples_per_bar
+                end_sample = min(total_samples, (bar_idx + 1) * samples_per_bar)
+
+                if start_sample < total_samples:
+                    bar_audio = full_audio[..., start_sample:end_sample]
+                    if bar_audio.shape[-1] < samples_per_bar:
+                        pad = np.zeros((*bar_audio.shape[:-1], samples_per_bar - bar_audio.shape[-1]), dtype=np.float32)
+                        bar_audio = np.concatenate([bar_audio, pad], axis=-1)
+                else:
+                    channels = full_audio.shape[:-1] if full_audio.ndim > 1 else ()
+                    bar_audio = np.zeros((*channels, samples_per_bar), dtype=np.float32)
+
+                slice_buf = io.BytesIO()
+                sf.write(
+                    slice_buf,
+                    np.moveaxis(bar_audio, -1, 0) if bar_audio.ndim > 1 else bar_audio,
+                    sys.sample_rate,
+                    format='WAV'
+                )
+                bar_b64 = base64.b64encode(slice_buf.getvalue()).decode("ascii")
+                bar_peaks = compute_waveform_peaks(bar_audio, columns=64)
+
+                chunk_obj = {
+                    "chunk_type": "bar",
+                    "bar_index": bar_idx,
+                    "total_bars": total_bars,
+                    "bpm": bpm,
+                    "start_seconds": bar_idx * seconds_per_bar,
+                    "duration_seconds": seconds_per_bar,
+                    "audio_base64": bar_b64,
+                    "peaks": bar_peaks,
+                    "manifest": manifest,
+                }
+                yield json.dumps(chunk_obj) + "\n"
+
+            # Final completion chunk
+            final_obj = {
+                "chunk_type": "complete",
+                "preview_id": node_key,
+                "audio_url": f"/api/preview/stream/{node_key}?v={payload_fingerprint}",
+                "total_bars": total_bars,
+                "total_duration": total_samples / float(sys.sample_rate),
+                "manifest": manifest,
+            }
+            yield json.dumps(final_obj) + "\n"
+
+        except Exception as e:
+            logger.error(f"[API /preview/stream-progressive Error] {e}", exc_info=True)
+            err_obj = {"chunk_type": "error", "error": str(e)}
+            yield json.dumps(err_obj) + "\n"
+
+    return StreamingResponse(generate_chunks(), media_type="application/x-ndjson")
 
 @api_router.post("/preview/export/{node_id:path}", tags=["Preview"])
 def export_ram_preview(node_id: str, payload: Optional[AudioNodeModel] = None):

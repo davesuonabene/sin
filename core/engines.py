@@ -117,6 +117,7 @@ def build_node_object(node_data: Any) -> AudioObject:
     key_match_mode = _get_val(node_data, "key_match_mode", "off")
     key_match_algorithm = _get_val(node_data, "key_match_algorithm", "nearest")
 
+    node_id = _get_val(node_data, "node_id", None)
     if node_type == "sequence":
         sequence = _get_val(node_data, "sequence", None) or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
         step_length = _get_val(node_data, "step_length", 0.25)
@@ -232,6 +233,21 @@ def build_node_object(node_data: Any) -> AudioObject:
             key_match_mode=key_match_mode,
             key_match_algorithm=key_match_algorithm
         )
+
+    if node_id is not None:
+        obj.node_id = int(node_id)
+    obj.node_type = str(node_type or "track")
+
+    from core.dag_cache import GLOBAL_DAG_CACHE
+    if isinstance(node_data, dict):
+        summary = {k: v for k, v in node_data.items() if k not in ("children", "filename", "audio_data")}
+    elif hasattr(node_data, "model_dump"):
+        summary = {k: v for k, v in node_data.model_dump().items() if k not in ("children", "filename", "audio_data")}
+    elif hasattr(node_data, "dict"):
+        summary = {k: v for k, v in node_data.dict().items() if k not in ("children", "filename", "audio_data")}
+    else:
+        summary = {"name": node_name, "type": node_type}
+    obj.fingerprint = GLOBAL_DAG_CACHE.compute_fingerprint(summary)
 
     children = _get_val(node_data, "children", []) or []
     for child_data in children:

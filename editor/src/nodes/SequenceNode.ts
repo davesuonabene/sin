@@ -2,6 +2,7 @@ import { LiteGraph } from 'litegraph.js';
 import { BaseNode } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
+import { SequenceRenderer, type RenderBox, type SignalTelemetry, type SequenceStep } from '../../../packages/iride/src/index.ts';
 
 export interface SequenceChannel {
     on: number[];
@@ -19,6 +20,7 @@ export interface SequenceDocument {
 }
 
 export class SequenceNode extends BaseNode {
+    private sequenceRenderer = new SequenceRenderer({ accentColor: '#ec4899' });
     static readonly stepCount = 16;
     static readonly stepParameterKeys = ['probability', 'offset', 'velocity', 'subdivisions'];
 
@@ -157,6 +159,70 @@ export class SequenceNode extends BaseNode {
         
         this.addInput("Input", "audio");
         this.addOutput("Audio", "audio");
+    }
+
+    override drawVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
+        let rawSeq: any[] | null = null;
+        if (Array.isArray(this.properties?.sequence) && this.properties.sequence.length > 0) {
+            rawSeq = this.properties.sequence;
+        }
+
+        if (!rawSeq) {
+            const trackData = (window as any).trackNodes?.get?.(this.id);
+            if (Array.isArray(trackData?.sequence) && trackData.sequence.length > 0) {
+                rawSeq = trackData.sequence;
+            }
+        }
+
+        if (!rawSeq) {
+            const channels = (this.properties as any)?.channels;
+            if (Array.isArray(channels) && channels[0] && Array.isArray(channels[0].on) && channels[0].on.length > 0) {
+                rawSeq = channels[0].on;
+            }
+        }
+
+        if (!rawSeq || rawSeq.length === 0) {
+            rawSeq = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+            if (this.properties) {
+                this.properties.sequence = [...rawSeq];
+            }
+        }
+
+        const rawParams = Array.isArray(this.properties?.step_parameters) ? this.properties.step_parameters : [];
+        const stepCount = SequenceNode.stepCount;
+        const steps: SequenceStep[] = [];
+
+        for (let i = 0; i < stepCount; i++) {
+            const rawVal = rawSeq[i];
+            const isGateOn = typeof rawVal === 'number'
+                ? rawVal > 0
+                : typeof rawVal === 'string'
+                    ? (rawVal === '1' || rawVal === 'true')
+                    : typeof rawVal === 'object' && rawVal !== null
+                        ? Boolean((rawVal as any).gate ?? (rawVal as any).on)
+                        : Boolean(rawVal);
+
+            const param = rawParams[i] || {};
+            const velocity = typeof param.velocity === 'number' ? param.velocity : 1.0;
+            const subdivisions = Number(param.subdivisions) || 1;
+            const probability = typeof param.probability === 'number' ? param.probability / 100 : 1.0;
+
+            steps.push({
+                gate: isGateOn,
+                velocity,
+                subdivisions,
+                probability
+            });
+        }
+
+        this.sequenceRenderer.setSignal({
+            stepCount,
+            steps,
+            stepLength: Number(this.properties?.step_length) || 0.25,
+            accentColor: this.nodeColor || '#ec4899'
+        });
+
+        this.sequenceRenderer.render(ctx, bounds, telemetry);
     }
 }
 

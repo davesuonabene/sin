@@ -25,6 +25,9 @@ import { clearLibraryCache, fetchLibrary, findLibraryFile, findLibraryFileById, 
 import { serializeNodeSubtree } from '../../ermes/ts/serializer';
 import { advanceAssetPoolSeed, normalizeAssetRefreshMode, resolveAssetFilterNode, resolveAssignedAssetFilters } from '../../ermes/ts/assetResolver';
 import { resolveAssignedRandomModifiers } from '../../ermes/ts/randomResolver';
+import { defaultTransportClock } from '../../packages/iride/src/index.ts';
+import { clearAudioBufferCache, fetchAudioBuffer } from './audioBufferCache';
+import { globalAudioScheduler } from './audioScheduler';
 
 const appElement = document.getElementById('app');
 if (!appElement) throw new Error('Could not find #app element');
@@ -227,6 +230,7 @@ function setGlobalParameters(values: Partial<GlobalParameters>, graph?: LGraph) 
         key: requestedKey || DEFAULT_GLOBAL_PARAMETERS.key
     };
     globalBpmInput.value = String(globalParameters.bpm);
+    defaultTransportClock.setBpm(globalParameters.bpm);
     globalTotalBarsInput.value = String(globalParameters.total_bars);
     globalKeyInput.value = globalParameters.key;
     writeGlobalParametersToGraph(graph);
@@ -276,7 +280,7 @@ const volumeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h
 const mutedIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5 1 2 2 2-2 1.5 1.5-2 2 2 2-1.5 1.5-2-2-2 2-1.5-1.5 2-2-2-2z"/></svg>';
 
 function updatePlaybackControls() {
-    const isPlaying = loopEnabled ? loopSource !== null || !masterPlayer.paused && !masterPlayer.ended : !masterPlayer.paused && !masterPlayer.ended;
+    const isPlaying = globalAudioScheduler.getIsPlaying() || (loopEnabled ? loopSource !== null || !masterPlayer.paused && !masterPlayer.ended : !masterPlayer.paused && !masterPlayer.ended);
     masterPlayBtn.innerHTML = isPlaying ? pauseIcon : playIcon;
     masterPlayBtn.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
     masterPlayBtn.title = isPlaying ? 'Pause' : 'Play';
@@ -343,6 +347,7 @@ function animateLoop() {
 }
 
 function stopLoop(savePosition: boolean) {
+    globalAudioScheduler.stop();
     if (loopSource) {
         if (savePosition) loopOffset = loopTime();
         try { loopSource.stop(); } catch { /* already stopped */ }
@@ -351,6 +356,7 @@ function stopLoop(savePosition: boolean) {
     }
     if (loopAnimationFrame !== null) cancelAnimationFrame(loopAnimationFrame);
     loopAnimationFrame = null;
+    stopPlaybackTelemetry();
 }
 
 function syncLoopGain() {
@@ -383,7 +389,13 @@ async function playLoop(offset: number, requestId = loopBufferRequestId) {
     if (!loopGain || loopContext !== context) {
         loopGain?.disconnect();
         loopGain = context.createGain();
-        loopGain.connect(context.destination);
+        const analyser = getOrCreateMasterAnalyser(context);
+        if (analyser) {
+            loopGain.connect(analyser);
+            analyser.connect(context.destination);
+        } else {
+            loopGain.connect(context.destination);
+        }
     }
     loopContext = context;
     syncLoopGain();
@@ -398,6 +410,7 @@ async function playLoop(offset: number, requestId = loopBufferRequestId) {
     loopSource = source;
     masterPlayer.loop = false;
     animateLoop();
+    startPlaybackTelemetry();
     updatePlaybackControls();
 }
 
@@ -405,7 +418,11 @@ function loadLoopBuffer(source: string) {
     const requestId = ++loopBufferRequestId;
     loopBuffer = null;
     loopLoad = masterWaveform.load(source).then(buffer => {
-        if (requestId === loopBufferRequestId) loopBuffer = buffer;
+        if (requestId === loopBufferRequestId) {
+            loopBuffer = buffer;
+            (window as any).activeRamPreviewBuffer = buffer;
+            (window as any).editorCanvas?.setDirty?.(true, true);
+        }
         return buffer;
     });
     return requestId;
@@ -483,21 +500,166 @@ masterPlayer.addEventListener('error', () => {
     const code = masterPlayer.error?.code;
     runtimeLog(`Audio stream failed${code ? ` (media error ${code})` : ''}`, 'error');
 });
+let telemetryAnimationFrame: number | null = null;
+let masterAudioAnalyser: AnalyserNode | null = null;
+let mediaElementSourceAttached = false;
+const scopeDataBuffer = new Float32Array(128);
+
+function getOrCreateMasterAnalyser(ctx?: AudioContext | null): AnalyserNode | null {
+    if (masterAudioAnalyser) return masterAudioAnalyser;
+    const targetCtx = ctx || masterWaveform.playbackContext || loopContext;
+    if (!targetCtx) return null;
+    try {
+        const analyser = targetCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.5;
+        masterAudioAnalyser = analyser;
+        return analyser;
+    } catch {
+        return null;
+    }
+}
+
+function attachMasterMediaElementSource(): void {
+    if (mediaElementSourceAttached) return;
+    let ctx = masterWaveform.playbackContext || loopContext;
+    if (!ctx) {
+        const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextCtor) {
+            ctx = new AudioContextCtor();
+        }
+    }
+    if (!ctx) return;
+    if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+    }
+    try {
+        const sourceNode = ctx.createMediaElementSource(masterPlayer);
+        const analyser = getOrCreateMasterAnalyser(ctx);
+        if (analyser) {
+            sourceNode.connect(analyser);
+            analyser.connect(ctx.destination);
+        } else {
+            sourceNode.connect(ctx.destination);
+        }
+        mediaElementSourceAttached = true;
+    } catch {
+        // Ignored if already attached
+    }
+}
+
+let playbackAnchorAudioTime = 0;
+let playbackAnchorWallTime = 0;
+
+function syncPlaybackAnchor(audioTime?: number) {
+    playbackAnchorAudioTime = audioTime !== undefined ? audioTime : (Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : 0);
+    playbackAnchorWallTime = performance.now() / 1000;
+}
+
+function getSmoothPlaybackTime(dur: number): number {
+    if (loopEnabled) {
+        return loopTime();
+    }
+    if (masterPlayer.paused || masterPlayer.ended) {
+        return Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : 0;
+    }
+    const elapsed = (performance.now() / 1000) - playbackAnchorWallTime;
+    const estimated = playbackAnchorAudioTime + elapsed;
+    if (dur > 0) {
+        return Math.max(0, Math.min(dur, estimated));
+    }
+    return Math.max(0, estimated);
+}
+
+function tickPlaybackTelemetry() {
+    const isSchedulerPlaying = globalAudioScheduler.getIsPlaying();
+    const isPlaying = isSchedulerPlaying || (loopEnabled ? Boolean(loopSource) : (!masterPlayer.paused && !masterPlayer.ended));
+    let dur = 0;
+    let curTime = 0;
+
+    if (isSchedulerPlaying) {
+        curTime = globalAudioScheduler.getCurrentTime();
+        dur = globalAudioScheduler.getTotalDuration();
+    } else {
+        dur = loopEnabled && loopBuffer?.duration ? loopBuffer.duration : (Number.isFinite(masterPlayer.duration) ? masterPlayer.duration : 0);
+        curTime = getSmoothPlaybackTime(dur);
+    }
+
+    if (isPlaying && !masterAudioAnalyser) {
+        attachMasterMediaElementSource();
+    }
+
+    if (isPlaying && masterAudioAnalyser) {
+        masterAudioAnalyser.getFloatTimeDomainData(scopeDataBuffer);
+        defaultTransportClock.setRealtimeScopeData(scopeDataBuffer);
+    } else {
+        defaultTransportClock.setRealtimeScopeData(null);
+    }
+
+    defaultTransportClock.setBpm(globalParameters.bpm);
+    defaultTransportClock.update(curTime, dur, isPlaying);
+    (window as any).editorCanvas?.setDirty?.(true, true);
+
+    if (isPlaying) {
+        telemetryAnimationFrame = requestAnimationFrame(tickPlaybackTelemetry);
+    } else {
+        telemetryAnimationFrame = null;
+    }
+}
+
+function startPlaybackTelemetry() {
+    attachMasterMediaElementSource();
+    syncPlaybackAnchor(masterPlayer.currentTime);
+    if (telemetryAnimationFrame === null) {
+        telemetryAnimationFrame = requestAnimationFrame(tickPlaybackTelemetry);
+    }
+}
+
+function stopPlaybackTelemetry() {
+    if (telemetryAnimationFrame !== null) {
+        cancelAnimationFrame(telemetryAnimationFrame);
+        telemetryAnimationFrame = null;
+    }
+    const dur = loopEnabled && loopBuffer?.duration ? loopBuffer.duration : (Number.isFinite(masterPlayer.duration) ? masterPlayer.duration : 0);
+    const curTime = loopEnabled ? loopTime() : (Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : 0);
+    defaultTransportClock.setRealtimeScopeData(null);
+    defaultTransportClock.update(curTime, dur, false);
+    (window as any).editorCanvas?.setDirty?.(true, true);
+}
+
 masterPlayer.addEventListener('seeked', () => {
     pendingMasterSeek = null;
+    syncPlaybackAnchor(masterPlayer.currentTime);
     if (!loopEnabled && Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
         masterWaveform.setPlayback(masterPlayer.currentTime, masterPlayer.duration);
     }
 });
-masterPlayer.addEventListener('play', updatePlaybackControls);
-masterPlayer.addEventListener('pause', updatePlaybackControls);
+masterPlayer.addEventListener('play', () => {
+    updatePlaybackControls();
+    syncPlaybackAnchor(masterPlayer.currentTime);
+    startPlaybackTelemetry();
+});
+masterPlayer.addEventListener('playing', () => {
+    syncPlaybackAnchor(masterPlayer.currentTime);
+});
+masterPlayer.addEventListener('pause', () => {
+    updatePlaybackControls();
+    stopPlaybackTelemetry();
+});
 masterPlayer.addEventListener('ended', () => {
     if (loopEnabled) return;
     masterWaveform.setPlayback(masterPlayer.duration, masterPlayer.duration);
     updatePlaybackControls();
+    stopPlaybackTelemetry();
 });
 
 masterPlayBtn.addEventListener('click', () => {
+    if (globalAudioScheduler.getIsPlaying()) {
+        globalAudioScheduler.stop();
+        updatePlaybackControls();
+        stopPlaybackTelemetry();
+        return;
+    }
     if (loopEnabled) {
         if (loopSource || !masterPlayer.paused) {
             if (loopSource) stopLoop(true);
@@ -931,6 +1093,7 @@ newStageBtn.addEventListener('click', () => {
 
     closeAllParamWindows();
     activeParamNodeId = null;
+    clearActiveWorkspaceManifest();
     graph.clear();
     trackNodes.clear();
     setGlobalParameters(DEFAULT_GLOBAL_PARAMETERS, graph);
@@ -974,6 +1137,7 @@ loadWorkspaceBtn.addEventListener('click', async () => {
         }
         closeAllParamWindows();
         activeParamNodeId = null;
+        clearActiveWorkspaceManifest();
         graph.configure(prepareWorkspaceGraph(preset.graph));
         // Apply saved transport settings immediately. Library metadata refresh
         // may take a moment and should not leave the editor showing defaults
@@ -1145,8 +1309,33 @@ tempFilesSelect.addEventListener('change', (e) => {
 });
 
 let activeRamPreviewNodeId: number | null = null;
+(window as any).activeRamPreviewNodeId = null;
 let activeRamPreviewPayload: any = null;
 let activeRamPreviewSource: string | null = null;
+let activeWorkspaceManifest: any = null;
+(window as any).activeWorkspaceManifest = null;
+
+export function getActiveWorkspaceManifest(): any {
+    return activeWorkspaceManifest;
+}
+
+function clearActiveWorkspaceManifest() {
+    activeWorkspaceManifest = null;
+    (window as any).activeWorkspaceManifest = null;
+    clearAudioBufferCache();
+    fetch('/api/preview/clear', { method: 'POST' }).catch(() => {});
+    const graph = (window as any).editorGraph as LGraph;
+    if (graph) {
+        const nodes = (((graph as any)._nodes || []) as any[]);
+        for (const node of nodes) {
+            if (!node) continue;
+            delete node.manifestStemUrl;
+            delete node.manifestEvents;
+            delete node.manifestStemBuffer;
+            node.setDirtyCanvas?.(true, true);
+        }
+    }
+}
 
 exportBtn.addEventListener('click', async () => {
     fileMenu.open = false;
@@ -2383,6 +2572,60 @@ window.addEventListener('add-asset-filter-to-param', (e: any) => {
     if (ownerData) ownerData.asset_modifier_id = modifierNode.id;
     window.dispatchEvent(new CustomEvent('modifier-assignment-changed', { detail: { nodeId } }));
     openParamWindow(modifierNode, { forceOpen: true });
+});
+
+window.addEventListener('item-pool-preview-refresh', async (e: any) => {
+    const poolNodeId = e.detail?.nodeId;
+    const graph = (window as any).editorGraph as LGraph;
+    if (!graph || poolNodeId == null) return;
+    const poolNode = graph.getNodeById(poolNodeId);
+    if (!poolNode) return;
+
+    const selectedItems = Array.isArray(poolNode.properties?.selected_items)
+        ? poolNode.properties.selected_items
+        : [];
+    if (selectedItems.length === 0) return;
+
+    // Determine the representative item: either currently output or first in selected items
+    const activeItem = poolNode.properties?.output_value
+        ? selectedItems.find((it: any) => (it.filepath || it.absolute_path) === poolNode.properties.output_value) || selectedItems[0]
+        : selectedItems[0];
+    if (!activeItem) return;
+
+    // Find any nodes associated with this pool (either via asset_modifier_id or parentId)
+    const nodes = (((graph as any)._nodes || []) as any[]);
+    for (const node of nodes) {
+        if (!node) continue;
+        const isAssociated = node.properties?.asset_modifier_id === poolNodeId ||
+            poolNode.properties?.parentId === node.id;
+        if (!isAssociated) continue;
+
+        if (node.type === 'Audio/Sample') {
+            const dragItem: LibraryDragItem = {
+                id: activeItem.id,
+                name: activeItem.name,
+                filepath: activeItem.filepath || activeItem.absolute_path,
+                itemType: activeItem.type || 'audio',
+                key: activeItem.key || undefined,
+                bpm: activeItem.bpm || undefined,
+                duration_seconds: activeItem.duration_seconds || undefined
+            };
+            await applyLibraryItemToSample(node, dragItem);
+            node.setDirtyCanvas?.(true, true);
+        } else if (node.type === 'Audio/Sequence') {
+            const dragItem: LibraryDragItem = {
+                id: activeItem.id,
+                name: activeItem.name,
+                filepath: activeItem.filepath || activeItem.absolute_path,
+                itemType: activeItem.type || 'sequence',
+                key: activeItem.key || undefined,
+                bpm: activeItem.bpm || undefined,
+                duration_seconds: activeItem.duration_seconds || undefined
+            };
+            await applyLibraryItemToSequence(node, dragItem);
+            node.setDirtyCanvas?.(true, true);
+        }
+    }
 });
 
 function addAssetFilterNode(parentId: number, openProperties: boolean = true) {
@@ -4036,8 +4279,8 @@ async function calculatePreview(
     payload.filename = keyName;
 
     try {
-        const res = await loggedTask('Render preview audio on server', () =>
-            fetch('/api/preview', {
+        const res = await loggedTask('Connect to progressive preview stream', () =>
+            fetch('/api/preview/stream-progressive', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -4056,7 +4299,68 @@ async function calculatePreview(
             throw new Error(`RAM preview failed: ${errorDetail}`);
         }
 
-        const data = await res.json();
+        const reader = res.body?.getReader();
+        if (!reader) throw new Error('ReadableStream not supported.');
+
+        const decoder = new TextDecoder();
+        let streamBuffer = '';
+        let finalData: any = null;
+        const targetNode = graph.getNodeById(nodeId);
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            streamBuffer += decoder.decode(value, { stream: true });
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                let chunkData: any;
+                try {
+                    chunkData = JSON.parse(line);
+                } catch {
+                    continue;
+                }
+
+                const cType = chunkData.chunk_type || chunkData.type;
+                if (cType === 'bar' || cType === 'bar_chunk') {
+                    const audioBuf = await globalAudioScheduler.decodeBase64Wav(chunkData.audio_base64);
+                    if (audioBuf) {
+                        globalAudioScheduler.addBarChunk({
+                            barIndex: chunkData.bar_index,
+                            totalBars: chunkData.total_bars,
+                            bpm: chunkData.bpm,
+                            startSeconds: chunkData.start_seconds,
+                            durationSeconds: chunkData.duration_seconds,
+                            audioBuffer: audioBuf,
+                            peaks: chunkData.peaks
+                        }, autoplay);
+
+                        if (autoplay) {
+                            startPlaybackTelemetry();
+                        }
+
+                        if (targetNode) {
+                            (targetNode as any).bufferedProgress = (chunkData.bar_index + 1) / chunkData.total_bars;
+                            (targetNode as any).isInvalidated = false;
+                            (targetNode as any).setDirtyCanvas?.(true, true);
+                        }
+                    }
+                } else if (cType === 'complete') {
+                    finalData = chunkData;
+                }
+            }
+        }
+
+        const fallbackUrl = `/api/preview/stream/${keyName}`;
+        const data = finalData ? {
+            status: 'success',
+            audio_url: finalData.audio_url || fallbackUrl,
+            manifest: finalData.manifest,
+            runtime_log: finalData.runtime_log,
+            ...finalData
+        } : { status: 'success', audio_url: fallbackUrl };
         appendServerRuntimeLog(data.runtime_log);
 
         if (data.status === 'success' && data.audio_url) {
@@ -4065,9 +4369,61 @@ async function calculatePreview(
                 return;
             }
             activeRamPreviewNodeId = nodeId;
+            (window as any).activeRamPreviewNodeId = nodeId;
             activeRamPreviewPayload = payload;
             activeRamPreviewSource = data.audio_url;
             previewRecalculateBtn.disabled = false;
+
+            // Distribute workspace manifest to active nodes in graph
+            if (data.manifest && typeof data.manifest === 'object') {
+                activeWorkspaceManifest = data.manifest;
+                (window as any).activeWorkspaceManifest = data.manifest;
+                const nodesMap = data.manifest.nodes || {};
+                const graphNodes = (((graph as any)._nodes || []) as any[]);
+                for (const gNode of graphNodes) {
+                    if (!gNode) continue;
+                    const manifestEntry = nodesMap[String(gNode.id)];
+                    if (manifestEntry) {
+                        gNode.manifestStemUrl = manifestEntry.audio_url;
+                        gNode.manifestEvents = manifestEntry.events || [];
+                        gNode.manifestStemDuration = manifestEntry.duration_seconds;
+
+                        // Sync resolved sample/pool filepath to node
+                        if (manifestEntry.filepath && gNode.properties) {
+                            const currentPath = String(gNode.properties.filepath || '');
+                            if (currentPath !== manifestEntry.filepath || !gNode.audioBuffer) {
+                                gNode.properties.filepath = manifestEntry.filepath;
+                                gNode.loadedFilepath = manifestEntry.filepath;
+                                delete gNode.manifestStemBuffer;
+                                fetchAudioBuffer(manifestEntry.filepath).then(buf => {
+                                    if (buf) {
+                                        gNode.audioBuffer = buf;
+                                        if (buf.duration) {
+                                            gNode.properties.duration_seconds = buf.duration;
+                                        }
+                                        gNode.setDirtyCanvas?.(true, true);
+                                    }
+                                }).catch(() => {});
+                            }
+                        }
+
+                        // Sample duration metadata inheritance
+                        if (manifestEntry.duration_seconds && gNode.properties && !gNode.properties.duration_seconds) {
+                            gNode.properties.duration_seconds = manifestEntry.duration_seconds;
+                        }
+
+                        // Only non-sample composite nodes fetch intermediate stem buffers
+                        if (manifestEntry.audio_url && manifestEntry.node_type !== 'sample') {
+                            fetchAudioBuffer(manifestEntry.audio_url).then(buf => {
+                                if (buf) {
+                                    gNode.manifestStemBuffer = buf;
+                                    gNode.setDirtyCanvas?.(true, true);
+                                }
+                            }).catch(() => {});
+                        }
+                    }
+                }
+            }
 
             setMasterPlayerSource(data.audio_url, autoplay);
 
@@ -4142,3 +4498,28 @@ function previewNode(
     if (!previewWorker) previewWorker = runPreviewQueue();
     return previewWorker;
 }
+
+window.addEventListener('node-property-changed', (e: any) => {
+    const changedNodeId = e.detail?.nodeId;
+    if (changedNodeId == null) return;
+
+    const graph = (window as any).editorGraph as LGraph;
+    if (graph) {
+        const gNode = graph.getNodeById(changedNodeId);
+        if (gNode) {
+            (gNode as any).isInvalidated = true;
+            (gNode as any).setDirtyCanvas?.(true, true);
+        }
+    }
+
+    fetch('/api/preview/invalidate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node_id: changedNodeId })
+    }).catch(() => {});
+
+    // If active playback is ongoing, trigger seamless hot-swap preview
+    if (globalAudioScheduler.getIsPlaying() && activeRamPreviewNodeId != null) {
+        void previewNode(activeRamPreviewNodeId, false, false, false);
+    }
+});

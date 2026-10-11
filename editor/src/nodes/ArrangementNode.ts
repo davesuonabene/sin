@@ -2,6 +2,7 @@ import { LiteGraph } from 'litegraph.js';
 import { BaseNode } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
+import { ArrangementRenderer, type RenderBox, type SignalTelemetry, type ArrangementSection } from '../../../packages/iride/src/index.ts';
 
 export interface ArrangementSectionStructure {
     points: number[];
@@ -14,6 +15,7 @@ export interface ArrangementSectionStructure {
 export type ArrangementSectionAnchor = 'start' | 'end';
 
 export class ArrangementNode extends BaseNode {
+    private arrangementRenderer = new ArrangementRenderer({ accentColor: '#f59e0b' });
     static panelSchema: NodePanelSchema = {
         tabs: [
             {
@@ -278,6 +280,40 @@ export class ArrangementNode extends BaseNode {
             section_quant: structure.quant,
             section_quant_anchor: structure.quantAnchor
         };
+    }
+
+    override drawVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
+        const totalBars = Math.max(0.25, Number(this.properties?.total_bars) || 4.0);
+        const structure = this.getSectionStructure();
+        const cutPoints = Array.isArray(structure.points) ? [...structure.points].sort((a, b) => a - b) : [];
+        const sectionBoundaries = [0, ...cutPoints.filter(p => p > 0 && p < totalBars), totalBars];
+
+        const sections: ArrangementSection[] = [];
+        for (let i = 0; i < sectionBoundaries.length - 1; i++) {
+            const startBar = sectionBoundaries[i];
+            const endBar = sectionBoundaries[i + 1];
+            const lengthBars = Math.max(0.01, endBar - startBar);
+            const prob = typeof structure.probability[i] === 'number' ? structure.probability[i] : 1.0;
+            const sampleStart = typeof structure.sampleStart[i] === 'number' ? structure.sampleStart[i] : 0.0;
+            const quant = structure.quant[i] || 'auto';
+
+            sections.push({
+                index: i,
+                startBar,
+                lengthBars,
+                probability: prob,
+                sampleStart,
+                quant
+            });
+        }
+
+        this.arrangementRenderer.setSignal({
+            totalBars,
+            sections,
+            accentColor: this.nodeColor
+        });
+
+        this.arrangementRenderer.render(ctx, bounds, telemetry);
     }
 }
 

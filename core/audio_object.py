@@ -7,6 +7,7 @@ from core.base_object import BaseObject
 from core.analyzers import BPMAnalyzer
 from core.dsp import stretch_audio, load_sample, process_sample_transform
 from core.runtime_trace import get_runtime_cache, set_runtime_cache, trace_runtime
+from core.dag_cache import GLOBAL_DAG_CACHE
 
 if TYPE_CHECKING:
     from core.system import System
@@ -41,9 +42,13 @@ class AudioObject(BaseObject):
         stretch_factor: float = 1.0,
         stretch_algorithm: str = "rubberband",
         key_match_mode: str = "off",
-        key_match_algorithm: str = "nearest"
+        key_match_algorithm: str = "nearest",
+        node_id: Optional[int] = None,
+        node_type: str = "track"
     ) -> None:
         super().__init__(name=name, data=data)
+        self.node_id = int(node_id) if node_id is not None else None
+        self.node_type = str(node_type or "track")
         self.audio_data = audio_data if audio_data is not None else None
         self.length_in_beats = float(length_in_beats)
         self.groove_amount = float(groove_amount)
@@ -148,6 +153,11 @@ class AudioObject(BaseObject):
         - If children exist, recursively renders each child, pads with leading zeros based on start_beat,
           and SUMs them into a parent master numpy array.
         """
+        if self.node_id is not None and getattr(self, "fingerprint", None):
+            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint)
+            if cached is not None:
+                return cached
+
         # Leaf node case: Raw sample data exists and no children
         if self.audio_data is not None and len(self.children) == 0:
             sr = system.sample_rate if system is not None else 44100
@@ -177,9 +187,10 @@ class AudioObject(BaseObject):
                 if data_to_render.shape[-1] > 0 and data_to_render.shape[-1] < target_samples:
                     reps = int(np.ceil(target_samples / data_to_render.shape[-1]))
                     tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
-                    data_to_render = tiled[..., :target_samples]
-
-            return self.apply_chain(data_to_render, system)
+            leaf_out = self.apply_chain(data_to_render, system)
+            if self.node_id is not None and getattr(self, "fingerprint", None):
+                GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, leaf_out)
+            return leaf_out
 
         if system is None:
             raise ValueError("System instance must be provided to render a composite AudioObject graph.")
@@ -189,6 +200,8 @@ class AudioObject(BaseObject):
         max_end_sample = 0
 
         for start_beat, child in self.children:
+            if self.node_id is not None and getattr(child, "node_id", None) is not None:
+                GLOBAL_DAG_CACHE.register_edge(parent_id=self.node_id, child_id=child.node_id)
             child_audio = child.render(system, **kwargs)
             start_sample = system.beat_to_samples(start_beat)
             end_sample = start_sample + child_audio.shape[-1]
@@ -264,7 +277,13 @@ class AudioObject(BaseObject):
             master_buffer = fitted_buffer
 
         # Apply parent node volume scaling
-        return self.apply_chain(master_buffer, system)
+        output_buffer = self.apply_chain(master_buffer, system)
+        if system is not None and self.node_id is not None:
+            dur = float(output_buffer.shape[-1]) / float(system.sample_rate)
+            system.record_node_stem(self.node_id, self.node_type, self.name, output_buffer, dur)
+        if self.node_id is not None and getattr(self, "fingerprint", None):
+            GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, output_buffer)
+        return output_buffer
 
 
 class SampleObject(AudioObject):
@@ -315,6 +334,11 @@ class SampleObject(AudioObject):
         )
 
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        if self.node_id is not None and getattr(self, "fingerprint", None):
+            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint)
+            if cached is not None:
+                return cached
+
         if not self.filepath:
             return np.zeros(0, dtype=np.float32)
 
@@ -367,6 +391,8 @@ class SampleObject(AudioObject):
             logging.getLogger("beat_generator.core").error(f"Error transforming sample '{self.filepath}': {e}")
             return np.zeros(0, dtype=np.float32)
 
+        sample_natural_dur = float(data_to_render.shape[-1]) / float(system.sample_rate) if system is not None and data_to_render.shape[-1] > 0 else 0.0
+
         loop_sample = kwargs.get("loop", True)
         if loop_sample and self.sample_type == "loop" and self.total_bars is not None and self.total_bars > 0 and system is not None:
             target_samples = system.beat_to_samples(self.total_bars * 4.0)
@@ -375,7 +401,19 @@ class SampleObject(AudioObject):
                 tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
                 data_to_render = tiled[..., :target_samples]
 
-        return self.apply_chain(data_to_render, system)
+        output_buffer = self.apply_chain(data_to_render, system)
+        if system is not None and self.node_id is not None:
+            system.record_node_stem(
+                self.node_id,
+                "sample",
+                self.name,
+                output_buffer,
+                sample_natural_dur,
+                extra={"filepath": self.filepath}
+            )
+        if self.node_id is not None and getattr(self, "fingerprint", None):
+            GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, output_buffer)
+        return output_buffer
 
 
 class SequenceObject(AudioObject):
@@ -506,6 +544,11 @@ class SequenceObject(AudioObject):
         }
 
     def render(self, system: Optional[System] = None, iteration: int = 0, **kwargs: Any) -> np.ndarray:
+        if self.node_id is not None and getattr(self, "fingerprint", None):
+            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint)
+            if cached is not None:
+                return cached
+
         if system is None:
             raise ValueError("System instance must be provided to render a SequenceObject.")
 
@@ -514,6 +557,8 @@ class SequenceObject(AudioObject):
 
         # Render the first child (the sample)
         _, first_child = self.children[0]
+        if self.node_id is not None and getattr(first_child, "node_id", None) is not None:
+            GLOBAL_DAG_CACHE.register_edge(parent_id=self.node_id, child_id=first_child.node_id)
         is_dynamic = getattr(first_child, "is_dynamic", False)
 
         cached_child_audio = None
@@ -636,7 +681,20 @@ class SequenceObject(AudioObject):
                 fitted_buffer[..., :copy_samples] = master_buffer[..., :copy_samples]
             master_buffer = fitted_buffer
 
-        return self.apply_chain(master_buffer, system)
+        output_buffer = self.apply_chain(master_buffer, system)
+        if system is not None and self.node_id is not None:
+            dur = float(output_buffer.shape[-1]) / float(system.sample_rate)
+            system.record_node_stem(
+                self.node_id,
+                "sequence",
+                self.name,
+                output_buffer,
+                dur,
+                extra={"sequence": self.sequence, "step_length": self.step_length}
+            )
+        if self.node_id is not None and getattr(self, "fingerprint", None):
+            GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, output_buffer)
+        return output_buffer
 
 
 import random
@@ -865,6 +923,8 @@ class ItemPoolObject(AudioObject):
                 trace_runtime(f"DSP transform cache hit: {os.path.basename(filepath)}")
                 set_runtime_cache(trace_marker, True)
             
+        sample_natural_dur = float(data_to_render.shape[-1]) / float(system.sample_rate) if system is not None and data_to_render.shape[-1] > 0 else 0.0
+
         loop_sample = kwargs.get("loop", True)
         if loop_sample and self.sample_type == "loop" and self.total_bars is not None and self.total_bars > 0 and system is not None:
             target_samples = system.beat_to_samples(self.total_bars * 4.0)
@@ -873,7 +933,17 @@ class ItemPoolObject(AudioObject):
                 tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
                 data_to_render = tiled[..., :target_samples]
 
-        return self.apply_chain(data_to_render, system)
+        output_buffer = self.apply_chain(data_to_render, system)
+        if system is not None and self.node_id is not None:
+            system.record_node_stem(
+                self.node_id,
+                "sample",
+                self.name,
+                output_buffer,
+                sample_natural_dur,
+                extra={"filepath": filepath, "is_pool": True}
+            )
+        return output_buffer
 
 # Backward-compatible import for saved projects and external integrations.
 SamplePoolObject = ItemPoolObject
@@ -1076,6 +1146,8 @@ class ArrangementObject(AudioObject):
         # Pre-render or identify dynamic children
         cached_audios = []
         for _, child in self.children:
+            if self.node_id is not None and getattr(child, "node_id", None) is not None:
+                GLOBAL_DAG_CACHE.register_edge(parent_id=self.node_id, child_id=child.node_id)
             if getattr(child, "is_dynamic", False):
                 cached_audios.append(None)
             else:
@@ -1162,4 +1234,17 @@ class ArrangementObject(AudioObject):
             write_end = write_start + event_audio.shape[-1]
             master_buffer[..., write_start:write_end] += event_audio
 
-        return self.apply_chain(master_buffer, system)
+        output_buffer = self.apply_chain(master_buffer, system)
+        if system is not None and self.node_id is not None:
+            dur = float(output_buffer.shape[-1]) / float(system.sample_rate)
+            system.record_node_stem(
+                self.node_id,
+                "arrangement",
+                self.name,
+                output_buffer,
+                dur,
+                extra={"total_bars": self.total_bars}
+            )
+        if self.node_id is not None and getattr(self, "fingerprint", None):
+            GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, output_buffer)
+        return output_buffer

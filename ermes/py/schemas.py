@@ -17,6 +17,7 @@ class FxModuleModel(BaseModel):
 
 
 class AudioNodeModel(BaseModel):
+    node_id: Optional[int] = None
     node_name: str
     node_type: str = "track"
     sample_type: Optional[str] = "loop"

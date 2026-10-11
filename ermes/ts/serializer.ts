@@ -143,6 +143,7 @@ export function serializeNodeSubtree(
         const key_match_algorithm = data?.key_match_algorithm || nodeObj?.properties?.key_match_algorithm || "nearest";
 
         const model = {
+            node_id: nodeId,
             node_name: name,
             node_type: nodeType,
             sample_type: sample_type,

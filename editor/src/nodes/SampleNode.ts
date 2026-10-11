@@ -3,6 +3,8 @@ import { BaseNode, DEFAULT_SAMPLE_INPUT_GAIN_DB, getDefaultFxChain } from './Bas
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { findLibraryFileForSnapshot, resolveLibraryAssets, submitLibraryMetadataProposal, type LibraryFile } from '../api.ts';
+import { WaveformRenderer, type RenderBox, type SignalTelemetry } from '../../../packages/iride/src/index.ts';
+import { fetchAudioBuffer } from '../audioBufferCache.ts';
 
 type MusicalMode = 'major' | 'minor' | null;
 type KeyMatchAlgorithm = 'nearest' | 'higher' | 'lower';
@@ -13,6 +15,11 @@ interface ParsedKey {
 }
 
 export class SampleNode extends BaseNode {
+    private waveformRenderer = new WaveformRenderer({ accentColor: '#38bdf8' });
+    private audioBuffer: AudioBuffer | null = null;
+    private loadedFilepath = '';
+    private isLoadingAudio = false;
+
     static panelSchema: NodePanelSchema = {
         tabs: [
             {
@@ -39,7 +46,8 @@ export class SampleNode extends BaseNode {
                 label: 'Common',
                 sections: [
                     { type: 'appearance' },
-                    { type: 'info_table' }
+                    { type: 'info_table' },
+                    { type: 'fields', fields: ['scope_mode', 'scope_window', 'scope_gain'] }
                 ]
             }
         ]
@@ -47,6 +55,21 @@ export class SampleNode extends BaseNode {
 
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'New Sample', tab: 'COMMON' },
+        {
+            key: 'scope_mode',
+            label: 'Scope Mode',
+            type: 'select',
+            default: 'full',
+            options: [
+                { value: 'full', label: 'Full Sample' },
+                { value: 'drawn', label: 'Real-Time Drawn' },
+                { value: 'scrolled', label: 'Real-Time Scrolled' }
+            ],
+            tab: 'COMMON',
+            description: 'Visualizer mode: Full sample waveform, Real-time drawn sweep, or Real-time scrolled'
+        },
+        { key: 'scope_window', label: 'Scope Window', type: 'float', default: 0.0, min: 0.0, max: 32.0, step: 0.25, unit: 's', tab: 'COMMON', description: 'Window size for oscilloscope sweep (0 = auto-inherit sample length)' },
+        { key: 'scope_gain', label: 'Scope Gain', type: 'float', default: 1.0, min: 0.2, max: 5.0, step: 0.1, tab: 'COMMON', description: 'Real-time oscilloscope amplitude gain' },
         { key: 'filepath', label: 'Asset File', type: 'filepath', default: '', tab: 'SAMPLE' },
         { key: 'sample_type', label: 'Type', type: 'radio', default: 'loop', options: [{ value: 'loop', label: 'Loop' }, { value: 'one_shot', label: 'One Shot' }], tab: 'SAMPLE' },
         { key: 'start_beat', label: 'Start Beat', type: 'float', default: 0, min: 0, tab: 'SAMPLE' },
@@ -165,6 +188,9 @@ export class SampleNode extends BaseNode {
             stretch_factor: 1.0,
             stretch_algorithm: "rubberband",
             chain: getDefaultFxChain(DEFAULT_SAMPLE_INPUT_GAIN_DB),
+            scope_mode: "full",
+            scope_window: 0.0,
+            scope_gain: 1.0,
             color: "#10b981",
             icon: "sample",
             shape: "circle"
@@ -466,6 +492,85 @@ export class SampleNode extends BaseNode {
         const pitchNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
         const suffix = mode === 'major' ? 'maj' : mode === 'minor' ? 'min' : '';
         return `${pitchNames[pitchClass]}${suffix}`;
+    }
+
+    override drawVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
+        const filepath = String(this.properties?.filepath || '');
+        if (filepath !== this.loadedFilepath) {
+            this.loadedFilepath = filepath;
+            this.audioBuffer = null;
+            delete (this as any).manifestStemBuffer;
+            this.waveformRenderer.setSignal(null);
+        }
+
+        if (filepath && !this.audioBuffer && !this.isLoadingAudio) {
+            this.isLoadingAudio = true;
+            fetchAudioBuffer(filepath).then(buffer => {
+                this.audioBuffer = buffer;
+                if (buffer?.duration) {
+                    this.properties.duration_seconds = buffer.duration;
+                }
+                this.isLoadingAudio = false;
+                this.setDirtyCanvas(true, true);
+            }).catch(() => {
+                this.isLoadingAudio = false;
+            });
+        }
+
+        const isPlaying = Boolean(telemetry?.isPlaying);
+        const scopeMode = (this.properties?.scope_mode || 'full') as 'full' | 'drawn' | 'scrolled';
+        // Sample node strictly displays its own sample audio asset, never a tiled master stem
+        const displayBuffer = this.audioBuffer;
+
+        const sampleDur = displayBuffer?.duration || Number(this.properties?.duration_seconds) || 0;
+        const cropStart = Number(this.properties?.crop_start ?? 0);
+        const cropEnd = Number(this.properties?.crop_end ?? 1);
+        const activeSpan = Math.max(0.01, cropEnd - cropStart);
+        // The active sample duration represents the exact sample length itself
+        const sampleActiveDuration = sampleDur > 0 ? sampleDur * activeSpan : 2.0;
+
+        // Window size inherits directly from the sample length itself, NOT playback length!
+        const customWindow = Number(this.properties?.scope_window) || 0;
+        const scopeWindow = customWindow > 0 ? customWindow : sampleActiveDuration;
+        const scopeGain = Number(this.properties?.scope_gain) || 1.0;
+
+        // Accurate playback scrubber: follows the sample's own active length and loop cycle
+        let playbackProgress: number | undefined;
+        if (isPlaying && sampleActiveDuration > 0 && telemetry) {
+            const cycleTime = ((telemetry.time % sampleActiveDuration) + sampleActiveDuration) % sampleActiveDuration;
+            playbackProgress = cropStart + (cycleTime / sampleActiveDuration) * activeSpan;
+        }
+
+        this.waveformRenderer.setOptions({
+            scopeMode: isPlaying ? scopeMode : 'full',
+            scopeWindow,
+            scopeGain
+        });
+        const bufferedProgress = (this as any).bufferedProgress != null ? (this as any).bufferedProgress : 1.0;
+        const isInvalidated = Boolean((this as any).isInvalidated);
+        this.waveformRenderer.setSignal({
+            buffer: displayBuffer,
+            duration: sampleActiveDuration,
+            cropStart,
+            cropEnd,
+            accentColor: this.nodeColor,
+            playbackProgress,
+            bufferedProgress,
+            isInvalidated
+        });
+
+        this.waveformRenderer.render(ctx, bounds, telemetry);
+    }
+
+    override onVisualizationToggled(enabled: boolean): void {
+        if (enabled) {
+            const filepath = String(this.properties?.filepath || '');
+            if (!filepath || !this.audioBuffer) {
+                window.dispatchEvent(new CustomEvent('preview-node', {
+                    detail: { nodeId: this.id }
+                }));
+            }
+        }
     }
 }
 

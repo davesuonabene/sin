@@ -10,6 +10,12 @@ import {
     traceNodeShape,
     type NodeShape
 } from './NodeVisuals.ts';
+import {
+    defaultTransportClock,
+    type RenderBox,
+    type SignalTelemetry,
+    drawRoundRect
+} from '../../../packages/iride/src/index.ts';
 
 /** Default attenuation applied before processing newly-created sample nodes. */
 export const DEFAULT_SAMPLE_INPUT_GAIN_DB = -6;
@@ -48,10 +54,13 @@ function clonePropertyValue<T>(value: T, seen = new WeakMap<object, any>()): T {
 export abstract class BaseNode extends LGraphNode {
     static readonly visualSize = 44;
     static readonly bodySize: number = BaseNode.visualSize;
+    static readonly visualPanelWidth = 220;
+    static readonly visualPanelHeight = 76;
     buttons: CanvasButton[] = [];
     previewBtn: CanvasButton;
     renderBtn: CanvasButton;
     removeBtn: CanvasButton;
+    eyeBtn: CanvasButton;
 
     static createNode<T extends BaseNode>(this: new () => T, properties?: Record<string, any>): T {
         const instance = new this();
@@ -125,6 +134,42 @@ export abstract class BaseNode extends LGraphNode {
     get modifierKind(): string | null {
         return null;
     }
+
+    get visualPanelWidth(): number {
+        const ctor = this.constructor as any;
+        return ctor.panelWidth || BaseNode.visualPanelWidth;
+    }
+
+    get visualPanelHeight(): number {
+        const ctor = this.constructor as any;
+        return ctor.panelHeight || BaseNode.visualPanelHeight;
+    }
+
+    get isVisualizationSupported(): boolean {
+        return !this.isModifier && this.type !== 'Audio/Disabled';
+    }
+
+    get isVisualizationActive(): boolean {
+        return Boolean(this.properties?.visualization_enabled) && this.isVisualizationSupported;
+    }
+
+    toggleVisualization(): void {
+        if (!this.isVisualizationSupported) return;
+        const nextState = !this.isVisualizationActive;
+        this.updateProperty('visualization_enabled', nextState);
+        this.resizable = nextState;
+        this.updateButtonLayout();
+        this.size = this.computeSize();
+        this.setDirtyCanvas(true, true);
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('node-visualization-toggled', {
+                detail: { nodeId: this.id, enabled: nextState }
+            }));
+        }
+        this.onVisualizationToggled?.(nextState);
+    }
+
+    onVisualizationToggled?(_enabled: boolean): void;
 
     // Backwards compatibility helpers
     getDefaultColor(): string { return (this.constructor as typeof BaseNode).defaultColor; }
@@ -224,24 +269,107 @@ export abstract class BaseNode extends LGraphNode {
         if ((this.flags as any)?.hidden || (this as any).collapsedDotMode) return;
 
         this.size = this.computeSize();
-        const isSelected = Boolean(canvas?.selected_nodes && canvas.selected_nodes[this.id]) || Boolean(this.is_selected);
+        this.updateButtonLayout();
+        const isSelected = canvas?.selected_nodes
+            ? Boolean(canvas.selected_nodes[this.id] || canvas.selected_nodes[String(this.id)])
+            : Boolean(this.is_selected);
         const isHovered = canvas?.node_over === this;
         const isLibraryDropTarget = canvas?.library_drop_node === this;
         const isMainPreview = Boolean(this.properties?.is_main_preview);
 
         ctx.save();
-        this.drawSelectionRing(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview);
-        this.drawBody(ctx);
-        this.drawIcon(ctx);
-        if (!this.isModifier) {
-            this.drawSlots(ctx);
-            this.drawBadges(ctx, isMainPreview);
-            this.drawNameBadge(ctx, isSelected, isHovered);
+        if (this.isVisualizationActive) {
+            this.drawPanelFrame(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview);
+            if (!this.isModifier) {
+                this.drawSlots(ctx);
+            }
+            const viewport: RenderBox = {
+                x: 6,
+                y: 25,
+                width: this.size[0] - 12,
+                height: this.size[1] - 31
+            };
+            const telemetry = defaultTransportClock.getTelemetry();
+            this.drawVisualization(ctx, viewport, telemetry);
+        } else {
+            this.drawSelectionRing(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview);
+            this.drawBody(ctx);
+            this.drawIcon(ctx);
+            if (!this.isModifier) {
+                this.drawSlots(ctx);
+                this.drawBadges(ctx, isMainPreview);
+                this.drawNameBadge(ctx, isSelected, isHovered);
+            }
         }
         ctx.restore();
 
         if (!this.isModifier) {
             this.onDrawForeground?.(ctx, canvas);
+        }
+    }
+
+    drawVisualization(_ctx: CanvasRenderingContext2D, _bounds: RenderBox, _telemetry?: SignalTelemetry): void {
+        // Subclasses override to invoke their IRIDE renderer
+    }
+
+    protected drawPanelFrame(
+        ctx: CanvasRenderingContext2D,
+        isSelected: boolean,
+        _isHovered: boolean,
+        isLibraryDropTarget: boolean,
+        isMainPreview: boolean
+    ): void {
+        const [width, height] = this.size;
+
+        // Selection ring
+        if (isMainPreview || isSelected || isLibraryDropTarget) {
+            ctx.save();
+            ctx.lineWidth = isSelected ? 2 : 1.5;
+            ctx.strokeStyle = isMainPreview ? "#f59e0b" : isSelected ? "#38bdf8" : "#22c55e";
+            drawRoundRect(ctx, -2, -2, width + 4, height + 4, 7);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Solid light panel background
+        ctx.fillStyle = "#ffffff";
+        drawRoundRect(ctx, 0, 0, width, height, 6);
+        ctx.fill();
+
+        // Single peripherical border around everything
+        ctx.strokeStyle = this.nodeColor;
+        ctx.lineWidth = isSelected ? 1.5 : 1;
+        drawRoundRect(ctx, 0, 0, width, height, 6);
+        ctx.stroke();
+
+        // Mini Neon Icon in header
+        const headerHeight = 20;
+        drawNeonIcon(ctx, this.nodeIcon, 12, headerHeight / 2 + 1, 12, this.nodeColor);
+
+        // Node Title (clean dark slate text on light canvas)
+        const nodeName = this.properties?.node_name || this.title || "Node";
+        ctx.font = "600 11px Inter, system-ui, sans-serif";
+        ctx.fillStyle = "#1e293b";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        const maxTitleWidth = width - 40;
+        const measured = ctx.measureText(nodeName);
+        let displayTitle = nodeName;
+        if (measured.width > maxTitleWidth) {
+            displayTitle = nodeName.slice(0, 16) + '...';
+        }
+        ctx.fillText(displayTitle, 22, headerHeight / 2 + 1.5);
+
+        // Subtle resize grip at bottom-right corner when selected
+        if (isSelected && this.isVisualizationActive) {
+            ctx.strokeStyle = "rgba(100, 116, 139, 0.45)";
+            ctx.lineWidth = 1.25;
+            ctx.beginPath();
+            ctx.moveTo(width - 9, height - 3);
+            ctx.lineTo(width - 3, height - 9);
+            ctx.moveTo(width - 5, height - 3);
+            ctx.lineTo(width - 3, height - 5);
+            ctx.stroke();
         }
     }
 
@@ -291,19 +419,20 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     protected drawSlots(ctx: CanvasRenderingContext2D): void {
-        const size = BaseNode.visualSize;
+        const [width, height] = this.size;
+        const slotY = height * 0.5;
         const drawSlot = (x: number) => {
             ctx.beginPath();
-            ctx.arc(x, size / 2, 4, 0, Math.PI * 2);
+            ctx.arc(x, slotY, 4, 0, Math.PI * 2);
             ctx.fillStyle = "#07111f";
             ctx.fill();
             ctx.beginPath();
-            ctx.arc(x, size / 2, 2.25, 0, Math.PI * 2);
+            ctx.arc(x, slotY, 2.25, 0, Math.PI * 2);
             ctx.fillStyle = "#f8fafc";
             ctx.fill();
         };
         if (this.inputs?.length) drawSlot(0);
-        if (this.outputs?.length) drawSlot(size);
+        if (this.outputs?.length) drawSlot(width);
     }
 
     protected drawBadges(ctx: CanvasRenderingContext2D, isMainPreview: boolean): void {
@@ -375,6 +504,14 @@ export abstract class BaseNode extends LGraphNode {
             "Render (Save to Temp)"
         );
 
+        this.eyeBtn = new CanvasButton(
+            2, 2, 13, 13, "👁", "rgba(15, 23, 42, 0.75)", "#0284c7",
+            () => {
+                this.toggleVisualization();
+            },
+            "Toggle Visual Feedback"
+        );
+
         this.removeBtn = new CanvasButton(
             48, 36, 16, 16, "×", "#5f1720", "#b91c1c",
             () => {
@@ -389,7 +526,25 @@ export abstract class BaseNode extends LGraphNode {
 
         this.addButton(this.previewBtn);
         this.addButton(this.renderBtn);
+        this.addButton(this.eyeBtn);
         this.addButton(this.removeBtn);
+        this.updateButtonLayout();
+    }
+
+    updateButtonLayout(): void {
+        if (this.isVisualizationActive) {
+            this.previewBtn.x = -80; this.previewBtn.y = 3; this.previewBtn.width = 16; this.previewBtn.height = 16;
+            this.renderBtn.x = -60; this.renderBtn.y = 3; this.renderBtn.width = 16; this.renderBtn.height = 16;
+            this.eyeBtn.x = -40; this.eyeBtn.y = 3; this.eyeBtn.width = 16; this.eyeBtn.height = 16;
+            this.eyeBtn.color = "#0284c7"; this.eyeBtn.hoverColor = "#38bdf8";
+            this.removeBtn.x = -20; this.removeBtn.y = 3; this.removeBtn.width = 16; this.removeBtn.height = 16;
+        } else {
+            this.eyeBtn.x = 2; this.eyeBtn.y = 2; this.eyeBtn.width = 13; this.eyeBtn.height = 13;
+            this.eyeBtn.color = "rgba(15, 23, 42, 0.75)"; this.eyeBtn.hoverColor = "#0284c7";
+            this.previewBtn.x = 48; this.previewBtn.y = 0; this.previewBtn.width = 16; this.previewBtn.height = 16;
+            this.renderBtn.x = 48; this.renderBtn.y = 18; this.renderBtn.width = 16; this.renderBtn.height = 16;
+            this.removeBtn.x = 48; this.removeBtn.y = 36; this.removeBtn.width = 16; this.removeBtn.height = 16;
+        }
     }
 
     addButton(btn: CanvasButton) {
@@ -397,7 +552,30 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     computeSize(): [number, number] {
+        if (this.isVisualizationActive) {
+            this.resizable = true;
+            const customW = Number(this.properties?.visual_width);
+            const customH = Number(this.properties?.visual_height);
+            const w = Math.max(160, customW || this.visualPanelWidth);
+            const h = Math.max(50, customH || this.visualPanelHeight);
+            return [w, h];
+        }
+        this.resizable = false;
         return [BaseNode.visualSize, BaseNode.visualSize];
+    }
+
+    onResize(size: [number, number]): void {
+        if (this.isVisualizationActive && size) {
+            const w = Math.max(160, Math.round(size[0]));
+            const h = Math.max(50, Math.round(size[1]));
+            this.size = [w, h];
+            if (this.properties) {
+                this.properties.visual_width = w;
+                this.properties.visual_height = h;
+            }
+            this.updateButtonLayout();
+            this.setDirtyCanvas(true, true);
+        }
     }
 
     getTitle(): string {
@@ -409,11 +587,10 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     isPointInside(x: number, y: number, margin: number = 0): boolean {
-        const width = BaseNode.visualSize;
-        const height = BaseNode.visualSize;
+        const [width, height] = this.size;
         const isHoveredOrSelected = Boolean(this.is_selected || ((window as any).editorCanvas?.node_over === this));
-        const extraRight = 28;
-        const extraTop = isHoveredOrSelected ? 32 : 0;
+        const extraRight = this.isVisualizationActive ? 8 : 28;
+        const extraTop = isHoveredOrSelected && !this.isVisualizationActive ? 32 : 0;
         const extraBottom = 16;
 
         return (
@@ -427,9 +604,13 @@ export abstract class BaseNode extends LGraphNode {
     onDrawForeground(ctx: CanvasRenderingContext2D, canvas: any) {
         if (this.flags.collapsed || (this.flags as any).hidden || this.isModifier) return;
         const isHovered = canvas && canvas.node_over === this;
-        const isSelected = Boolean(canvas && canvas.selected_nodes && canvas.selected_nodes[this.id]) || this.is_selected;
+        const isSelected = canvas?.selected_nodes
+            ? Boolean(canvas.selected_nodes[this.id] || canvas.selected_nodes[String(this.id)])
+            : Boolean(this.is_selected);
         
-        if (isHovered || isSelected) {
+        // When visualization is active: icons are visible ONLY when node is selected!
+        const showButtons = this.isVisualizationActive ? isSelected : (isHovered || isSelected);
+        if (showButtons) {
             for (const btn of this.buttons) {
                 btn.draw(ctx, this);
             }
@@ -439,8 +620,11 @@ export abstract class BaseNode extends LGraphNode {
     onMouseMove(_e: MouseEvent, local_pos: any, canvas: any) {
         if (this.flags.collapsed || (this.flags as any).hidden || this.isModifier) return;
         const isHovered = canvas && canvas.node_over === this;
-        const isSelected = Boolean(canvas && canvas.selected_nodes && canvas.selected_nodes[this.id]) || this.is_selected;
-        if (!isHovered && !isSelected) return;
+        const isSelected = canvas?.selected_nodes
+            ? Boolean(canvas.selected_nodes[this.id] || canvas.selected_nodes[String(this.id)])
+            : Boolean(this.is_selected);
+        const showButtons = this.isVisualizationActive ? isSelected : (isHovered || isSelected);
+        if (!showButtons) return;
 
         if (!local_pos || local_pos.length < 2) return;
         const x = local_pos[0];
@@ -481,6 +665,11 @@ export abstract class BaseNode extends LGraphNode {
 
     onMouseDown(_e: MouseEvent, local_pos: any, _canvas: any): boolean {
         if (this.flags.collapsed || (this.flags as any).hidden || this.isModifier) return false;
+        const isSelected = _canvas?.selected_nodes
+            ? Boolean(_canvas.selected_nodes[this.id] || _canvas.selected_nodes[String(this.id)])
+            : Boolean(this.is_selected);
+        const showButtons = this.isVisualizationActive ? isSelected : true;
+        if (!showButtons) return false;
 
         if (local_pos && local_pos.length >= 2) {
             const x = local_pos[0];
@@ -530,8 +719,7 @@ export abstract class BaseNode extends LGraphNode {
 
     getConnectionPos(is_input: boolean, _slot_number: number | string, out?: any): any {
         out = out || new Float32Array(2);
-        const width = BaseNode.visualSize;
-        const height = BaseNode.visualSize;
+        const [width, height] = this.size;
 
         if (is_input) {
             // Lateral left connection

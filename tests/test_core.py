@@ -15,6 +15,7 @@ from api import (
     AudioNodeModel,
     RAM_PREVIEW_STORE,
     StageSaveRequest,
+    clear_ram_preview_cache,
     export_ram_preview,
     load_current_stage,
     preview_graph_ram,
@@ -542,6 +543,8 @@ class TestApiAudioFlow(AudioFixtureTestCase):
                     for entry in cached_response["runtime_log"]
                 ))
                 preview_id = preview_response["preview_id"]
+                self.assertIn("manifest", preview_response)
+                self.assertIn("nodes", preview_response["manifest"])
                 self.addCleanup(RAM_PREVIEW_STORE.pop, preview_id, None)
 
                 full_request = Request({
@@ -574,6 +577,13 @@ class TestApiAudioFlow(AudioFixtureTestCase):
 
                 render_response = render_graph(payload)
                 self.assertTrue((Path("temp_renders") / render_response["filename"]).is_file())
+
+                # Test wiping RAM store on workspace change
+                self.assertGreater(len(RAM_PREVIEW_STORE), 0)
+                clear_res = clear_ram_preview_cache()
+                self.assertEqual(clear_res["status"], "success")
+                self.assertEqual(len(RAM_PREVIEW_STORE), 0)
+
 
 
 class TestCurrentStagePersistence(unittest.TestCase):

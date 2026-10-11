@@ -222,8 +222,8 @@ export class MasterWaveform {
         this.ctx.save();
         this.ctx.scale(dpr, dpr);
         const background = this.ctx.createLinearGradient(0, 0, 0, cssHeight);
-        background.addColorStop(0, '#172033');
-        background.addColorStop(1, '#0b1120');
+        background.addColorStop(0, '#f8fafc');
+        background.addColorStop(1, '#f1f5f9');
         this.ctx.fillStyle = background;
         this.ctx.fillRect(0, 0, cssWidth, cssHeight);
 
@@ -248,11 +248,11 @@ export class MasterWaveform {
                 this.ctx.restore();
             };
             const playheadX = this.progress * cssWidth;
-            drawPeaks('#536278', playheadX, cssWidth);
-            drawPeaks('#3ee6b0', 0, playheadX);
-            this.ctx.fillStyle = 'rgba(62, 230, 176, 0.08)';
+            drawPeaks('#94a3b8', playheadX, cssWidth);
+            drawPeaks('#059669', 0, playheadX);
+            this.ctx.fillStyle = 'rgba(5, 150, 105, 0.08)';
             this.ctx.fillRect(0, 0, playheadX, cssHeight);
-            this.ctx.strokeStyle = '#ffffff';
+            this.ctx.strokeStyle = '#0284c7';
             this.ctx.lineWidth = 1.5;
             this.ctx.beginPath();
             this.ctx.moveTo(playheadX, 0);
@@ -264,16 +264,19 @@ export class MasterWaveform {
             this.ctx.textAlign = 'left';
             this.ctx.textBaseline = 'middle';
             const labelWidth = this.ctx.measureText(timeLabel).width + 12;
-            this.ctx.fillStyle = 'rgba(5, 10, 20, 0.78)';
+            this.ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
             this.ctx.fillRect(5, cssHeight - 17, labelWidth, 14);
-            this.ctx.fillStyle = '#e2e8f0';
+            this.ctx.strokeStyle = '#cbd5e1';
+            this.ctx.lineWidth = 1;
+            this.ctx.strokeRect(5, cssHeight - 17, labelWidth, 14);
+            this.ctx.fillStyle = '#1e293b';
             this.ctx.fillText(timeLabel, 11, cssHeight - 10);
 
             if (this.hoverProgress !== null && !this.isSeeking) {
                 const hoverX = this.hoverProgress * cssWidth;
                 const hoverTime = this.formatTime(this.hoverProgress * this.duration);
                 this.ctx.setLineDash([2, 3]);
-                this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                this.ctx.strokeStyle = 'rgba(2, 132, 199, 0.6)';
                 this.ctx.beginPath();
                 this.ctx.moveTo(hoverX, 0);
                 this.ctx.lineTo(hoverX, cssHeight);

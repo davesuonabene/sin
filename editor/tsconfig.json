@@ -20,5 +20,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "../ermes/ts/**/*"]
+  "include": ["src", "../ermes/ts/**/*", "../packages/iride/src/**/*"]
 }

@@ -32,10 +32,10 @@ export class WaveformVisualizer {
     private static readonly MIN_VIEW_WIDTH = 0.0005;
 
     // Visual configuration
-    private waveformColor: string = "#10b981";
-    private backgroundColor: string = "#0f172a";
-    private overlayColor: string = "rgba(15, 23, 42, 0.65)";
-    private handleColor: string = "#38bdf8";
+    private waveformColor: string = "#059669";
+    private backgroundColor: string = "#f8fafc";
+    private overlayColor: string = "rgba(148, 163, 184, 0.28)";
+    private handleColor: string = "#0284c7";
 
     // Drag state
     private activeDrag: 'start' | 'end' | 'scroll' | 'box-zoom' | null = null;
@@ -361,7 +361,7 @@ export class WaveformVisualizer {
 
         // 2. Grid lines & Center horizontal line
         const gridCols = 8;
-        this.ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+        this.ctx.strokeStyle = "rgba(148, 163, 184, 0.25)";
         this.ctx.lineWidth = 1;
 
         for (let i = 1; i < gridCols; i++) {
@@ -529,7 +529,7 @@ export class WaveformVisualizer {
         this.ctx.fill();
 
         // Handle label text
-        this.ctx.fillStyle = "#0f172a";
+        this.ctx.fillStyle = "#ffffff";
         this.ctx.font = "bold 9px Inter, monospace";
         this.ctx.textAlign = "center";
         this.ctx.textBaseline = "middle";
