@@ -48,7 +48,8 @@ function drawLibraryTypeIcon(canvas: HTMLCanvasElement, visual: LibraryTypeVisua
     const context = canvas.getContext('2d');
     if (!context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
-    drawNeonIcon(context, visual.icon, canvas.width / 2, canvas.height / 2, 16, '#ffffff');
+    const iconSize = Math.max(10, Math.round(Math.min(canvas.width, canvas.height) * 0.85));
+    drawNeonIcon(context, visual.icon, canvas.width / 2, canvas.height / 2, iconSize, visual.color);
 }
 
 let libraryPreviewEnabled = true;
@@ -661,7 +662,7 @@ export class LibraryPanel {
         const subfolderWrapper = document.createElement('div');
         subfolderWrapper.className = 'td-library-subfolder';
         if (depth > 0) {
-            subfolderWrapper.style.marginLeft = `${depth * 8}px`;
+            subfolderWrapper.style.marginLeft = `${depth * 4}px`;
         }
 
         const subfolderRow = document.createElement('div');
@@ -675,10 +676,6 @@ export class LibraryPanel {
         toggleSpan.className = 'td-library-subfolder-toggle';
         toggleSpan.textContent = isExpanded ? '▾' : '▸';
 
-        const iconSpan = document.createElement('span');
-        iconSpan.className = 'td-library-subfolder-icon';
-        iconSpan.textContent = '📁';
-
         const titleSpan = document.createElement('span');
         titleSpan.className = 'td-library-subfolder-title';
         titleSpan.textContent = folder.name;
@@ -688,7 +685,7 @@ export class LibraryPanel {
         countSpan.className = 'td-library-subfolder-count';
         countSpan.textContent = `(${folder.totalCount})`;
 
-        subfolderRow.append(toggleSpan, iconSpan, titleSpan, countSpan);
+        subfolderRow.append(toggleSpan, titleSpan, countSpan);
 
         const subfolderContents = document.createElement('div');
         subfolderContents.className = 'td-library-subfolder-contents';
@@ -741,8 +738,8 @@ export class LibraryPanel {
         const externalBadge = content.is_external ? '<span class="td-library-external-badge" title="External vault reference">↗ ext</span>' : '';
 
         contentRow.innerHTML = `
-            <span class="library-type-icon library-type-icon--small" style="--library-icon-color: ${contentVisual.color}; background-color: ${contentVisual.color}; border-color: ${contentVisual.color}" title="${contentVisual.label}" aria-label="${contentVisual.label}">
-                <canvas width="24" height="24"></canvas>
+            <span class="library-type-icon library-type-icon--small" title="${contentVisual.label}" aria-label="${contentVisual.label}">
+                <canvas width="14" height="14"></canvas>
             </span>
             <span class="stem-name" title="${content.absolute_path || content.relative_path}">${versionedContent.fileVersionDisplayName || content.filename || content.name || content.title}${metaInfo}${externalBadge}</span>
             <span class="stem-duration">${content.duration_seconds ? content.duration_seconds + 's' : ''}</span>
@@ -973,26 +970,31 @@ export class LibraryPanel {
             const isOrganizerExpanded = this.expandedOrganizerKeys.has(itemKey)
                 || (isSearchActive && versionedOrganizerContents.length > 0);
 
-            let accordionToggle = '';
+            const isOrganizer = isAssetOrganizer(item);
+            let multitrackToggle = '';
             if (item.type === 'multitrack' && Array.isArray(item.stems) && item.stems.length > 0) {
-                accordionToggle = `<button class="multitrack-toggle-btn" title="Toggle Stem List" aria-label="Toggle stem list">▼</button>`;
-            } else if (isAssetOrganizer(item) && visibleOrganizerContents.length > 0) {
-                accordionToggle = `<button class="pack-toggle-btn multitrack-toggle-btn" title="Toggle Pack Contents" aria-label="Toggle pack contents">${isOrganizerExpanded ? '▲' : '▼'}</button>`;
+                multitrackToggle = `<button class="multitrack-toggle-btn" title="Toggle Stem List" aria-label="Toggle stem list">▼</button>`;
             }
 
             const isFav = Boolean(item.favourite ?? item.attributes?.favourite);
             const externalBadge = item.is_external ? '<span class="td-library-external-badge" title="External vault reference">↗ ext</span>' : '';
 
+            const iconHtml = isOrganizer
+                ? `<span class="td-library-folder-toggle" aria-hidden="true">${isOrganizerExpanded ? '▾' : '▸'}</span>`
+                : `<span class="library-type-icon" title="${typeVisual.label}" aria-label="${typeVisual.label}">
+                    <canvas width="16" height="16"></canvas>
+                </span>`;
+
             el.innerHTML = `
-                <span class="library-type-icon" style="--library-icon-color: ${typeVisual.color}; background-color: ${typeVisual.color}; border-color: ${typeVisual.color}" title="${typeVisual.label}" aria-label="${typeVisual.label}">
-                    <canvas width="24" height="24"></canvas>
-                </span>
+                ${iconHtml}
                 <span class="item-label" title="${item.absolute_path}">${displayName}${metaStr} ${lengthBadge}${externalBadge}</span>
-                ${accordionToggle}
+                ${multitrackToggle}
                 <button class="td-library-row-fav-btn${isFav ? ' active' : ''}" type="button" title="${isFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isFav ? '★' : '☆'}</button>
             `;
-            const typeIconCanvas = el.querySelector('.library-type-icon canvas') as HTMLCanvasElement | null;
-            if (typeIconCanvas) drawLibraryTypeIcon(typeIconCanvas, typeVisual);
+            if (!isOrganizer) {
+                const typeIconCanvas = el.querySelector('.library-type-icon canvas') as HTMLCanvasElement | null;
+                if (typeIconCanvas) drawLibraryTypeIcon(typeIconCanvas, typeVisual);
+            }
 
             const favBtn = el.querySelector('.td-library-row-fav-btn') as HTMLButtonElement | null;
             if (favBtn) {
@@ -1044,7 +1046,7 @@ export class LibraryPanel {
 
             el.onclick = (e) => {
                 const target = e.target as HTMLElement;
-                if (target.classList.contains('multitrack-toggle-btn') && !target.classList.contains('pack-toggle-btn')) {
+                if (target.classList.contains('multitrack-toggle-btn')) {
                     e.stopPropagation();
                     const stemContainer = itemWrapper.querySelector('.multitrack-stem-container:not(.pack-content-container)') as HTMLElement;
                     if (stemContainer) {
@@ -1054,14 +1056,14 @@ export class LibraryPanel {
                     }
                     return;
                 }
-                if (target.classList.contains('pack-toggle-btn') || isAssetOrganizer(item)) {
+                if (target.classList.contains('td-library-folder-toggle') || isAssetOrganizer(item)) {
                     e.stopPropagation();
                     const packContainer = itemWrapper.querySelector('.pack-content-container') as HTMLElement;
                     if (packContainer) {
                         const isHidden = packContainer.style.display === 'none';
                         packContainer.style.display = isHidden ? 'block' : 'none';
-                        const toggleBtn = itemWrapper.querySelector('.pack-toggle-btn') as HTMLElement | null;
-                        if (toggleBtn) toggleBtn.innerText = isHidden ? '▲' : '▼';
+                        const toggleBtn = itemWrapper.querySelector('.td-library-folder-toggle') as HTMLElement | null;
+                        if (toggleBtn) toggleBtn.innerText = isHidden ? '▾' : '▸';
                         if (isHidden) {
                             this.expandedOrganizerKeys.add(itemKey);
                         } else {

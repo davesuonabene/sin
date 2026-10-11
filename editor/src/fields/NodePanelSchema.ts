@@ -1,4 +1,4 @@
-import { type FieldSchema } from './FieldSchema';
+import { type FieldSchema } from './FieldSchema.ts';
 
 export type SectionType =
     | 'fields'

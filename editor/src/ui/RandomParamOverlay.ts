@@ -182,6 +182,11 @@ export class RandomParamOverlay {
             }
         }
 
+        const updateMod = (window as any).updateModifiersForParent;
+        if (typeof updateMod === 'function') {
+            updateMod(node);
+        }
+
         return randomNode;
     }
 
@@ -413,7 +418,7 @@ export class RandomParamOverlay {
                 badge.style.border = `1px solid ${dest.enabled ? colors.border : '#475569'}`;
                 badge.style.color = dest.enabled ? colors.text : '#94a3b8';
                 badge.textContent = spreadStr;
-                badge.title = 'Drag horizontally to adjust ± range (or Ctrl+Drag)';
+                badge.title = 'Mouse wheel over parameter to adjust ± range';
 
                 badge.onpointerdown = (e: PointerEvent) => {
                     e.preventDefault();
@@ -474,7 +479,7 @@ export class RandomParamOverlay {
                 `;
 
                 if (isMapped && dest) {
-                    shield.title = `${dest.paramLabel || key}: ${spreadStr} (Mapped)\nClick to unmap · Ctrl+Drag to adjust range`;
+                    shield.title = `${dest.paramLabel || key}: ${spreadStr} (Mapped)\nClick to unmap · Scroll wheel to adjust range`;
                     shield.innerHTML = `
                         <div class="shield-range-track" style="position: relative; flex: 1; height: 7px; background: rgba(15, 23, 42, 0.9); border: 1px solid ${colors.border}; border-radius: 3px; overflow: hidden; margin-right: 8px; pointer-events: none;">
                             <div class="shield-range-fill" style="position: absolute; left: ${Math.max(0, 50 - spread * 0.5)}%; width: ${spread}%; height: 100%; background: ${colors.border}; opacity: 0.75; box-shadow: 0 0 6px ${colors.border};"></div>
@@ -485,7 +490,7 @@ export class RandomParamOverlay {
                         </div>
                     `;
                 } else {
-                    shield.title = `Click to map ${key} to Randomizer · Ctrl+Drag for range`;
+                    shield.title = `Click to map ${key} to Randomizer · Scroll wheel for range`;
                     shield.innerHTML = `
                         <div style="flex: 1;"></div>
                         <div class="shield-indicator" style="display: flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; color: #f472b6; background: #0f172a; border: 1px dashed rgba(236, 72, 153, 0.5); padding: 2px 7px; border-radius: 3px; pointer-events: none; flex-shrink: 0;">
@@ -506,35 +511,12 @@ export class RandomParamOverlay {
 
                 shield.onpointerdown = (e: PointerEvent) => {
                     e.stopPropagation();
-                    if (e.ctrlKey || e.metaKey) {
-                        e.preventDefault();
-                        const mod = this.getOrCreateRandomModifier(node);
-                        let targetDest = mod.properties.destinations?.find((d: RandomDestination) => d.paramKey === key);
-                        if (!targetDest) {
-                            const labelText = row.getAttribute('data-param-label') || key;
-                            const currentVal = this.getWorkingVal(node, key, 0);
-                            targetDest = {
-                                id: `dst_${key}_${Math.random().toString(36).substring(2, 6)}`,
-                                paramKey: key,
-                                paramLabel: labelText,
-                                minPercent: -10,
-                                maxPercent: 10,
-                                baseValue: currentVal,
-                                enabled: true
-                            };
-                            mod.properties.destinations = [...(mod.properties.destinations || []), targetDest];
-                            mod.updateProperty('destinations', mod.properties.destinations);
-                            this.updateVisualFeedback(container, node, isOverlayActive);
-                        }
-                        this.startDragOnRow(e, row, targetDest, mod, node, container, isOverlayActive);
-                    }
                 };
                 shield.onmousedown = (e) => e.stopPropagation();
 
                 shield.onclick = (e: MouseEvent) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    if (e.ctrlKey || e.metaKey) return; // Handled by drag
 
                     // Normal click: toggle mapping
                     const mod = this.getOrCreateRandomModifier(node);
@@ -594,31 +576,7 @@ export class RandomParamOverlay {
                     ctrl.style.pointerEvents = '';
                     ctrl.removeAttribute('tabindex');
                 });
-                row.onpointerdown = (e: PointerEvent) => {
-                    if (e.ctrlKey || e.metaKey) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const mod = this.getOrCreateRandomModifier(node);
-                        let targetDest = mod.properties.destinations?.find((d: RandomDestination) => d.paramKey === key);
-                        if (!targetDest) {
-                            const labelText = row.getAttribute('data-param-label') || key;
-                            const currentVal = this.getWorkingVal(node, key, 0);
-                            targetDest = {
-                                id: `dst_${key}_${Math.random().toString(36).substring(2, 6)}`,
-                                paramKey: key,
-                                paramLabel: labelText,
-                                minPercent: -10,
-                                maxPercent: 10,
-                                baseValue: currentVal,
-                                enabled: true
-                            };
-                            mod.properties.destinations = [...(mod.properties.destinations || []), targetDest];
-                            mod.updateProperty('destinations', mod.properties.destinations);
-                            this.updateVisualFeedback(container, node, isOverlayActive);
-                        }
-                        this.startDragOnRow(e, row, targetDest, mod, node, container, isOverlayActive);
-                    }
-                };
+                row.onpointerdown = null;
             }
         });
 
@@ -689,8 +647,8 @@ export class RandomParamOverlay {
                 `;
 
                 shield.title = isMapped && dest
-                    ? `${labelText}: ${spreadStr} (Mapped)\nClick to unmap · Ctrl+Drag to adjust range`
-                    : `Click to map ${labelText} to Randomizer · Ctrl+Drag for range`;
+                    ? `${labelText}: ${spreadStr} (Mapped)\nClick to unmap · Scroll wheel to adjust range`
+                    : `Click to map ${labelText} to Randomizer · Scroll wheel for range`;
 
                 if (isMapped && dest) {
                     shield.innerHTML = `
@@ -714,34 +672,12 @@ export class RandomParamOverlay {
 
                 shield.onpointerdown = (e: PointerEvent) => {
                     e.stopPropagation();
-                    if (e.ctrlKey || e.metaKey) {
-                        e.preventDefault();
-                        const mod = this.getOrCreateRandomModifier(node);
-                        let targetDest = mod.properties.destinations?.find((d: RandomDestination) => d.paramKey === key);
-                        if (!targetDest) {
-                            const currentVal = this.getWorkingVal(node, key, 0);
-                            targetDest = {
-                                id: `dst_${key}_${Math.random().toString(36).substring(2, 6)}`,
-                                paramKey: key,
-                                paramLabel: labelText,
-                                minPercent: -10,
-                                maxPercent: 10,
-                                baseValue: currentVal,
-                                enabled: true
-                            };
-                            mod.properties.destinations = [...(mod.properties.destinations || []), targetDest];
-                            mod.updateProperty('destinations', mod.properties.destinations);
-                            this.updateVisualFeedback(container, node, isOverlayActive);
-                        }
-                        this.startDragOnStep(e, stepEl, targetDest, mod, node, container, isOverlayActive);
-                    }
                 };
                 shield.onmousedown = (e) => e.stopPropagation();
 
                 shield.onclick = (e: MouseEvent) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    if (e.ctrlKey || e.metaKey) return; // Handled by drag
 
                     // Normal click: toggle mapping for this specific step
                     const mod = this.getOrCreateRandomModifier(node);
@@ -805,17 +741,8 @@ export class RandomParamOverlay {
 
                     stepEl.classList.add('td-step-is-mapped');
                     stepEl.style.boxShadow = `0 0 0 1.5px ${colors.border}`;
-                    stepEl.title = `${labelText}: ${spreadStr}\nCtrl+Drag to adjust range`;
-                    stepEl.onpointerdown = (e: PointerEvent) => {
-                        if (e.ctrlKey || e.metaKey) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            const mod = this.getAttachedRandomModifier(node);
-                            if (mod && dest) {
-                                this.startDragOnStep(e, stepEl, dest, mod, node, container, isOverlayActive);
-                            }
-                        }
-                    };
+                    stepEl.title = `${labelText}: ${spreadStr}`;
+                    stepEl.onpointerdown = null;
                 } else {
                     stepEl.classList.remove('td-step-is-mapped');
                     stepEl.style.boxShadow = '';
@@ -831,12 +758,11 @@ export class RandomParamOverlay {
             const fieldKey = rowLabel.dataset.rowFieldKey;
             const fieldLabel = rowLabel.dataset.rowFieldLabel || fieldKey;
             if (!fieldKey) return;
-            let suppressNextClick = false;
 
             if (isOverlayActive) {
                 rowLabel.style.cursor = 'pointer';
                 rowLabel.style.transition = 'all 0.15s ease';
-                rowLabel.title = `Click to toggle random mapping for all 16 ${fieldLabel} steps`;
+                rowLabel.title = `Click to toggle random mapping for all 16 ${fieldLabel} steps · Scroll wheel to adjust range`;
 
                 rowLabel.onmouseenter = () => {
                     rowLabel.style.color = '#ec4899';
@@ -847,18 +773,7 @@ export class RandomParamOverlay {
                     rowLabel.style.textDecoration = '';
                 };
 
-                rowLabel.onpointerdown = (e: PointerEvent) => {
-                    if (!(e.ctrlKey || e.metaKey)) return;
-
-                    const mod = this.getAttachedRandomModifier(node);
-                    const targets = this.getMappedSequenceRowDestinations(mod, fieldKey);
-                    if (!mod || targets.length === 0) return;
-
-                    e.preventDefault();
-                    e.stopPropagation();
-                    suppressNextClick = true;
-                    this.startDragOnSequenceRowLabel(e, rowLabel, targets, mod, node, container, isOverlayActive);
-                };
+                rowLabel.onpointerdown = null;
 
                 rowLabel.onwheel = (e: WheelEvent) => {
                     e.preventDefault();
@@ -876,11 +791,6 @@ export class RandomParamOverlay {
                 rowLabel.onclick = (e: MouseEvent) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    if (suppressNextClick) {
-                        suppressNextClick = false;
-                        return;
-                    }
-                    if (e.ctrlKey || e.metaKey) return;
                     const mod = this.getOrCreateRandomModifier(node);
                     const currentDests: RandomDestination[] = mod.properties.destinations || [];
                     const all16Keys = Array.from({ length: 16 }, (_, i) => `step_parameters.${i}.${fieldKey}`);

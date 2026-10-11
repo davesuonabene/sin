@@ -56,16 +56,15 @@ class BPMAnalyzer:
         return None
 
     @staticmethod
-    def from_duration(duration_seconds: float) -> float:
+    def from_duration(duration_seconds: float) -> Optional[float]:
         """
         Calculates assumed BPM from duration by checking standard loop lengths (in bars).
-        Returns assumed_bpm if within reasonable range (85 to 169), default 120.0 fallback.
+        Returns assumed_bpm if within reasonable range (85 to 169), otherwise None.
         """
         if duration_seconds <= 0:
-            return 120.0
+            return None
 
-        inferred = BPMAnalyzer.from_loop_duration(duration_seconds)
-        return inferred if inferred is not None else 120.0
+        return BPMAnalyzer.from_loop_duration(duration_seconds)
 
 
 class KeyAnalyzer:

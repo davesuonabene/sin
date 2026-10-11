@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
     assetMatchesFilters,
+    getAssetDisplayName,
     getFilterableAssetItems,
     isAssetOrganizer,
 } from '../src/ui/libraryFilters.ts';
@@ -76,5 +77,11 @@ test('getFilterableAssetItems recursively extracts leaf items from subfolders', 
     assert.equal(filterable[0].vault_id, 2);
     assert.equal(filterable[1].is_external, true);
     assert.equal(assetMatchesFilters(rootContainer, { tags: ['hihat'] }), true);
+});
+
+test('getAssetDisplayName prioritizes title over filename and path', () => {
+    assert.equal(getAssetDisplayName({ title: 'Glitch With Friends', name: 'Glitch With Friends_2' }), 'Glitch With Friends');
+    assert.equal(getAssetDisplayName({ name: 'Kick 01.wav' }), 'Kick 01.wav');
+    assert.equal(getAssetDisplayName({ absolute_path: 'C:/Samples/Snare.wav' }), 'Snare.wav');
 });
 

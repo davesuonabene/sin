@@ -1,9 +1,9 @@
-import { type FieldSchema } from '../fields/FieldSchema';
-import { type BaseNode } from '../nodes/BaseNode';
-import { fetchLibrary } from '../api';
-import { groupFileVersions } from '../libraryVersioning';
-import { RadioGroup } from './components/RadioGroup';
-import { getParameterWheelStep, registerParameterWheelControl } from './ParameterWheelMenu';
+import { type FieldSchema } from '../fields/FieldSchema.ts';
+import { type BaseNode } from '../nodes/BaseNode.ts';
+import { fetchLibrary } from '../api.ts';
+import { groupFileVersions } from '../libraryVersioning.ts';
+import { RadioGroup } from './components/RadioGroup.ts';
+import { getParameterWheelStep, registerParameterWheelControl } from './ParameterWheelMenu.ts';
 
 function formatDb(db: number): string {
     if (db <= -35.9) return "-inf dB";

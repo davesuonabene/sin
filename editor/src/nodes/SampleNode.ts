@@ -1,8 +1,8 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode, DEFAULT_SAMPLE_INPUT_GAIN_DB, getDefaultFxChain } from './BaseNode';
-import { type FieldSchema } from '../fields/FieldSchema';
-import { type NodePanelSchema } from '../fields/NodePanelSchema';
-import { findLibraryFileForSnapshot, resolveLibraryAssets, submitLibraryMetadataProposal, type LibraryFile } from '../api';
+import { BaseNode, DEFAULT_SAMPLE_INPUT_GAIN_DB, getDefaultFxChain } from './BaseNode.ts';
+import { type FieldSchema } from '../fields/FieldSchema.ts';
+import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
+import { findLibraryFileForSnapshot, resolveLibraryAssets, submitLibraryMetadataProposal, type LibraryFile } from '../api.ts';
 
 type MusicalMode = 'major' | 'minor' | null;
 type KeyMatchAlgorithm = 'nearest' | 'higher' | 'lower';
@@ -22,7 +22,9 @@ export class SampleNode extends BaseNode {
                     { type: 'waveform_crop', filepathKey: 'filepath', cropStartKey: 'crop_start', cropEndKey: 'crop_end' },
                     { type: 'fields', layout: 'inline', fields: ['crop_start', 'crop_end'] },
                     { type: 'fields', fields: ['sample_type'] },
-                    { type: 'fields', fields: ['start_beat', 'original_bpm', 'target_bpm', 'key', 'key_match_mode', 'key_match_algorithm', 'transpose', 'cents', 'stretch_mode', 'stretch_algorithm'] }
+                    { type: 'fields', fields: ['start_beat', 'original_bpm', 'target_bpm'] },
+                    { type: 'fields', fields: ['key', 'key_match_mode', 'key_match_algorithm', 'transpose', 'cents'] },
+                    { type: 'fields', fields: ['stretch_mode', 'stretch_algorithm'] }
                 ]
             },
             {
@@ -46,7 +48,7 @@ export class SampleNode extends BaseNode {
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'New Sample', tab: 'COMMON' },
         { key: 'filepath', label: 'Asset File', type: 'filepath', default: '', tab: 'SAMPLE' },
-        { key: 'sample_type', label: 'Type', type: 'select', default: 'loop', options: [{ value: 'loop', label: 'Loop' }, { value: 'one_shot', label: 'One Shot' }], tab: 'SAMPLE' },
+        { key: 'sample_type', label: 'Type', type: 'radio', default: 'loop', options: [{ value: 'loop', label: 'Loop' }, { value: 'one_shot', label: 'One Shot' }], tab: 'SAMPLE' },
         { key: 'start_beat', label: 'Start Beat', type: 'float', default: 0, min: 0, tab: 'SAMPLE' },
         {
             key: 'original_bpm',
@@ -84,7 +86,7 @@ export class SampleNode extends BaseNode {
         {
             key: 'key_match_algorithm',
             label: 'Matching Algorithm',
-            type: 'select',
+            type: 'radio',
             default: 'nearest',
             options: [
                 { value: 'nearest', label: 'Shift Nearest' },
@@ -94,12 +96,12 @@ export class SampleNode extends BaseNode {
             tab: 'SAMPLE',
             description: 'Choose whether Follow shifts to the closest compatible key, only upward, or only downward.'
         },
-        { key: 'transpose', label: 'Transpose', type: 'slider', default: 0, min: -24, max: 24, step: 1, unit: 'st', tab: 'SAMPLE' },
-        { key: 'cents', label: 'Fine Tune', type: 'slider', default: 0, min: -100, max: 100, step: 1, unit: 'ct', tab: 'SAMPLE' },
+        { key: 'transpose', label: 'Transpose', type: 'int', default: 0, min: -24, max: 24, step: 1, unit: 'st', tab: 'SAMPLE' },
+        { key: 'cents', label: 'Fine Tune', type: 'int', default: 0, min: -100, max: 100, step: 1, unit: 'ct', tab: 'SAMPLE' },
         {
             key: 'stretch_mode',
             label: 'Stretch Mode',
-            type: 'select',
+            type: 'radio',
             default: 'time_stretch',
             options: [
                 { value: 'time_stretch', label: 'Time Stretch (Independent Pitch)' },
@@ -111,7 +113,7 @@ export class SampleNode extends BaseNode {
         {
             key: 'stretch_algorithm',
             label: 'Stretch Algorithm',
-            type: 'select',
+            type: 'radio',
             default: 'rubberband',
             options: [
                 { value: 'rubberband', label: 'General / Tonal — R3 Finer' },
@@ -217,14 +219,33 @@ export class SampleNode extends BaseNode {
         );
         if (!libraryFile) return null;
 
+        const isExplicitOneShot = libraryFile.is_loop === false
+            || libraryFile.sample_type === 'one_shot'
+            || (Array.isArray(libraryFile.tags) && libraryFile.tags.includes('One shot'));
+        const isExplicitLoop = libraryFile.is_loop === true
+            || libraryFile.sample_type === 'loop'
+            || (Array.isArray(libraryFile.tags) && libraryFile.tags.includes('Loop'));
+
+        if (isExplicitOneShot) {
+            this.updateProperty('sample_type', 'one_shot');
+        } else if (isExplicitLoop) {
+            this.updateProperty('sample_type', 'loop');
+        }
+
         const bpm = Number(libraryFile?.bpm);
         if (libraryFile?.id != null) this.updateProperty('library_item_id', libraryFile.id);
         if (libraryFile.absolute_path && libraryFile.absolute_path !== filepath) {
             this.updateProperty('filepath', libraryFile.absolute_path);
         }
-        if (!this.properties?.original_bpm_is_local_override
-            && Number.isFinite(bpm) && bpm >= 20 && bpm <= 400 && this.properties.original_bpm !== bpm) {
-            this.updateProperty('original_bpm', bpm);
+        if (!this.properties?.original_bpm_is_local_override) {
+            if (Number.isFinite(bpm) && bpm >= 20 && bpm <= 400) {
+                if (this.properties.original_bpm !== bpm) {
+                    this.updateProperty('original_bpm', bpm);
+                }
+            } else if (isExplicitOneShot) {
+                // One shots do not have any bpm signature unless user specified from the library
+                this.updateProperty('original_bpm', null);
+            }
         }
 
         const duration = Number(libraryFile.duration_seconds);
@@ -309,12 +330,18 @@ export class SampleNode extends BaseNode {
             ? Number(this.properties?.key_match_transpose) || 0
             : 0;
 
+        const isOneShot = (this.properties?.sample_type || model.sample_type) === 'one_shot';
         return {
             ...model,
+            sample_type: isOneShot ? 'one_shot' : (model.sample_type || 'loop'),
+            original_bpm: isOneShot && !this.properties?.original_bpm_is_local_override && !model.original_bpm_is_local_override && (model.original_bpm === 120 || !model.original_bpm)
+                ? null
+                : model.original_bpm,
             key: matchTranspose !== 0 ? (this.properties?.key_match_target || model.key) : model.key,
             transpose: (Number(model.transpose) || 0) + matchTranspose,
             key_match_mode: this.properties?.key_match_mode || 'off',
-            key_match_algorithm: this.properties?.key_match_algorithm || 'nearest'
+            key_match_algorithm: this.properties?.key_match_algorithm || 'nearest',
+            stretch_algorithm: this.properties?.stretch_algorithm || 'rubberband'
         };
     }
 

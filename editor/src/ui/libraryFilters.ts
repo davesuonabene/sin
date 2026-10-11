@@ -157,7 +157,7 @@ export function getCompatibleAssetFacets(
 }
 
 export function getAssetDisplayName(item: any): string {
-    const source = String(item?.name || item?.title || item?.filename || item?.absolute_path || item?.filepath || 'Untitled asset');
+    const source = String(item?.title || item?.name || item?.filename || item?.absolute_path || item?.filepath || 'Untitled asset');
     return source.replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'Untitled asset';
 }
 

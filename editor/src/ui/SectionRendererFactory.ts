@@ -1,15 +1,15 @@
-import { type PanelSectionConfig } from '../fields/NodePanelSchema';
-import { type FieldSchema } from '../fields/FieldSchema';
-import { type BaseNode } from '../nodes/BaseNode';
-import { WidgetFactory } from './WidgetFactory';
-import { WaveformCropSection } from './components/WaveformCropSection';
-import { SequenceGridSection } from './components/SequenceGridSection';
-import { ArrangementTimelineSection } from './components/ArrangementTimelineSection';
-import { FxChainSection } from './components/FxChainSection';
-import { AssetPoolSection } from './components/AssetPoolSection';
-import { RandomDestinationsSection } from './components/RandomDestinationsSection';
-import { NEON_ICONS, NODE_SHAPES } from '../nodes/NodeVisuals';
-import { APPEARANCE_COLOR_PRESETS } from '../config/appearance';
+import { type PanelSectionConfig } from '../fields/NodePanelSchema.ts';
+import { type FieldSchema } from '../fields/FieldSchema.ts';
+import { type BaseNode } from '../nodes/BaseNode.ts';
+import { WidgetFactory } from './WidgetFactory.ts';
+import { WaveformCropSection } from './components/WaveformCropSection.ts';
+import { SequenceGridSection } from './components/SequenceGridSection.ts';
+import { ArrangementTimelineSection } from './components/ArrangementTimelineSection.ts';
+import { FxChainSection } from './components/FxChainSection.ts';
+import { AssetPoolSection } from './components/AssetPoolSection.ts';
+import { RandomDestinationsSection } from './components/RandomDestinationsSection.ts';
+import { NEON_ICONS, NODE_SHAPES } from '../nodes/NodeVisuals.ts';
+import { APPEARANCE_COLOR_PRESETS } from '../config/appearance.ts';
 
 export class SectionRendererFactory {
     static async renderSection(
@@ -101,7 +101,13 @@ export class SectionRendererFactory {
                     if (key === 'node_name' && titleDisplay) {
                         titleDisplay.innerText = String(val);
                     }
+                    SectionRendererFactory.updateNodeFieldStates(windowContext?.container || group, node);
                     windowContext.refreshAudioPreview();
+                    if ((key === 'crop_start' || key === 'crop_end') && typeof windowContext?.updateCropFromFields === 'function') {
+                        const cs = Math.max(0, Math.min(1, Number(node.properties.crop_start) || 0));
+                        const ce = Math.max(0, Math.min(1, Number(node.properties.crop_end) ?? 1));
+                        windowContext.updateCropFromFields(cs, ce);
+                    }
                     if (field.type === 'filepath' && windowContext.currentWaveformVisualizer) {
                         await windowContext.renderTabContent();
                     }
@@ -115,7 +121,36 @@ export class SectionRendererFactory {
             group.appendChild(row);
         }
 
+        SectionRendererFactory.updateNodeFieldStates(group, node);
         container.appendChild(group);
+    }
+
+    private static setRowDisabled(row: HTMLElement | null, disabled: boolean) {
+        if (!row) return;
+        row.style.display = '';
+        row.style.opacity = disabled ? '0.38' : '';
+        row.style.pointerEvents = disabled ? 'none' : '';
+        row.style.filter = disabled ? 'grayscale(100%)' : '';
+        row.setAttribute('aria-disabled', String(disabled));
+        const inputs = row.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button');
+        inputs.forEach(input => {
+            input.disabled = disabled;
+        });
+    }
+
+    public static updateNodeFieldStates(container: HTMLElement, node: BaseNode) {
+        if (!container || !node) return;
+        if (node.nodeType === 'sample' || node.type === 'Audio/Sample') {
+            const isOneShot = node.properties?.sample_type === 'one_shot';
+            const origBpmRow = container.querySelector<HTMLElement>('[data-field-key="original_bpm"]');
+            const targetBpmRow = container.querySelector<HTMLElement>('[data-field-key="target_bpm"]');
+            this.setRowDisabled(origBpmRow, isOneShot);
+            this.setRowDisabled(targetBpmRow, isOneShot);
+
+            const isKeyMatchOff = !node.properties?.key_match_mode || node.properties?.key_match_mode === 'off';
+            const keyAlgoRow = container.querySelector<HTMLElement>('[data-field-key="key_match_algorithm"]');
+            this.setRowDisabled(keyAlgoRow, isKeyMatchOff);
+        }
     }
 
     private static renderAppearanceSection(

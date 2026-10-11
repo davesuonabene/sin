@@ -1,8 +1,8 @@
-import { type BaseNode } from '../../nodes/BaseNode';
-import { type FieldSchema } from '../../fields/FieldSchema';
-import { type ArrangementNode, type ArrangementSectionStructure } from '../../nodes/ArrangementNode';
-import { ArrangementVisualizer } from '../ArrangementVisualizer';
-import { resolveArrangementSourceVisual } from '../arrangementSourceVisual';
+import { type BaseNode } from '../../nodes/BaseNode.ts';
+import { type FieldSchema } from '../../fields/FieldSchema.ts';
+import { type ArrangementNode, type ArrangementSectionStructure } from '../../nodes/ArrangementNode.ts';
+import { ArrangementVisualizer } from '../ArrangementVisualizer.ts';
+import { resolveArrangementSourceVisual } from '../arrangementSourceVisual.ts';
 
 export class ArrangementTimelineSection {
     static async render(

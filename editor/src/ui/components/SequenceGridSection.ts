@@ -1,7 +1,7 @@
-import { type FieldSchema } from '../../fields/FieldSchema';
-import { type BaseNode } from '../../nodes/BaseNode';
-import { StepValueControl } from './StepValueControl';
-import { type SequenceDocument } from '../../nodes/SequenceNode';
+import { type FieldSchema } from '../../fields/FieldSchema.ts';
+import { type BaseNode } from '../../nodes/BaseNode.ts';
+import { StepValueControl } from './StepValueControl.ts';
+import { type SequenceDocument } from '../../nodes/SequenceNode.ts';
 
 type StepParameters = Record<string, number | boolean> & {
     subdivision_enabled: boolean;
@@ -114,7 +114,7 @@ export class SequenceGridSection {
         const saveButton = document.createElement('button');
         saveButton.type = 'button';
         saveButton.className = 'waveform-asset-button td-seq-header-button td-seq-save-button';
-        saveButton.textContent = '↓';
+        saveButton.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>';
         saveButton.title = 'Save sequence to the default GAIA vault';
         saveButton.setAttribute('aria-label', saveButton.title);
 
@@ -281,12 +281,58 @@ export class SequenceGridSection {
             }
         };
 
+        const collapsedModifiers: Record<string, boolean> = {
+            ...(node.properties?.collapsed_step_modifiers || {})
+        };
+
         for (const field of parameterFields) {
+            const isRowCollapsed = Boolean(collapsedModifiers[field.key]);
+            const rowElements: HTMLElement[] = [];
+
             const label = document.createElement('div');
-            label.className = 'td-seq-row-label';
-            label.textContent = field.label;
+            label.className = 'td-seq-row-label td-seq-modifier-row-item';
             label.dataset.rowFieldKey = field.key;
             label.dataset.rowFieldLabel = field.label;
+
+            const toggleBtn = document.createElement('button');
+            toggleBtn.type = 'button';
+            toggleBtn.className = 'td-seq-row-toggle';
+            toggleBtn.textContent = isRowCollapsed ? '▶' : '▼';
+            toggleBtn.title = isRowCollapsed ? `Expand ${field.label}` : `Collapse ${field.label}`;
+            toggleBtn.setAttribute('aria-label', toggleBtn.title);
+            toggleBtn.setAttribute('aria-expanded', String(!isRowCollapsed));
+
+            const labelText = document.createElement('span');
+            labelText.className = 'td-seq-row-label-text';
+            labelText.textContent = field.label;
+
+            label.append(toggleBtn, labelText);
+
+            const updateRowCollapseVisual = (collapsed: boolean) => {
+                toggleBtn.textContent = collapsed ? '▶' : '▼';
+                toggleBtn.title = collapsed ? `Expand ${field.label}` : `Collapse ${field.label}`;
+                toggleBtn.setAttribute('aria-label', toggleBtn.title);
+                toggleBtn.setAttribute('aria-expanded', String(!collapsed));
+                rowElements.forEach(el => {
+                    el.classList.toggle('is-collapsed-row', collapsed);
+                });
+            };
+
+            const toggleRow = (e?: Event) => {
+                if (e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                }
+                const next = !Boolean(collapsedModifiers[field.key]);
+                collapsedModifiers[field.key] = next;
+                node.updateProperty('collapsed_step_modifiers', { ...collapsedModifiers });
+                updateRowCollapseVisual(next);
+                windowContext?.applyOverlays?.();
+            };
+
+            toggleBtn.addEventListener('pointerdown', e => e.stopPropagation());
+            toggleBtn.addEventListener('click', toggleRow);
+
             grid.appendChild(label);
 
             stepParameters.forEach((parameters, stepIndex) => {
@@ -320,6 +366,10 @@ export class SequenceGridSection {
                 control.element.dataset.paramLabel = stepLabel;
                 control.element.dataset.stepIndex = String(stepIndex);
                 control.element.dataset.stepNumber = String(stepIndex + 1);
+                control.element.classList.add('td-seq-modifier-row-item');
+                if (isRowCollapsed) {
+                    control.element.classList.add('is-collapsed-row');
+                }
                 control.element.classList.toggle('is-step-off', !sequence[stepIndex]);
                 input.dataset.fieldKey = field.key;
                 input.dataset.stepIndex = String(stepIndex);
@@ -346,8 +396,15 @@ export class SequenceGridSection {
                     if (typingInput === input) typingInput = null;
                 });
                 grid.appendChild(control.element);
+                rowElements.push(control.element);
                 if ((stepIndex + 1) % 4 === 0 && stepIndex < STEP_COUNT - 1) {
-                    grid.appendChild(this.createBeatSpacer());
+                    const spacer = this.createBeatSpacer();
+                    spacer.classList.add('td-seq-modifier-row-item');
+                    if (isRowCollapsed) {
+                        spacer.classList.add('is-collapsed-row');
+                    }
+                    grid.appendChild(spacer);
+                    rowElements.push(spacer);
                 }
             });
         }

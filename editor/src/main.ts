@@ -10,6 +10,7 @@ import './nodes/ModulatorNode';
 import './nodes/AssetFilterNode';
 import './nodes/RandomNode';
 import './nodes/DisabledNode';
+import { isModifierNode, BaseNode } from './nodes/BaseNode';
 import { PropertiesWindow } from './ui/PropertiesWindow';
 import { NodePopupMenu } from './ui/NodePopupMenu';
 import { NodeContextMenu } from './ui/NodeContextMenu';
@@ -696,7 +697,7 @@ function rebuildTrackNodesFromGraph(graph: LGraph) {
             name: p.node_name || node.title || 'AudioNode',
             filepath: p.filepath || '',
             sample_type: p.sample_type,
-            original_bpm: p.original_bpm || 120,
+            original_bpm: p.sample_type === 'one_shot' ? (p.original_bpm || null) : (p.original_bpm || 120),
             target_bpm: p.target_bpm || p.bpm || 120,
             bpm: p.bpm || p.target_bpm || 120,
             key: p.key || '',
@@ -1374,6 +1375,48 @@ const originalConnect = (LiteGraph as any).LGraphNode.prototype.connect;
     return link;
 };
 
+export function updateModifiersForParent(parentNode: any): void {
+    if (!parentNode || !parentNode.graph) return;
+    const allNodes: any[] = (parentNode.graph as any)._nodes || [];
+    const modifiers = allNodes.filter(n =>
+        n && isModifierNode(n) && n.properties?.parentId === parentNode.id
+    );
+    if (!modifiers.length) return;
+
+    const parentWidth = parentNode.size?.[0] || BaseNode.visualSize || 44;
+    const parentHeight = parentNode.size?.[1] || BaseNode.visualSize || 44;
+    const parentCenterX = parentNode.pos[0] + parentWidth * 0.5;
+    const parentBottomY = parentNode.pos[1] + parentHeight;
+
+    const spacing = 56;
+    const totalWidth = (modifiers.length - 1) * spacing + BaseNode.visualSize;
+    const startX = parentCenterX - totalWidth * 0.5;
+    const targetY = parentBottomY + 32;
+
+    modifiers.forEach((mod, index) => {
+        const targetX = startX + index * spacing;
+        if (!mod.pos) {
+            mod.pos = [targetX, targetY];
+        } else {
+            mod.pos[0] = targetX;
+            mod.pos[1] = targetY;
+        }
+    });
+}
+
+export function syncAllModifierPositions(graph?: any): void {
+    const targetGraph = graph || (window as any).editorGraph;
+    if (!targetGraph || !targetGraph._nodes) return;
+    for (const node of targetGraph._nodes) {
+        if (node && !isModifierNode(node)) {
+            updateModifiersForParent(node);
+        }
+    }
+}
+
+(window as any).updateModifiersForParent = updateModifiersForParent;
+(window as any).syncAllModifierPositions = syncAllModifierPositions;
+
 // Keep canvas navigation and selection on familiar desktop controls:
 // middle-drag pans, Shift+left-drag box-selects, and Ctrl+click adds nodes.
 const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.processMouseDown;
@@ -1454,12 +1497,28 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
     }
 
     try {
-        return originalProcessMouseDown.call(this, e);
+        const res = originalProcessMouseDown.call(this, e);
+        if (this.node_dragged && isModifierNode(this.node_dragged)) {
+            this.node_dragged = null;
+        }
+        return res;
     } finally {
         this.allow_dragcanvas = previousAllowDragCanvas;
         if (boxSelect || additiveSelect) delete (e as any).ctrlKey;
         if (additiveSelect) delete (e as any).shiftKey;
     }
+};
+
+const originalProcessMouseMove = (LiteGraph as any).LGraphCanvas.prototype.processMouseMove;
+(LiteGraph as any).LGraphCanvas.prototype.processMouseMove = function (e: MouseEvent) {
+    if (this.node_dragged && isModifierNode(this.node_dragged)) {
+        this.node_dragged = null;
+    }
+    const res = originalProcessMouseMove.call(this, e);
+    if (this.node_dragged) {
+        syncAllModifierPositions(this.graph);
+    }
+    return res;
 };
 
 const originalProcessNodeSelected = (LiteGraph as any).LGraphCanvas.prototype.processNodeSelected;
@@ -2010,6 +2069,7 @@ function syncGraphHierarchy(graph?: LGraph) {
     syncBpmInheritance(targetGraph);
     syncArrangementLengthInheritance(targetGraph);
     updateMainPreviewTarget(targetGraph);
+    syncAllModifierPositions(targetGraph);
 }
 
 window.addEventListener('graph-connections-changed', () => {
@@ -2030,7 +2090,7 @@ function updateGraphNodeCollapsing() {
         const lgraphNode = graph.getNodeById(nodeId);
         if (!lgraphNode) continue;
 
-        if ((lgraphNode as any)?.isModifier || data.type === "modulator" || data.type === "asset_filter" || data.type === "random" || lgraphNode.type === "Audio/Modulator" || lgraphNode.type === "Audio/AssetFilter" || lgraphNode.type === "Audio/Random") {
+        if (isModifierNode(lgraphNode) || data.type === "modulator" || data.type === "asset_filter" || data.type === "random") {
             const parentId = data.parentId || lgraphNode.properties?.parentId;
 
             const isParentSelected = parentId != null && Boolean(selectedMap[parentId]);
@@ -2043,7 +2103,7 @@ function updateGraphNodeCollapsing() {
                 (lgraphNode as any).collapsedDotMode = false;
             } else {
                 lgraphNode.flags.collapsed = true;
-                (lgraphNode as any).flags.hidden = false;
+                (lgraphNode as any).flags.hidden = true;
                 (lgraphNode as any).collapsedDotMode = true;
             }
         } else if (data.parentId === null) {
@@ -2062,6 +2122,8 @@ function updateGraphNodeCollapsing() {
             }
         }
     }
+
+    syncAllModifierPositions(graph);
 
     if ((window as any).editorCanvas) {
         (window as any).editorCanvas.setDirty(true, true);
@@ -2378,15 +2440,6 @@ function addModulatorNode(
         modNode.size = (modNode as any).computeSize();
     }
 
-    const parentWidth = parentNode.size ? parentNode.size[0] : 200;
-    const parentHeight = parentNode.size ? parentNode.size[1] : 44;
-    const offsetX = (modCount - 0.5) * 210;
-
-    modNode.pos = [
-        parentNode.pos[0] + parentWidth * 0.5 - 90 + offsetX,
-        parentNode.pos[1] + parentHeight + 60
-    ];
-
     graph.add(modNode);
 
     trackNodes.set(modNode.id, {
@@ -2407,6 +2460,7 @@ function addModulatorNode(
         parentData.modulators.push(modNode.id);
     }
 
+    updateModifiersForParent(parentNode);
     updateGraphNodeCollapsing();
     window.dispatchEvent(new CustomEvent('graph-connections-changed'));
     if ((window as any).editorCanvas) {
@@ -3410,16 +3464,14 @@ const dockview = new DockviewComponent(dockviewContainer, {
                                 || node.properties?.node_type === "random";
 
                             if (!isMod) {
-                                if (node.flags?.collapsed) continue;
-                                const width = node.size?.[0] || 200;
+                                const hasVisibleModifiers = nodesList.some((n: any) =>
+                                    n && isModifierNode(n) && n.properties?.parentId === node.id && !(n.flags as any)?.hidden
+                                );
+                                if (!hasVisibleModifiers || node.flags?.collapsed) continue;
+                                const width = node.size?.[0] || 44;
                                 const height = node.size?.[1] || 44;
                                 const inletX = node.pos[0] + width * 0.5;
                                 const inletY = node.pos[1] + height;
-
-                                ctx.beginPath();
-                                ctx.arc(inletX, inletY, 6, 0, Math.PI * 2);
-                                ctx.fillStyle = "rgba(147, 51, 234, 0.2)";
-                                ctx.fill();
 
                                 ctx.beginPath();
                                 ctx.arc(inletX, inletY, 4, 0, Math.PI * 2);
@@ -3442,9 +3494,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                             const parentY = parentNode.pos[1] + parentHeight;
                             const modWidth = node.size?.[0] || 44;
                             const modX = node.pos[0] + modWidth * 0.5;
-                            const modY = (node as any).collapsedDotMode
-                                ? node.pos[1] + 10
-                                : node.pos[1];
+                            const modY = node.pos[1];
 
                             const modColor = (node as any).nodeColor || node.color || "#a855f7";
 
@@ -3456,28 +3506,13 @@ const dockview = new DockviewComponent(dockviewContainer, {
                             ctx.lineCap = "round";
                             ctx.stroke();
 
-                            if ((node as any).collapsedDotMode) {
-                                ctx.beginPath();
-                                ctx.arc(modX, modY, 7.5, 0, Math.PI * 2);
-                                ctx.fillStyle = "rgba(147, 51, 234, 0.25)";
-                                ctx.fill();
-
-                                ctx.beginPath();
-                                ctx.arc(modX, modY, 4.5, 0, Math.PI * 2);
-                                ctx.fillStyle = modColor;
-                                ctx.fill();
-                                ctx.lineWidth = 1.5;
-                                ctx.strokeStyle = "#ffffff";
-                                ctx.stroke();
-                            } else {
-                                ctx.beginPath();
-                                ctx.arc(modX, modY, 4.5, 0, Math.PI * 2);
-                                ctx.fillStyle = modColor;
-                                ctx.fill();
-                                ctx.lineWidth = 1.5;
-                                ctx.strokeStyle = "#ffffff";
-                                ctx.stroke();
-                            }
+                            ctx.beginPath();
+                            ctx.arc(modX, modY, 3.5, 0, Math.PI * 2);
+                            ctx.fillStyle = modColor;
+                            ctx.fill();
+                            ctx.lineWidth = 1.5;
+                            ctx.strokeStyle = "#ffffff";
+                            ctx.stroke();
                         }
 
                         ctx.restore();

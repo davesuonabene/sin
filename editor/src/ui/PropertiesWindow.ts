@@ -314,7 +314,7 @@ export class PropertiesWindow {
                     </div>
                     <div style="display: flex; align-items: center; gap: 4px;">
                         ${!(this.node as any).isModifier ? `
-                            <button type="button" class="random-mode-toggle-btn ${this.isRandomMappingMode ? 'active' : ''}" id="td-random-mode-btn" title="Toggle Live Random Mapping Mode (Locks normal editing, click parameter to map, Ctrl+Click to edit range)" style="display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; font-size: 10px; font-weight: 600; border-radius: 4px; border: 1px solid ${this.isRandomMappingMode ? '#ec4899' : '#334155'}; background: ${this.isRandomMappingMode ? '#db2777' : '#1e293b'}; color: ${this.isRandomMappingMode ? '#ffffff' : '#f472b6'}; cursor: pointer; transition: all 0.15s ease;">
+                            <button type="button" class="random-mode-toggle-btn ${this.isRandomMappingMode ? 'active' : ''}" id="td-random-mode-btn" title="Toggle Live Random Mapping Mode (Locks normal editing, click parameter to map, scroll to edit range)" style="display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; font-size: 10px; font-weight: 600; border-radius: 4px; border: 1px solid ${this.isRandomMappingMode ? '#ec4899' : '#334155'}; background: ${this.isRandomMappingMode ? '#db2777' : '#1e293b'}; color: ${this.isRandomMappingMode ? '#ffffff' : '#f472b6'}; cursor: pointer; transition: all 0.15s ease;">
                                 <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: ${this.isRandomMappingMode ? '#ffffff' : '#ec4899'};"></span>
                                 <span class="random-mode-btn-text">${this.isRandomMappingMode ? 'Mapping Active' : 'Map Mode'}</span>
                             </button>
@@ -481,11 +481,13 @@ export class PropertiesWindow {
                     if (token !== this.renderToken || this.disposed) return;
                     contentContainer.appendChild(el);
                 }
+                SectionRendererFactory.updateNodeFieldStates(contentContainer, this.node as any);
                 finish();
                 return;
             }
         }
 
+        SectionRendererFactory.updateNodeFieldStates(contentContainer, this.node as any);
         finish();
     }
 

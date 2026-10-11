@@ -24,20 +24,13 @@ function renderMenu(): void {
     });
 }
 
-function closeMenu(commitSelection: boolean): void {
-    if (!menuIsOpen) return;
-    if (commitSelection) selectedStep = previewStep;
-    menu?.remove();
-    menu = null;
-    menuOrigin = null;
-    menuIsOpen = false;
-}
+let didMove = false;
 
 function stepAtPointer(x: number, y: number): number | null {
     if (!menuOrigin) return null;
     const dx = x - menuOrigin.x;
     const dy = y - menuOrigin.y;
-    if (Math.hypot(dx, dy) < 24) return null;
+    if (Math.hypot(dx, dy) < 18) return null;
 
     // Top, right, bottom, and left map to coarse through fine adjustment.
     const quadrant = ((Math.round((Math.atan2(dy, dx) + Math.PI / 2) / (Math.PI / 2)) % 4) + 4) % 4;
@@ -49,10 +42,11 @@ function openMenu(): void {
 
     menuOrigin = { ...pointerPosition };
     previewStep = selectedStep;
+    didMove = false;
     menu = document.createElement('div');
     menu.className = 'td-param-wheel-menu';
     menu.setAttribute('role', 'status');
-    menu.setAttribute('aria-label', 'Mouse wheel adjustment step. Move toward a value, then release Alt to select it.');
+    menu.setAttribute('aria-label', 'Mouse wheel adjustment step. Move toward a value, or click middle mouse to select.');
     menu.innerHTML = `
         <span class="td-param-wheel-ring" aria-hidden="true"></span>
         <span class="td-param-wheel-center">Step</span>
@@ -66,6 +60,23 @@ function openMenu(): void {
     renderMenu();
 }
 
+function closeMenu(commitSelection: boolean): void {
+    if (!menuIsOpen) return;
+    if (commitSelection) {
+        if (!didMove) {
+            // Quick click without drag: cycle through steps [10, 1, 0.1, 0.01]
+            const currIdx = WHEEL_STEPS.indexOf(selectedStep as any);
+            selectedStep = WHEEL_STEPS[(currIdx + 1) % WHEEL_STEPS.length];
+        } else {
+            selectedStep = previewStep;
+        }
+    }
+    menu?.remove();
+    menu = null;
+    menuOrigin = null;
+    menuIsOpen = false;
+}
+
 function installListeners(): void {
     if (listenersInstalled || typeof document === 'undefined') return;
     listenersInstalled = true;
@@ -73,9 +84,12 @@ function installListeners(): void {
     document.addEventListener('pointermove', event => {
         if (menuIsOpen) {
             const step = stepAtPointer(event.clientX, event.clientY);
-            if (step != null && step !== previewStep) {
-                previewStep = step;
-                renderMenu();
+            if (step != null) {
+                didMove = true;
+                if (step !== previewStep) {
+                    previewStep = step;
+                    renderMenu();
+                }
             }
             return;
         }
@@ -84,6 +98,36 @@ function installListeners(): void {
         pointerPosition = pointerControl ? { x: event.clientX, y: event.clientY } : null;
     }, true);
 
+    // Middle mouse button (button 1): clicking/holding mouse wheel on a parameter opens the selector
+    document.addEventListener('pointerdown', event => {
+        if (event.button === 1) { // Middle click
+            const ctrl = getWheelControl(event.target);
+            if (ctrl?.isConnected) {
+                event.preventDefault();
+                event.stopPropagation();
+                pointerControl = ctrl;
+                pointerPosition = { x: event.clientX, y: event.clientY };
+                openMenu();
+            }
+        }
+    }, true);
+
+    document.addEventListener('pointerup', event => {
+        if (event.button === 1 && menuIsOpen) {
+            event.preventDefault();
+            event.stopPropagation();
+            closeMenu(true);
+        }
+    }, true);
+
+    document.addEventListener('auxclick', event => {
+        if (event.button === 1 && (menuIsOpen || getWheelControl(event.target))) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    }, true);
+
+    // Alt key support
     window.addEventListener('keydown', event => {
         if (event.key !== 'Alt' || event.repeat || menuIsOpen) return;
         if (!pointerControl?.isConnected) return;

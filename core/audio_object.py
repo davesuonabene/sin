@@ -116,6 +116,9 @@ class AudioObject(BaseObject):
         1. First try BPMAnalyzer.from_filename(filepath).
         2. If None, get duration from audio_data and use BPMAnalyzer.from_duration(duration_seconds).
         """
+        if self.sample_type in ("one_shot", "oneshot"):
+            return None
+
         if self.filepath:
             bpm = BPMAnalyzer.from_filename(self.filepath)
             if bpm is not None:
@@ -125,8 +128,9 @@ class AudioObject(BaseObject):
         if self.audio_data is not None and self.audio_data.shape[-1] > 0:
             duration_seconds = float(self.audio_data.shape[-1]) / float(sample_rate)
             bpm = BPMAnalyzer.from_duration(duration_seconds)
-            self._original_bpm = bpm
-            return bpm
+            if bpm is not None:
+                self._original_bpm = bpm
+                return bpm
 
         return None
 
@@ -147,14 +151,14 @@ class AudioObject(BaseObject):
         # Leaf node case: Raw sample data exists and no children
         if self.audio_data is not None and len(self.children) == 0:
             sr = system.sample_rate if system is not None else 44100
-            if self._original_bpm is None:
+            if self._original_bpm is None and self.sample_type not in ("one_shot", "oneshot"):
                 self.detect_and_set_bpm(sample_rate=sr)
 
             target_bpm = system.bpm if system is not None else 120.0
             data_to_render = process_sample_transform(
                 audio_data=self.audio_data,
                 sr=sr,
-                original_bpm=self._original_bpm,
+                original_bpm=self._original_bpm if self.sample_type not in ("one_shot", "oneshot") else None,
                 target_bpm=target_bpm,
                 transpose=self.transpose,
                 cents=self.cents,
@@ -163,6 +167,7 @@ class AudioObject(BaseObject):
                 stretch_algorithm=self.stretch_algorithm,
                 sample_type=self.sample_type,
                 fast_preview=system is not None and system.render_mode == "preview",
+                key_match_mode=self.key_match_mode,
                 key_match_algorithm=self.key_match_algorithm,
             )
 
@@ -796,12 +801,12 @@ class ItemPoolObject(AudioObject):
         
         chosen_item = self.current_pool[self.last_played_index] if 0 <= self.last_played_index < len(self.current_pool) else None
         item_bpm = chosen_item.get("bpm") if chosen_item else None
-        if item_bpm is None:
+        if item_bpm is None and self.sample_type not in ("one_shot", "oneshot"):
             item_bpm = BPMAnalyzer.from_filename(filepath)
             if item_bpm is None and audio_array.shape[-1] > 0:
                 item_bpm = BPMAnalyzer.from_duration(float(audio_array.shape[-1]) / sr)
         
-        original_bpm = item_bpm if item_bpm is not None else self._original_bpm
+        original_bpm = item_bpm if item_bpm is not None else (None if self.sample_type in ("one_shot", "oneshot") else self._original_bpm)
                 
         if self.crop_start > 0.0 or self.crop_end < 1.0:
             total_samples = audio_array.shape[-1]

@@ -918,6 +918,44 @@ def get_library(vault_id: Optional[int] = None):
                 if response.status == 200:
                     requested_vault_ids = [vault.get("id") for vault in json.loads(response.read().decode('utf-8'))]
 
+        def _expand_nested_collection_contents(parent_cid: int, items: list[dict], prefix: str = "", visited: set[int] | None = None) -> list[dict]:
+            if visited is None:
+                visited = {parent_cid}
+            res = []
+            for c in items:
+                sub_id = c.get("child_id") or c.get("id")
+                sub_type = c.get("type")
+                sub_title = c.get("title") or c.get("filename") or ""
+                if sub_type in {"collection", "folder", "sample_pack"} and sub_id and sub_id not in visited:
+                    visited.add(sub_id)
+                    try:
+                        sub_req = urllib.request.Request(f"http://127.0.0.1:8001/items/{sub_id}/contents", headers={'Accept': 'application/json'})
+                        with urllib.request.urlopen(sub_req, timeout=8.0) as sub_resp:
+                            if sub_resp.status == 200:
+                                sub_items = json.loads(sub_resp.read().decode('utf-8'))
+                                next_prefix = f"{prefix}/{sub_title}".strip("/") if prefix else sub_title
+                                res.extend(_expand_nested_collection_contents(sub_id, sub_items, next_prefix, visited))
+                                continue
+                    except Exception as sub_err:
+                        logger.debug(f"[API /library] Nested collection query failed for {sub_id}: {sub_err}")
+
+                cur_folder = c.get("folder") or ""
+                if not cur_folder and c.get("relative_path"):
+                    norm_rel = c["relative_path"].replace("\\", "/").strip("/")
+                    if "/" in norm_rel:
+                        cur_folder = os.path.dirname(norm_rel)
+                if prefix:
+                    if cur_folder and (cur_folder == prefix or cur_folder.startswith(prefix + "/") or cur_folder.startswith(sub_title)):
+                        c["folder"] = cur_folder
+                    elif cur_folder:
+                        c["folder"] = f"{prefix}/{cur_folder}"
+                    else:
+                        c["folder"] = prefix
+                elif cur_folder:
+                    c["folder"] = cur_folder
+                res.append(c)
+            return res
+
         for requested_vault_id in requested_vault_ids:
             query = f"?vault_id={requested_vault_id}&limit=10000"
             req = urllib.request.Request(f"http://127.0.0.1:8001/items/{query}", headers={'Accept': 'application/json'})
@@ -986,21 +1024,25 @@ def get_library(vault_id: Optional[int] = None):
                             logger.debug(f"[API /library] Project table query failed for {item_id}: {p_err}")
 
                     # For collections, if contents is empty, query /items/{id}/contents
-                    elif item_type in {"collection", "folder"} and item_id and not contents:
-                        try:
-                            col_req = urllib.request.Request(f"http://127.0.0.1:8001/items/{item_id}/contents", headers={'Accept': 'application/json'})
-                            with urllib.request.urlopen(col_req, timeout=8.0) as col_resp:
-                                if col_resp.status == 200:
-                                    contents = json.loads(col_resp.read().decode('utf-8'))
-                        except Exception as c_err:
-                            logger.debug(f"[API /library] Collection contents query failed for {item_id}: {c_err}")
+                    elif item_type in {"collection", "folder"} and item_id:
+                        if not contents:
+                            try:
+                                col_req = urllib.request.Request(f"http://127.0.0.1:8001/items/{item_id}/contents", headers={'Accept': 'application/json'})
+                                with urllib.request.urlopen(col_req, timeout=8.0) as col_resp:
+                                    if col_resp.status == 200:
+                                        contents = json.loads(col_resp.read().decode('utf-8'))
+                            except Exception as c_err:
+                                logger.debug(f"[API /library] Collection contents query failed for {item_id}: {c_err}")
+                        if contents and any(isinstance(c, dict) and c.get("type") in {"collection", "folder", "sample_pack"} for c in contents):
+                            contents = _expand_nested_collection_contents(item_id, contents)
 
+                    display_name = f.get("title") or f.get("name") or os.path.basename(abs_path)
                     raw_items.append({
                         "id": item_id,
                         "vault_id": f.get("vault_id"),
                         "parent_id": f.get("parent_id"),
                         "absolute_path": abs_path,
-                        "name": os.path.basename(abs_path),
+                        "name": display_name,
                         "tags": f.get("tags", []),
                         "type": item_type,
                         "key": key,
@@ -1033,7 +1075,7 @@ def get_library(vault_id: Optional[int] = None):
                        COALESCE(s.key, m.key, mt.key) as key,
                        COALESCE(s.bpm, m.bpm, mt.bpm) as bpm,
                        mt.stems_json, mt.is_valid_length, mt.length_variance,
-                       ci.manifest_json
+                       ci.title as collection_title, ci.manifest_json
                 FROM items i
                 LEFT JOIN sample_items s ON i.id = s.id
                 LEFT JOIN midi_items m ON i.id = m.id
@@ -1113,17 +1155,19 @@ def get_library(vault_id: Optional[int] = None):
 
             # For collection items, query child items from items table if manifest_json is empty
             collection_ids = [row["id"] for row in rows if row["type"] in {"collection", "folder", "sample_pack"}]
-            children_by_collection: dict[int, list[dict[str, Any]]] = {}
+            children_by_parent: dict[int, list[dict[str, Any]]] = {}
             if collection_ids:
                 placeholders = ",".join("?" for _ in collection_ids)
                 child_rows = cursor.execute(f"""
                     SELECT i.id, i.parent_id, i.absolute_path, i.type, i.metadata_json,
+                           ci.title as collection_title,
                            COALESCE(s.key, m.key, mt.key) as key,
                            COALESCE(s.bpm, m.bpm, mt.bpm) as bpm
                     FROM items i
                     LEFT JOIN sample_items s ON i.id = s.id
                     LEFT JOIN midi_items m ON i.id = m.id
                     LEFT JOIN multitrack_items mt ON i.id = mt.id
+                    LEFT JOIN collection_items ci ON i.id = ci.id
                     WHERE i.parent_id IN ({placeholders})
                 """, collection_ids).fetchall()
                 for cr in child_rows:
@@ -1133,12 +1177,12 @@ def get_library(vault_id: Optional[int] = None):
                     except Exception:
                         c_attrs = {}
                     cpath = cr["absolute_path"] or ""
-                    children_by_collection.setdefault(cid, []).append({
+                    children_by_parent.setdefault(cid, []).append({
                         "id": cr["id"],
                         "child_id": cr["id"],
                         "collection_id": cid,
                         "filename": os.path.basename(cpath),
-                        "title": c_attrs.get("title") or os.path.basename(cpath),
+                        "title": cr["collection_title"] or c_attrs.get("title") or os.path.basename(cpath),
                         "absolute_path": cpath,
                         "relative_path": os.path.basename(cpath),
                         "folder": c_attrs.get("folder") or None,
@@ -1149,6 +1193,31 @@ def get_library(vault_id: Optional[int] = None):
                         "favourite": bool(c_attrs.get("favourite", False)),
                         "stream_url": f"/api/library/stream/{cr['id']}",
                     })
+
+            def _gather_sql_descendants(cid: int, prefix: str = "", visited: set[int] | None = None) -> list[dict[str, Any]]:
+                if visited is None:
+                    visited = {cid}
+                res = []
+                for ch in children_by_parent.get(cid, []):
+                    ch_id = ch["id"]
+                    ch_type = ch.get("type")
+                    ch_title = ch.get("title") or ch.get("filename") or ""
+                    if ch_type in {"collection", "folder", "sample_pack"} and ch_id not in visited:
+                        visited.add(ch_id)
+                        next_prefix = f"{prefix}/{ch_title}".strip("/") if prefix else ch_title
+                        res.extend(_gather_sql_descendants(ch_id, next_prefix, visited))
+                    else:
+                        ch_copy = dict(ch)
+                        cur_folder = ch_copy.get("folder") or ""
+                        if prefix:
+                            ch_copy["folder"] = f"{prefix}/{cur_folder}".strip("/") if cur_folder else prefix
+                        res.append(ch_copy)
+                return res
+
+            children_by_collection = {
+                cid: _gather_sql_descendants(cid)
+                for cid in collection_ids
+            }
 
             for row in rows:
                 item_id = row["id"]
@@ -1186,13 +1255,14 @@ def get_library(vault_id: Optional[int] = None):
                     except Exception:
                         attributes = {}
                 favourite = bool(attributes.get("favourite", False))
+                display_name = row["collection_title"] or attributes.get("title") or attributes.get("name") or os.path.basename(abs_path)
 
                 raw_items.append({
                     "id": item_id,
                     "vault_id": row["vault_id"],
                     "parent_id": row["parent_id"],
                     "absolute_path": abs_path,
-                    "name": os.path.basename(abs_path),
+                    "name": display_name,
                     "tags": tags,
                     "type": row["type"],
                     "key": key,

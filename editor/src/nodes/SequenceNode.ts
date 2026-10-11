@@ -1,7 +1,7 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode } from './BaseNode';
-import { type FieldSchema } from '../fields/FieldSchema';
-import { type NodePanelSchema } from '../fields/NodePanelSchema';
+import { BaseNode } from './BaseNode.ts';
+import { type FieldSchema } from '../fields/FieldSchema.ts';
+import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 
 export interface SequenceChannel {
     on: number[];
@@ -57,10 +57,10 @@ export class SequenceNode extends BaseNode {
         { key: 'velocity', label: 'Velocity', type: 'float', default: 1, min: 0, max: 1, step: 0.01, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' } },
         { key: 'subdivisions', label: 'Subdivisions', type: 'int', default: 1, min: 1, max: 16, step: 1, tab: 'SEQUENCE', stepVisual: { mode: 'fragments' } },
         { key: 'step_length', label: 'Step Length', type: 'float', default: 0.25, min: 0.0625, max: 4.0, step: 0.0625, unit: 'bars', tab: 'SEQUENCE' },
-        { key: 'play_mode', label: 'Play Mode', type: 'select', default: 'gate', options: [{ value: 'gate', label: 'Gate' }, { value: 'trigger', label: 'Trigger' }], tab: 'SEQUENCE' },
+        { key: 'play_mode', label: 'Play Mode', type: 'radio', default: 'gate', options: [{ value: 'gate', label: 'Gate' }, { value: 'trigger', label: 'Trigger' }], tab: 'SEQUENCE' },
         { key: 'fade_ms', label: 'Step Fade', type: 'float', default: 0, min: 0, max: 5, step: 0.1, unit: 'ms', tab: 'SEQUENCE', description: 'Applies a short gain fade at the start and end of every triggered sample.' },
         { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'SEQUENCE' },
-        { key: 'seed_mode', label: 'Seed Mode', type: 'select', default: 'moving', options: [{ value: 'moving', label: 'Moving (per iteration)' }, { value: 'fixed', label: 'Fixed (looped by arranger)' }], tab: 'SEQUENCE' }
+        { key: 'seed_mode', label: 'Seed Mode', type: 'radio', default: 'moving', options: [{ value: 'moving', label: 'Moving (per iteration)' }, { value: 'fixed', label: 'Fixed (looped by arranger)' }], tab: 'SEQUENCE' }
     ];
 
     static defaultColor = "#ec4899";

@@ -52,9 +52,9 @@ def process_sample_transform(
 
     # Determine base time-stretch rate from BPM ratio if loop mode and not off
     bpm_rate = 1.0
-    if sample_type not in ("one_shot", "oneshot") and mode != "off":
-        orig = float(original_bpm or 120.0)
-        tgt = float(target_bpm or 120.0)
+    if sample_type not in ("one_shot", "oneshot") and mode != "off" and original_bpm is not None and target_bpm is not None:
+        orig = float(original_bpm)
+        tgt = float(target_bpm)
         if orig > 0 and tgt > 0 and orig != tgt:
             algo = str(key_match_algorithm or "nearest").lower().strip()
             match_mode = str(key_match_mode or "off").lower().strip()

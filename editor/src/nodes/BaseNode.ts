@@ -1,18 +1,29 @@
 import { LiteGraph, LGraphNode } from 'litegraph.js';
-import { CanvasButton } from '../ui/CanvasButton';
-import { getGhostSource, isGhostFieldLinked } from '../ghosts';
-import { type FieldSchema } from '../fields/FieldSchema';
-import { type NodePanelSchema } from '../fields/NodePanelSchema';
+import { CanvasButton } from '../ui/CanvasButton.ts';
+import { getGhostSource, isGhostFieldLinked } from '../ghosts.ts';
+import { type FieldSchema } from '../fields/FieldSchema.ts';
+import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import {
     drawNeonIcon,
     normalizeNeonIcon,
     normalizeNodeShape,
     traceNodeShape,
     type NodeShape
-} from './NodeVisuals';
+} from './NodeVisuals.ts';
 
 /** Default attenuation applied before processing newly-created sample nodes. */
 export const DEFAULT_SAMPLE_INPUT_GAIN_DB = -6;
+
+export function isModifierNode(node: any): boolean {
+    if (!node) return false;
+    return Boolean(
+        node.isModifier ||
+        node.properties?.parentId != null ||
+        node.type === 'Audio/Modulator' ||
+        node.type === 'Audio/AssetFilter' ||
+        node.type === 'Audio/Random'
+    );
+}
 
 export function getDefaultFxChain(preGainDb = 0) {
     const preGain = Math.pow(10, preGainDb / 20);
@@ -108,7 +119,7 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     get isModifier(): boolean {
-        return false;
+        return Boolean(this.properties?.parentId);
     }
 
     get modifierKind(): string | null {
@@ -182,9 +193,11 @@ export abstract class BaseNode extends LGraphNode {
             this.size = this.computeSize();
         }
         this.setDirtyCanvas(true, true);
-        window.dispatchEvent(new CustomEvent('node-property-changed', {
-            detail: { nodeId: this.id, key, value: clonePropertyValue(value) }
-        }));
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('node-property-changed', {
+                detail: { nodeId: this.id, key, value: clonePropertyValue(value) }
+            }));
+        }
     }
 
     async onPropertyEdited(_key: string, _value: any, _previousValue: any): Promise<void> {
@@ -220,12 +233,16 @@ export abstract class BaseNode extends LGraphNode {
         this.drawSelectionRing(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview);
         this.drawBody(ctx);
         this.drawIcon(ctx);
-        this.drawSlots(ctx);
-        this.drawBadges(ctx, isMainPreview);
-        this.drawNameBadge(ctx, isSelected, isHovered);
+        if (!this.isModifier) {
+            this.drawSlots(ctx);
+            this.drawBadges(ctx, isMainPreview);
+            this.drawNameBadge(ctx, isSelected, isHovered);
+        }
         ctx.restore();
 
-        this.onDrawForeground?.(ctx, canvas);
+        if (!this.isModifier) {
+            this.onDrawForeground?.(ctx, canvas);
+        }
     }
 
     protected drawSelectionRing(
@@ -408,7 +425,7 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     onDrawForeground(ctx: CanvasRenderingContext2D, canvas: any) {
-        if (this.flags.collapsed || (this.flags as any).hidden) return;
+        if (this.flags.collapsed || (this.flags as any).hidden || this.isModifier) return;
         const isHovered = canvas && canvas.node_over === this;
         const isSelected = Boolean(canvas && canvas.selected_nodes && canvas.selected_nodes[this.id]) || this.is_selected;
         
@@ -420,7 +437,7 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     onMouseMove(_e: MouseEvent, local_pos: any, canvas: any) {
-        if (this.flags.collapsed || (this.flags as any).hidden) return;
+        if (this.flags.collapsed || (this.flags as any).hidden || this.isModifier) return;
         const isHovered = canvas && canvas.node_over === this;
         const isSelected = Boolean(canvas && canvas.selected_nodes && canvas.selected_nodes[this.id]) || this.is_selected;
         if (!isHovered && !isSelected) return;
@@ -463,7 +480,7 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     onMouseDown(_e: MouseEvent, local_pos: any, _canvas: any): boolean {
-        if (this.flags.collapsed || (this.flags as any).hidden) return false;
+        if (this.flags.collapsed || (this.flags as any).hidden || this.isModifier) return false;
 
         if (local_pos && local_pos.length >= 2) {
             const x = local_pos[0];

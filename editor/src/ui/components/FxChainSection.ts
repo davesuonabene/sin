@@ -1,4 +1,4 @@
-import { type BaseNode, getDefaultFxChain } from '../../nodes/BaseNode';
+import { type BaseNode, getDefaultFxChain } from '../../nodes/BaseNode.ts';
 
 function linearToDb(gain: number): number {
     if (gain <= 0.0001) return -36;

@@ -1,5 +1,5 @@
-import { type FieldSchema } from '../../fields/FieldSchema';
-import { getParameterWheelStep, registerParameterWheelControl } from '../ParameterWheelMenu';
+import { type FieldSchema } from '../../fields/FieldSchema.ts';
+import { getParameterWheelStep, registerParameterWheelControl } from '../ParameterWheelMenu.ts';
 
 interface NumericStepValueOptions {
     field: FieldSchema<number>;

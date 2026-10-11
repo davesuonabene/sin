@@ -1,5 +1,5 @@
-import { type BaseNode } from '../../nodes/BaseNode';
-import { getAssetDisplayName } from '../libraryFilters';
+import { type BaseNode } from '../../nodes/BaseNode.ts';
+import { getAssetDisplayName } from '../libraryFilters.ts';
 
 interface DroppedPoolItem {
     id?: number | string;

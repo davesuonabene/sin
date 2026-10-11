@@ -1,5 +1,5 @@
-import { type BaseNode } from '../../nodes/BaseNode';
-import { WaveformVisualizer } from '../WaveformVisualizer';
+import { type BaseNode } from '../../nodes/BaseNode.ts';
+import { WaveformVisualizer } from '../WaveformVisualizer.ts';
 
 interface DroppedLibraryItem {
     id?: number | string;
@@ -142,32 +142,65 @@ export class WaveformCropSection {
             await windowContext.renderTabContent();
         });
 
-        const updateTimeLabels = (s: number, e: number) => {
-            const dur = node.properties.duration_seconds || 0;
-            if (dur > 0 && timeStartEl && timeEndEl) {
-                timeStartEl.textContent = `Start: ${(s * dur).toFixed(2)}s`;
-                timeEndEl.textContent = `End: ${(e * dur).toFixed(2)}s`;
+        const updateCropInputs = (s: number, e: number) => {
+            const root: ParentNode = windowContext?.container || container.closest('.td-properties-window') || document;
+            const startInput = root.querySelector('[data-field-key="crop_start"] input') as HTMLInputElement | null;
+            const endInput = root.querySelector('[data-field-key="crop_end"] input') as HTMLInputElement | null;
+            const sVal = (Math.round(s * 100) / 100).toFixed(2);
+            const eVal = (Math.round(e * 100) / 100).toFixed(2);
+            if (startInput && document.activeElement !== startInput) {
+                startInput.value = sVal;
+            }
+            if (endInput && document.activeElement !== endInput) {
+                endInput.value = eVal;
             }
         };
 
+        const updateTimeLabels = (s: number, e: number) => {
+            const dur = visualizer?.getDuration() || Number(node.properties.duration_seconds) || 0;
+            if (timeStartEl && timeEndEl) {
+                timeStartEl.textContent = `${(s * dur).toFixed(2)}s`;
+                timeEndEl.textContent = `${(e * dur).toFixed(2)}s`;
+            }
+        };
+
+        const initialS = node.properties.crop_start !== undefined ? Number(node.properties.crop_start) : 0.0;
+        const initialE = node.properties.crop_end !== undefined ? Number(node.properties.crop_end) : 1.0;
+
         const visualizer = new WaveformVisualizer({
             container: visContainer,
-            cropStart: node.properties.crop_start || 0.0,
-            cropEnd: node.properties.crop_end || 1.0,
+            cropStart: initialS,
+            cropEnd: initialE,
             onCropChange: (s: number, e: number) => {
-                node.updateProperty('crop_start', s);
-                node.updateProperty('crop_end', e);
+                const roundedS = Math.round(s * 100) / 100;
+                const roundedE = Math.round(e * 100) / 100;
+                node.updateProperty('crop_start', roundedS);
+                node.updateProperty('crop_end', roundedE);
+                updateCropInputs(roundedS, roundedE);
                 updateTimeLabels(s, e);
                 windowContext.refreshAudioPreview();
             }
         });
 
         windowContext.currentWaveformVisualizer = visualizer;
+        windowContext.updateCropFromFields = (s: number, e: number) => {
+            visualizer.setCrop(s, e, true);
+            updateTimeLabels(s, e);
+        };
 
         const filepath = node.properties.filepath;
         if (filepath) {
             await visualizer.loadAudio(filepath);
-            updateTimeLabels(visualizer.getCrop().start, visualizer.getCrop().end);
+            const audioDur = visualizer.getDuration();
+            if (audioDur > 0) {
+                node.updateProperty('duration_seconds', audioDur);
+            }
+            const crop = visualizer.getCrop();
+            updateTimeLabels(crop.start, crop.end);
+            updateCropInputs(crop.start, crop.end);
+        } else {
+            updateTimeLabels(initialS, initialE);
+            updateCropInputs(initialS, initialE);
         }
     }
 }

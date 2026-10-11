@@ -23,6 +23,8 @@ export interface LibraryFile {
     stems?: any[];
     is_valid_length?: boolean;
     length_variance?: number;
+    is_loop?: boolean | null;
+    sample_type?: string | null;
 }
 
 export interface LibraryBpmUpdateResult {

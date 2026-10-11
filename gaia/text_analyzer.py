@@ -255,6 +255,11 @@ def analyze_path(absolute_path: str, duration_seconds: float | None = None) -> d
         inferred = BPMAnalyzer.from_loop_duration(duration_seconds)
         bpm = round(inferred) if inferred is not None else None
 
+    # One shots and single notes do not have any bpm signature unless user specified from the library.
+    # Analysis should not set any bpm for one shots or single notes.
+    if not is_midi and (not is_loop or role == "single_note"):
+        bpm = None
+
     key = extract_key(metadata_text, allow_bare_note=role == "single_note")
     # Only run audio signal key detection if explicit key was not in filename/text,
     # role is musical ('harmonic' or 'single_note'), duration is sample-length (<= 45s),

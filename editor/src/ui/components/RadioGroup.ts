@@ -28,9 +28,16 @@ export class RadioGroup {
             input.name = config.name;
             input.value = option.value;
             input.checked = option.value === config.value;
+            if (input.checked) {
+                label.classList.add('is-checked');
+            }
             input.setAttribute('aria-label', option.label);
             input.addEventListener('change', () => {
-                if (input.checked) config.onChange(input.value);
+                if (input.checked) {
+                    group.querySelectorAll('.td-radio-option').forEach(el => el.classList.remove('is-checked'));
+                    label.classList.add('is-checked');
+                    config.onChange(input.value);
+                }
             });
 
             const text = document.createElement('span');
