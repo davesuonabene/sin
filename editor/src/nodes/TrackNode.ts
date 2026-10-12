@@ -3,6 +3,7 @@ import { BaseNode } from './BaseNode';
 import { type FieldSchema } from '../fields/FieldSchema';
 import { type NodePanelSchema } from '../fields/NodePanelSchema';
 import { WaveformRenderer, type RenderBox, type SignalTelemetry } from '../../../packages/iride/src/index.ts';
+import { globalAudioScheduler } from '../audioScheduler';
 
 export class TrackNode extends BaseNode {
     private waveformRenderer = new WaveformRenderer({ accentColor: '#4f46e5' });
@@ -38,21 +39,6 @@ export class TrackNode extends BaseNode {
 
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Master Track', tab: 'COMMON' },
-        {
-            key: 'scope_mode',
-            label: 'Scope Mode',
-            type: 'select',
-            default: 'full',
-            options: [
-                { value: 'full', label: 'Full Stem' },
-                { value: 'drawn', label: 'Real-Time Drawn' },
-                { value: 'scrolled', label: 'Real-Time Scrolled' }
-            ],
-            tab: 'COMMON',
-            description: 'Visualizer mode: Full stem, Real-time drawn sweep, or Real-time scrolled'
-        },
-        { key: 'scope_window', label: 'Scope Window', type: 'float', default: 0.0, min: 0.0, max: 64.0, step: 0.25, unit: 's', tab: 'COMMON', description: 'Window size for oscilloscope sweep (0 = auto-inherit track length)' },
-        { key: 'scope_gain', label: 'Scope Gain', type: 'float', default: 1.0, min: 0.2, max: 5.0, step: 0.1, tab: 'COMMON', description: 'Real-time oscilloscope amplitude gain' },
         { key: 'mix_mode', label: 'Mix Mode', type: 'select', default: 'sum', options: [{ value: 'sum', label: 'Sum' }, { value: 'first', label: 'First' }, { value: 'last', label: 'Last' }], tab: 'TRACK' },
         { key: 'bpm', label: 'Engine BPM', type: 'global_float', default: 'global', min: 20, max: 300, unit: 'BPM', tab: 'TRACK' },
         { key: 'total_bars', label: 'Total Bars', type: 'global_float', default: 'global', min: 0.25, max: 128, step: 0.25, unit: 'bars', tab: 'TRACK' }
@@ -82,9 +68,6 @@ export class TrackNode extends BaseNode {
             bpm: "global",
             target_bpm: 120,
             total_bars: "global",
-            scope_mode: "full",
-            scope_window: 0.0,
-            scope_gain: 1.0,
             color: "#4f46e5",
             icon: "mixer",
             shape: "diamond"
@@ -105,47 +88,75 @@ export class TrackNode extends BaseNode {
         super.updateProperty('bpm', value);
     }
 
+    override onGlobalParametersChanged(parameters: Record<string, any>): void {
+        super.onGlobalParametersChanged(parameters);
+        if (this.properties?.bpm === 'global' && parameters.bpm) {
+            this.properties.target_bpm = parameters.bpm;
+        }
+        this.setDirtyCanvas?.(true, true);
+    }
+
     override drawVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
         const isPreviewTarget = this.id === (window as any).activeRamPreviewNodeId
             || ((window as any).activeRamPreviewNodeId == null && Boolean(this.properties?.is_main_preview));
 
-        const isPlaying = Boolean(telemetry?.isPlaying);
-        const scopeMode = (this.properties?.scope_mode || 'full') as 'full' | 'drawn' | 'scrolled';
-        const customWindow = Number(this.properties?.scope_window) || 0;
-        const totalBars = Number(this.properties?.total_bars) || 4;
-        const bpm = Number(this.properties?.target_bpm) || 120;
-        const autoTrackWindow = totalBars * 4 * (60 / bpm);
-        const scopeWindow = customWindow > 0 ? customWindow : autoTrackWindow;
-        const scopeGain = Number(this.properties?.scope_gain) || 1.0;
+        const getGlobal = (window as any).getGlobalParameter;
+        const globalBars = typeof getGlobal === 'function' ? Number(getGlobal('total_bars')) : 4;
+        const globalBpm = typeof getGlobal === 'function' ? Number(getGlobal('bpm')) : 120;
 
-        const manifestStem = (this as any).manifestStemBuffer as AudioBuffer | undefined;
+        const totalBarsSetting = this.properties?.total_bars;
+        const totalBars = (totalBarsSetting === 'global' || !Number.isFinite(Number(totalBarsSetting)))
+            ? (Number.isFinite(globalBars) && globalBars > 0 ? globalBars : 4)
+            : Math.max(0.25, Number(totalBarsSetting));
+
+        const bpmSetting = this.properties?.bpm;
+        const resolvedBpm = (bpmSetting === 'global' || !Number.isFinite(Number(bpmSetting)))
+            ? (Number(this.properties?.target_bpm) || (Number.isFinite(globalBpm) && globalBpm > 0 ? globalBpm : 120))
+            : Math.max(20, Number(bpmSetting));
+
+        const autoTrackWindow = totalBars * 4 * (60 / resolvedBpm);
+
+        const schedulerBuf = isPreviewTarget ? globalAudioScheduler.getFullAudioBuffer() : undefined;
         const masterBuf = isPreviewTarget ? ((window as any).activeRamPreviewBuffer as AudioBuffer | undefined) : undefined;
-        const displayBuffer = manifestStem || this.audioBuffer || masterBuf;
+        const manifestStem = (this as any).manifestStemBuffer as AudioBuffer | undefined;
+        // For the active preview target, the live scheduler buffer is authoritative
+        const displayBuffer = isPreviewTarget
+            ? (schedulerBuf || masterBuf || manifestStem || this.audioBuffer)
+            : (manifestStem || this.audioBuffer || schedulerBuf || masterBuf);
+
+        const bufferedProgress = (this as any).bufferedProgress != null
+            ? (this as any).bufferedProgress
+            : (isPreviewTarget ? globalAudioScheduler.getBufferedProgress() : 1.0);
+        const isInvalidated = Boolean((this as any).isInvalidated);
+
+        // Fixed track window duration ensures the buffer fills from left to right without stretching
+        const expectedDuration = autoTrackWindow > 0
+            ? autoTrackWindow
+            : ((this as any).manifestStemDuration || telemetry?.duration || displayBuffer?.duration || 0);
+
+        let playbackProgress: number | undefined;
+        if (telemetry && telemetry.isPlaying && expectedDuration > 0) {
+            const curTime = ((telemetry.time % expectedDuration) + expectedDuration) % expectedDuration;
+            playbackProgress = curTime / expectedDuration;
+        }
 
         this.waveformRenderer.setOptions({
-            scopeMode: isPlaying ? scopeMode : 'full',
-            scopeWindow,
-            scopeGain
+            scopeMode: 'full'
         });
-        const bufferedProgress = (this as any).bufferedProgress != null ? (this as any).bufferedProgress : 1.0;
-        const isInvalidated = Boolean((this as any).isInvalidated);
         this.waveformRenderer.setSignal({
             buffer: displayBuffer,
-            duration: displayBuffer?.duration || autoTrackWindow || (telemetry?.duration || 0),
+            duration: expectedDuration,
             accentColor: this.nodeColor,
             bufferedProgress,
-            isInvalidated
+            isInvalidated,
+            playbackProgress
         });
 
         this.waveformRenderer.render(ctx, bounds, telemetry);
     }
 
-    override onVisualizationToggled(enabled: boolean): void {
-        if (enabled && !this.audioBuffer && !(window as any).activeRamPreviewBuffer) {
-            window.dispatchEvent(new CustomEvent('preview-node', {
-                detail: { nodeId: this.id }
-            }));
-        }
+    override onVisualizationToggled(_enabled: boolean): void {
+        // Toggling visual feedback should only update presentation state without hijacking master playback.
     }
 }
 

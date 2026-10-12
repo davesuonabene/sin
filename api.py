@@ -352,17 +352,28 @@ class InvalidateNodesRequest(BaseModel):
 
 
 @api_router.post("/preview/invalidate", tags=["Preview"])
-def invalidate_graph_nodes(payload: InvalidateNodesRequest):
+def invalidate_graph_nodes(payload: Optional[InvalidateNodesRequest] = None):
     from core.dag_cache import GLOBAL_DAG_CACHE
     invalidated_all: set[str] = set()
     ids_to_process = []
-    if payload.node_ids:
-        ids_to_process.extend(payload.node_ids)
-    if payload.node_id is not None:
-        ids_to_process.append(payload.node_id)
+    if payload:
+        if payload.node_ids:
+            ids_to_process.extend(payload.node_ids)
+        if payload.node_id is not None:
+            ids_to_process.append(payload.node_id)
+    if not ids_to_process:
+        GLOBAL_DAG_CACHE.clear()
+        RAM_PREVIEW_STORE.clear()
+        logger.info("[API /preview/invalidate] Fully cleared DAG cache and RAM preview store")
+        return {"status": "success", "invalidated": "all"}
+
     for nid in ids_to_process:
         inv = GLOBAL_DAG_CACHE.invalidate_downstream(nid)
         invalidated_all.update(inv)
+        for k in list(RAM_PREVIEW_STORE.keys()):
+            if k == str(nid) or k == f"export_{nid}" or f"_{nid}" in k:
+                RAM_PREVIEW_STORE.pop(k, None)
+
     logger.info(f"[API /preview/invalidate] Invalidated {len(invalidated_all)} nodes downstream: {invalidated_all}")
     return {"status": "success", "invalidated": list(invalidated_all)}
 
@@ -402,6 +413,11 @@ def preview_graph_progressive(payload: AudioNodeModel):
             if payload.total_bars is not None and float(payload.total_bars) > 0:
                 total_bars = max(1, int(np.ceil(float(payload.total_bars))))
 
+            manifest["total_bars"] = total_bars
+            manifest["total_duration"] = total_samples / float(sys.sample_rate)
+            manifest["bpm"] = bpm
+            manifest["sample_rate"] = sys.sample_rate
+
             # Store full rendered WAV in RAM_PREVIEW_STORE for instant loops & zero-latency replays
             wav_io = io.BytesIO()
             sf.write(
@@ -412,6 +428,35 @@ def preview_graph_progressive(payload: AudioNodeModel):
             )
             bytes_data = wav_io.getvalue()
             out_filename = f"{node_key}.wav"
+
+            # Encode and store intermediate node stems in RAM_PREVIEW_STORE
+            node_stems = getattr(sys, "_node_stems", {})
+            for stem_id, stem_audio in node_stems.items():
+                if node_key == str(stem_id) or node_key == f"export_{stem_id}" or node_key.endswith(f"_{stem_id}"):
+                    if stem_id in manifest.get("nodes", {}):
+                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{node_key}?v={payload_fingerprint}"
+                    continue
+                try:
+                    s_buf = io.BytesIO()
+                    sf.write(
+                        s_buf,
+                        np.moveaxis(stem_audio, -1, 0) if stem_audio.ndim > 1 else stem_audio,
+                        sys.sample_rate,
+                        format='WAV'
+                    )
+                    s_bytes = s_buf.getvalue()
+                    stem_key = f"stem_{node_key}_{stem_id}"
+                    RAM_PREVIEW_STORE[stem_key] = {
+                        "wav_bytes": s_bytes,
+                        "filename": f"stem_{stem_id}.wav",
+                        "node_name": f"Node_{stem_id}",
+                        "sample_rate": sys.sample_rate,
+                        "payload_fingerprint": payload_fingerprint,
+                    }
+                    if stem_id in manifest.get("nodes", {}):
+                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
+                except Exception as stem_err:
+                    logger.warning(f"Failed to encode intermediate stem {stem_id}: {stem_err}")
 
             RAM_PREVIEW_STORE[node_key] = {
                 "wav_bytes": bytes_data,
@@ -471,6 +516,9 @@ def preview_graph_progressive(payload: AudioNodeModel):
             }
             yield json.dumps(final_obj) + "\n"
 
+        except GeneratorExit:
+            # Client aborted or disconnected from stream
+            return
         except Exception as e:
             logger.error(f"[API /preview/stream-progressive Error] {e}", exc_info=True)
             err_obj = {"chunk_type": "error", "error": str(e)}

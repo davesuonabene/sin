@@ -6,7 +6,12 @@ import librosa
 import soundfile as sf
 
 from core.runtime_trace import get_runtime_cache, set_runtime_cache, trace_runtime
-from core.stretching import StretchAlgorithm, normalize_stretch_algorithm, stretch_with_rubberband
+from core.stretching import (
+    StretchAlgorithm,
+    normalize_stretch_algorithm,
+    stretch_with_rubberband,
+    RubberBandUnavailableError,
+)
 
 
 def process_sample_transform(
@@ -113,14 +118,21 @@ def process_sample_transform(
         requires_time_stretch = mode != "off" and abs(total_time_rate - 1.0) > 1e-4
         if algorithm is not StretchAlgorithm.LIBROSA and (requires_pitch_shift or requires_time_stretch):
             # Rubber Band processes pitch and tempo together in one high-quality pass.
-            audio_data = stretch_with_rubberband(
-                audio_data,
-                sr,
-                algorithm=algorithm,
-                tempo_rate=total_time_rate if mode != "off" else 1.0,
-                semitones=total_semitones,
-                fast_engine=fast_preview,
-            )
+            try:
+                audio_data = stretch_with_rubberband(
+                    audio_data,
+                    sr,
+                    algorithm=algorithm,
+                    tempo_rate=total_time_rate if mode != "off" else 1.0,
+                    semitones=total_semitones,
+                    fast_engine=fast_preview,
+                )
+            except RubberBandUnavailableError:
+                # Fallback to librosa if Rubber Band CLI is not installed in the environment
+                if requires_pitch_shift:
+                    audio_data = librosa.effects.pitch_shift(y=audio_data, sr=sr, n_steps=total_semitones)
+                if requires_time_stretch:
+                    audio_data = librosa.effects.time_stretch(y=audio_data, rate=total_time_rate)
         else:
             # Retained solely for saved nodes that explicitly choose the legacy
             # algorithm. New nodes use Rubber Band by default.

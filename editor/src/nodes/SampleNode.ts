@@ -5,6 +5,7 @@ import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { findLibraryFileForSnapshot, resolveLibraryAssets, submitLibraryMetadataProposal, type LibraryFile } from '../api.ts';
 import { WaveformRenderer, type RenderBox, type SignalTelemetry } from '../../../packages/iride/src/index.ts';
 import { fetchAudioBuffer } from '../audioBufferCache.ts';
+import { globalAudioScheduler } from '../audioScheduler.ts';
 
 type MusicalMode = 'major' | 'minor' | null;
 type KeyMatchAlgorithm = 'nearest' | 'higher' | 'lower';
@@ -16,9 +17,46 @@ interface ParsedKey {
 
 export class SampleNode extends BaseNode {
     private waveformRenderer = new WaveformRenderer({ accentColor: '#38bdf8' });
-    private audioBuffer: AudioBuffer | null = null;
-    private loadedFilepath = '';
-    private isLoadingAudio = false;
+    public audioBuffer: AudioBuffer | null = null;
+    public loadedFilepath = '';
+    public isLoadingAudio = false;
+    private loadingAudioPromise: Promise<AudioBuffer | null> | null = null;
+
+    public async ensureAudioLoaded(): Promise<AudioBuffer | null> {
+        const filepath = String(this.properties?.filepath || '');
+        if (!filepath) {
+            this.audioBuffer = null;
+            this.loadedFilepath = '';
+            this.waveformRenderer.setSignal(null);
+            return null;
+        }
+        if (this.audioBuffer && this.loadedFilepath === filepath) {
+            return this.audioBuffer;
+        }
+        if (this.loadingAudioPromise && this.loadedFilepath === filepath) {
+            return this.loadingAudioPromise;
+        }
+        this.isLoadingAudio = true;
+        this.loadedFilepath = filepath;
+        this.loadingAudioPromise = (async () => {
+            try {
+                const buffer = await fetchAudioBuffer(filepath);
+                this.audioBuffer = buffer;
+                if (buffer?.duration) {
+                    this.properties.duration_seconds = buffer.duration;
+                }
+                this.setDirtyCanvas(true, true);
+                return buffer;
+            } catch (err) {
+                console.warn(`Failed to preload audio for SampleNode #${this.id}:`, err);
+                return null;
+            } finally {
+                this.isLoadingAudio = false;
+                this.loadingAudioPromise = null;
+            }
+        })();
+        return this.loadingAudioPromise;
+    }
 
     static panelSchema: NodePanelSchema = {
         tabs: [
@@ -55,21 +93,6 @@ export class SampleNode extends BaseNode {
 
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'New Sample', tab: 'COMMON' },
-        {
-            key: 'scope_mode',
-            label: 'Scope Mode',
-            type: 'select',
-            default: 'full',
-            options: [
-                { value: 'full', label: 'Full Sample' },
-                { value: 'drawn', label: 'Real-Time Drawn' },
-                { value: 'scrolled', label: 'Real-Time Scrolled' }
-            ],
-            tab: 'COMMON',
-            description: 'Visualizer mode: Full sample waveform, Real-time drawn sweep, or Real-time scrolled'
-        },
-        { key: 'scope_window', label: 'Scope Window', type: 'float', default: 0.0, min: 0.0, max: 32.0, step: 0.25, unit: 's', tab: 'COMMON', description: 'Window size for oscilloscope sweep (0 = auto-inherit sample length)' },
-        { key: 'scope_gain', label: 'Scope Gain', type: 'float', default: 1.0, min: 0.2, max: 5.0, step: 0.1, tab: 'COMMON', description: 'Real-time oscilloscope amplitude gain' },
         { key: 'filepath', label: 'Asset File', type: 'filepath', default: '', tab: 'SAMPLE' },
         { key: 'sample_type', label: 'Type', type: 'radio', default: 'loop', options: [{ value: 'loop', label: 'Loop' }, { value: 'one_shot', label: 'One Shot' }], tab: 'SAMPLE' },
         { key: 'start_beat', label: 'Start Beat', type: 'float', default: 0, min: 0, tab: 'SAMPLE' },
@@ -201,6 +224,18 @@ export class SampleNode extends BaseNode {
 
     override updateProperty(key: string, value: any): void {
         super.updateProperty(key, value);
+        if (key === 'filepath') {
+            const pathStr = String(value || '');
+            if (pathStr !== this.loadedFilepath || !this.audioBuffer) {
+                this.loadedFilepath = pathStr;
+                this.audioBuffer = null;
+                delete (this as any).manifestStemBuffer;
+                this.waveformRenderer.setSignal(null);
+                if (pathStr) {
+                    void this.ensureAudioLoaded();
+                }
+            }
+        }
         if (!this.graph) return;
         if (key === 'key_match_mode' || key === 'key_match_algorithm' || key === 'key') {
             SampleNode.propagateKeyMatch(
@@ -504,50 +539,156 @@ export class SampleNode extends BaseNode {
         }
 
         if (filepath && !this.audioBuffer && !this.isLoadingAudio) {
-            this.isLoadingAudio = true;
-            fetchAudioBuffer(filepath).then(buffer => {
-                this.audioBuffer = buffer;
-                if (buffer?.duration) {
-                    this.properties.duration_seconds = buffer.duration;
-                }
-                this.isLoadingAudio = false;
-                this.setDirtyCanvas(true, true);
-            }).catch(() => {
-                this.isLoadingAudio = false;
-            });
+            void this.ensureAudioLoaded();
         }
 
         const isPlaying = Boolean(telemetry?.isPlaying);
-        const scopeMode = (this.properties?.scope_mode || 'full') as 'full' | 'drawn' | 'scrolled';
-        // Sample node strictly displays its own sample audio asset, never a tiled master stem
-        const displayBuffer = this.audioBuffer;
+        const isPreviewTarget = this.id === (window as any).activeRamPreviewNodeId;
+        const schedulerBuf = isPreviewTarget ? globalAudioScheduler.getFullAudioBuffer() : undefined;
+        // Sample node displays its own loaded sample audio asset, or live scheduler buffer if preview target
+        const displayBuffer = this.audioBuffer || schedulerBuf;
 
         const sampleDur = displayBuffer?.duration || Number(this.properties?.duration_seconds) || 0;
         const cropStart = Number(this.properties?.crop_start ?? 0);
         const cropEnd = Number(this.properties?.crop_end ?? 1);
         const activeSpan = Math.max(0.01, cropEnd - cropStart);
-        // The active sample duration represents the exact sample length itself
         const sampleActiveDuration = sampleDur > 0 ? sampleDur * activeSpan : 2.0;
 
-        // Window size inherits directly from the sample length itself, NOT playback length!
-        const customWindow = Number(this.properties?.scope_window) || 0;
-        const scopeWindow = customWindow > 0 ? customWindow : sampleActiveDuration;
-        const scopeGain = Number(this.properties?.scope_gain) || 1.0;
+        const pitchMultiplier = Math.pow(2, Number(this.properties?.transpose || 0) / 12);
+        const effectivePitchRate = pitchMultiplier > 0 ? pitchMultiplier : 1.0;
 
-        // Accurate playback scrubber: follows the sample's own active length and loop cycle
+        // Playhead scrubber: tracks real physical playback through the sample
         let playbackProgress: number | undefined;
-        if (isPlaying && sampleActiveDuration > 0 && telemetry) {
-            const cycleTime = ((telemetry.time % sampleActiveDuration) + sampleActiveDuration) % sampleActiveDuration;
-            playbackProgress = cropStart + (cycleTime / sampleActiveDuration) * activeSpan;
+        let isTriggered: boolean | undefined;
+
+        if (isPlaying && telemetry) {
+            if (isPreviewTarget) {
+                // Directly previewing this sample: playhead smoothly scrolls through the sample at natural speed
+                const dur = telemetry.duration > 0 ? telemetry.duration : sampleActiveDuration;
+                const curTime = dur > 0 ? ((telemetry.time % dur) + dur) % dur : 0;
+                const sampleTime = curTime * effectivePitchRate;
+                const progress = sampleActiveDuration > 0 ? Math.max(0, Math.min(1, sampleTime / sampleActiveDuration)) : 0;
+                playbackProgress = cropStart + progress * activeSpan;
+                isTriggered = true;
+            } else {
+                // Playing in graph/arrangement: check triggers across loop cycles
+                const manifestEvents = ((this as any).manifestEvents as Array<{ time: number; duration: number }> | undefined)
+                    || ((window as any).activeWorkspaceManifest?.nodes?.[String(this.id)]?.events as Array<{ time: number; duration: number }> | undefined);
+                const totalTrackDur = telemetry.duration > 0
+                    ? telemetry.duration
+                    : (Number((window as any).activeWorkspaceManifest?.total_duration) || (manifestEvents?.length ? manifestEvents[manifestEvents.length - 1].time + manifestEvents[manifestEvents.length - 1].duration : sampleActiveDuration));
+                const curTime = totalTrackDur > 0 ? ((telemetry.time % totalTrackDur) + totalTrackDur) % totalTrackDur : telemetry.time;
+
+                if (manifestEvents && manifestEvents.length > 0) {
+                    let activeEvent = manifestEvents.find(e => curTime >= e.time && curTime < (e.time + Math.max(0.02, e.duration)));
+                    let triggerTime = curTime;
+                    if (!activeEvent && totalTrackDur > 0) {
+                        const lastEventEnd = Math.max(...manifestEvents.map(e => e.time + Math.max(0.02, e.duration)));
+                        if (lastEventEnd > 0 && lastEventEnd < totalTrackDur * 0.85) {
+                            const bpm = Number(this.properties?.target_bpm || (window as any).activeWorkspaceManifest?.bpm || (window as any).getGlobalParameter?.('bpm') || 120);
+                            const barSec = 4 * (60 / bpm);
+                            const patternBars = Math.max(1, Math.round(lastEventEnd / barSec));
+                            const patternDur = Math.max(0.05, patternBars * barSec);
+                            const timeInPattern = ((curTime % patternDur) + patternDur) % patternDur;
+                            const loopedEvent = manifestEvents.find(e => timeInPattern >= e.time && timeInPattern < (e.time + Math.max(0.02, e.duration)));
+                            if (loopedEvent) {
+                                activeEvent = loopedEvent;
+                                triggerTime = timeInPattern;
+                            }
+                        }
+                    }
+
+                    if (activeEvent) {
+                        const elapsedInEvent = triggerTime - activeEvent.time;
+                        const sampleTime = elapsedInEvent * effectivePitchRate;
+                        const sampleProgress = sampleActiveDuration > 0 ? (sampleTime / sampleActiveDuration) : 0;
+                        const progressInCrop = this.properties?.sample_type === 'loop'
+                            ? (sampleProgress % 1.0)
+                            : Math.max(0, Math.min(1, sampleProgress));
+                        playbackProgress = cropStart + progressInCrop * activeSpan;
+                        isTriggered = true;
+                    } else {
+                        isTriggered = false;
+                    }
+                } else {
+                    // Check if connected to a parent SequenceNode
+                    let parentSequenceNode: any = null;
+                    if (this.graph && this.outputs) {
+                        for (const out of this.outputs) {
+                            for (const linkId of out.links || []) {
+                                const link = (this.graph as any).links?.[linkId];
+                                if (link && link.target_id != null) {
+                                    const candidate = this.graph.getNodeById(link.target_id);
+                                    if (candidate && (candidate.type === 'Audio/Sequence' || candidate.properties?.node_type === 'sequence')) {
+                                        parentSequenceNode = candidate;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (parentSequenceNode) break;
+                        }
+                    }
+
+                    if (parentSequenceNode) {
+                        const seq = parentSequenceNode.properties?.sequence;
+                        const rawSeq = Array.isArray(seq) && seq.length > 0 ? seq : [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+                        const stepLength = Number(parentSequenceNode.properties?.step_length) || 0.25;
+                        const bpm = Number(this.properties?.target_bpm || (window as any).getGlobalParameter?.('bpm') || 120);
+                        const stepDuration = stepLength * 4 * (60 / bpm);
+                        const patternDuration = Math.max(0.05, rawSeq.length * stepDuration);
+                        const timeInPattern = ((curTime % patternDuration) + patternDuration) % patternDuration;
+                        const stepIdx = Math.floor(timeInPattern / stepDuration);
+                        const stepVal = rawSeq[stepIdx];
+                        const isStepOn = typeof stepVal === 'number' ? stepVal > 0 : Boolean(stepVal);
+
+                        if (isStepOn) {
+                            const elapsedInStep = timeInPattern - (stepIdx * stepDuration);
+                            const sampleTime = elapsedInStep * effectivePitchRate;
+                            const sampleProgress = sampleActiveDuration > 0 ? (sampleTime / sampleActiveDuration) : 0;
+                            const progressInCrop = this.properties?.sample_type === 'loop'
+                                ? (sampleProgress % 1.0)
+                                : Math.max(0, Math.min(1, sampleProgress));
+                            playbackProgress = cropStart + progressInCrop * activeSpan;
+                            isTriggered = true;
+                        } else {
+                            isTriggered = false;
+                        }
+                    } else {
+                        // Fallback before manifest is streamed:
+                        const startBeat = Number(this.properties?.start_beat ?? 0);
+                        const bpm = Number(this.properties?.target_bpm || (window as any).activeWorkspaceManifest?.bpm || 120);
+                        const startSec = startBeat * (60 / bpm);
+                        const isLoop = this.properties?.sample_type === 'loop';
+
+                        if (isLoop && sampleActiveDuration > 0) {
+                            const offsetFromStart = curTime - startSec;
+                            if (offsetFromStart >= 0) {
+                                const loopCycle = (offsetFromStart * effectivePitchRate) % sampleActiveDuration;
+                                const progress = Math.max(0, Math.min(1, loopCycle / sampleActiveDuration));
+                                playbackProgress = cropStart + progress * activeSpan;
+                                isTriggered = true;
+                            } else {
+                                isTriggered = false;
+                            }
+                        } else {
+                            const endSec = startSec + (sampleActiveDuration / effectivePitchRate);
+                            if (curTime >= startSec && curTime <= endSec) {
+                                const elapsed = curTime - startSec;
+                                const progress = Math.max(0, Math.min(1, (elapsed * effectivePitchRate) / sampleActiveDuration));
+                                playbackProgress = cropStart + progress * activeSpan;
+                                isTriggered = true;
+                            } else {
+                                isTriggered = false;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         this.waveformRenderer.setOptions({
-            scopeMode: isPlaying ? scopeMode : 'full',
-            scopeWindow,
-            scopeGain
+            scopeMode: 'full'
         });
-        const bufferedProgress = (this as any).bufferedProgress != null ? (this as any).bufferedProgress : 1.0;
-        const isInvalidated = Boolean((this as any).isInvalidated);
         this.waveformRenderer.setSignal({
             buffer: displayBuffer,
             duration: sampleActiveDuration,
@@ -555,8 +696,9 @@ export class SampleNode extends BaseNode {
             cropEnd,
             accentColor: this.nodeColor,
             playbackProgress,
-            bufferedProgress,
-            isInvalidated
+            isTriggered,
+            bufferedProgress: 1.0,
+            isInvalidated: false
         });
 
         this.waveformRenderer.render(ctx, bounds, telemetry);
@@ -565,10 +707,8 @@ export class SampleNode extends BaseNode {
     override onVisualizationToggled(enabled: boolean): void {
         if (enabled) {
             const filepath = String(this.properties?.filepath || '');
-            if (!filepath || !this.audioBuffer) {
-                window.dispatchEvent(new CustomEvent('preview-node', {
-                    detail: { nodeId: this.id }
-                }));
+            if (filepath && !this.audioBuffer && !this.isLoadingAudio) {
+                void this.ensureAudioLoaded();
             }
         }
     }

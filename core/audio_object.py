@@ -156,6 +156,10 @@ class AudioObject(BaseObject):
         if self.node_id is not None and getattr(self, "fingerprint", None):
             cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint)
             if cached is not None:
+                if system is not None and system.render_mode == "preview":
+                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint)
+                    if cached_extra and "manifest_state" in cached_extra:
+                        system.restore_manifest_state(cached_extra["manifest_state"])
                 return cached
 
         # Leaf node case: Raw sample data exists and no children
@@ -199,17 +203,39 @@ class AudioObject(BaseObject):
         rendered_children: List[Tuple[int, np.ndarray]] = []
         max_end_sample = 0
 
+        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
         for start_beat, child in self.children:
             if self.node_id is not None and getattr(child, "node_id", None) is not None:
                 GLOBAL_DAG_CACHE.register_edge(parent_id=self.node_id, child_id=child.node_id)
-            child_audio = child.render(system, **kwargs)
             start_sample = system.beat_to_samples(start_beat)
+            start_sec = base_offset_sec + (float(start_sample) / float(system.sample_rate))
+            child_kwargs = dict(kwargs)
+            child_kwargs["timeline_offset_sec"] = start_sec
+            child_audio = child.render(system, **child_kwargs)
             end_sample = start_sample + child_audio.shape[-1]
 
             if end_sample > max_end_sample:
                 max_end_sample = end_sample
 
             rendered_children.append((start_sample, child_audio))
+
+            if system is not None and getattr(child, "node_id", None) is not None:
+                child_dur = float(child_audio.shape[-1]) / float(system.sample_rate)
+                nat_dur = getattr(child, "_natural_duration", child_dur)
+                if getattr(child, "sample_type", None) == "loop" and nat_dur > 0 and child_dur > nat_dur:
+                    reps = max(1, int(round(child_dur / nat_dur)))
+                    for r in range(reps):
+                        system.record_node_event(child.node_id, {
+                            "time": round(start_sec + r * nat_dur, 4),
+                            "duration": round(nat_dur, 4),
+                            "parent_id": self.node_id
+                        })
+                else:
+                    system.record_node_event(child.node_id, {
+                        "time": round(start_sec, 4),
+                        "duration": round(child_dur, 4),
+                        "parent_id": self.node_id
+                    })
 
         # If base audio_data exists on composite node, include its length in max_end_sample
         if self.audio_data is not None:
@@ -282,7 +308,13 @@ class AudioObject(BaseObject):
             dur = float(output_buffer.shape[-1]) / float(system.sample_rate)
             system.record_node_stem(self.node_id, self.node_type, self.name, output_buffer, dur)
         if self.node_id is not None and getattr(self, "fingerprint", None):
-            GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, output_buffer)
+            manifest_state = system.capture_manifest_state() if system is not None else None
+            GLOBAL_DAG_CACHE.store(
+                self.node_id,
+                self.fingerprint,
+                output_buffer,
+                extra={"manifest_state": manifest_state} if manifest_state else None
+            )
         return output_buffer
 
 
@@ -337,6 +369,14 @@ class SampleObject(AudioObject):
         if self.node_id is not None and getattr(self, "fingerprint", None):
             cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint)
             if cached is not None:
+                if system is not None and system.render_mode == "preview":
+                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint)
+                    if cached_extra and "manifest_state" in cached_extra:
+                        system.restore_manifest_state(cached_extra["manifest_state"])
+                    if cached_extra and "natural_duration" in cached_extra:
+                        self._natural_duration = cached_extra["natural_duration"]
+                    else:
+                        self._natural_duration = float(cached.shape[-1]) / float(system.sample_rate) if system is not None else 0.0
                 return cached
 
         if not self.filepath:
@@ -392,6 +432,7 @@ class SampleObject(AudioObject):
             return np.zeros(0, dtype=np.float32)
 
         sample_natural_dur = float(data_to_render.shape[-1]) / float(system.sample_rate) if system is not None and data_to_render.shape[-1] > 0 else 0.0
+        self._natural_duration = sample_natural_dur
 
         loop_sample = kwargs.get("loop", True)
         if loop_sample and self.sample_type == "loop" and self.total_bars is not None and self.total_bars > 0 and system is not None:
@@ -412,7 +453,16 @@ class SampleObject(AudioObject):
                 extra={"filepath": self.filepath}
             )
         if self.node_id is not None and getattr(self, "fingerprint", None):
-            GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, output_buffer)
+            manifest_state = system.capture_manifest_state() if system is not None else None
+            GLOBAL_DAG_CACHE.store(
+                self.node_id,
+                self.fingerprint,
+                output_buffer,
+                extra={
+                    "manifest_state": manifest_state,
+                    "natural_duration": getattr(self, "_natural_duration", sample_natural_dur),
+                } if manifest_state or hasattr(self, "_natural_duration") else None
+            )
         return output_buffer
 
 
@@ -547,6 +597,10 @@ class SequenceObject(AudioObject):
         if self.node_id is not None and getattr(self, "fingerprint", None):
             cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint)
             if cached is not None:
+                if system is not None and system.render_mode == "preview":
+                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint)
+                    if cached_extra and "manifest_state" in cached_extra:
+                        system.restore_manifest_state(cached_extra["manifest_state"])
                 return cached
 
         if system is None:
@@ -692,8 +746,24 @@ class SequenceObject(AudioObject):
                 dur,
                 extra={"sequence": self.sequence, "step_length": self.step_length}
             )
+        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
+        if system is not None and getattr(first_child, "node_id", None) is not None:
+            for start_i, audio_i in voice_cut_steps:
+                evt_time = base_offset_sec + (float(start_i) / float(system.sample_rate))
+                evt_dur = float(audio_i.shape[-1]) / float(system.sample_rate)
+                system.record_node_event(first_child.node_id, {
+                    "time": round(evt_time, 4),
+                    "duration": round(evt_dur, 4),
+                    "sequence_id": self.node_id
+                })
         if self.node_id is not None and getattr(self, "fingerprint", None):
-            GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, output_buffer)
+            manifest_state = system.capture_manifest_state() if system is not None else None
+            GLOBAL_DAG_CACHE.store(
+                self.node_id,
+                self.fingerprint,
+                output_buffer,
+                extra={"manifest_state": manifest_state} if manifest_state else None
+            )
         return output_buffer
 
 
@@ -1145,23 +1215,38 @@ class ArrangementObject(AudioObject):
         
         # Pre-render or identify dynamic children
         cached_audios = []
-        for _, child in self.children:
+        child_template_events: Dict[Any, Dict[str, List[dict]]] = {}
+        for child_idx, (_, child) in enumerate(self.children):
             if self.node_id is not None and getattr(child, "node_id", None) is not None:
                 GLOBAL_DAG_CACHE.register_edge(parent_id=self.node_id, child_id=child.node_id)
             if getattr(child, "is_dynamic", False):
                 cached_audios.append(None)
             else:
+                before_counts = {
+                    nid: len(nentry.get("events", []))
+                    for nid, nentry in (system.manifest.get("nodes", {}) if system is not None else {}).items()
+                }
                 child_kwargs = dict(kwargs)
                 child_kwargs["loop"] = False
+                child_kwargs["timeline_offset_sec"] = 0.0
                 audio = child.render(system, **child_kwargs)
                 cached_audios.append(audio)
+                if system is not None:
+                    captured = {}
+                    for nid, nentry in system.manifest.get("nodes", {}).items():
+                        start_idx = before_counts.get(nid, 0)
+                        evts = nentry.get("events", [])[start_idx:]
+                        if evts:
+                            captured[nid] = [dict(e) for e in evts]
+                            del nentry["events"][start_idx:]
+                    child_template_events[child_idx] = captured
 
         observed_channel_shapes = [
             audio.shape[:-1]
             for audio in cached_audios
             if audio is not None
         ]
-        rendered_events: List[Tuple[int, np.ndarray]] = []
+        rendered_events: List[Tuple[int, np.ndarray, Optional[int], Any, int, int]] = []
         
         # Use a reproducible random generator based on the seed
         seed_hash = int(hashlib.md5(str(self.seed).encode()).hexdigest(), 16)
@@ -1183,11 +1268,27 @@ class ArrangementObject(AudioObject):
                 audio = cached_audios[child_idx]
                 _, child = self.children[child_idx]
 
+                dyn_key = None
                 if audio is None:
+                    dyn_key = f"dyn_{iteration_count}"
+                    before_counts = {
+                        nid: len(nentry.get("events", []))
+                        for nid, nentry in (system.manifest.get("nodes", {}) if system is not None else {}).items()
+                    }
                     child_kwargs = dict(kwargs)
                     child_kwargs["loop"] = False
+                    child_kwargs["timeline_offset_sec"] = 0.0
                     audio = child.render(system, iteration=iteration_count, **child_kwargs)
                     observed_channel_shapes.append(audio.shape[:-1])
+                    if system is not None:
+                        captured = {}
+                        for nid, nentry in system.manifest.get("nodes", {}).items():
+                            start_idx = before_counts.get(nid, 0)
+                            evts = nentry.get("events", [])[start_idx:]
+                            if evts:
+                                captured[nid] = [dict(e) for e in evts]
+                                del nentry["events"][start_idx:]
+                        child_template_events[dyn_key] = captured
                 iteration_count += 1
                 if audio.shape[-1] == 0:
                     break
@@ -1218,6 +1319,10 @@ class ArrangementObject(AudioObject):
                     rendered_events.append((
                         write_start,
                         playable_audio[..., source_start:source_end],
+                        getattr(child, "node_id", None),
+                        dyn_key if dyn_key is not None else child_idx,
+                        source_start,
+                        source_end
                     ))
 
                 if quant_samples is None or quant_samples <= 0:
@@ -1230,7 +1335,7 @@ class ArrangementObject(AudioObject):
             else ()
         )
         master_buffer = np.zeros((*channel_shape, total_samples_to_fill), dtype=np.float32)
-        for write_start, event_audio in rendered_events:
+        for write_start, event_audio, child_node_id, evt_key, source_start, source_end in rendered_events:
             write_end = write_start + event_audio.shape[-1]
             master_buffer[..., write_start:write_end] += event_audio
 
@@ -1245,6 +1350,38 @@ class ArrangementObject(AudioObject):
                 dur,
                 extra={"total_bars": self.total_bars}
             )
+        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
+        if system is not None:
+            sr = float(system.sample_rate)
+            for write_start, event_audio, child_node_id, evt_key, source_start, source_end in rendered_events:
+                if child_node_id is not None:
+                    evt_time = base_offset_sec + (float(write_start) / sr)
+                    evt_dur = float(event_audio.shape[-1]) / sr
+                    system.record_node_event(child_node_id, {
+                        "time": round(evt_time, 4),
+                        "duration": round(evt_dur, 4),
+                        "arrangement_id": self.node_id
+                    })
+                if evt_key in child_template_events:
+                    source_start_sec = float(source_start) / sr
+                    source_end_sec = float(source_end) / sr
+                    for desc_node_id, desc_evts in child_template_events[evt_key].items():
+                        for devt in desc_evts:
+                            t_rel = float(devt.get("time", 0.0))
+                            d_rel = float(devt.get("duration", 0.0))
+                            if t_rel >= source_start_sec - 0.002 and t_rel < source_end_sec:
+                                new_evt = dict(devt)
+                                actual_time = base_offset_sec + (float(write_start) / sr) + (t_rel - source_start_sec)
+                                new_evt["time"] = round(actual_time, 4)
+                                new_evt["duration"] = round(min(d_rel, source_end_sec - t_rel), 4)
+                                new_evt["arrangement_id"] = self.node_id
+                                system.record_node_event(int(desc_node_id), new_evt)
         if self.node_id is not None and getattr(self, "fingerprint", None):
-            GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, output_buffer)
+            manifest_state = system.capture_manifest_state() if system is not None else None
+            GLOBAL_DAG_CACHE.store(
+                self.node_id,
+                self.fingerprint,
+                output_buffer,
+                extra={"manifest_state": manifest_state} if manifest_state else None
+            )
         return output_buffer

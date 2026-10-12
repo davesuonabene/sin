@@ -90,9 +90,22 @@ export class WaveformRenderer extends BaseSignalRenderer {
         ctx.stroke();
 
         // Check if we have peaks or need to extract them from buffer
-        if (signal?.buffer && (!this.cachedPeaks || this.cachedWidth !== Math.floor(width))) {
+        if (signal?.buffer && (!this.cachedPeaks || this.cachedWidth !== Math.floor(width) || this.cachedBuffer !== signal.buffer)) {
             this.cachedWidth = Math.floor(width);
-            this.cachedPeaks = extractPeaksFromBuffer(signal.buffer, this.cachedWidth);
+            this.cachedBuffer = signal.buffer;
+            const buf = signal.buffer;
+            const totalDur = (signal.duration && signal.duration > 0) ? signal.duration : buf.duration;
+            const bufferRatio = Math.min(1.0, Math.max(0.01, buf.duration / Math.max(0.01, totalDur)));
+            if (bufferRatio < 0.99) {
+                // Buffer is progressively filling: extract peaks proportionally up to buffer front
+                const bufferedCols = Math.max(1, Math.min(this.cachedWidth, Math.floor(this.cachedWidth * bufferRatio)));
+                const partialPeaks = extractPeaksFromBuffer(buf, bufferedCols);
+                const fullPeaks = new Float32Array(this.cachedWidth * 2);
+                fullPeaks.set(partialPeaks.subarray(0, Math.min(fullPeaks.length, partialPeaks.length)));
+                this.cachedPeaks = fullPeaks;
+            } else {
+                this.cachedPeaks = extractPeaksFromBuffer(buf, this.cachedWidth);
+            }
         } else if (signal?.peaks && !this.cachedPeaks) {
             this.cachedPeaks = signal.peaks;
         }

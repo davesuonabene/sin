@@ -241,7 +241,11 @@ export async function resolveAssetFilterNode(
     }
 
     if (ownerNode?.properties) {
-        if (ownerNode.type === 'Audio/Sequence' && assetPath) {
+        const isSeq = ownerNode.type === 'Audio/Sequence'
+            || ownerNode.type === 'sequence'
+            || ownerNode.type === 'Sequence'
+            || ownerNode.properties?.node_type === 'sequence';
+        if (isSeq && assetPath) {
             const applySequence = typeof window !== 'undefined' ? (window as any).applyLibraryItemToSequence : undefined;
             if (typeof applySequence === 'function') {
                 await applySequence(ownerNode, {

@@ -62,6 +62,38 @@ class System:
         })
         node_entry.setdefault("events", []).append(event)
 
+    def capture_manifest_state(self) -> dict:
+        import copy
+        return {
+            "manifest_nodes": copy.deepcopy(self.manifest.get("nodes", {})),
+            "node_stems": getattr(self, "_node_stems", {}).copy()
+        }
+
+    def restore_manifest_state(self, state: dict) -> None:
+        if not state or not isinstance(state, dict):
+            return
+        import copy
+        manifest_nodes = state.get("manifest_nodes", {})
+        for nid, nentry in manifest_nodes.items():
+            if nid not in self.manifest.setdefault("nodes", {}):
+                self.manifest["nodes"][nid] = copy.deepcopy(nentry)
+            else:
+                existing = self.manifest["nodes"][nid]
+                for k, v in nentry.items():
+                    if k == "events":
+                        existing_events = existing.setdefault("events", [])
+                        for evt in v:
+                            if evt not in existing_events:
+                                existing_events.append(copy.deepcopy(evt))
+                    elif k not in existing:
+                        existing[k] = copy.deepcopy(v)
+
+        stems = state.get("node_stems", {})
+        if stems:
+            if not hasattr(self, "_node_stems"):
+                self._node_stems = {}
+            self._node_stems.update(stems)
+
     def beat_to_samples(self, beat: float) -> int:
         """
         Calculates how many audio samples represent a given beat count

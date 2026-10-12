@@ -92,10 +92,10 @@ topHeader.innerHTML = `
                 <input id="global-key-input" type="text" value="C" maxlength="8" spellcheck="false" aria-label="Global musical key">
             </label>
         </div>
-        <button id="global-preview-btn" class="header-btn global-preview-btn icon-header-btn" title="Preview the main graph output" aria-label="Preview the main graph output" disabled>
+        <button id="global-preview-btn" class="header-btn global-preview-btn icon-header-btn" title="Play transport (Space)" aria-label="Play transport (Space)" disabled>
             <span class="btn-icon" aria-hidden="true">▶</span>
         </button>
-        <button id="preview-recalculate-btn" class="header-btn preview-recalculate-btn icon-header-btn" title="Recalculate the current preview without refreshing modifiers" aria-label="Recalculate the current preview without refreshing modifiers" disabled>
+        <button id="preview-recalculate-btn" class="header-btn preview-recalculate-btn icon-header-btn" title="Refresh pools, samples, and modifiers" aria-label="Refresh pools, samples, and modifiers" disabled>
             <span class="btn-icon" aria-hidden="true">↻</span>
         </button>
     </div>
@@ -284,6 +284,13 @@ function updatePlaybackControls() {
     masterPlayBtn.innerHTML = isPlaying ? pauseIcon : playIcon;
     masterPlayBtn.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
     masterPlayBtn.title = isPlaying ? 'Pause' : 'Play';
+
+    globalPreviewBtn.innerHTML = isPlaying
+        ? '<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></span>'
+        : '<span class="btn-icon" aria-hidden="true">▶</span>';
+    globalPreviewBtn.setAttribute('aria-label', isPlaying ? 'Pause transport (Space)' : 'Play transport (Space)');
+    globalPreviewBtn.title = isPlaying ? 'Pause transport (Space)' : 'Play transport (Space)';
+
     const isLooping = loopEnabled;
     masterLoopBtn.disabled = masterPlayBtn.disabled;
     masterLoopBtn.classList.toggle('is-active', isLooping);
@@ -313,13 +320,20 @@ let loopOffset = 0;
 let loopAnimationFrame: number | null = null;
 
 const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
-    const duration = Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0
-        ? masterPlayer.duration
-        : masterWaveform.duration;
+    const isSchedPlaying = globalAudioScheduler.getIsPlaying();
+    const duration = isSchedPlaying
+        ? globalAudioScheduler.getTotalDuration()
+        : (Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0
+            ? masterPlayer.duration
+            : masterWaveform.duration);
     if (duration <= 0) return;
     const targetTime = Math.max(0, Math.min(duration, progress * duration));
     pendingMasterSeek = targetTime;
     masterWaveform.setPlayback(targetTime, duration);
+    if (activeRamPreviewNodeId != null && globalAudioScheduler.getTotalDuration() > 0) {
+        globalAudioScheduler.seek(targetTime);
+        if (isSchedPlaying) return;
+    }
     if (loopEnabled) {
         const wasPlaying = loopSource !== null || !masterPlayer.paused;
         loopOffset = targetTime;
@@ -453,15 +467,16 @@ function setMasterPlayerSource(source: string, autoplay: boolean = false) {
     }
 }
 
-function setPreviewCalculatingState() {
+function setPreviewCalculatingState(isHotSwap: boolean = false) {
+    if (isHotSwap) return;
     ++loopBufferRequestId;
     loopBuffer = null;
     loopLoad = Promise.resolve(null);
     stopLoop(false);
     masterPlayer.loop = false;
-    masterPlayer.pause();
-    masterPlayer.removeAttribute('src');
-    masterPlayer.load();
+    if (!masterPlayer.paused) {
+        masterPlayer.pause();
+    }
     masterPlayer.setAttribute('aria-disabled', 'true');
     masterPlayBtn.disabled = true;
     masterLoopBtn.disabled = true;
@@ -478,7 +493,7 @@ function setPreviewFailedState() {
 }
 
 masterPlayer.addEventListener('timeupdate', () => {
-    if (!loopEnabled && pendingMasterSeek === null && Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
+    if (!globalAudioScheduler.getIsPlaying() && !loopEnabled && pendingMasterSeek === null && Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
         masterWaveform.setPlayback(masterPlayer.currentTime, masterPlayer.duration);
     }
 });
@@ -578,22 +593,29 @@ function tickPlaybackTelemetry() {
     let curTime = 0;
 
     if (isSchedulerPlaying) {
+        globalAudioScheduler.tick();
         curTime = globalAudioScheduler.getCurrentTime();
         dur = globalAudioScheduler.getTotalDuration();
+        globalAudioScheduler.getFloatTimeDomainData(scopeDataBuffer);
+        defaultTransportClock.setRealtimeScopeData(scopeDataBuffer);
     } else {
         dur = loopEnabled && loopBuffer?.duration ? loopBuffer.duration : (Number.isFinite(masterPlayer.duration) ? masterPlayer.duration : 0);
         curTime = getSmoothPlaybackTime(dur);
+
+        if (isPlaying && !masterAudioAnalyser) {
+            attachMasterMediaElementSource();
+        }
+
+        if (isPlaying && masterAudioAnalyser) {
+            masterAudioAnalyser.getFloatTimeDomainData(scopeDataBuffer);
+            defaultTransportClock.setRealtimeScopeData(scopeDataBuffer);
+        } else {
+            defaultTransportClock.setRealtimeScopeData(null);
+        }
     }
 
-    if (isPlaying && !masterAudioAnalyser) {
-        attachMasterMediaElementSource();
-    }
-
-    if (isPlaying && masterAudioAnalyser) {
-        masterAudioAnalyser.getFloatTimeDomainData(scopeDataBuffer);
-        defaultTransportClock.setRealtimeScopeData(scopeDataBuffer);
-    } else {
-        defaultTransportClock.setRealtimeScopeData(null);
+    if (dur > 0 && isPlaying) {
+        masterWaveform.setPlayback(curTime, dur);
     }
 
     defaultTransportClock.setBpm(globalParameters.bpm);
@@ -653,40 +675,85 @@ masterPlayer.addEventListener('ended', () => {
     stopPlaybackTelemetry();
 });
 
-masterPlayBtn.addEventListener('click', () => {
-    if (globalAudioScheduler.getIsPlaying()) {
-        globalAudioScheduler.stop();
+async function toggleTransportPlayback(): Promise<void> {
+    const isPlaying = globalAudioScheduler.getIsPlaying()
+        || (!masterPlayer.paused && !masterPlayer.ended)
+        || (loopEnabled && Boolean(loopSource));
+
+    if (isPlaying) {
+        if (globalAudioScheduler.getIsPlaying()) {
+            globalAudioScheduler.pause();
+        }
+        if (!masterPlayer.paused) {
+            masterPlayer.pause();
+        }
+        if (loopEnabled && loopSource) {
+            stopLoop(true);
+        }
         updatePlaybackControls();
         stopPlaybackTelemetry();
         return;
     }
-    if (loopEnabled) {
-        if (loopSource || !masterPlayer.paused) {
-            if (loopSource) stopLoop(true);
-            else masterPlayer.pause();
-            updatePlaybackControls();
-        } else {
-            void playLoop(loopTime());
+
+    // Currently stopped / paused:
+    const graph = (window as any).editorGraph as LGraph;
+    const target = resolveMainPreviewNode(graph);
+    const isTargetInvalidated = target && isGraphPreviewInvalidated(graph, target.id);
+
+    // 1. If active RAM preview buffer is loaded and target is not invalidated, resume playback seamlessly
+    if (target && !isTargetInvalidated && activeRamPreviewNodeId != null && globalAudioScheduler.getTotalDuration() > 0) {
+        globalAudioScheduler.play();
+        updatePlaybackControls();
+        startPlaybackTelemetry();
+        return;
+    }
+
+    // 2. If target exists (first generation or invalidated before playing), generate/preview target
+    if (target) {
+        try {
+            globalPreviewBtn.disabled = true;
+            const isFirstGen = activeRamPreviewNodeId == null || globalAudioScheduler.getTotalDuration() === 0;
+            // First play triggers loading onto samples and patterns (refreshModifiers: true, globalPreview: true)
+            // If target was merely invalidated by parameter tweaks while paused, preserve user's choices (refreshModifiers: false)
+            await previewNode(target.id, true, isFirstGen, isFirstGen);
+        } catch (e) {
+            console.error('Playback generation error:', e);
+        } finally {
+            globalPreviewBtn.disabled = false;
+            updateMainPreviewTarget(graph);
         }
         return;
     }
-    if (masterPlayer.paused) masterPlayer.play().catch(error => console.error('Play failed', error));
-    else masterPlayer.pause();
+
+    // 3. Fallback when there is NO graph target (empty workspace / standalone render playback):
+    if (loopEnabled && loopBuffer) {
+        void playLoop(loopTime());
+        return;
+    }
+
+    if (tempFilesSelect.value && tempFilesSelect.value !== 'RAM_PREVIEW' && masterPlayer.src && masterPlayer.src !== window.location.href) {
+        masterPlayer.play().catch(error => console.error('Play failed', error));
+        return;
+    }
+}
+
+masterPlayBtn.addEventListener('click', () => {
+    void toggleTransportPlayback();
 });
 
 masterLoopBtn.addEventListener('click', () => {
-    if (!loopEnabled) {
+    loopEnabled = !loopEnabled;
+    globalAudioScheduler.setLoop(loopEnabled);
+    if (loopEnabled) {
         const currentTime = Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : 0;
         const wasPlaying = !masterPlayer.paused && !masterPlayer.ended;
-        loopEnabled = true;
         masterPlayer.loop = false;
         masterPlayer.pause();
         loopOffset = currentTime;
-        if (wasPlaying) void playLoop(currentTime);
+        if (wasPlaying && !globalAudioScheduler.getIsPlaying()) void playLoop(currentTime);
     } else {
         const currentTime = loopTime();
         const wasPlaying = loopSource !== null || !masterPlayer.paused && !masterPlayer.ended;
-        loopEnabled = false;
         stopLoop(false);
         masterPlayer.loop = false;
         pendingMasterSeek = currentTime;
@@ -695,7 +762,7 @@ masterLoopBtn.addEventListener('click', () => {
         } catch (error) {
             console.error('Could not restore native playback position', error);
         }
-        if (wasPlaying) masterPlayer.play().catch(error => console.error('Play failed', error));
+        if (wasPlaying && !globalAudioScheduler.getIsPlaying()) masterPlayer.play().catch(error => console.error('Play failed', error));
     }
     updatePlaybackControls();
 });
@@ -921,6 +988,55 @@ function graphResolutionNodes(graph: LGraph, rootNodeId?: number): any[] {
     return nodes;
 }
 
+function markNodeAndAncestorsInvalidated(graph: LGraph, nodeId: number) {
+    const visited = new Set<number>();
+    const pending = [nodeId];
+    while (pending.length > 0) {
+        const currId = pending.pop();
+        if (currId == null || visited.has(currId)) continue;
+        visited.add(currId);
+        const node = graph.getNodeById(currId);
+        if (node) {
+            (node as any).isInvalidated = true;
+            (node as any).setDirtyCanvas?.(true, true);
+        }
+        // In LiteGraph, audio links flow from child (origin) to parent/mixer (target).
+        // Downstream ancestors that depend on this node are connected to its outputs.
+        if (node && node.outputs) {
+            for (const out of node.outputs) {
+                for (const linkId of out.links || []) {
+                    const link = (graph as any).links?.[linkId];
+                    if (link && link.target_id != null) {
+                        pending.push(link.target_id);
+                    }
+                }
+            }
+        }
+        const data = trackNodes.get(currId);
+        if (data?.parentId != null) {
+            pending.push(data.parentId);
+        }
+    }
+}
+
+function isGraphPreviewInvalidated(graph: LGraph, targetId: number): boolean {
+    const target = graph.getNodeById(targetId);
+    if (!target) return true;
+    if (Boolean((target as any).isInvalidated)) return true;
+    const subtree = graphResolutionNodes(graph, targetId);
+    return subtree.some(n => Boolean((n as any).isInvalidated));
+}
+
+function clearSubtreeInvalidated(graph: LGraph, targetId: number) {
+    const subtree = graphResolutionNodes(graph, targetId);
+    for (const n of subtree) {
+        if (n) {
+            (n as any).isInvalidated = false;
+            (n as any).setDirtyCanvas?.(true, true);
+        }
+    }
+}
+
 async function syncGraphSampleMetadataFromLibrary(
     graph: LGraph,
     includeDynamicAssets = true,
@@ -1015,6 +1131,68 @@ async function syncGraphSampleMetadataFromLibrary(
         });
     }));
     return files;
+}
+
+async function preloadSubtreeAssets(graph: LGraph, rootNodeId?: number): Promise<void> {
+    const nodes = graphResolutionNodes(graph, rootNodeId);
+    const loadPromises: Promise<any>[] = [];
+
+    for (const node of nodes) {
+        if (!node) continue;
+
+        // 1. SampleNode: preload audio buffer into memory
+        if (node.type === 'Audio/Sample' || node.properties?.node_type === 'sample' || typeof (node as any).ensureAudioLoaded === 'function') {
+            const filepath = String(node.properties?.filepath || '');
+            if (filepath) {
+                if (typeof (node as any).ensureAudioLoaded === 'function') {
+                    loadPromises.push((node as any).ensureAudioLoaded());
+                } else if (!node.audioBuffer || node.loadedFilepath !== filepath) {
+                    loadPromises.push(
+                        fetchAudioBuffer(filepath).then(buf => {
+                            if (buf) {
+                                node.audioBuffer = buf;
+                                node.loadedFilepath = filepath;
+                                if (buf.duration) {
+                                    node.properties.duration_seconds = buf.duration;
+                                }
+                                node.setDirtyCanvas?.(true, true);
+                            }
+                        }).catch(err => {
+                            console.warn(`Failed to preload audio for SampleNode #${node.id}:`, err);
+                        })
+                    );
+                }
+            }
+        }
+
+        // 2. SequenceNode: ensure sequence pattern is parsed/loaded if filepath is set
+        if (node.type === 'Audio/Sequence' || node.properties?.node_type === 'sequence') {
+            const filepath = String(node.properties?.filepath || '');
+            const hasSequence = Array.isArray(node.properties?.sequence) && node.properties.sequence.length > 0;
+            if (filepath && !hasSequence) {
+                const item = {
+                    id: node.properties?.library_item_id,
+                    filepath: filepath,
+                    itemType: filepath.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi',
+                    name: filepath.split(/[\\/]/).pop()
+                };
+                loadPromises.push(
+                    applyLibraryItemToSequence(node, item as any).catch(err => {
+                        console.warn(`Failed to preload sequence for SequenceNode #${node.id}:`, err);
+                    })
+                );
+            }
+        }
+    }
+
+    if (loadPromises.length > 0) {
+        await Promise.all(loadPromises);
+    }
+
+    for (const node of nodes) {
+        node.setDirtyCanvas?.(true, true);
+    }
+    (window as any).editorCanvas?.setDirty?.(true, true);
 }
 
 function setWorkspaceControlsEnabled() {
@@ -1155,6 +1333,7 @@ loadWorkspaceBtn.addEventListener('click', async () => {
         loadGlobalParametersFromGraph(graph);
         updateGraphNodeCollapsing();
         canvas?.setDirty(true, true);
+        void preloadSubtreeAssets(graph);
         // Metadata may have changed serialized properties. Coalesce any event
         // saves and replace the stage once more with the final loaded graph.
         cancelScheduledStageSave();
@@ -1252,8 +1431,25 @@ window.addEventListener('open-node-properties', (e: Event) => {
 });
 
 window.addEventListener('keydown', (e: KeyboardEvent) => {
-    const activeEl = document.activeElement;
-    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || (activeEl as HTMLElement).isContentEditable)) {
+    const activeEl = document.activeElement as HTMLElement | null;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
+        return;
+    }
+    if (e.code === 'Space' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+        if (
+            activeEl && (
+                activeEl.tagName === 'SELECT' ||
+                activeEl.closest('.properties-window') ||
+                activeEl.closest('.td-field-input') ||
+                activeEl.closest('.node-title-editor') ||
+                activeEl.closest('.dialog-modal') ||
+                activeEl.closest('.sin-modal')
+            )
+        ) {
+            return;
+        }
+        e.preventDefault();
+        void toggleTransportPlayback();
         return;
     }
     if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -1265,20 +1461,9 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
     }
 });
 
-globalPreviewBtn.addEventListener('click', async () => {
+globalPreviewBtn.addEventListener('click', () => {
     if (globalPreviewBtn.disabled) return;
-    const graph = (window as any).editorGraph as LGraph;
-    const target = resolveMainPreviewNode(graph);
-    if (!target) return;
-
-    globalPreviewBtn.disabled = true;
-    globalPreviewBtn.innerHTML = '<span class="btn-icon" aria-hidden="true">…</span>';
-    try {
-        await previewNode(target.id, true, true);
-    } finally {
-        globalPreviewBtn.innerHTML = '<span class="btn-icon" aria-hidden="true">▶</span>';
-        updateMainPreviewTarget(graph);
-    }
+    void toggleTransportPlayback();
 });
 
 previewRecalculateBtn.addEventListener('click', async () => {
@@ -1287,13 +1472,55 @@ previewRecalculateBtn.addEventListener('click', async () => {
     const nodeId = activeRamPreviewNodeId ?? resolveMainPreviewNode(graph)?.id;
     if (nodeId == null) return;
 
+    // Refreshing immediately stops playback
+    if (globalAudioScheduler.getIsPlaying()) {
+        globalAudioScheduler.stop();
+    }
+    if (!masterPlayer.paused) {
+        masterPlayer.pause();
+    }
+    if (loopEnabled && loopSource) {
+        stopLoop(true);
+    }
+    updatePlaybackControls();
+    stopPlaybackTelemetry();
+
     previewRecalculateBtn.disabled = true;
     previewRecalculateBtn.innerHTML = '<span class="btn-icon" aria-hidden="true">…</span>';
+
     try {
-        await previewNode(nodeId, true, false, false);
+        // Fully clear DAG cache and RAM preview store in backend
+        await fetch('/api/preview/invalidate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node_ids: [] })
+        }).catch(() => {});
+
+        clearAudioBufferCache();
+
+        if (graph) {
+            for (const node of ((graph as any)._nodes || [])) {
+                if (node) {
+                    (node as any).isInvalidated = true;
+                    delete (node as any).manifestStemBuffer;
+                    (node as any).setDirtyCanvas?.(true, true);
+                }
+            }
+        }
+
+        // Recalculate with:
+        // autoplay = false (refreshing will not autostart)
+        // globalPreview = true (triggers reload of pools and random modifiers set to global refresh rate)
+        // refreshModifiers = true (everything that is not locked and set to global refresh, will refresh)
+        await previewNode(nodeId, false, true, true);
+    } catch (err) {
+        const isAbort = (err as any)?.name === 'AbortError' || String(err).toLowerCase().includes('abort');
+        if (!isAbort) {
+            console.error('Recalculate preview error:', err);
+        }
     } finally {
         previewRecalculateBtn.innerHTML = '<span class="btn-icon" aria-hidden="true">↻</span>';
-        previewRecalculateBtn.disabled = activeRamPreviewNodeId == null;
+        previewRecalculateBtn.disabled = activeRamPreviewNodeId == null && resolveMainPreviewNode(graph) == null;
     }
 });
 
@@ -1322,6 +1549,12 @@ export function getActiveWorkspaceManifest(): any {
 function clearActiveWorkspaceManifest() {
     activeWorkspaceManifest = null;
     (window as any).activeWorkspaceManifest = null;
+    activeRamPreviewNodeId = null;
+    (window as any).activeRamPreviewNodeId = null;
+    activeRamPreviewPayload = null;
+    activeRamPreviewSource = null;
+    (window as any).activeRamPreviewBuffer = null;
+    globalAudioScheduler.reset();
     clearAudioBufferCache();
     fetch('/api/preview/clear', { method: 'POST' }).catch(() => {});
     const graph = (window as any).editorGraph as LGraph;
@@ -1334,7 +1567,9 @@ function clearActiveWorkspaceManifest() {
             delete node.manifestStemBuffer;
             node.setDirtyCanvas?.(true, true);
         }
+        updateMainPreviewTarget(graph);
     }
+    updatePlaybackControls();
 }
 
 exportBtn.addEventListener('click', async () => {
@@ -1415,8 +1650,8 @@ async function updateTempRendersList(selectFilename?: string) {
                 tempFilesSelect.appendChild(opt);
             });
 
-            let selectedIndex = 0;
             if (selectFilename) {
+                let selectedIndex = 0;
                 for (let i = 0; i < tempFilesSelect.options.length; i++) {
                     const optText = tempFilesSelect.options[i].textContent || '';
                     if (optText === selectFilename || optText.includes(selectFilename) || selectFilename.includes(optText)) {
@@ -1424,13 +1659,26 @@ async function updateTempRendersList(selectFilename?: string) {
                         break;
                     }
                 }
-            }
-
-            tempFilesSelect.selectedIndex = selectedIndex;
-            const selectedOpt = tempFilesSelect.options[selectedIndex];
-            if (selectedOpt && selectedOpt.value) {
-                tempFilesSelect.value = selectedOpt.value;
-                setMasterPlayerSource(selectedOpt.value, Boolean(selectFilename));
+                tempFilesSelect.selectedIndex = selectedIndex;
+                const selectedOpt = tempFilesSelect.options[selectedIndex];
+                if (selectedOpt && selectedOpt.value) {
+                    tempFilesSelect.value = selectedOpt.value;
+                    setMasterPlayerSource(selectedOpt.value, true);
+                }
+            } else if (activeRamPreviewNodeId != null) {
+                const ramOpt = Array.from(tempFilesSelect.options).find(o => o.value === 'RAM_PREVIEW');
+                if (ramOpt) {
+                    tempFilesSelect.value = 'RAM_PREVIEW';
+                }
+            } else {
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = 'Select render…';
+                placeholder.disabled = true;
+                placeholder.selected = true;
+                tempFilesSelect.insertBefore(placeholder, tempFilesSelect.firstChild);
+                tempFilesSelect.selectedIndex = 0;
+                tempFilesSelect.value = '';
             }
             updatePlaybackTrackPresentation();
         } else {
@@ -2065,8 +2313,12 @@ function updateMainPreviewTarget(graph?: LGraph): any | null {
     const state = getMainPreviewState(targetGraph);
     const targetName = target?.properties?.node_name || target?.title || '';
     globalPreviewBtn.disabled = !target;
+    previewRecalculateBtn.disabled = !target && activeRamPreviewNodeId == null;
+    const isPlaying = globalAudioScheduler.getIsPlaying()
+        || (!masterPlayer.paused && !masterPlayer.ended)
+        || (loopEnabled && Boolean(loopSource));
     globalPreviewBtn.title = target
-        ? `Preview main output: ${targetName} (${state.mode === 'manual' ? 'manual' : 'automatic'})`
+        ? (isPlaying ? 'Pause transport (Space)' : `Play transport (Space) · ${targetName} (${state.mode === 'manual' ? 'manual' : 'automatic'})`)
         : 'Add an audio node to enable main preview';
     globalPreviewBtn.setAttribute('aria-label', globalPreviewBtn.title);
     return target;
@@ -2261,9 +2513,49 @@ function syncGraphHierarchy(graph?: LGraph) {
     syncAllModifierPositions(targetGraph);
 }
 
+let connectionsChangeTimer: any = null;
+
 window.addEventListener('graph-connections-changed', () => {
-    syncGraphHierarchy();
-    updateGraphNodeCollapsing();
+    const graph = (window as any).editorGraph as LGraph;
+    if (graph) {
+        syncGraphHierarchy(graph);
+        updateGraphNodeCollapsing();
+
+        // Mark all nodes in graph as invalidated because connectivity/topology has changed
+        for (const node of (graph as any)._nodes || []) {
+            if (node) {
+                (node as any).isInvalidated = true;
+                (node as any).setDirtyCanvas?.(true, true);
+            }
+        }
+    } else {
+        syncGraphHierarchy();
+        updateGraphNodeCollapsing();
+    }
+
+    if (connectionsChangeTimer) {
+        clearTimeout(connectionsChangeTimer);
+    }
+
+    connectionsChangeTimer = setTimeout(() => {
+        // Fully clear DAG cache and RAM preview store in backend
+        fetch('/api/preview/invalidate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node_ids: [] })
+        }).catch(() => {});
+
+        // If active playback is ongoing, trigger seamless in-place hot-swap preview
+        if (globalAudioScheduler.getIsPlaying()) {
+            const currentGraph = (window as any).editorGraph as LGraph;
+            const targetId = (activeRamPreviewNodeId != null && currentGraph?.getNodeById(activeRamPreviewNodeId))
+                ? activeRamPreviewNodeId
+                : resolveMainPreviewNode(currentGraph)?.id;
+            if (targetId != null) {
+                void previewNode(targetId, false, false, false);
+            }
+        }
+    }, 150);
 });
 
 function updateGraphNodeCollapsing() {
@@ -3019,6 +3311,11 @@ function handleNodeRemoved(nodeId: number) {
     if (activeParamNodeId === nodeId) {
         activeParamNodeId = null;
     }
+
+    if (activeRamPreviewNodeId === nodeId) {
+        activeRamPreviewNodeId = null;
+        (window as any).activeRamPreviewNodeId = null;
+    }
     updateGraphNodeCollapsing();
 }
 
@@ -3217,7 +3514,15 @@ async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
         node.applySequenceDocument(document);
         node.updateProperty('filepath', item.filepath);
         if (item.id != null) node.updateProperty('library_item_id', item.id);
+        const graph = (window as any).editorGraph as LGraph;
+        if (graph) markNodeAndAncestorsInvalidated(graph, node.id);
         node.setDirtyCanvas?.(true, true);
+        window.dispatchEvent(new CustomEvent('arrangement-source-changed', {
+            detail: { nodeId: node.id },
+        }));
+        window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
+            detail: { nodeId: node.id }
+        }));
         return true;
     }
 
@@ -3237,17 +3542,32 @@ async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
 
     const sourceName = item.name || item.filepath.split(/[\\/]/).pop() || "Sequence";
     const nodeName = sourceName.replace(/\.(?:mid|midi)$/i, '') || "Sequence";
-    Object.assign(node.properties, {
-        node_name: nodeName,
-        node_type: "sequence",
-        filepath: item.filepath,
-        sequence: [...parsed.sequence],
-        step_parameters: Array.isArray(parsed.step_parameters)
-            ? parsed.step_parameters.map((step: any) => ({ ...step }))
-            : node.properties.step_parameters,
-        original_bpm: parsed.bpm || item.bpm || node.properties.original_bpm || 120
-    });
-    node.title = nodeName;
+
+    if (typeof node.updateProperty === 'function') {
+        node.updateProperty('node_name', nodeName);
+        node.updateProperty('filepath', item.filepath);
+        if (item.id != null) node.updateProperty('library_item_id', item.id);
+        node.updateProperty('sequence', [...parsed.sequence]);
+        if (Array.isArray(parsed.step_parameters)) {
+            node.updateProperty('step_parameters', parsed.step_parameters.map((step: any) => ({ ...step })));
+        }
+        if (parsed.bpm || item.bpm) {
+            node.updateProperty('original_bpm', parsed.bpm || item.bpm || 120);
+        }
+    } else {
+        Object.assign(node.properties, {
+            node_name: nodeName,
+            node_type: "sequence",
+            filepath: item.filepath,
+            library_item_id: item.id ?? node.properties.library_item_id,
+            sequence: [...parsed.sequence],
+            step_parameters: Array.isArray(parsed.step_parameters)
+                ? parsed.step_parameters.map((step: any) => ({ ...step }))
+                : node.properties.step_parameters,
+            original_bpm: parsed.bpm || item.bpm || node.properties.original_bpm || 120
+        });
+        node.title = nodeName;
+    }
 
     const data = trackNodes.get(node.id);
     if (data) {
@@ -3260,7 +3580,17 @@ async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
         data.original_bpm = parsed.bpm || item.bpm || data.original_bpm || 120;
     }
 
+    const graph = (window as any).editorGraph as LGraph;
+    if (graph) {
+        markNodeAndAncestorsInvalidated(graph, node.id);
+    }
     node.setDirtyCanvas?.(true, true);
+    window.dispatchEvent(new CustomEvent('arrangement-source-changed', {
+        detail: { nodeId: node.id },
+    }));
+    window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
+        detail: { nodeId: node.id }
+    }));
     return true;
 }
 (window as any).applyLibraryItemToSequence = applyLibraryItemToSequence;
@@ -3541,6 +3871,7 @@ async function restoreCurrentStage(graph: LGraph, canvas: LGraphCanvas): Promise
         loadGlobalParametersFromGraph(graph);
         updateGraphNodeCollapsing();
         canvas.setDirty(true, true);
+        void preloadSubtreeAssets(graph);
         lastSavedStageFingerprint = JSON.stringify(stage.graph);
         setStageSaveState('saved');
         runtimeLog(`Restoring current stage complete (${Math.round(performance.now() - restoreStartedAt)} ms)`, 'common');
@@ -3643,8 +3974,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     (graphCanvas as any).drawSlot = function () { };
 
                     (graph as any).onNodeConnectionChange = function () {
-                        syncGraphHierarchy(graph);
-                        updateGraphNodeCollapsing();
+                        window.dispatchEvent(new CustomEvent('graph-connections-changed'));
                     };
 
                     // Clean white canvas background without grid fade
@@ -4226,6 +4556,8 @@ type PreviewRequest = {
 let pendingPreviewRequest: PreviewRequest | null = null;
 let previewRequestVersion = 0;
 let previewWorker: Promise<void> | null = null;
+let currentPreviewAbortController: AbortController | null = null;
+let currentPreviewSessionId = 0;
 
 async function calculatePreview(
     nodeId: number,
@@ -4239,9 +4571,27 @@ async function calculatePreview(
     const previewStartedAt = performance.now();
     console.log(`[Preview] Starting RAM preview (/api/preview) for node #${nodeId}`);
 
+    if (currentPreviewAbortController) {
+        currentPreviewAbortController.abort();
+    }
+    const abortController = new AbortController();
+    currentPreviewAbortController = abortController;
+    const sessionId = ++currentPreviewSessionId;
+
+    activeRamPreviewNodeId = nodeId;
+    (window as any).activeRamPreviewNodeId = nodeId;
+    const targetNode = graph.getNodeById(nodeId);
+    if (targetNode) {
+        delete (targetNode as any).manifestStemBuffer;
+        (targetNode as any).bufferedProgress = 0;
+        (targetNode as any).isInvalidated = true;
+        (targetNode as any).setDirtyCanvas?.(true, true);
+    }
+    (window as any).editorCanvas?.setDirty?.(true, true);
+
     try {
         const libraryFiles = await loggedTask('Resolve graph asset metadata', () =>
-            syncGraphSampleMetadataFromLibrary(graph, true, nodeId)
+            syncGraphSampleMetadataFromLibrary(graph, refreshModifiers, nodeId)
         );
         if (refreshModifiers) {
             await loggedTask('Resolve preview asset pools', () =>
@@ -4258,6 +4608,9 @@ async function calculatePreview(
                 })
             );
         }
+        await loggedTask('Preload audio buffers and sequences', () =>
+            preloadSubtreeAssets(graph, nodeId)
+        );
     } catch (error) {
         console.error('Asset Filter resolution failed', error);
         const message = error instanceof Error ? error.message : String(error);
@@ -4283,7 +4636,8 @@ async function calculatePreview(
             fetch('/api/preview/stream-progressive', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                signal: abortController.signal
             })
         );
 
@@ -4305,9 +4659,12 @@ async function calculatePreview(
         const decoder = new TextDecoder();
         let streamBuffer = '';
         let finalData: any = null;
-        const targetNode = graph.getNodeById(nodeId);
 
         while (true) {
+            if (sessionId !== currentPreviewSessionId || abortController.signal.aborted) {
+                reader.cancel();
+                break;
+            }
             const { done, value } = await reader.read();
             if (done) break;
             streamBuffer += decoder.decode(value, { stream: true });
@@ -4316,6 +4673,7 @@ async function calculatePreview(
 
             for (const line of lines) {
                 if (!line.trim()) continue;
+                if (sessionId !== currentPreviewSessionId) break;
                 let chunkData: any;
                 try {
                     chunkData = JSON.parse(line);
@@ -4326,8 +4684,8 @@ async function calculatePreview(
                 const cType = chunkData.chunk_type || chunkData.type;
                 if (cType === 'bar' || cType === 'bar_chunk') {
                     const audioBuf = await globalAudioScheduler.decodeBase64Wav(chunkData.audio_base64);
-                    if (audioBuf) {
-                        globalAudioScheduler.addBarChunk({
+                    if (audioBuf && sessionId === currentPreviewSessionId) {
+                        const chunkPayload = {
                             barIndex: chunkData.bar_index,
                             totalBars: chunkData.total_bars,
                             bpm: chunkData.bpm,
@@ -4335,20 +4693,50 @@ async function calculatePreview(
                             durationSeconds: chunkData.duration_seconds,
                             audioBuffer: audioBuf,
                             peaks: chunkData.peaks
-                        }, autoplay);
+                        };
 
-                        if (autoplay) {
-                            startPlaybackTelemetry();
+                        if (chunkData.bar_index === 0) {
+                            globalAudioScheduler.startSession(chunkPayload, autoplay, sessionId);
+                            if (autoplay || globalAudioScheduler.getIsPlaying()) {
+                                startPlaybackTelemetry();
+                                updatePlaybackControls();
+                            }
+                        } else {
+                            globalAudioScheduler.addBarChunk(chunkPayload, sessionId);
+                        }
+
+                        const totalExpectedDuration = (chunkData.total_bars && chunkData.duration_seconds)
+                            ? chunkData.total_bars * chunkData.duration_seconds
+                            : 0;
+
+                        const fullBuf = globalAudioScheduler.getFullAudioBuffer();
+                        if (fullBuf) {
+                            (window as any).activeRamPreviewBuffer = fullBuf;
+                            masterWaveform.setAudioBuffer(fullBuf, totalExpectedDuration);
+                        }
+
+                        if (chunkData.manifest) {
+                            distributeWorkspaceManifest(graph, chunkData.manifest);
                         }
 
                         if (targetNode) {
                             (targetNode as any).bufferedProgress = (chunkData.bar_index + 1) / chunkData.total_bars;
-                            (targetNode as any).isInvalidated = false;
+                            if (chunkData.bar_index >= chunkData.total_bars - 1) {
+                                clearSubtreeInvalidated(graph, nodeId);
+                            }
                             (targetNode as any).setDirtyCanvas?.(true, true);
                         }
+                        masterPlayBtn.disabled = false;
+                        masterLoopBtn.disabled = false;
+                        (window as any).editorCanvas?.setDirty?.(true, true);
                     }
                 } else if (cType === 'complete') {
                     finalData = chunkData;
+                    clearSubtreeInvalidated(graph, nodeId);
+                    if (targetNode) {
+                        (targetNode as any).bufferedProgress = 1.0;
+                        (targetNode as any).setDirtyCanvas?.(true, true);
+                    }
                 }
             }
         }
@@ -4373,59 +4761,22 @@ async function calculatePreview(
             activeRamPreviewPayload = payload;
             activeRamPreviewSource = data.audio_url;
             previewRecalculateBtn.disabled = false;
+            masterPlayBtn.disabled = false;
+            masterLoopBtn.disabled = false;
+
+            const fullBuf = globalAudioScheduler.getFullAudioBuffer();
+            if (fullBuf) {
+                (window as any).activeRamPreviewBuffer = fullBuf;
+                masterWaveform.setAudioBuffer(fullBuf, data.total_duration);
+            }
 
             // Distribute workspace manifest to active nodes in graph
             if (data.manifest && typeof data.manifest === 'object') {
-                activeWorkspaceManifest = data.manifest;
-                (window as any).activeWorkspaceManifest = data.manifest;
-                const nodesMap = data.manifest.nodes || {};
-                const graphNodes = (((graph as any)._nodes || []) as any[]);
-                for (const gNode of graphNodes) {
-                    if (!gNode) continue;
-                    const manifestEntry = nodesMap[String(gNode.id)];
-                    if (manifestEntry) {
-                        gNode.manifestStemUrl = manifestEntry.audio_url;
-                        gNode.manifestEvents = manifestEntry.events || [];
-                        gNode.manifestStemDuration = manifestEntry.duration_seconds;
-
-                        // Sync resolved sample/pool filepath to node
-                        if (manifestEntry.filepath && gNode.properties) {
-                            const currentPath = String(gNode.properties.filepath || '');
-                            if (currentPath !== manifestEntry.filepath || !gNode.audioBuffer) {
-                                gNode.properties.filepath = manifestEntry.filepath;
-                                gNode.loadedFilepath = manifestEntry.filepath;
-                                delete gNode.manifestStemBuffer;
-                                fetchAudioBuffer(manifestEntry.filepath).then(buf => {
-                                    if (buf) {
-                                        gNode.audioBuffer = buf;
-                                        if (buf.duration) {
-                                            gNode.properties.duration_seconds = buf.duration;
-                                        }
-                                        gNode.setDirtyCanvas?.(true, true);
-                                    }
-                                }).catch(() => {});
-                            }
-                        }
-
-                        // Sample duration metadata inheritance
-                        if (manifestEntry.duration_seconds && gNode.properties && !gNode.properties.duration_seconds) {
-                            gNode.properties.duration_seconds = manifestEntry.duration_seconds;
-                        }
-
-                        // Only non-sample composite nodes fetch intermediate stem buffers
-                        if (manifestEntry.audio_url && manifestEntry.node_type !== 'sample') {
-                            fetchAudioBuffer(manifestEntry.audio_url).then(buf => {
-                                if (buf) {
-                                    gNode.manifestStemBuffer = buf;
-                                    gNode.setDirtyCanvas?.(true, true);
-                                }
-                            }).catch(() => {});
-                        }
-                    }
-                }
+                distributeWorkspaceManifest(graph, data.manifest);
             }
 
-            setMasterPlayerSource(data.audio_url, autoplay);
+            clearSubtreeInvalidated(graph, nodeId);
+            updatePlaybackControls();
 
             // Add/select RAM preview entry in toolbar dropdown
             let ramOpt = Array.from(tempFilesSelect.options).find(o => o.value === 'RAM_PREVIEW');
@@ -4446,11 +4797,70 @@ async function calculatePreview(
             throw new Error(data.detail || "RAM preview calculation failed.");
         }
     } catch (err) {
+        if ((err as any)?.name === 'AbortError' || String(err).includes('aborted') || String(err).includes('BodyStreamBuffer was aborted')) {
+            // Silently ignore intentional abort of previous preview stream
+            return;
+        }
         console.error("Error during RAM preview:", err);
         if (requestVersion === previewRequestVersion) {
             runtimeLog(`Preview failed for node ${nodeId}: ${(err as Error).message || String(err)}`, 'error');
         }
         if (requestVersion === previewRequestVersion) throw err;
+    }
+}
+
+function distributeWorkspaceManifest(graph: LGraph, manifest: any) {
+    if (!manifest || typeof manifest !== 'object') return;
+    activeWorkspaceManifest = manifest;
+    (window as any).activeWorkspaceManifest = manifest;
+    const nodesMap = manifest.nodes || {};
+    const graphNodes = (((graph as any)._nodes || []) as any[]);
+    for (const gNode of graphNodes) {
+        if (!gNode) continue;
+        const manifestEntry = nodesMap[String(gNode.id)];
+        if (manifestEntry) {
+            const stemUrlChanged = gNode.manifestStemUrl !== manifestEntry.audio_url;
+            gNode.manifestStemUrl = manifestEntry.audio_url;
+            gNode.manifestEvents = manifestEntry.events || [];
+            gNode.manifestStemDuration = manifestEntry.duration_seconds;
+
+            // Sync resolved sample/pool filepath to node
+            if (manifestEntry.filepath && gNode.properties) {
+                const currentPath = String(gNode.properties.filepath || '');
+                if (currentPath !== manifestEntry.filepath || !gNode.audioBuffer) {
+                    gNode.properties.filepath = manifestEntry.filepath;
+                    gNode.loadedFilepath = manifestEntry.filepath;
+                    delete gNode.manifestStemBuffer;
+                    fetchAudioBuffer(manifestEntry.filepath).then(buf => {
+                        if (buf) {
+                            gNode.audioBuffer = buf;
+                            if (buf.duration) {
+                                gNode.properties.duration_seconds = buf.duration;
+                            }
+                            gNode.setDirtyCanvas?.(true, true);
+                        }
+                    }).catch(() => {});
+                }
+            }
+
+            // Sample duration metadata inheritance
+            if (manifestEntry.duration_seconds && gNode.properties && !gNode.properties.duration_seconds) {
+                gNode.properties.duration_seconds = manifestEntry.duration_seconds;
+            }
+
+            // Only non-sample composite nodes fetch intermediate stem buffers (skip active preview target which uses progressive scheduler audio)
+            if (manifestEntry.audio_url && manifestEntry.node_type !== 'sample' && gNode.id !== activeRamPreviewNodeId) {
+                if (stemUrlChanged || !gNode.manifestStemBuffer || gNode.isInvalidated) {
+                    fetchAudioBuffer(manifestEntry.audio_url).then(buf => {
+                        if (buf && gNode.id !== activeRamPreviewNodeId) {
+                            gNode.manifestStemBuffer = buf;
+                            gNode.setDirtyCanvas?.(true, true);
+                        }
+                    }).catch(() => {});
+                }
+            }
+            gNode.setDirtyCanvas?.(true, true);
+        }
     }
 }
 
@@ -4469,8 +4879,9 @@ async function runPreviewQueue() {
                     request.refreshModifiers
                 );
             } catch (error) {
+                const isAbort = (error as any)?.name === 'AbortError' || String(error).toLowerCase().includes('abort');
                 const isLatest = requestVersion === previewRequestVersion && pendingPreviewRequest == null;
-                if (isLatest) {
+                if (isLatest && !isAbort) {
                     setPreviewFailedState();
                     alert(error instanceof Error ? error.message : 'RAM preview failed.');
                 }
@@ -4494,32 +4905,69 @@ function previewNode(
     pendingPreviewRequest = { nodeId, autoplay, globalPreview, refreshModifiers };
     previewRequestVersion++;
     runtimeLog(`Preview queued for node ${nodeId}`, 'common');
-    setPreviewCalculatingState();
+    setPreviewCalculatingState(globalAudioScheduler.getIsPlaying());
     if (!previewWorker) previewWorker = runPreviewQueue();
     return previewWorker;
 }
 
+const NON_DSP_PROPERTIES = new Set([
+    'visualization_enabled',
+    'visual_width',
+    'visual_height',
+    'collapsed_step_modifiers',
+    'collapsed',
+    'collapsedDotMode',
+    'pinned',
+    'color',
+    'bgcolor',
+    'boxcolor',
+    'pos',
+    'size',
+    'selected',
+    'node_name',
+    'name',
+    'description',
+    'tags',
+    'favorite'
+]);
+
+let dspInvalidateTimer: any = null;
+const pendingInvalidatedNodes = new Set<number>();
+
 window.addEventListener('node-property-changed', (e: any) => {
     const changedNodeId = e.detail?.nodeId;
+    const propertyKey = e.detail?.key;
     if (changedNodeId == null) return;
+
+    if (propertyKey && NON_DSP_PROPERTIES.has(propertyKey)) {
+        // UI visual adjustments do not alter audio DSP; avoid invalidating preview cache or triggering re-renders
+        return;
+    }
 
     const graph = (window as any).editorGraph as LGraph;
     if (graph) {
-        const gNode = graph.getNodeById(changedNodeId);
-        if (gNode) {
-            (gNode as any).isInvalidated = true;
-            (gNode as any).setDirtyCanvas?.(true, true);
+        markNodeAndAncestorsInvalidated(graph, changedNodeId);
+    }
+
+    pendingInvalidatedNodes.add(changedNodeId);
+
+    // Debounce invalidation & preview recalculation to allow seamless, uninterrupted parameter tweaking
+    if (dspInvalidateTimer) {
+        clearTimeout(dspInvalidateTimer);
+    }
+    dspInvalidateTimer = setTimeout(() => {
+        const idsToInvalidate = Array.from(pendingInvalidatedNodes);
+        pendingInvalidatedNodes.clear();
+
+        fetch('/api/preview/invalidate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node_ids: idsToInvalidate })
+        }).catch(() => {});
+
+        // If active playback is ongoing, trigger seamless in-place hot-swap preview
+        if (globalAudioScheduler.getIsPlaying() && activeRamPreviewNodeId != null) {
+            void previewNode(activeRamPreviewNodeId, false, false, false);
         }
-    }
-
-    fetch('/api/preview/invalidate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ node_id: changedNodeId })
-    }).catch(() => {});
-
-    // If active playback is ongoing, trigger seamless hot-swap preview
-    if (globalAudioScheduler.getIsPlaying() && activeRamPreviewNodeId != null) {
-        void previewNode(activeRamPreviewNodeId, false, false, false);
-    }
+    }, 150);
 });

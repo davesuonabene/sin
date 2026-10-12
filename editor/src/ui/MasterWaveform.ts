@@ -128,6 +128,20 @@ export class MasterWaveform {
         this.draw();
     }
 
+    setAudioBuffer(buffer: AudioBuffer, totalExpectedDuration?: number): void {
+        this.loadToken++;
+        this.audioBuffer = buffer;
+        this.invalidatePeaks();
+        if (totalExpectedDuration && totalExpectedDuration > 0) {
+            this.knownDuration = totalExpectedDuration;
+        } else if (!this.knownDuration || this.knownDuration < buffer.duration) {
+            this.knownDuration = buffer.duration;
+        }
+        this.message = '';
+        this.updateAccessibility();
+        this.draw();
+    }
+
     clear(message = 'Ready to render') {
         this.loadToken++;
         this.audioBuffer = null;
@@ -176,14 +190,14 @@ export class MasterWaveform {
         this.peakCacheColumns = 0;
     }
 
-    private waveformPeaks(columns: number): Float32Array {
-        if (!this.audioBuffer || columns <= 0) return new Float32Array(0);
-        if (
-            this.peakCache
-            && this.peakCacheBuffer === this.audioBuffer
-            && this.peakCacheColumns === columns
-        ) {
-            return this.peakCache;
+    private waveformPeaks(columns: number): { peaks: Float32Array; bufferedCols: number } {
+        if (!this.audioBuffer || columns <= 0) return { peaks: new Float32Array(0), bufferedCols: 0 };
+        const totalDur = this.duration > 0 ? this.duration : this.audioBuffer.duration;
+        const bufferRatio = Math.min(1.0, Math.max(0.01, this.audioBuffer.duration / Math.max(0.01, totalDur)));
+        const bufferedCols = Math.max(1, Math.min(columns, Math.floor(columns * bufferRatio)));
+
+        if (this.peakCache && this.peakCacheBuffer === this.audioBuffer && this.peakCacheColumns === columns) {
+            return { peaks: this.peakCache, bufferedCols };
         }
 
         const channels = Array.from(
@@ -191,9 +205,9 @@ export class MasterWaveform {
             (_, channel) => this.audioBuffer!.getChannelData(channel)
         );
         const sampleCount = this.audioBuffer.length;
-        const samplesPerColumn = Math.max(1, Math.floor(sampleCount / columns));
+        const samplesPerColumn = Math.max(1, Math.floor(sampleCount / bufferedCols));
         const peaks = new Float32Array(columns);
-        for (let x = 0; x < columns; x++) {
+        for (let x = 0; x < bufferedCols; x++) {
             const start = x * samplesPerColumn;
             const end = Math.min(sampleCount, start + samplesPerColumn);
             let peak = 0;
@@ -205,7 +219,7 @@ export class MasterWaveform {
         this.peakCache = peaks;
         this.peakCacheBuffer = this.audioBuffer;
         this.peakCacheColumns = columns;
-        return peaks;
+        return { peaks, bufferedCols };
     }
 
     private draw() {
@@ -230,7 +244,16 @@ export class MasterWaveform {
         if (this.audioBuffer) {
             const columns = Math.max(1, Math.floor(cssWidth));
             const middle = cssHeight / 2;
-            const peaks = this.waveformPeaks(columns);
+            const { peaks, bufferedCols } = this.waveformPeaks(columns);
+            const playheadX = this.progress * cssWidth;
+            const bufferFrontX = (bufferedCols < columns) ? (bufferedCols / columns) * cssWidth : null;
+
+            // Unbuffered background past bufferFrontX
+            if (bufferFrontX != null) {
+                this.ctx.fillStyle = 'rgba(241, 245, 249, 0.7)';
+                this.ctx.fillRect(bufferFrontX, 0, cssWidth - bufferFrontX, cssHeight);
+            }
+
             const drawPeaks = (color: string, startX: number, endX: number) => {
                 this.ctx.save();
                 this.ctx.beginPath();
@@ -238,7 +261,7 @@ export class MasterWaveform {
                 this.ctx.clip();
                 this.ctx.strokeStyle = color;
                 this.ctx.lineWidth = 1;
-                for (let x = 0; x < columns; x++) {
+                for (let x = 0; x < bufferedCols; x++) {
                     const peakHeight = Math.max(1, peaks[x] * (cssHeight * 0.38));
                     this.ctx.beginPath();
                     this.ctx.moveTo(x + 0.5, middle - peakHeight);
@@ -247,11 +270,25 @@ export class MasterWaveform {
                 }
                 this.ctx.restore();
             };
-            const playheadX = this.progress * cssWidth;
-            drawPeaks('#94a3b8', playheadX, cssWidth);
-            drawPeaks('#059669', 0, playheadX);
+
+            const endActiveX = bufferFrontX != null ? Math.min(cssWidth, bufferFrontX) : cssWidth;
+            drawPeaks('#94a3b8', playheadX, endActiveX);
+            drawPeaks('#059669', 0, Math.min(playheadX, endActiveX));
+
             this.ctx.fillStyle = 'rgba(5, 150, 105, 0.08)';
-            this.ctx.fillRect(0, 0, playheadX, cssHeight);
+            this.ctx.fillRect(0, 0, Math.min(playheadX, endActiveX), cssHeight);
+
+            // Leading cyan front edge of progressive buffer fill
+            if (bufferFrontX != null && bufferFrontX < cssWidth - 1) {
+                this.ctx.strokeStyle = '#38bdf8';
+                this.ctx.lineWidth = 1.5;
+                this.ctx.beginPath();
+                this.ctx.moveTo(bufferFrontX, 0);
+                this.ctx.lineTo(bufferFrontX, cssHeight);
+                this.ctx.stroke();
+            }
+
+            // Playhead scrubber
             this.ctx.strokeStyle = '#0284c7';
             this.ctx.lineWidth = 1.5;
             this.ctx.beginPath();

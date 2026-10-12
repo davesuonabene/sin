@@ -56,6 +56,17 @@ class DagNodeCache:
             return entry.get("audio")
         return None
 
+    def get_extra(self, node_id: int | str, fingerprint: str) -> Optional[dict[str, Any]]:
+        """
+        Retrieves cached extra metadata (manifest entries, stems) if fingerprint matches.
+        """
+        if node_id is None:
+            return None
+        entry = self._cache.get(str(node_id))
+        if entry and entry.get("fingerprint") == str(fingerprint):
+            return entry.get("extra")
+        return None
+
     def register_edge(self, parent_id: int | str, child_id: int | str) -> None:
         """
         Registers an audio signal edge: parent_id consumes child_id.

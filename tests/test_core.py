@@ -505,6 +505,32 @@ class TestGraphRendering(AudioFixtureTestCase):
         self.assertTrue(np.all(full_output[400:500] == 1.0))
         self.assertTrue(np.all(full_output[600:700] == 1.0))
 
+    def test_arrangement_replicates_child_manifest_events_across_repetitions(self):
+        system = System(bpm=120.0, render_mode="preview")
+        system.sample_rate = 200
+
+        sample = AudioObject(audio_data=np.ones(10, dtype=np.float32), sample_type="one_shot")
+        sample.node_id = 99
+
+        seq = SequenceObject(
+            sequence=[1, 0, 1, 0],
+            step_length=1.0,
+            total_bars=1.0,
+        )
+        seq.node_id = 88
+        seq.add_child(sample, 0.0)
+
+        arr = ArrangementObject(total_bars=4.0, quant="auto")
+        arr.node_id = 77
+        arr.add_child(seq, 0.0)
+
+        arr.render(system)
+
+        sample_events = system.manifest["nodes"].get("99", {}).get("events", [])
+        self.assertEqual(len(sample_events), 8)
+        seq_events = system.manifest["nodes"].get("88", {}).get("events", [])
+        self.assertEqual(len(seq_events), 4)
+
 
 class TestApiAudioFlow(AudioFixtureTestCase):
     @classmethod
