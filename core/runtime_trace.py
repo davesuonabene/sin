@@ -21,7 +21,10 @@ def collect_runtime_trace() -> Iterator[list[dict]]:
     try:
         yield entries
     finally:
-        _active_trace.reset(token)
+        try:
+            _active_trace.reset(token)
+        except ValueError:
+            _active_trace.set(None)
 
 
 def trace_runtime(message: str, level: RuntimeLevel = "debug") -> None:

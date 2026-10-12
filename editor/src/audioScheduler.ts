@@ -13,10 +13,75 @@ export interface BarChunk {
     peaks?: number[];
 }
 
+const WORKLET_PROCESSOR_CODE = `
+class RingBufferProcessor extends AudioWorkletProcessor {
+    constructor() {
+        super();
+        this.queues = [[], []];
+        this.offsets = [0, 0];
+        this.isPlaying = false;
+        this.port.onmessage = (e) => {
+            const data = e.data;
+            if (!data) return;
+            if (data.type === 'push_pcm') {
+                const chans = data.channels;
+                for (let c = 0; c < chans.length; c++) {
+                    if (!this.queues[c]) this.queues[c] = [];
+                    this.queues[c].push(chans[c]);
+                }
+            } else if (data.type === 'clear') {
+                this.queues = [[], []];
+                this.offsets = [0, 0];
+            } else if (data.type === 'set_playing') {
+                this.isPlaying = Boolean(data.isPlaying);
+            }
+        };
+    }
+
+    process(inputs, outputs) {
+        const output = outputs[0];
+        if (!this.isPlaying || !output || output.length === 0) return true;
+        const frames = output[0].length;
+        const numChans = output.length;
+
+        for (let c = 0; c < numChans; c++) {
+            const outChan = output[c];
+            const q = this.queues[c] || this.queues[0];
+            let written = 0;
+
+            while (q && q.length > 0 && written < frames) {
+                const block = q[0];
+                const off = this.offsets[c] || 0;
+                const avail = block.length - off;
+                const toCopy = Math.min(frames - written, avail);
+                outChan.set(block.subarray(off, off + toCopy), written);
+                written += toCopy;
+                const nextOff = off + toCopy;
+                if (nextOff >= block.length) {
+                    q.shift();
+                    this.offsets[c] = 0;
+                } else {
+                    this.offsets[c] = nextOff;
+                }
+            }
+
+            if (written < frames) {
+                outChan.fill(0, written);
+            }
+        }
+        return true;
+    }
+}
+registerProcessor('ring-buffer-processor', RingBufferProcessor);
+`;
+
 export class GaplessAudioScheduler {
     private audioCtx: AudioContext | null = null;
     private masterGain: GainNode | null = null;
     private analyser: AnalyserNode | null = null;
+    private workletNode: AudioWorkletNode | null = null;
+    private workletEnabled = false;
+    private workletInitAttempted = false;
     private activeSources: { source: AudioBufferSourceNode; gain: GainNode; startTime: number; endTime: number }[] = [];
     private barBuffers = new Map<number, AudioBuffer>();
     private fullAudioBuffer: AudioBuffer | null = null;
@@ -39,6 +104,31 @@ export class GaplessAudioScheduler {
         // AudioContext initialized lazily on user gesture
     }
 
+    private async initAudioWorklet(ctx: AudioContext): Promise<boolean> {
+        if (this.workletInitAttempted) return this.workletEnabled;
+        this.workletInitAttempted = true;
+        try {
+            if (!ctx.audioWorklet || typeof ctx.audioWorklet.addModule !== 'function') {
+                return false;
+            }
+            const blob = new Blob([WORKLET_PROCESSOR_CODE], { type: 'application/javascript' });
+            const url = URL.createObjectURL(blob);
+            await ctx.audioWorklet.addModule(url);
+            URL.revokeObjectURL(url);
+
+            this.workletNode = new AudioWorkletNode(ctx, 'ring-buffer-processor');
+            if (this.masterGain) {
+                this.workletNode.connect(this.masterGain);
+            }
+            this.workletEnabled = true;
+            return true;
+        } catch (e) {
+            console.warn('[GaplessAudioScheduler] AudioWorklet fallback to AudioBufferSourceNode:', e);
+            this.workletEnabled = false;
+            return false;
+        }
+    }
+
     private ensureContext(): AudioContext {
         if (!this.audioCtx) {
             const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -49,6 +139,7 @@ export class GaplessAudioScheduler {
             this.analyser.smoothingTimeConstant = 0.5;
             this.masterGain.connect(this.analyser);
             this.analyser.connect(this.audioCtx.destination);
+            void this.initAudioWorklet(this.audioCtx);
         }
         if (this.audioCtx.state === 'suspended') {
             this.audioCtx.resume();
@@ -112,6 +203,10 @@ export class GaplessAudioScheduler {
         this.pausedTime = 0;
         this.stopSources();
         this.isPlaying = false;
+        if (this.workletNode) {
+            this.workletNode.port.postMessage({ type: 'clear' });
+            this.workletNode.port.postMessage({ type: 'set_playing', isPlaying: false });
+        }
     }
 
     pause(): void {
@@ -119,6 +214,9 @@ export class GaplessAudioScheduler {
         this.pausedTime = this.getCurrentTime();
         this.stopSources();
         this.isPlaying = false;
+        if (this.workletNode) {
+            this.workletNode.port.postMessage({ type: 'set_playing', isPlaying: false });
+        }
     }
 
     play(): void {
@@ -129,6 +227,9 @@ export class GaplessAudioScheduler {
         const resumeTime = this.pausedTime || 0;
         const startTime = (totalDuration > 0 && resumeTime >= totalDuration && !this.loop) ? 0 : resumeTime;
         this.isPlaying = true;
+        if (this.workletNode) {
+            this.workletNode.port.postMessage({ type: 'set_playing', isPlaying: true });
+        }
         this.seek(startTime);
     }
 
@@ -164,6 +265,19 @@ export class GaplessAudioScheduler {
 
     getTotalDuration(): number {
         return this.totalBars * this.secondsPerBar;
+    }
+
+    /**
+     * Decode raw binary WAV ArrayBuffer into an AudioBuffer directly without base64 CPU overhead.
+     */
+    async decodeWav(arrayBuffer: ArrayBuffer): Promise<AudioBuffer | null> {
+        try {
+            const ctx = this.ensureContext();
+            return await ctx.decodeAudioData(arrayBuffer.slice(0));
+        } catch (err) {
+            console.warn('[GaplessAudioScheduler] Failed to decode WAV ArrayBuffer:', err);
+            return null;
+        }
     }
 
     /**

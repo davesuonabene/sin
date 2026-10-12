@@ -279,8 +279,8 @@ graph TD
 
 When implementation resumes on the engine & sync infrastructure, the planned roadmap consists of:
 
-1. [ ] **UI State Machine Integration:** Hook `setPreviewCalculatingState` and `node-property-changed` into a unified `EngineSyncManager` that updates `.stage-save-status` and node badges.
-2. [ ] **Telemetry Profiler in Runtime Console:** Surface backend millisecond timings (`runtime_log` entries) into the bottom `RuntimeLogPanel`.
-3. [ ] **Binary Streaming Protocol:** Implement a binary chunk alternative for `/api/preview/stream-progressive` to reduce base64 decoding CPU overhead.
-4. [ ] **AudioWorklet Ring Buffer Scheduler:** Upgrade `GaplessAudioScheduler` to `AudioWorklet` for guaranteed thread isolation.
+1. [x] **UI State Machine Integration:** Hooked `setPreviewCalculatingState` and `node-property-changed` into a unified `EngineSyncManager` that updates `.engine-sync-status` and node badges.
+2. [x] **Telemetry Profiler in Runtime Console:** Surfaced backend millisecond timings (`runtime_log` entries) into the bottom `RuntimeLogPanel` with category filters and live metrics bar.
+3. [x] **Binary Streaming Protocol:** Implemented binary chunk framing (`SINB` header: magic + meta_len + audio_len) for `/api/preview/stream-progressive` to eliminate base64 CPU overhead.
+4. [x] **AudioWorklet Ring Buffer Scheduler:** Upgraded `GaplessAudioScheduler` with an `AudioWorkletNode` ring buffer processor for thread isolation with seamless fallback.
 5. [ ] **Hardware Abstraction Layer (HAL):** Define the abstract `AudioOutputDevice` interface in `core/` to pave the way for native ASIO/JACK/ALSA output options.

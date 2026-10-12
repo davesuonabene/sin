@@ -2,7 +2,9 @@ import {
     clearRuntimeLog,
     runtimeLog,
     subscribeRuntimeLog,
-    type RuntimeLogEntry
+    subscribeEngineTelemetry,
+    type RuntimeLogEntry,
+    type EngineTelemetrySummary
 } from '../runtimeLog';
 
 function formatTimestamp(timestamp: Date): string {
@@ -15,17 +17,22 @@ function formatTimestamp(timestamp: Date): string {
     });
 }
 
+export type RuntimeLogFilter = 'all' | 'app' | 'engine' | 'error';
+
 export class RuntimeLogPanel {
     private readonly panel: HTMLDivElement;
     private readonly rows: HTMLDivElement;
     private readonly toggle: HTMLButtonElement;
     private readonly errorEcho: HTMLButtonElement;
+    private readonly telemetryRender: HTMLElement;
+    private readonly telemetryStream: HTMLElement;
+    private readonly telemetryTotal: HTMLElement;
+    private readonly telemetryBuffer: HTMLElement;
     private readonly unsubscribe: () => void;
+    private readonly unsubscribeTelemetry: () => void;
     private hiddenErrorCount = 0;
     private currentEntries: RuntimeLogEntry[] = [];
-    private renderedFirstId = 0;
-    private renderedLastId = 0;
-    private renderedCount = 0;
+    private activeFilter: RuntimeLogFilter = 'all';
 
     constructor(parent: HTMLElement) {
         this.toggle = document.createElement('button');
@@ -49,10 +56,22 @@ export class RuntimeLogPanel {
         this.panel.innerHTML = `
             <div class="runtime-log-header">
                 <span>Runtime log</span>
+                <div class="runtime-log-filters" role="tablist" aria-label="Log category filter">
+                    <button type="button" class="is-active" data-filter="all">All</button>
+                    <button type="button" data-filter="app">App</button>
+                    <button type="button" data-filter="engine">Engine</button>
+                    <button type="button" data-filter="error">Errors</button>
+                </div>
                 <div class="runtime-log-actions">
                     <button type="button" data-action="clear">Clear</button>
                     <button type="button" data-action="close" aria-label="Close runtime log">×</button>
                 </div>
+            </div>
+            <div class="runtime-log-telemetry-bar" aria-label="Engine Telemetry Profiler">
+                <span>Render: <b data-telemetry="render">--</b></span>
+                <span>Stream: <b data-telemetry="stream">--</b></span>
+                <span>Total: <b data-telemetry="total">--</b></span>
+                <span>Buffer: <b data-telemetry="buffer">--</b></span>
             </div>
             <div class="runtime-log-columns" aria-hidden="true">
                 <span>TIME</span><span>LEVEL</span><span>EVENT</span>
@@ -60,41 +79,86 @@ export class RuntimeLogPanel {
             <div class="runtime-log-rows" role="log" aria-live="polite"></div>
         `;
         this.rows = this.panel.querySelector('.runtime-log-rows') as HTMLDivElement;
+        this.telemetryRender = this.panel.querySelector('[data-telemetry="render"]') as HTMLElement;
+        this.telemetryStream = this.panel.querySelector('[data-telemetry="stream"]') as HTMLElement;
+        this.telemetryTotal = this.panel.querySelector('[data-telemetry="total"]') as HTMLElement;
+        this.telemetryBuffer = this.panel.querySelector('[data-telemetry="buffer"]') as HTMLElement;
 
         this.toggle.addEventListener('click', () => this.setOpen(Boolean(this.panel.hidden)));
         this.errorEcho.addEventListener('click', () => this.setOpen(true));
         this.panel.querySelector('[data-action="close"]')?.addEventListener('click', () => this.setOpen(false));
         this.panel.querySelector('[data-action="clear"]')?.addEventListener('click', () => clearRuntimeLog());
 
+        const filterBtns = this.panel.querySelectorAll<HTMLButtonElement>('.runtime-log-filters button');
+        filterBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const filter = btn.dataset.filter as RuntimeLogFilter;
+                if (filter) this.setFilter(filter);
+            });
+        });
+
         parent.append(this.panel, this.toggle, this.errorEcho);
         this.unsubscribe = subscribeRuntimeLog((entries, appendedEntries) => this.render(entries, appendedEntries));
+        this.unsubscribeTelemetry = subscribeEngineTelemetry(t => this.renderTelemetry(t));
+
+        (window as any).runtimeLogPanel = this;
         runtimeLog('Editor runtime ready', 'common');
     }
 
     dispose(): void {
         this.unsubscribe();
+        this.unsubscribeTelemetry();
         this.panel.remove();
         this.toggle.remove();
         this.errorEcho.remove();
+        if ((window as any).runtimeLogPanel === this) {
+            delete (window as any).runtimeLogPanel;
+        }
     }
 
-    private setOpen(open: boolean): void {
+    setOpen(open: boolean): void {
         this.panel.hidden = !open;
         this.toggle.classList.toggle('is-active', open);
         this.toggle.setAttribute('aria-expanded', String(open));
         if (open) {
             this.hiddenErrorCount = 0;
             this.errorEcho.hidden = true;
-            this.renderRows(this.currentEntries);
+            this.renderFilteredRows();
             this.rows.scrollTop = this.rows.scrollHeight;
+        }
+    }
+
+    openWithFilter(filter: RuntimeLogFilter): void {
+        this.setFilter(filter);
+        this.setOpen(true);
+    }
+
+    setFilter(filter: RuntimeLogFilter): void {
+        this.activeFilter = filter;
+        const filterBtns = this.panel.querySelectorAll<HTMLButtonElement>('.runtime-log-filters button');
+        filterBtns.forEach(btn => {
+            btn.classList.toggle('is-active', btn.dataset.filter === filter);
+        });
+        this.renderFilteredRows();
+    }
+
+    private renderTelemetry(t: EngineTelemetrySummary): void {
+        if (this.telemetryRender) {
+            this.telemetryRender.textContent = t.renderMs != null ? `${t.renderMs}ms` : '--';
+        }
+        if (this.telemetryStream) {
+            this.telemetryStream.textContent = t.streamMs != null ? `${t.streamMs}ms` : '--';
+        }
+        if (this.telemetryTotal) {
+            this.telemetryTotal.textContent = t.totalMs != null ? `${t.totalMs}ms` : '--';
+        }
+        if (this.telemetryBuffer) {
+            this.telemetryBuffer.textContent = t.bufferedPercent != null ? `${Math.round(t.bufferedPercent)}%` : '--';
         }
     }
 
     private render(entries: RuntimeLogEntry[], appendedEntries: RuntimeLogEntry[]): void {
         this.currentEntries = entries;
-        // Inspect only the delta supplied by the logger. Scanning the complete
-        // bounded history for every hidden-panel event made logging cost grow
-        // with the size of the retained log.
         const newErrors = appendedEntries.filter(entry => entry.level === 'error');
         if (newErrors.length > 0 && this.panel.hidden) {
             this.hiddenErrorCount += newErrors.length;
@@ -106,33 +170,24 @@ export class RuntimeLogPanel {
         }
         if (this.panel.hidden) return;
 
-        this.renderRows(entries);
+        this.renderFilteredRows();
     }
 
-    private renderRows(entries: RuntimeLogEntry[]): void {
-        const shouldFollow = this.rows.scrollHeight - this.rows.scrollTop - this.rows.clientHeight < 36;
-        if (entries.length === 0) {
-            this.rows.replaceChildren();
-            this.renderedFirstId = 0;
-            this.renderedLastId = 0;
-            this.renderedCount = 0;
-            return;
-        }
+    private getFilteredEntries(): RuntimeLogEntry[] {
+        if (this.activeFilter === 'all') return this.currentEntries;
+        if (this.activeFilter === 'error') return this.currentEntries.filter(e => e.level === 'error');
+        if (this.activeFilter === 'engine') return this.currentEntries.filter(e => e.category === 'engine' || e.category === 'telemetry');
+        return this.currentEntries.filter(e => !e.category || e.category === 'app');
+    }
 
-        const canAppend = this.renderedCount > 0
-            && entries.length >= this.renderedCount
-            && entries[0].id === this.renderedFirstId
-            && entries[this.renderedCount - 1]?.id === this.renderedLastId;
-        const pendingEntries = canAppend ? entries.slice(this.renderedCount) : entries;
+    private renderFilteredRows(): void {
+        const filtered = this.getFilteredEntries();
+        const shouldFollow = this.rows.scrollHeight - this.rows.scrollTop - this.rows.clientHeight < 36;
         const fragment = document.createDocumentFragment();
-        for (const entry of pendingEntries) {
+        for (const entry of filtered) {
             fragment.appendChild(this.createRow(entry));
         }
-        if (canAppend) this.rows.appendChild(fragment);
-        else this.rows.replaceChildren(fragment);
-        this.renderedFirstId = entries[0].id;
-        this.renderedLastId = entries[entries.length - 1].id;
-        this.renderedCount = entries.length;
+        this.rows.replaceChildren(fragment);
         if (shouldFollow) this.rows.scrollTop = this.rows.scrollHeight;
     }
 
@@ -140,6 +195,7 @@ export class RuntimeLogPanel {
         const row = document.createElement('div');
         row.className = 'runtime-log-row';
         row.dataset.level = entry.level;
+        if (entry.category) row.dataset.category = entry.category;
 
         const timestamp = document.createElement('time');
         timestamp.dateTime = entry.timestamp.toISOString();

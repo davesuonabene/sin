@@ -379,94 +379,106 @@ def invalidate_graph_nodes(payload: Optional[InvalidateNodesRequest] = None):
 
 
 @api_router.post("/preview/stream-progressive", tags=["Preview"])
-def preview_graph_progressive(payload: AudioNodeModel):
+def preview_graph_progressive(payload: AudioNodeModel, format: Optional[str] = None):
     import base64
     import io
+    import struct
     from fastapi.responses import StreamingResponse
     from core.dag_cache import compute_waveform_peaks
 
+    is_binary = (format == "binary")
+
     def generate_chunks():
         try:
-            sys = System(bpm=payload.bpm, render_mode="preview")
-            renderer = get_renderer_for_node(payload.node_type)
-            full_audio = renderer.render(payload, sys)
-            payload_snapshot = (
-                payload.model_dump(mode="json")
-                if hasattr(payload, "model_dump")
-                else payload.dict()
-            )
-            payload_fingerprint = hashlib.sha1(
-                json.dumps(payload_snapshot, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-            ).hexdigest()[:16]
-            node_key = payload.filename or payload.node_name or "preview"
+            with collect_runtime_trace() as runtime_entries:
+                trace_runtime(f"Progressive stream accepted: {payload.node_name} ({payload.node_type})", "common")
+                dsp_start = perf_counter()
+                sys = System(bpm=payload.bpm, render_mode="preview")
+                renderer = get_renderer_for_node(payload.node_type)
+                trace_runtime(f"Renderer selected: {renderer.__class__.__name__}")
+                full_audio = renderer.render(payload, sys)
+                render_duration_ms = (perf_counter() - dsp_start) * 1000.0
+                trace_runtime(
+                    f"Graph rendered: {full_audio.shape[-1] if full_audio.size > 0 else 0} samples "
+                    f"({render_duration_ms:.1f} ms)"
+                )
+                payload_snapshot = (
+                    payload.model_dump(mode="json")
+                    if hasattr(payload, "model_dump")
+                    else payload.dict()
+                )
+                payload_fingerprint = hashlib.sha1(
+                    json.dumps(payload_snapshot, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+                ).hexdigest()[:16]
+                node_key = payload.filename or payload.node_name or "preview"
 
-            bpm = float(sys.bpm or payload.bpm or 120.0)
-            samples_per_bar = sys.samples_per_bar
-            seconds_per_bar = sys.seconds_per_bar
-            manifest = getattr(sys, "manifest", {"nodes": {}})
+                bpm = float(sys.bpm or payload.bpm or 120.0)
+                samples_per_bar = sys.samples_per_bar
+                seconds_per_bar = sys.seconds_per_bar
+                manifest = getattr(sys, "manifest", {"nodes": {}})
 
-            if full_audio.size == 0:
-                full_audio = np.zeros(samples_per_bar, dtype=np.float32)
+                if full_audio.size == 0:
+                    full_audio = np.zeros(samples_per_bar, dtype=np.float32)
 
-            total_samples = full_audio.shape[-1]
-            total_bars = max(1, int(np.ceil(total_samples / max(1, samples_per_bar))))
-            if payload.total_bars is not None and float(payload.total_bars) > 0:
-                total_bars = max(1, int(np.ceil(float(payload.total_bars))))
+                total_samples = full_audio.shape[-1]
+                total_bars = max(1, int(np.ceil(total_samples / max(1, samples_per_bar))))
+                if payload.total_bars is not None and float(payload.total_bars) > 0:
+                    total_bars = max(1, int(np.ceil(float(payload.total_bars))))
 
-            manifest["total_bars"] = total_bars
-            manifest["total_duration"] = total_samples / float(sys.sample_rate)
-            manifest["bpm"] = bpm
-            manifest["sample_rate"] = sys.sample_rate
+                manifest["total_bars"] = total_bars
+                manifest["total_duration"] = total_samples / float(sys.sample_rate)
+                manifest["bpm"] = bpm
+                manifest["sample_rate"] = sys.sample_rate
 
-            # Store full rendered WAV in RAM_PREVIEW_STORE for instant loops & zero-latency replays
-            wav_io = io.BytesIO()
-            sf.write(
-                wav_io,
-                np.moveaxis(full_audio, -1, 0) if full_audio.ndim > 1 else full_audio,
-                sys.sample_rate,
-                format='WAV'
-            )
-            bytes_data = wav_io.getvalue()
-            out_filename = f"{node_key}.wav"
+                # Store full rendered WAV in RAM_PREVIEW_STORE for instant loops & zero-latency replays
+                wav_io = io.BytesIO()
+                sf.write(
+                    wav_io,
+                    np.moveaxis(full_audio, -1, 0) if full_audio.ndim > 1 else full_audio,
+                    sys.sample_rate,
+                    format='WAV'
+                )
+                bytes_data = wav_io.getvalue()
+                out_filename = f"{node_key}.wav"
 
-            # Encode and store intermediate node stems in RAM_PREVIEW_STORE
-            node_stems = getattr(sys, "_node_stems", {})
-            for stem_id, stem_audio in node_stems.items():
-                if node_key == str(stem_id) or node_key == f"export_{stem_id}" or node_key.endswith(f"_{stem_id}"):
-                    if stem_id in manifest.get("nodes", {}):
-                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{node_key}?v={payload_fingerprint}"
-                    continue
-                try:
-                    s_buf = io.BytesIO()
-                    sf.write(
-                        s_buf,
-                        np.moveaxis(stem_audio, -1, 0) if stem_audio.ndim > 1 else stem_audio,
-                        sys.sample_rate,
-                        format='WAV'
-                    )
-                    s_bytes = s_buf.getvalue()
-                    stem_key = f"stem_{node_key}_{stem_id}"
-                    RAM_PREVIEW_STORE[stem_key] = {
-                        "wav_bytes": s_bytes,
-                        "filename": f"stem_{stem_id}.wav",
-                        "node_name": f"Node_{stem_id}",
-                        "sample_rate": sys.sample_rate,
-                        "payload_fingerprint": payload_fingerprint,
-                    }
-                    if stem_id in manifest.get("nodes", {}):
-                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
-                except Exception as stem_err:
-                    logger.warning(f"Failed to encode intermediate stem {stem_id}: {stem_err}")
+                # Encode and store intermediate node stems in RAM_PREVIEW_STORE
+                node_stems = getattr(sys, "_node_stems", {})
+                for stem_id, stem_audio in node_stems.items():
+                    if node_key == str(stem_id) or node_key == f"export_{stem_id}" or node_key.endswith(f"_{stem_id}"):
+                        if stem_id in manifest.get("nodes", {}):
+                            manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{node_key}?v={payload_fingerprint}"
+                        continue
+                    try:
+                        s_buf = io.BytesIO()
+                        sf.write(
+                            s_buf,
+                            np.moveaxis(stem_audio, -1, 0) if stem_audio.ndim > 1 else stem_audio,
+                            sys.sample_rate,
+                            format='WAV'
+                        )
+                        s_bytes = s_buf.getvalue()
+                        stem_key = f"stem_{node_key}_{stem_id}"
+                        RAM_PREVIEW_STORE[stem_key] = {
+                            "wav_bytes": s_bytes,
+                            "filename": f"stem_{stem_id}.wav",
+                            "node_name": f"Node_{stem_id}",
+                            "sample_rate": sys.sample_rate,
+                            "payload_fingerprint": payload_fingerprint,
+                        }
+                        if stem_id in manifest.get("nodes", {}):
+                            manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
+                    except Exception as stem_err:
+                        logger.warning(f"Failed to encode intermediate stem {stem_id}: {stem_err}")
 
-            RAM_PREVIEW_STORE[node_key] = {
-                "wav_bytes": bytes_data,
-                "filename": out_filename,
-                "node_name": payload.node_name,
-                "sample_rate": sys.sample_rate,
-                "payload": payload_snapshot,
-                "payload_fingerprint": payload_fingerprint,
-                "manifest": manifest,
-            }
+                RAM_PREVIEW_STORE[node_key] = {
+                    "wav_bytes": bytes_data,
+                    "filename": out_filename,
+                    "node_name": payload.node_name,
+                    "sample_rate": sys.sample_rate,
+                    "payload": payload_snapshot,
+                    "payload_fingerprint": payload_fingerprint,
+                    "manifest": manifest,
+                }
 
             # Stream progressive bar chunks
             for bar_idx in range(total_bars):
@@ -489,23 +501,39 @@ def preview_graph_progressive(payload: AudioNodeModel):
                     sys.sample_rate,
                     format='WAV'
                 )
-                bar_b64 = base64.b64encode(slice_buf.getvalue()).decode("ascii")
+                slice_bytes = slice_buf.getvalue()
                 bar_peaks = compute_waveform_peaks(bar_audio, columns=64)
 
-                chunk_obj = {
-                    "chunk_type": "bar",
-                    "bar_index": bar_idx,
-                    "total_bars": total_bars,
-                    "bpm": bpm,
-                    "start_seconds": bar_idx * seconds_per_bar,
-                    "duration_seconds": seconds_per_bar,
-                    "audio_base64": bar_b64,
-                    "peaks": bar_peaks,
-                    "manifest": manifest,
-                }
-                yield json.dumps(chunk_obj) + "\n"
+                if is_binary:
+                    chunk_obj = {
+                        "chunk_type": "bar",
+                        "bar_index": bar_idx,
+                        "total_bars": total_bars,
+                        "bpm": bpm,
+                        "start_seconds": bar_idx * seconds_per_bar,
+                        "duration_seconds": seconds_per_bar,
+                        "peaks": bar_peaks,
+                        "manifest": manifest,
+                    }
+                    meta_bytes = json.dumps(chunk_obj).encode("utf-8")
+                    header = struct.pack(">4sII", b"SINB", len(meta_bytes), len(slice_bytes))
+                    yield header + meta_bytes + slice_bytes
+                else:
+                    bar_b64 = base64.b64encode(slice_bytes).decode("ascii")
+                    chunk_obj = {
+                        "chunk_type": "bar",
+                        "bar_index": bar_idx,
+                        "total_bars": total_bars,
+                        "bpm": bpm,
+                        "start_seconds": bar_idx * seconds_per_bar,
+                        "duration_seconds": seconds_per_bar,
+                        "audio_base64": bar_b64,
+                        "peaks": bar_peaks,
+                        "manifest": manifest,
+                    }
+                    yield json.dumps(chunk_obj) + "\n"
 
-            # Final completion chunk
+            # Final completion chunk with telemetry & metrics
             final_obj = {
                 "chunk_type": "complete",
                 "preview_id": node_key,
@@ -513,8 +541,20 @@ def preview_graph_progressive(payload: AudioNodeModel):
                 "total_bars": total_bars,
                 "total_duration": total_samples / float(sys.sample_rate),
                 "manifest": manifest,
+                "runtime_log": runtime_entries,
+                "metrics": {
+                    "render_ms": round(render_duration_ms, 2),
+                    "total_bars": total_bars,
+                    "sample_rate": sys.sample_rate,
+                },
             }
-            yield json.dumps(final_obj) + "\n"
+
+            if is_binary:
+                meta_bytes = json.dumps(final_obj).encode("utf-8")
+                header = struct.pack(">4sII", b"SINB", len(meta_bytes), 0)
+                yield header + meta_bytes
+            else:
+                yield json.dumps(final_obj) + "\n"
 
         except GeneratorExit:
             # Client aborted or disconnected from stream
@@ -522,9 +562,15 @@ def preview_graph_progressive(payload: AudioNodeModel):
         except Exception as e:
             logger.error(f"[API /preview/stream-progressive Error] {e}", exc_info=True)
             err_obj = {"chunk_type": "error", "error": str(e)}
-            yield json.dumps(err_obj) + "\n"
+            if is_binary:
+                meta_bytes = json.dumps(err_obj).encode("utf-8")
+                header = struct.pack(">4sII", b"SINB", len(meta_bytes), 0)
+                yield header + meta_bytes
+            else:
+                yield json.dumps(err_obj) + "\n"
 
-    return StreamingResponse(generate_chunks(), media_type="application/x-ndjson")
+    media_type = "application/octet-stream" if is_binary else "application/x-ndjson"
+    return StreamingResponse(generate_chunks(), media_type=media_type)
 
 @api_router.post("/preview/export/{node_id:path}", tags=["Preview"])
 def export_ram_preview(node_id: str, payload: Optional[AudioNodeModel] = None):

@@ -59,6 +59,59 @@ class TestApiStreaming(unittest.TestCase):
         last = chunks[-1]
         self.assertEqual(last["chunk_type"], "complete")
         self.assertIn("audio_url", last)
+        self.assertIn("metrics", last)
+        self.assertIn("render_ms", last["metrics"])
+
+    def test_progressive_binary_stream_endpoint(self):
+        import struct
+        import asyncio
+
+        payload = AudioNodeModel(
+            node_name="Binary Streaming Track",
+            node_type="track",
+            bpm=120.0,
+            total_bars=2.0,
+            filename="test_bin_stream",
+        )
+        response = sin_api.preview_graph_progressive(payload, format="binary")
+        self.assertEqual(response.media_type, "application/octet-stream")
+
+        async def consume_binary():
+            frames = []
+            async for raw in response.body_iterator:
+                buf = raw if isinstance(raw, bytes) else raw.encode("latin1")
+                # Parse 12-byte header
+                while len(buf) >= 12:
+                    magic, meta_len, audio_len = struct.unpack(">4sII", buf[:12])
+                    self.assertEqual(magic, b"SINB")
+                    total_len = 12 + meta_len + audio_len
+                    self.assertLessEqual(total_len, len(buf))
+                    meta_bytes = buf[12 : 12 + meta_len]
+                    audio_bytes = buf[12 + meta_len : total_len]
+                    meta = json.loads(meta_bytes.decode("utf-8"))
+                    frames.append((meta, audio_bytes))
+                    buf = buf[total_len:]
+            return frames
+
+        frames = asyncio.run(consume_binary())
+        self.assertGreater(len(frames), 1)
+
+        # Bar chunk verification
+        first_meta, first_audio = frames[0]
+        self.assertEqual(first_meta["chunk_type"], "bar")
+        self.assertEqual(first_meta["bar_index"], 0)
+        self.assertNotIn("audio_base64", first_meta)  # No base64 overhead!
+        self.assertIn("peaks", first_meta)
+        self.assertGreater(len(first_audio), 0)
+        self.assertTrue(first_audio.startswith(b"RIFF"))  # Valid WAV byte data
+
+        # Complete chunk verification
+        last_meta, last_audio = frames[-1]
+        self.assertEqual(last_meta["chunk_type"], "complete")
+        self.assertEqual(len(last_audio), 0)
+        self.assertIn("metrics", last_meta)
+        self.assertIn("render_ms", last_meta["metrics"])
+        self.assertIn("runtime_log", last_meta)
 
 
 if __name__ == "__main__":

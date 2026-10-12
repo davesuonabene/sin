@@ -1,10 +1,20 @@
 export type RuntimeLogLevel = 'common' | 'warning' | 'debug' | 'error';
+export type RuntimeLogCategory = 'app' | 'engine' | 'telemetry';
 
 export interface RuntimeLogEntry {
     id: number;
     timestamp: Date;
     level: RuntimeLogLevel;
     message: string;
+    category?: RuntimeLogCategory;
+}
+
+export interface EngineTelemetrySummary {
+    renderMs?: number;
+    streamMs?: number;
+    totalMs?: number;
+    bufferedPercent?: number;
+    nodeCount?: number;
 }
 
 type RuntimeLogListener = (
@@ -18,6 +28,20 @@ const listeners = new Set<RuntimeLogListener>();
 let nextId = 1;
 let fetchLoggingInstalled = false;
 
+let latestTelemetry: EngineTelemetrySummary = {};
+const telemetryListeners = new Set<(t: EngineTelemetrySummary) => void>();
+
+export function updateEngineTelemetry(update: Partial<EngineTelemetrySummary>): void {
+    latestTelemetry = { ...latestTelemetry, ...update };
+    for (const listener of telemetryListeners) listener(latestTelemetry);
+}
+
+export function subscribeEngineTelemetry(listener: (t: EngineTelemetrySummary) => void): () => void {
+    telemetryListeners.add(listener);
+    listener(latestTelemetry);
+    return () => telemetryListeners.delete(listener);
+}
+
 function publish(appendedEntries: RuntimeLogEntry[] = []) {
     const snapshot = entries.slice();
     for (const listener of listeners) listener(snapshot, appendedEntries);
@@ -29,7 +53,8 @@ function appendEntries(nextEntries: Array<Omit<RuntimeLogEntry, 'id' | 'timestam
         id: nextId++,
         timestamp,
         level: entry.level,
-        message: entry.message
+        message: entry.message,
+        category: entry.category || 'app'
     }));
     entries.push(...appended);
     if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES);
@@ -37,8 +62,8 @@ function appendEntries(nextEntries: Array<Omit<RuntimeLogEntry, 'id' | 'timestam
     return appended;
 }
 
-export function runtimeLog(message: string, level: RuntimeLogLevel = 'common'): RuntimeLogEntry {
-    return appendEntries([{ level, message }])[0];
+export function runtimeLog(message: string, level: RuntimeLogLevel = 'common', category: RuntimeLogCategory = 'app'): RuntimeLogEntry {
+    return appendEntries([{ level, message, category }])[0];
 }
 
 export async function loggedTask<T>(label: string, task: () => Promise<T> | T): Promise<T> {
@@ -110,7 +135,7 @@ export function appendServerRuntimeLog(rawEntries: unknown): void {
             : 'debug';
         const offset = Number(rawEntry.offset_ms);
         const prefix = Number.isFinite(offset) ? `SERVER +${offset.toFixed(1)} ms ` : 'SERVER ';
-        normalized.push({ level, message: `${prefix}${rawEntry.message}` });
+        normalized.push({ level, message: `${prefix}${rawEntry.message}`, category: 'engine' });
     }
     if (normalized.length > 0) appendEntries(normalized);
 }

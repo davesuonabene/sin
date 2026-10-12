@@ -17,8 +17,9 @@ import { NodeContextMenu } from './ui/NodeContextMenu';
 import { isLibraryPreviewEnabled, LibraryPanel, setLibraryPreviewEnabled } from './ui/LibraryPanel';
 import { MasterWaveform } from './ui/MasterWaveform';
 import { RuntimeLogPanel } from './ui/RuntimeLogPanel';
+import { EngineSyncManager } from './ui/EngineSyncManager';
 import { getParameterWheelStep, registerParameterWheelControl } from './ui/ParameterWheelMenu';
-import { appendServerRuntimeLog, installFetchLogging, loggedTask, runtimeLog } from './runtimeLog';
+import { appendServerRuntimeLog, installFetchLogging, loggedTask, runtimeLog, updateEngineTelemetry } from './runtimeLog';
 import { attachGhostProperties, createGhostNode, detachGhostDependents, isGhostNode, syncGhostTrackData } from './ghosts';
 import { installSeparatedNodeClipboard } from './nodeClipboard';
 import { clearLibraryCache, fetchLibrary, findLibraryFile, findLibraryFileById, findLibraryFileForPoolLocator, refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from './api';
@@ -469,6 +470,7 @@ function setMasterPlayerSource(source: string, autoplay: boolean = false) {
 
 function setPreviewCalculatingState(isHotSwap: boolean = false) {
     if (isHotSwap) return;
+    EngineSyncManager.getInstance().setState('dsp_rendering');
     ++loopBufferRequestId;
     loopBuffer = null;
     loopLoad = Promise.resolve(null);
@@ -485,6 +487,7 @@ function setPreviewCalculatingState(isHotSwap: boolean = false) {
 }
 
 function setPreviewFailedState() {
+    EngineSyncManager.getInstance().setState('error', { errorMessage: 'Preview calculation failed' });
     masterPlayer.setAttribute('aria-disabled', 'true');
     masterPlayBtn.disabled = true;
     masterLoopBtn.disabled = true;
@@ -1471,6 +1474,8 @@ previewRecalculateBtn.addEventListener('click', async () => {
     const graph = (window as any).editorGraph as LGraph;
     const nodeId = activeRamPreviewNodeId ?? resolveMainPreviewNode(graph)?.id;
     if (nodeId == null) return;
+
+    EngineSyncManager.getInstance().setState('global_refreshing');
 
     // Refreshing immediately stops playback
     if (globalAudioScheduler.getIsPlaying()) {
@@ -4381,6 +4386,8 @@ stageSaveStatus.setAttribute('role', 'status');
 stageSaveStatus.setAttribute('aria-live', 'polite');
 dockviewContainer.appendChild(stageSaveStatus);
 setStageSaveState('loading');
+const engineSync = EngineSyncManager.getInstance();
+engineSync.attachTo(dockviewContainer);
 new RuntimeLogPanel(dockviewContainer);
 
 dockview.onDidAddPanel(() => updatePanelToggleButtons());
@@ -4581,6 +4588,10 @@ async function calculatePreview(
     activeRamPreviewNodeId = nodeId;
     (window as any).activeRamPreviewNodeId = nodeId;
     const targetNode = graph.getNodeById(nodeId);
+    const nodeName = targetNode?.properties?.node_name || targetNode?.title || ('Node #' + nodeId);
+    const engineSync = EngineSyncManager.getInstance();
+    engineSync.setState('dsp_rendering', { nodeId, nodeName });
+
     if (targetNode) {
         delete (targetNode as any).manifestStemBuffer;
         (targetNode as any).bufferedProgress = 0;
@@ -4633,7 +4644,7 @@ async function calculatePreview(
 
     try {
         const res = await loggedTask('Connect to progressive preview stream', () =>
-            fetch('/api/preview/stream-progressive', {
+            fetch('/api/preview/stream-progressive?format=binary', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
@@ -4656,86 +4667,182 @@ async function calculatePreview(
         const reader = res.body?.getReader();
         if (!reader) throw new Error('ReadableStream not supported.');
 
-        const decoder = new TextDecoder();
-        let streamBuffer = '';
         let finalData: any = null;
 
-        while (true) {
-            if (sessionId !== currentPreviewSessionId || abortController.signal.aborted) {
-                reader.cancel();
-                break;
-            }
-            const { done, value } = await reader.read();
-            if (done) break;
-            streamBuffer += decoder.decode(value, { stream: true });
-            const lines = streamBuffer.split('\n');
-            streamBuffer = lines.pop() || '';
+        const processBarChunk = async (chunkData: any, audioBuf: AudioBuffer) => {
+            const chunkPayload = {
+                barIndex: chunkData.bar_index,
+                totalBars: chunkData.total_bars,
+                bpm: chunkData.bpm,
+                startSeconds: chunkData.start_seconds,
+                durationSeconds: chunkData.duration_seconds,
+                audioBuffer: audioBuf,
+                peaks: chunkData.peaks
+            };
 
-            for (const line of lines) {
-                if (!line.trim()) continue;
-                if (sessionId !== currentPreviewSessionId) break;
-                let chunkData: any;
-                try {
-                    chunkData = JSON.parse(line);
-                } catch {
-                    continue;
+            if (chunkData.bar_index === 0) {
+                globalAudioScheduler.startSession(chunkPayload, autoplay, sessionId);
+                if (autoplay || globalAudioScheduler.getIsPlaying()) {
+                    startPlaybackTelemetry();
+                    updatePlaybackControls();
+                }
+            } else {
+                globalAudioScheduler.addBarChunk(chunkPayload, sessionId);
+            }
+
+            engineSync.setState('streaming_chunks', {
+                barsReceived: chunkData.bar_index + 1,
+                totalBars: chunkData.total_bars,
+                nodeId,
+                nodeName
+            });
+
+            const totalExpectedDuration = (chunkData.total_bars && chunkData.duration_seconds)
+                ? chunkData.total_bars * chunkData.duration_seconds
+                : 0;
+
+            const fullBuf = globalAudioScheduler.getFullAudioBuffer();
+            if (fullBuf) {
+                (window as any).activeRamPreviewBuffer = fullBuf;
+                masterWaveform.setAudioBuffer(fullBuf, totalExpectedDuration);
+            }
+
+            if (chunkData.manifest) {
+                distributeWorkspaceManifest(graph, chunkData.manifest);
+            }
+
+            if (targetNode) {
+                (targetNode as any).bufferedProgress = (chunkData.bar_index + 1) / chunkData.total_bars;
+                if (chunkData.bar_index >= chunkData.total_bars - 1) {
+                    clearSubtreeInvalidated(graph, nodeId);
+                }
+                (targetNode as any).setDirtyCanvas?.(true, true);
+            }
+            masterPlayBtn.disabled = false;
+            masterLoopBtn.disabled = false;
+            (window as any).editorCanvas?.setDirty?.(true, true);
+        };
+
+        const isBinary = res.headers.get('content-type')?.includes('octet-stream');
+        if (isBinary) {
+            let buffer = new Uint8Array(0);
+            while (true) {
+                if (sessionId !== currentPreviewSessionId || abortController.signal.aborted) {
+                    reader.cancel();
+                    break;
+                }
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value && value.length > 0) {
+                    const nextBuf = new Uint8Array(buffer.length + value.length);
+                    nextBuf.set(buffer, 0);
+                    nextBuf.set(value, buffer.length);
+                    buffer = nextBuf;
                 }
 
-                const cType = chunkData.chunk_type || chunkData.type;
-                if (cType === 'bar' || cType === 'bar_chunk') {
-                    const audioBuf = await globalAudioScheduler.decodeBase64Wav(chunkData.audio_base64);
-                    if (audioBuf && sessionId === currentPreviewSessionId) {
-                        const chunkPayload = {
-                            barIndex: chunkData.bar_index,
-                            totalBars: chunkData.total_bars,
-                            bpm: chunkData.bpm,
-                            startSeconds: chunkData.start_seconds,
-                            durationSeconds: chunkData.duration_seconds,
-                            audioBuffer: audioBuf,
-                            peaks: chunkData.peaks
-                        };
-
-                        if (chunkData.bar_index === 0) {
-                            globalAudioScheduler.startSession(chunkPayload, autoplay, sessionId);
-                            if (autoplay || globalAudioScheduler.getIsPlaying()) {
-                                startPlaybackTelemetry();
-                                updatePlaybackControls();
+                while (buffer.length >= 12) {
+                    if (buffer[0] !== 0x53 || buffer[1] !== 0x49 || buffer[2] !== 0x4E || buffer[3] !== 0x42) {
+                        let syncIdx = -1;
+                        for (let i = 1; i < buffer.length - 3; i++) {
+                            if (buffer[i] === 0x53 && buffer[i + 1] === 0x49 && buffer[i + 2] === 0x4E && buffer[i + 3] === 0x42) {
+                                syncIdx = i;
+                                break;
                             }
+                        }
+                        if (syncIdx > 0) {
+                            buffer = buffer.subarray(syncIdx);
                         } else {
-                            globalAudioScheduler.addBarChunk(chunkPayload, sessionId);
+                            buffer = buffer.subarray(buffer.length - 3);
+                            break;
                         }
+                    }
 
-                        const totalExpectedDuration = (chunkData.total_bars && chunkData.duration_seconds)
-                            ? chunkData.total_bars * chunkData.duration_seconds
-                            : 0;
+                    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+                    const metaLen = view.getUint32(4, false);
+                    const audioLen = view.getUint32(8, false);
+                    const frameLen = 12 + metaLen + audioLen;
+                    if (buffer.length < frameLen) {
+                        break;
+                    }
 
-                        const fullBuf = globalAudioScheduler.getFullAudioBuffer();
-                        if (fullBuf) {
-                            (window as any).activeRamPreviewBuffer = fullBuf;
-                            masterWaveform.setAudioBuffer(fullBuf, totalExpectedDuration);
+                    const metaBytes = buffer.subarray(12, 12 + metaLen);
+                    const audioBytes = buffer.subarray(12 + metaLen, frameLen);
+                    buffer = buffer.subarray(frameLen);
+
+                    let chunkData: any;
+                    try {
+                        chunkData = JSON.parse(new TextDecoder().decode(metaBytes));
+                    } catch (e) {
+                        console.error('[BinaryStream] JSON parse error:', e);
+                        continue;
+                    }
+
+                    if (sessionId !== currentPreviewSessionId) break;
+
+                    const cType = chunkData.chunk_type || chunkData.type;
+                    if (cType === 'bar' || cType === 'bar_chunk') {
+                        let audioBuf: AudioBuffer | null = null;
+                        if (audioBytes.length > 0) {
+                            const rawWavBuffer = audioBytes.buffer.slice(
+                                audioBytes.byteOffset,
+                                audioBytes.byteOffset + audioBytes.byteLength
+                            );
+                            audioBuf = await globalAudioScheduler.decodeWav(rawWavBuffer);
                         }
-
-                        if (chunkData.manifest) {
-                            distributeWorkspaceManifest(graph, chunkData.manifest);
+                        if (audioBuf && sessionId === currentPreviewSessionId) {
+                            await processBarChunk(chunkData, audioBuf);
                         }
-
+                    } else if (cType === 'complete') {
+                        finalData = chunkData;
+                        clearSubtreeInvalidated(graph, nodeId);
                         if (targetNode) {
-                            (targetNode as any).bufferedProgress = (chunkData.bar_index + 1) / chunkData.total_bars;
-                            if (chunkData.bar_index >= chunkData.total_bars - 1) {
-                                clearSubtreeInvalidated(graph, nodeId);
-                            }
+                            (targetNode as any).bufferedProgress = 1.0;
                             (targetNode as any).setDirtyCanvas?.(true, true);
                         }
-                        masterPlayBtn.disabled = false;
-                        masterLoopBtn.disabled = false;
-                        (window as any).editorCanvas?.setDirty?.(true, true);
+                    } else if (cType === 'error') {
+                        throw new Error(chunkData.error || 'Server streaming error');
                     }
-                } else if (cType === 'complete') {
-                    finalData = chunkData;
-                    clearSubtreeInvalidated(graph, nodeId);
-                    if (targetNode) {
-                        (targetNode as any).bufferedProgress = 1.0;
-                        (targetNode as any).setDirtyCanvas?.(true, true);
+                }
+            }
+        } else {
+            const decoder = new TextDecoder();
+            let streamBuffer = '';
+            while (true) {
+                if (sessionId !== currentPreviewSessionId || abortController.signal.aborted) {
+                    reader.cancel();
+                    break;
+                }
+                const { done, value } = await reader.read();
+                if (done) break;
+                streamBuffer += decoder.decode(value, { stream: true });
+                const lines = streamBuffer.split('\n');
+                streamBuffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    if (sessionId !== currentPreviewSessionId) break;
+                    let chunkData: any;
+                    try {
+                        chunkData = JSON.parse(line);
+                    } catch {
+                        continue;
+                    }
+
+                    const cType = chunkData.chunk_type || chunkData.type;
+                    if (cType === 'bar' || cType === 'bar_chunk') {
+                        const audioBuf = await globalAudioScheduler.decodeBase64Wav(chunkData.audio_base64);
+                        if (audioBuf && sessionId === currentPreviewSessionId) {
+                            await processBarChunk(chunkData, audioBuf);
+                        }
+                    } else if (cType === 'complete') {
+                        finalData = chunkData;
+                        clearSubtreeInvalidated(graph, nodeId);
+                        if (targetNode) {
+                            (targetNode as any).bufferedProgress = 1.0;
+                            (targetNode as any).setDirtyCanvas?.(true, true);
+                        }
+                    } else if (cType === 'error') {
+                        throw new Error(chunkData.error || 'Server streaming error');
                     }
                 }
             }
@@ -4792,7 +4899,21 @@ async function calculatePreview(
             }
             tempFilesSelect.value = 'RAM_PREVIEW';
             updatePlaybackTrackPresentation();
-            runtimeLog(`Preview ready for node ${nodeId} (${Math.round(performance.now() - previewStartedAt)} ms)`, 'common');
+            const totalDurationMs = Math.round(performance.now() - previewStartedAt);
+            engineSync.setState('idle_synced', {
+                lastRenderDurationMs: finalData?.metrics?.render_ms ?? totalDurationMs,
+                nodeId,
+                nodeName
+            });
+            if (finalData?.metrics) {
+                updateEngineTelemetry({
+                    renderMs: finalData.metrics.render_ms,
+                    streamMs: Math.max(0, totalDurationMs - (finalData.metrics.render_ms || 0)),
+                    totalMs: totalDurationMs,
+                    bufferedPercent: 100
+                });
+            }
+            runtimeLog(`Preview ready for node ${nodeId} (${totalDurationMs} ms)`, 'common');
         } else {
             throw new Error(data.detail || "RAM preview calculation failed.");
         }
@@ -4802,6 +4923,11 @@ async function calculatePreview(
             return;
         }
         console.error("Error during RAM preview:", err);
+        engineSync.setState('error', {
+            errorMessage: (err as Error).message || String(err),
+            nodeId,
+            nodeName
+        });
         if (requestVersion === previewRequestVersion) {
             runtimeLog(`Preview failed for node ${nodeId}: ${(err as Error).message || String(err)}`, 'error');
         }
@@ -4949,6 +5075,7 @@ window.addEventListener('node-property-changed', (e: any) => {
         markNodeAndAncestorsInvalidated(graph, changedNodeId);
     }
 
+    EngineSyncManager.getInstance().setState('dirty_pending');
     pendingInvalidatedNodes.add(changedNodeId);
 
     // Debounce invalidation & preview recalculation to allow seamless, uninterrupted parameter tweaking
@@ -4967,6 +5094,7 @@ window.addEventListener('node-property-changed', (e: any) => {
 
         // If active playback is ongoing, trigger seamless in-place hot-swap preview
         if (globalAudioScheduler.getIsPlaying() && activeRamPreviewNodeId != null) {
+            EngineSyncManager.getInstance().setState('hot_swapping');
             void previewNode(activeRamPreviewNodeId, false, false, false);
         }
     }, 150);

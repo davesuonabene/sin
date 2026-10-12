@@ -450,6 +450,25 @@ export abstract class BaseNode extends LGraphNode {
         };
         if (isMainPreview) drawBadge("#f59e0b", "▶");
         if (this.properties?.disabled || this.type === "Audio/Disabled") drawBadge("#dc2626", "×");
+
+        if ((this as any).isInvalidated) {
+            ctx.beginPath();
+            ctx.arc(6, BaseNode.visualSize - 6, 3.5, 0, Math.PI * 2);
+            ctx.fillStyle = "#f59e0b";
+            ctx.fill();
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+
+        const prog = (this as any).bufferedProgress;
+        if (typeof prog === 'number' && prog > 0 && prog < 1.0) {
+            const barW = BaseNode.visualSize - 8;
+            ctx.fillStyle = "rgba(15, 23, 42, 0.6)";
+            ctx.fillRect(4, BaseNode.visualSize - 5, barW, 2.5);
+            ctx.fillStyle = "#38bdf8";
+            ctx.fillRect(4, BaseNode.visualSize - 5, barW * Math.min(1, Math.max(0, prog)), 2.5);
+        }
     }
 
     protected drawNameBadge(ctx: CanvasRenderingContext2D, isSelected: boolean, isHovered: boolean): void {
