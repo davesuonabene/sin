@@ -41,6 +41,8 @@ class RingBufferProcessor extends AudioWorkletProcessor {
     process(inputs, outputs) {
         const output = outputs[0];
         if (!this.isPlaying || !output || output.length === 0) return true;
+        const q0 = this.queues[0];
+        if (!q0 || q0.length === 0) return true;
         const frames = output[0].length;
         const numChans = output.length;
 
@@ -82,7 +84,7 @@ export class GaplessAudioScheduler {
     private workletNode: AudioWorkletNode | null = null;
     private workletEnabled = false;
     private workletInitAttempted = false;
-    private activeSources: { source: AudioBufferSourceNode; gain: GainNode; startTime: number; endTime: number }[] = [];
+    private activeSources: { source: AudioBufferSourceNode; gain: GainNode; startTime: number; endTime: number; barIndex: number }[] = [];
     private barBuffers = new Map<number, AudioBuffer>();
     private fullAudioBuffer: AudioBuffer | null = null;
     private totalBars = 0;
@@ -331,15 +333,14 @@ export class GaplessAudioScheduler {
             source.start(now, offsetInBar);
             const remainingDuration = buffer.duration - offsetInBar;
             const endTime = now + remainingDuration;
-            this.activeSources.push({ source, gain, startTime: now, endTime });
+            this.activeSources.push({ source, gain, startTime: now, endTime, barIndex });
             this.lastScheduledBar = barIndex;
             this.nextScheduleTime = endTime;
             source.onended = () => {
                 const idx = this.activeSources.findIndex(s => s.source === source);
                 if (idx >= 0) this.activeSources.splice(idx, 1);
-                if (this.loop && this.isPlaying && barIndex === this.totalBars - 1) {
-                    this.lastScheduledBar = -1;
-                    this.scheduleNextAvailableBars();
+                if (!this.loop && this.activeSources.length === 0 && this.lastScheduledBar >= this.totalBars - 1) {
+                    this.stop();
                 }
             };
         }
@@ -520,7 +521,7 @@ export class GaplessAudioScheduler {
         source.start(scheduleTime);
         const stepDuration = Math.max(buffer.duration, this.secondsPerBar);
         const endTime = scheduleTime + stepDuration;
-        this.activeSources.push({ source, gain, startTime: scheduleTime, endTime });
+        this.activeSources.push({ source, gain, startTime: scheduleTime, endTime, barIndex });
 
         this.lastScheduledBar = barIndex;
         this.nextScheduleTime = endTime;
@@ -547,7 +548,11 @@ export class GaplessAudioScheduler {
         const now = this.audioCtx.currentTime;
         for (let i = 0; i < this.activeSources.length; i++) {
             const item = this.activeSources[i];
+            if (item.barIndex !== barIndex) {
+                continue; // Only hot-swap sources that belong to this bar
+            }
             if (now >= item.startTime && now < item.endTime) {
+                // Currently playing: micro-crossfade into updated buffer
                 const offset = Math.max(0, now - item.startTime);
                 if (offset < newBuffer.duration) {
                     try {
@@ -572,7 +577,8 @@ export class GaplessAudioScheduler {
                             source: newSource,
                             gain: newGain,
                             startTime: item.startTime,
-                            endTime: newEndTime
+                            endTime: newEndTime,
+                            barIndex: item.barIndex
                         };
 
                         newSource.onended = () => {
@@ -584,6 +590,42 @@ export class GaplessAudioScheduler {
                     } catch (e) {
                         console.warn('[GaplessAudioScheduler] Hot-swap crossfade error:', e);
                     }
+                }
+            } else if (item.startTime > now) {
+                // Pre-scheduled future bar: replace pending source seamlessly
+                try {
+                    item.source.stop();
+                    item.source.disconnect();
+                    item.gain.disconnect();
+
+                    const newSource = this.audioCtx.createBufferSource();
+                    newSource.buffer = newBuffer;
+                    const newGain = this.audioCtx.createGain();
+                    newGain.gain.setValueAtTime(1.0, item.startTime);
+
+                    newSource.connect(newGain);
+                    newGain.connect(this.masterGain);
+
+                    newSource.start(item.startTime);
+                    const stepDuration = Math.max(newBuffer.duration, this.secondsPerBar);
+                    const newEndTime = item.startTime + stepDuration;
+
+                    this.activeSources[i] = {
+                        source: newSource,
+                        gain: newGain,
+                        startTime: item.startTime,
+                        endTime: newEndTime,
+                        barIndex: item.barIndex
+                    };
+
+                    newSource.onended = () => {
+                        const idx = this.activeSources.findIndex(s => s.source === newSource);
+                        if (idx >= 0) {
+                            this.activeSources.splice(idx, 1);
+                        }
+                    };
+                } catch (e) {
+                    console.warn('[GaplessAudioScheduler] Future source hot-swap error:', e);
                 }
             }
         }
