@@ -8,6 +8,7 @@ import { ArrangementTimelineSection } from './components/ArrangementTimelineSect
 import { FxChainSection } from './components/FxChainSection.ts';
 import { AssetPoolSection } from './components/AssetPoolSection.ts';
 import { RandomDestinationsSection } from './components/RandomDestinationsSection.ts';
+import { ExportSection } from './components/ExportSection.ts';
 import { NEON_ICONS, NODE_SHAPES } from '../nodes/NodeVisuals.ts';
 import { APPEARANCE_COLOR_PRESETS } from '../config/appearance.ts';
 
@@ -54,6 +55,9 @@ export class SectionRendererFactory {
                 break;
             case 'arrangement_timeline':
                 await ArrangementTimelineSection.render(wrapper, node, windowContext);
+                break;
+            case 'export_panel':
+                await ExportSection.render(wrapper, node, windowContext);
                 break;
             default:
                 this.renderFieldsSection(wrapper, section, node, windowContext);

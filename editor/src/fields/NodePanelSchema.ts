@@ -9,7 +9,8 @@ export type SectionType =
     | 'arrangement_timeline'
     | 'fx_chain'
     | 'pool_editor'
-    | 'random_panel';
+    | 'random_panel'
+    | 'export_panel';
 
 export interface PanelSectionConfig {
     type: SectionType;

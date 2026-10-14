@@ -142,6 +142,11 @@ export function serializeNodeSubtree(
         const key_match_mode = data?.key_match_mode || nodeObj?.properties?.key_match_mode || "off";
         const key_match_algorithm = data?.key_match_algorithm || nodeObj?.properties?.key_match_algorithm || "nearest";
 
+        const projectName = (graph as any)?.extra?.project_name
+            || (typeof window !== 'undefined' && typeof (window as any).getProjectName === 'function' ? (window as any).getProjectName() : null)
+            || (typeof document !== 'undefined' ? (document.querySelector('#workspace-preset-select') as HTMLSelectElement)?.value : null)
+            || 'project';
+
         const model = {
             node_id: nodeId,
             node_name: name,
@@ -154,6 +159,10 @@ export function serializeNodeSubtree(
             bpm: bpm,
             start_beat: start_beat,
             mix_mode: mix_mode,
+            project_name: nodeObj?.properties?.project_name ?? data?.project_name ?? projectName,
+            export_directory: nodeObj?.properties?.export_directory ?? data?.export_directory,
+            export_pattern: nodeObj?.properties?.export_pattern ?? data?.export_pattern,
+            export_overwrite_mode: nodeObj?.properties?.export_overwrite_mode ?? data?.export_overwrite_mode,
             crop_start: crop_start,
             crop_end: crop_end,
             transpose: transpose,

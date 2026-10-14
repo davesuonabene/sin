@@ -136,6 +136,7 @@ export class SequenceNode extends BaseNode {
         this.boxcolor = "#db2777";
         
         this.properties = {
+            ...this.properties,
             node_name: "Sequence",
             node_type: "sequence",
             sequence: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],

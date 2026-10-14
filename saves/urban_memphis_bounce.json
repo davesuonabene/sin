@@ -2,8 +2,8 @@
   "version": 2,
   "savedAt": "2026-10-10T12:00:00.000Z",
   "graph": {
-    "last_node_id": 20,
-    "last_link_id": 12,
+    "last_node_id": 30,
+    "last_link_id": 17,
     "nodes": [
       {
         "id": 1,
@@ -26,18 +26,49 @@
         "outputs": [],
         "title": "Asset Pool",
         "properties": {
-          "node_name": "Field Loop Pool (Memphis Trap)",
+          "node_name": "Pulse Kick Pool (Organico v2)",
           "selected_items": [
             {
-              "id": 4679
+              "id": 13748
             },
             {
-              "id": 4684
+              "id": 13749
+            },
+            {
+              "id": 13751
+            },
+            {
+              "id": 13752
+            },
+            {
+              "id": 13753
+            },
+            {
+              "id": 13754
+            },
+            {
+              "id": 4673
+            },
+            {
+              "id": 4674
+            },
+            {
+              "id": 4675
+            },
+            {
+              "id": 4676
+            },
+            {
+              "id": 4677
+            },
+            {
+              "id": 4678
             }
           ],
           "playbackMode": "Random",
           "refresh_mode": "global",
           "output_type": "asset_path",
+          "visualization_enabled": true,
           "node_type": "asset_filter",
           "parentId": 2
         }
@@ -72,9 +103,10 @@
         ],
         "title": "Sample",
         "properties": {
-          "node_name": "Field Loop Layer",
-          "sample_type": "loop",
+          "node_name": "Pulse Kick Core",
+          "sample_type": "one_shot",
           "gain": 0.0,
+          "visualization_enabled": true,
           "node_type": "sample",
           "asset_modifier_id": 1
         }
@@ -113,158 +145,162 @@
             "name": "Audio",
             "type": "audio",
             "links": [
-              9
+              8
             ],
             "slot_index": 0
           }
         ],
         "title": "Sequence",
         "properties": {
-          "node_name": "Loop 4-Bar Sustained Trigger",
-          "step_length": 1.0,
+          "node_name": "Pulse Kick Sequence",
+          "step_length": 0.25,
           "play_mode": "trigger",
           "total_bars": 4,
+          "seed": 601,
+          "seed_mode": "moving",
           "sequence": [
             1,
             0,
             0,
-            0,
             1,
             0,
             0,
             0,
-            1,
             0,
             0,
             0,
             1,
             0,
+            0,
+            1,
             0,
             0
           ],
           "step_parameters": [
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.65,
+              "offset": -0.0095,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 93
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.572,
+              "offset": -0.0051,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 96
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.572,
+              "offset": 0.0047,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 94
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.572,
+              "offset": -0.0083,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.56,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.56,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.56,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.56,
-              "offset": 0,
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             }
           ],
-          "node_type": "sequence"
+          "visualization_enabled": true,
+          "node_type": "sequence",
+          "asset_modifier_id": 4
         }
       },
       {
         "id": 4,
-        "type": "Audio/AssetFilter",
+        "type": "Audio/Random",
         "pos": [
-          100,
-          280
+          380,
+          120
         ],
         "size": [
           44,
@@ -278,38 +314,85 @@
         "mode": 0,
         "inputs": [],
         "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Kick Multi-Param Random Modulator",
+          "refresh_mode": "global",
+          "seed": 602,
+          "visualization_enabled": true,
+          "destinations": [
+            {
+              "id": "p-kick-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Velocity Variation",
+              "minPercent": -12,
+              "maxPercent": 10,
+              "baseValue": 0.65,
+              "enabled": true
+            },
+            {
+              "id": "p-kick-off",
+              "paramKey": "offset",
+              "paramLabel": "Humanize Timing",
+              "minPercent": -8,
+              "maxPercent": 8,
+              "baseValue": 0.0,
+              "enabled": true
+            },
+            {
+              "id": "p-kick-prob",
+              "paramKey": "probability",
+              "paramLabel": "Ghost Trigger Probability",
+              "minPercent": -8,
+              "maxPercent": 0,
+              "baseValue": 100,
+              "enabled": true
+            }
+          ],
+          "node_type": "random",
+          "parentId": 3
+        }
+      },
+      {
+        "id": 5,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
         "title": "Asset Pool",
         "properties": {
-          "node_name": "Organic Kick Pool",
+          "node_name": "Pulse Bed Loop Pool",
           "selected_items": [
             {
-              "id": 4673
+              "id": 4679
             },
             {
-              "id": 4674
-            },
-            {
-              "id": 4675
-            },
-            {
-              "id": 4676
-            },
-            {
-              "id": 4677
-            },
-            {
-              "id": 4678
+              "id": 4685
             }
           ],
           "playbackMode": "Random",
           "refresh_mode": "global",
           "output_type": "asset_path",
+          "visualization_enabled": true,
           "node_type": "asset_filter",
-          "parentId": 5
+          "parentId": 6
         }
       },
       {
-        "id": 5,
+        "id": 6,
         "type": "Audio/Sample",
         "pos": [
           320,
@@ -323,7 +406,7 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 4,
+        "order": 5,
         "mode": 0,
         "inputs": [],
         "outputs": [
@@ -338,15 +421,16 @@
         ],
         "title": "Sample",
         "properties": {
-          "node_name": "Organic Field Kick",
-          "sample_type": "one_shot",
+          "node_name": "Pulse Field Bed Layer",
+          "sample_type": "loop",
           "gain": 0.0,
+          "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 4
+          "asset_modifier_id": 5
         }
       },
       {
-        "id": 6,
+        "id": 7,
         "type": "Audio/Sequence",
         "pos": [
           600,
@@ -360,7 +444,7 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 5,
+        "order": 6,
         "mode": 0,
         "inputs": [
           {
@@ -379,154 +463,209 @@
             "name": "Audio",
             "type": "audio",
             "links": [
-              6
+              9
             ],
             "slot_index": 0
           }
         ],
         "title": "Sequence",
         "properties": {
-          "node_name": "Organic Kick Sequence",
-          "step_length": 0.25,
+          "node_name": "Pulse Loop Sustained Trigger",
+          "step_length": 1.0,
           "play_mode": "trigger",
           "total_bars": 4,
+          "seed": 603,
+          "seed_mode": "moving",
           "sequence": [
             1,
             0,
             0,
-            1,
-            0,
-            0,
-            0,
-            0,
-            0,
             0,
             1,
             0,
             0,
+            0,
             1,
+            0,
+            0,
+            0,
+            1,
+            0,
             0,
             0
           ],
           "step_parameters": [
             {
-              "velocity": 0.7,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.7,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.7,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.7,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
+              "velocity": 0.52,
               "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             }
           ],
+          "visualization_enabled": true,
           "node_type": "sequence"
         }
       },
       {
-        "id": 7,
+        "id": 8,
+        "type": "Audio/Track",
+        "pos": [
+          880,
+          200
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 8
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 9
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              15
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "Sub Bass Bus",
+          "gain": -2.0,
+          "visualization_enabled": true,
+          "node_type": "track"
+        }
+      },
+      {
+        "id": 9,
         "type": "Audio/AssetFilter",
         "pos": [
           100,
@@ -540,171 +679,46 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 6,
+        "order": 8,
         "mode": 0,
         "inputs": [],
         "outputs": [],
         "title": "Asset Pool",
         "properties": {
-          "node_name": "Field Hits Pool",
+          "node_name": "Rhythm Snare Pool (New Snares 1-7)",
           "selected_items": [
             {
-              "id": 4624
+              "id": 13756
             },
             {
-              "id": 4625
+              "id": 13757
             },
             {
-              "id": 4626
+              "id": 13758
             },
             {
-              "id": 4627
+              "id": 13759
             },
             {
-              "id": 4628
+              "id": 13760
             },
             {
-              "id": 4629
+              "id": 13761
             },
             {
-              "id": 4630
-            },
-            {
-              "id": 4631
-            },
-            {
-              "id": 4632
-            },
-            {
-              "id": 4633
-            },
-            {
-              "id": 4634
-            },
-            {
-              "id": 4635
-            },
-            {
-              "id": 4636
-            },
-            {
-              "id": 4637
-            },
-            {
-              "id": 4638
-            },
-            {
-              "id": 4639
-            },
-            {
-              "id": 4640
-            },
-            {
-              "id": 4641
-            },
-            {
-              "id": 4642
-            },
-            {
-              "id": 4643
-            },
-            {
-              "id": 4644
-            },
-            {
-              "id": 4645
-            },
-            {
-              "id": 4646
-            },
-            {
-              "id": 4647
-            },
-            {
-              "id": 4648
-            },
-            {
-              "id": 4649
-            },
-            {
-              "id": 4650
-            },
-            {
-              "id": 4651
-            },
-            {
-              "id": 4652
-            },
-            {
-              "id": 4653
-            },
-            {
-              "id": 4654
-            },
-            {
-              "id": 4655
-            },
-            {
-              "id": 4656
-            },
-            {
-              "id": 4657
-            },
-            {
-              "id": 4658
-            },
-            {
-              "id": 4659
-            },
-            {
-              "id": 4660
-            },
-            {
-              "id": 4661
-            },
-            {
-              "id": 4662
-            },
-            {
-              "id": 4663
-            },
-            {
-              "id": 4664
-            },
-            {
-              "id": 4665
-            },
-            {
-              "id": 4666
-            },
-            {
-              "id": 4667
-            },
-            {
-              "id": 4668
-            },
-            {
-              "id": 4669
-            },
-            {
-              "id": 4670
-            },
-            {
-              "id": 4671
-            },
-            {
-              "id": 4672
+              "id": 13762
             }
           ],
           "playbackMode": "Random",
           "refresh_mode": "global",
           "output_type": "asset_path",
+          "visualization_enabled": true,
           "node_type": "asset_filter",
-          "parentId": 8
+          "parentId": 10
         }
       },
       {
-        "id": 8,
+        "id": 10,
         "type": "Audio/Sample",
         "pos": [
           320,
@@ -718,7 +732,7 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 7,
+        "order": 9,
         "mode": 0,
         "inputs": [],
         "outputs": [
@@ -733,15 +747,16 @@
         ],
         "title": "Sample",
         "properties": {
-          "node_name": "Field Perc Hit",
+          "node_name": "Rhythm Snare Main",
           "sample_type": "one_shot",
           "gain": 0.0,
+          "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 7
+          "asset_modifier_id": 9
         }
       },
       {
-        "id": 9,
+        "id": 11,
         "type": "Audio/Sequence",
         "pos": [
           600,
@@ -755,7 +770,7 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 8,
+        "order": 10,
         "mode": 0,
         "inputs": [
           {
@@ -774,17 +789,19 @@
             "name": "Audio",
             "type": "audio",
             "links": [
-              7
+              10
             ],
             "slot_index": 0
           }
         ],
         "title": "Sequence",
         "properties": {
-          "node_name": "Field Hit Snare/Clap Sequence",
+          "node_name": "Rhythm Snare Sequence",
           "step_length": 0.25,
           "play_mode": "trigger",
           "total_bars": 4,
+          "seed": 604,
+          "seed_mode": "moving",
           "sequence": [
             0,
             0,
@@ -806,123 +823,124 @@
           "step_parameters": [
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.6,
-              "offset": 0,
+              "velocity": 0.58,
+              "offset": -0.0117,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 98
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             }
           ],
+          "visualization_enabled": true,
           "node_type": "sequence",
-          "asset_modifier_id": 10
+          "asset_modifier_id": 12
         }
       },
       {
-        "id": 10,
+        "id": 12,
         "type": "Audio/Random",
         "pos": [
           380,
@@ -936,23 +954,51 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 9,
+        "order": 11,
         "mode": 0,
         "inputs": [],
         "outputs": [],
         "title": "Random",
         "properties": {
-          "node_name": "Hit Velocity Modulator",
-          "min": -0.15,
-          "max": 0.15,
-          "distribution": "gaussian",
-          "refresh_mode": "step",
+          "node_name": "Snare Step Modulator",
+          "refresh_mode": "global",
+          "seed": 605,
+          "visualization_enabled": true,
+          "destinations": [
+            {
+              "id": "r-snare-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Velocity Range",
+              "minPercent": -15,
+              "maxPercent": 12,
+              "baseValue": 0.58,
+              "enabled": true
+            },
+            {
+              "id": "r-snare-off",
+              "paramKey": "offset",
+              "paramLabel": "Pocket Swing Offset",
+              "minPercent": -10,
+              "maxPercent": 14,
+              "baseValue": 0.0,
+              "enabled": true
+            },
+            {
+              "id": "r-snare-prob",
+              "paramKey": "probability",
+              "paramLabel": "Ghost Snare Probability",
+              "minPercent": -18,
+              "maxPercent": 0,
+              "baseValue": 100,
+              "enabled": true
+            }
+          ],
           "node_type": "random",
-          "parentId": 9
+          "parentId": 11
         }
       },
       {
-        "id": 11,
+        "id": 13,
         "type": "Audio/AssetFilter",
         "pos": [
           100,
@@ -966,60 +1012,91 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 10,
+        "order": 12,
         "mode": 0,
         "inputs": [],
         "outputs": [],
         "title": "Asset Pool",
         "properties": {
-          "node_name": "Organic Shakes & Clicks Pool",
+          "node_name": "Rhythm Field Hits Pool (v2)",
           "selected_items": [
             {
-              "id": 4620
+              "id": 4625
             },
             {
-              "id": 4621
+              "id": 4627
             },
             {
-              "id": 4622
+              "id": 4629
             },
             {
-              "id": 4623
+              "id": 4631
             },
             {
-              "id": 4695
+              "id": 4633
             },
             {
-              "id": 4696
+              "id": 4635
             },
             {
-              "id": 4697
+              "id": 4637
             },
             {
-              "id": 4698
+              "id": 4639
             },
             {
-              "id": 4699
+              "id": 4641
             },
             {
-              "id": 4700
+              "id": 4643
             },
             {
-              "id": 4701
+              "id": 4645
             },
             {
-              "id": 4702
+              "id": 13744
+            },
+            {
+              "id": 4649
+            },
+            {
+              "id": 4651
+            },
+            {
+              "id": 4653
+            },
+            {
+              "id": 4657
+            },
+            {
+              "id": 13745
+            },
+            {
+              "id": 4665
+            },
+            {
+              "id": 4667
+            },
+            {
+              "id": 4669
+            },
+            {
+              "id": 13746
+            },
+            {
+              "id": 13747
             }
           ],
           "playbackMode": "Random",
           "refresh_mode": "global",
           "output_type": "asset_path",
+          "visualization_enabled": true,
           "node_type": "asset_filter",
-          "parentId": 12
+          "parentId": 14
         }
       },
       {
-        "id": 12,
+        "id": 14,
         "type": "Audio/Sample",
         "pos": [
           320,
@@ -1033,7 +1110,7 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 11,
+        "order": 13,
         "mode": 0,
         "inputs": [],
         "outputs": [
@@ -1048,15 +1125,16 @@
         ],
         "title": "Sample",
         "properties": {
-          "node_name": "Organic Shaker/Click",
+          "node_name": "Rhythm Perc Accent Hit",
           "sample_type": "one_shot",
           "gain": 0.0,
+          "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 11
+          "asset_modifier_id": 13
         }
       },
       {
-        "id": 13,
+        "id": 15,
         "type": "Audio/Sequence",
         "pos": [
           600,
@@ -1070,7 +1148,7 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 12,
+        "order": 14,
         "mode": 0,
         "inputs": [
           {
@@ -1089,17 +1167,398 @@
             "name": "Audio",
             "type": "audio",
             "links": [
-              8
+              11
             ],
             "slot_index": 0
           }
         ],
         "title": "Sequence",
         "properties": {
-          "node_name": "Organic Shaker Groove",
+          "node_name": "Rhythm Perc Syncopation",
           "step_length": 0.25,
           "play_mode": "trigger",
           "total_bars": 4,
+          "seed": 606,
+          "seed_mode": "moving",
+          "sequence": [
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.5,
+              "offset": -0.0155,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 95
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.5,
+              "offset": -0.0111,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 82
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.44,
+              "offset": -0.0165,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 92
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            }
+          ],
+          "visualization_enabled": true,
+          "node_type": "sequence",
+          "asset_modifier_id": 16
+        }
+      },
+      {
+        "id": 16,
+        "type": "Audio/Random",
+        "pos": [
+          380,
+          600
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 15,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Hit Multi-Param Modulator",
+          "refresh_mode": "global",
+          "seed": 607,
+          "visualization_enabled": true,
+          "destinations": [
+            {
+              "id": "r-hit-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Hit Dynamics Range",
+              "minPercent": -20,
+              "maxPercent": 15,
+              "baseValue": 0.5,
+              "enabled": true
+            },
+            {
+              "id": "r-hit-off",
+              "paramKey": "offset",
+              "paramLabel": "Micro Groove Offsets",
+              "minPercent": -15,
+              "maxPercent": 15,
+              "baseValue": 0.0,
+              "enabled": true
+            },
+            {
+              "id": "r-hit-prob",
+              "paramKey": "probability",
+              "paramLabel": "Syncopation Masking",
+              "minPercent": -25,
+              "maxPercent": 0,
+              "baseValue": 90,
+              "enabled": true
+            }
+          ],
+          "node_type": "random",
+          "parentId": 15
+        }
+      },
+      {
+        "id": 17,
+        "type": "Audio/Track",
+        "pos": [
+          880,
+          520
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 16,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 10
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 11
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              16
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "Punch Drum Bus",
+          "gain": -2.5,
+          "visualization_enabled": true,
+          "node_type": "track"
+        }
+      },
+      {
+        "id": 18,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 17,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Tops Organic Shakers Pool (Latest)",
+          "selected_items": [
+            {
+              "id": 4695
+            },
+            {
+              "id": 4697
+            },
+            {
+              "id": 4699
+            },
+            {
+              "id": 4700
+            },
+            {
+              "id": 4702
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "visualization_enabled": true,
+          "node_type": "asset_filter",
+          "parentId": 19
+        }
+      },
+      {
+        "id": 19,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 18,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              5
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Tops Shaker Layer",
+          "sample_type": "one_shot",
+          "gain": 0.0,
+          "visualization_enabled": true,
+          "node_type": "sample",
+          "asset_modifier_id": 18
+        }
+      },
+      {
+        "id": 20,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 19,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 5
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              12
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Tops Shaker Flow",
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "total_bars": 4,
+          "seed": 608,
+          "seed_mode": "moving",
           "sequence": [
             1,
             1,
@@ -1120,157 +1579,128 @@
           ],
           "step_parameters": [
             {
-              "velocity": 0.42,
-              "offset": 0,
+              "velocity": 0.4,
+              "offset": -0.0117,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.42,
-              "offset": 0,
+              "velocity": 0.352,
+              "offset": -0.0083,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 87
+            },
+            {
+              "velocity": 0.352,
+              "offset": -0.0124,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 97
+            },
+            {
+              "velocity": 0.352,
+              "offset": -0.0122,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 80
+            },
+            {
+              "velocity": 0.4,
+              "offset": -0.0142,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 99
+            },
+            {
+              "velocity": 0.352,
+              "offset": 0.006,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.42,
-              "offset": 0,
+              "velocity": 0.352,
+              "offset": 0.0027,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 94
+            },
+            {
+              "velocity": 0.352,
+              "offset": 0.0078,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 80
+            },
+            {
+              "velocity": 0.4,
+              "offset": -0.0048,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 93
+            },
+            {
+              "velocity": 0.352,
+              "offset": -0.0119,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 90
+            },
+            {
+              "velocity": 0.352,
+              "offset": 0.0104,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 91
+            },
+            {
+              "velocity": 0.352,
+              "offset": 0.0069,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 81
+            },
+            {
+              "velocity": 0.4,
+              "offset": -0.0126,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 92
+            },
+            {
+              "velocity": 0.352,
+              "offset": 0.0036,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
+              "velocity": 0.352,
+              "offset": -0.0092,
+              "subdivisions": 2,
+              "subdivision_enabled": true,
+              "probability": 98
             },
             {
-              "velocity": 0.42,
-              "offset": 0,
+              "velocity": 0.352,
+              "offset": 0.0082,
               "subdivisions": 1,
               "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
+              "probability": 87
             }
           ],
+          "visualization_enabled": true,
           "node_type": "sequence",
-          "asset_modifier_id": 14
+          "asset_modifier_id": 21
         }
       },
       {
-        "id": 14,
+        "id": 21,
         "type": "Audio/Random",
         "pos": [
           380,
-          600
-        ],
-        "size": [
-          44,
-          44
-        ],
-        "flags": {
-          "collapsed": false,
-          "hidden": false
-        },
-        "order": 13,
-        "mode": 0,
-        "inputs": [],
-        "outputs": [],
-        "title": "Random",
-        "properties": {
-          "node_name": "Shaker Dynamic Modulator",
-          "min": -0.2,
-          "max": 0.1,
-          "distribution": "uniform",
-          "refresh_mode": "step",
-          "node_type": "random",
-          "parentId": 13
-        }
-      },
-      {
-        "id": 15,
-        "type": "Audio/AssetFilter",
-        "pos": [
-          100,
           760
         ],
         "size": [
@@ -1281,14 +1711,402 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 14,
+        "order": 20,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Shaker Groove Modulator",
+          "refresh_mode": "global",
+          "seed": 609,
+          "visualization_enabled": true,
+          "destinations": [
+            {
+              "id": "t-shake-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Shaker Wave Velocity",
+              "minPercent": -22,
+              "maxPercent": 15,
+              "baseValue": 0.4,
+              "enabled": true
+            },
+            {
+              "id": "t-shake-off",
+              "paramKey": "offset",
+              "paramLabel": "Loose Shaker Swing",
+              "minPercent": -12,
+              "maxPercent": 12,
+              "baseValue": 0.0,
+              "enabled": true
+            },
+            {
+              "id": "t-shake-prob",
+              "paramKey": "probability",
+              "paramLabel": "Ghost Shaker Skipping",
+              "minPercent": -20,
+              "maxPercent": 0,
+              "baseValue": 95,
+              "enabled": true
+            }
+          ],
+          "node_type": "random",
+          "parentId": 20
+        }
+      },
+      {
+        "id": 22,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          920
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 21,
         "mode": 0,
         "inputs": [],
         "outputs": [],
         "title": "Asset Pool",
         "properties": {
-          "node_name": "Atmospheric Rain & Texture Pool",
+          "node_name": "Tops Micro Clicks Pool (v2)",
           "selected_items": [
+            {
+              "id": 4620
+            },
+            {
+              "id": 4622
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "visualization_enabled": true,
+          "node_type": "asset_filter",
+          "parentId": 23
+        }
+      },
+      {
+        "id": 23,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          920
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 22,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              6
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Tops Micro Click",
+          "sample_type": "one_shot",
+          "gain": 0.0,
+          "visualization_enabled": true,
+          "node_type": "sample",
+          "asset_modifier_id": 22
+        }
+      },
+      {
+        "id": 24,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          920
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 23,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 6
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              13
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Tops Micro Click Groove",
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "total_bars": 4,
+          "seed": 610,
+          "seed_mode": "moving",
+          "sequence": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "velocity": 0.38,
+              "offset": -0.0155,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 90
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.334,
+              "offset": -0.0111,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 77
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.38,
+              "offset": 0.0096,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 91
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.334,
+              "offset": -0.0031,
+              "subdivisions": 2,
+              "subdivision_enabled": true,
+              "probability": 88
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.38,
+              "offset": -0.0107,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 76
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.334,
+              "offset": -0.012,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 87
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.38,
+              "offset": -0.0032,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 87
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            },
+            {
+              "velocity": 0.334,
+              "offset": 0.0124,
+              "subdivisions": 2,
+              "subdivision_enabled": true,
+              "probability": 78
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 100
+            }
+          ],
+          "visualization_enabled": true,
+          "node_type": "sequence",
+          "asset_modifier_id": 25
+        }
+      },
+      {
+        "id": 25,
+        "type": "Audio/Random",
+        "pos": [
+          380,
+          920
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 24,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Micro-Click Glitch Modulator",
+          "refresh_mode": "global",
+          "seed": 611,
+          "visualization_enabled": true,
+          "destinations": [
+            {
+              "id": "t-click-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Glitch Tap Velocity",
+              "minPercent": -25,
+              "maxPercent": 18,
+              "baseValue": 0.38,
+              "enabled": true
+            },
+            {
+              "id": "t-click-off",
+              "paramKey": "offset",
+              "paramLabel": "Sub-step Jitter",
+              "minPercent": -18,
+              "maxPercent": 18,
+              "baseValue": 0.0,
+              "enabled": true
+            },
+            {
+              "id": "t-click-prob",
+              "paramKey": "probability",
+              "paramLabel": "Sporadic Click Trigger",
+              "minPercent": -35,
+              "maxPercent": 0,
+              "baseValue": 85,
+              "enabled": true
+            }
+          ],
+          "node_type": "random",
+          "parentId": 24
+        }
+      },
+      {
+        "id": 26,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          1080
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 25,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Tops Environmental Textures & Birds",
+          "selected_items": [
+            {
+              "id": 13763
+            },
+            {
+              "id": 4704
+            },
+            {
+              "id": 4705
+            },
+            {
+              "id": 13764
+            },
             {
               "id": 4619
             },
@@ -1309,30 +2127,22 @@
             },
             {
               "id": 4694
-            },
-            {
-              "id": 4703
-            },
-            {
-              "id": 4704
-            },
-            {
-              "id": 4705
             }
           ],
           "playbackMode": "Random",
           "refresh_mode": "global",
           "output_type": "asset_path",
+          "visualization_enabled": true,
           "node_type": "asset_filter",
-          "parentId": 16
+          "parentId": 27
         }
       },
       {
-        "id": 16,
+        "id": 27,
         "type": "Audio/Sample",
         "pos": [
           320,
-          760
+          1080
         ],
         "size": [
           44,
@@ -1342,7 +2152,7 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 15,
+        "order": 26,
         "mode": 0,
         "inputs": [],
         "outputs": [
@@ -1350,26 +2160,27 @@
             "name": "Audio",
             "type": "audio",
             "links": [
-              5
+              7
             ],
             "slot_index": 0
           }
         ],
         "title": "Sample",
         "properties": {
-          "node_name": "Environmental Texture",
+          "node_name": "Tops Organic Texture Sparkle",
           "sample_type": "one_shot",
           "gain": -2.0,
+          "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 15
+          "asset_modifier_id": 26
         }
       },
       {
-        "id": 17,
+        "id": 28,
         "type": "Audio/Sequence",
         "pos": [
           600,
-          760
+          1080
         ],
         "size": [
           44,
@@ -1379,13 +2190,13 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 16,
+        "order": 27,
         "mode": 0,
         "inputs": [
           {
             "name": "Input",
             "type": "audio",
-            "link": 5
+            "link": 7
           },
           {
             "name": "Input",
@@ -1398,17 +2209,19 @@
             "name": "Audio",
             "type": "audio",
             "links": [
-              10
+              14
             ],
             "slot_index": 0
           }
         ],
         "title": "Sequence",
         "properties": {
-          "node_name": "Atmospheric Accents",
+          "node_name": "Tops Texture Accents",
           "step_length": 0.5,
           "play_mode": "trigger",
           "total_bars": 4,
+          "seed": 612,
+          "seed_mode": "moving",
           "sequence": [
             0,
             0,
@@ -1422,70 +2235,71 @@
           "step_parameters": [
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.42,
-              "offset": 0,
+              "velocity": 0.308,
+              "offset": -0.0233,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "probability": 85
+            },
+            {
+              "velocity": 0.0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
               "velocity": 0.0,
-              "offset": 0,
+              "offset": 0.0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0,
+              "velocity": 0.308,
+              "offset": -0.0135,
               "subdivisions": 1,
               "subdivision_enabled": false,
-              "probability": 100
-            },
-            {
-              "velocity": 0.42,
-              "offset": 0,
-              "subdivisions": 1,
-              "subdivision_enabled": false,
-              "probability": 100
+              "probability": 88
             }
           ],
+          "visualization_enabled": true,
           "node_type": "sequence"
         }
       },
       {
-        "id": 18,
+        "id": 29,
         "type": "Audio/Track",
         "pos": [
           880,
-          440
+          920
         ],
         "size": [
           44,
@@ -1495,125 +2309,80 @@
           "collapsed": false,
           "hidden": false
         },
-        "order": 17,
+        "order": 28,
         "mode": 0,
         "inputs": [
-          {
-            "name": "Input",
-            "type": "audio",
-            "link": 6
-          },
-          {
-            "name": "Input",
-            "type": "audio",
-            "link": 7
-          },
-          {
-            "name": "Input",
-            "type": "audio",
-            "link": 8
-          },
-          {
-            "name": "Input",
-            "type": "audio",
-            "link": null
-          }
-        ],
-        "outputs": [
-          {
-            "name": "Audio",
-            "type": "audio",
-            "links": [
-              11
-            ],
-            "slot_index": 0
-          }
-        ],
-        "title": "Track",
-        "properties": {
-          "node_name": "Punch Drum Bus",
-          "gain": -2.0,
-          "node_type": "track"
-        }
-      },
-      {
-        "id": 19,
-        "type": "Audio/Track",
-        "pos": [
-          880,
-          440
-        ],
-        "size": [
-          44,
-          44
-        ],
-        "flags": {
-          "collapsed": false,
-          "hidden": false
-        },
-        "order": 18,
-        "mode": 0,
-        "inputs": [
-          {
-            "name": "Input",
-            "type": "audio",
-            "link": 9
-          },
-          {
-            "name": "Input",
-            "type": "audio",
-            "link": 10
-          },
-          {
-            "name": "Input",
-            "type": "audio",
-            "link": null
-          }
-        ],
-        "outputs": [
-          {
-            "name": "Audio",
-            "type": "audio",
-            "links": [
-              12
-            ],
-            "slot_index": 0
-          }
-        ],
-        "title": "Track",
-        "properties": {
-          "node_name": "Sub Bass Bus",
-          "gain": -3.0,
-          "node_type": "track"
-        }
-      },
-      {
-        "id": 20,
-        "type": "Audio/Track",
-        "pos": [
-          1160,
-          440
-        ],
-        "size": [
-          44,
-          44
-        ],
-        "flags": {
-          "collapsed": false,
-          "hidden": false
-        },
-        "order": 19,
-        "mode": 0,
-        "inputs": [
-          {
-            "name": "Input",
-            "type": "audio",
-            "link": 11
-          },
           {
             "name": "Input",
             "type": "audio",
             "link": 12
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 13
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 14
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              17
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "Tops Air & Perc Bus",
+          "gain": -2.5,
+          "visualization_enabled": true,
+          "node_type": "track"
+        }
+      },
+      {
+        "id": 30,
+        "type": "Audio/Track",
+        "pos": [
+          1160,
+          546
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 29,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 15
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 16
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 17
           },
           {
             "name": "Input",
@@ -1633,6 +2402,7 @@
         "properties": {
           "node_name": "Master Output",
           "gain": -1.5,
+          "visualization_enabled": true,
           "node_type": "track"
         }
       }
@@ -1648,90 +2418,130 @@
       ],
       [
         2,
-        5,
-        0,
         6,
+        0,
+        7,
         0,
         "audio"
       ],
       [
         3,
-        8,
+        10,
         0,
-        9,
+        11,
         0,
         "audio"
       ],
       [
         4,
-        12,
+        14,
         0,
-        13,
+        15,
         0,
         "audio"
       ],
       [
         5,
-        16,
+        19,
         0,
-        17,
+        20,
         0,
         "audio"
       ],
       [
         6,
-        6,
+        23,
         0,
-        18,
+        24,
         0,
         "audio"
       ],
       [
         7,
-        9,
+        27,
         0,
-        18,
-        1,
+        28,
+        0,
         "audio"
       ],
       [
         8,
-        13,
+        3,
         0,
-        18,
-        2,
+        8,
+        0,
         "audio"
       ],
       [
         9,
-        3,
+        7,
         0,
-        19,
-        0,
+        8,
+        1,
         "audio"
       ],
       [
         10,
+        11,
+        0,
         17,
         0,
-        19,
-        1,
         "audio"
       ],
       [
         11,
-        18,
+        15,
         0,
-        20,
-        0,
+        17,
+        1,
         "audio"
       ],
       [
         12,
-        19,
-        0,
         20,
+        0,
+        29,
+        0,
+        "audio"
+      ],
+      [
+        13,
+        24,
+        0,
+        29,
         1,
+        "audio"
+      ],
+      [
+        14,
+        28,
+        0,
+        29,
+        2,
+        "audio"
+      ],
+      [
+        15,
+        8,
+        0,
+        30,
+        0,
+        "audio"
+      ],
+      [
+        16,
+        17,
+        0,
+        30,
+        1,
+        "audio"
+      ],
+      [
+        17,
+        29,
+        0,
+        30,
+        2,
         "audio"
       ]
     ],
@@ -1746,7 +2556,7 @@
         "key": "A#m"
       },
       "main_preview": {
-        "node_id": 20,
+        "node_id": 30,
         "mode": "auto"
       }
     },

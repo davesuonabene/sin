@@ -105,6 +105,8 @@ export class WidgetFactory {
         switch (field.type) {
             case 'filepath':
                 return this.createFilepathWidget(field, node, onChange);
+            case 'directory':
+                return this.createDirectoryWidget(field, node, onChange);
             case 'slider':
                 return this.createSliderWidget(field, node, onChange);
             case 'string':
@@ -314,6 +316,73 @@ export class WidgetFactory {
         });
 
         return input;
+    }
+
+    private static createDirectoryWidget(
+        field: FieldSchema,
+        node: BaseNode,
+        onChange: (key: string, val: any, previousValue: any) => void
+    ): HTMLElement {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'td-param-directory-control';
+        wrapper.style.display = 'flex';
+        wrapper.style.gap = '4px';
+        wrapper.style.alignItems = 'center';
+        wrapper.style.width = '100%';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'td-param-input';
+        input.style.flex = '1';
+        input.value = String(this.getFieldValue(node, field) ?? field.default ?? 'exports');
+        if (field.placeholder) input.placeholder = field.placeholder;
+
+        const browseBtn = document.createElement('button');
+        browseBtn.type = 'button';
+        browseBtn.className = 'td-param-action-btn';
+        browseBtn.textContent = 'Browse…';
+        browseBtn.title = 'Browse folders';
+
+        const commit = () => {
+            const previousValue = this.getFieldValue(node, field);
+            const val = input.value.trim() || String(field.default || 'exports');
+            if (!this.mayEditField(node, field, val)) {
+                input.value = String(previousValue ?? '');
+                return;
+            }
+            const updated = this.setFieldValue(node, field, val);
+            input.value = String(updated);
+            if (!Object.is(updated, previousValue)) {
+                onChange(field.key, updated, previousValue);
+            }
+        };
+
+        input.addEventListener('change', commit);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                commit();
+                input.blur();
+            }
+        });
+
+        browseBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent('open-folder-picker', {
+                detail: {
+                    initialPath: input.value,
+                    onSelect: (selectedPath: string) => {
+                        input.value = selectedPath;
+                        commit();
+                    }
+                }
+            }));
+        });
+
+        wrapper.appendChild(input);
+        wrapper.appendChild(browseBtn);
+        return wrapper;
     }
 
     private static createNumberWidget(

@@ -97,6 +97,125 @@ from core.engines import get_renderer_for_node, build_node_object
 
 RAM_PREVIEW_STORE: Dict[str, Dict[str, Any]] = {}
 
+def resolve_render_export(payload: AudioNodeModel) -> tuple[str, str, str]:
+    """
+    Resolves the export directory, filename with variable substitution,
+    and returns (target_directory, out_filename, file_url).
+    Supports variables:
+      {name}, {bpm}, {bars}, {key}, {date}, {time}, {datetime}, {idx}, {incremental}, {type}, {id}
+    """
+    from datetime import datetime
+    import re
+    from urllib.parse import quote
+
+    # If both export_directory and export_pattern are unset, fall back to legacy temp_renders behavior
+    if payload.export_directory is None and payload.export_pattern is None:
+        temp_dir = "temp_renders"
+        os.makedirs(temp_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_name = payload.filename or "output"
+        out_filename = f"{timestamp}_{base_name}_{payload.node_name}.wav"
+        return temp_dir, out_filename, f"/temp_renders/{out_filename}"
+
+    raw_dir = (payload.export_directory or "exports").strip()
+    base_dir = os.path.abspath(os.getcwd())
+    if os.path.isabs(raw_dir):
+        target_dir = os.path.normpath(raw_dir)
+    else:
+        target_dir = os.path.normpath(os.path.join(base_dir, raw_dir))
+
+    if not target_dir.startswith(base_dir) and not os.path.isabs(raw_dir):
+        target_dir = os.path.join(base_dir, "exports")
+
+    os.makedirs(target_dir, exist_ok=True)
+
+    clean_project = re.sub(r'[^\w\-.]', '_', payload.project_name or payload.project or "project").strip('_') or "project"
+    clean_name = re.sub(r'[^\w\-.]', '_', payload.node_name or "output").strip('_') or "output"
+    now = datetime.now()
+    bpm_val = f"{int(payload.bpm)}" if float(payload.bpm).is_integer() else f"{payload.bpm:.1f}"
+    bars_val = f"{int(payload.total_bars)}" if payload.total_bars and float(payload.total_bars).is_integer() else f"{payload.total_bars or 4}"
+    key_val = re.sub(r'[^\w\-#]', '', payload.key or "").strip() or "nokey"
+    type_val = re.sub(r'[^\w\-]', '', payload.node_type or "track").lower()
+    id_val = str(payload.node_id or 0)
+    date_val = now.strftime("%Y%m%d")
+    time_val = now.strftime("%H%M%S")
+    datetime_val = now.strftime("%Y%m%d_%H%M%S")
+
+    pattern = (payload.export_pattern or "{project}_{name}_{idx}").strip()
+    if pattern.endswith(".wav"):
+        pattern = pattern[:-4]
+
+    token_map = {
+        "{project}": clean_project,
+        "{project_name}": clean_project,
+        "{name}": clean_name,
+        "{node_name}": clean_name,
+        "{bpm}": bpm_val,
+        "{bars}": bars_val,
+        "{key}": key_val,
+        "{type}": type_val,
+        "{id}": id_val,
+        "{date}": date_val,
+        "{time}": time_val,
+        "{datetime}": datetime_val,
+    }
+
+    subbed = pattern
+    for token, val in token_map.items():
+        subbed = subbed.replace(token, val)
+
+    overwrite_mode = (payload.export_overwrite_mode or "incremental").lower()
+    has_idx_token = "{idx}" in subbed or "{incremental}" in subbed
+
+    if has_idx_token:
+        idx_placeholder = "__IDX_TOKEN__"
+        template = subbed.replace("{idx}", idx_placeholder).replace("{incremental}", idx_placeholder)
+        escaped_template = re.escape(template).replace(idx_placeholder, r"(\d+)")
+        regex = re.compile(rf"^{escaped_template}\.wav$", re.IGNORECASE)
+
+        existing_indices: list[int] = []
+        if os.path.exists(target_dir):
+            for fname in os.listdir(target_dir):
+                m = regex.match(fname)
+                if m:
+                    try:
+                        existing_indices.append(int(m.group(1)))
+                    except ValueError:
+                        pass
+
+        if overwrite_mode == "overwrite":
+            next_idx = 1
+        else:
+            next_idx = (max(existing_indices) + 1) if existing_indices else 1
+
+        idx_str = f"{next_idx:03d}"
+        final_base = template.replace(idx_placeholder, idx_str)
+        out_filename = f"{final_base}.wav"
+    else:
+        final_base = subbed
+        if overwrite_mode == "overwrite":
+            out_filename = f"{final_base}.wav"
+        else:
+            candidate = f"{final_base}.wav"
+            if not os.path.exists(os.path.join(target_dir, candidate)):
+                out_filename = candidate
+            else:
+                regex = re.compile(rf"^{re.escape(final_base)}_(\d+)\.wav$", re.IGNORECASE)
+                existing_indices = []
+                for fname in os.listdir(target_dir):
+                    m = regex.match(fname)
+                    if m:
+                        try:
+                            existing_indices.append(int(m.group(1)))
+                        except ValueError:
+                            pass
+                next_idx = (max(existing_indices) + 1) if existing_indices else 1
+                out_filename = f"{final_base}_{next_idx:03d}.wav"
+
+    rel_path = os.path.relpath(os.path.join(target_dir, out_filename), base_dir).replace("\\", "/")
+    file_url = f"/api/renders/file?path={quote(rel_path)}"
+    return target_dir, out_filename, file_url
+
 @api_router.post("/render", tags=["System"])
 def render_graph(payload: AudioNodeModel):
     from fastapi import HTTPException
@@ -116,14 +235,8 @@ def render_graph(payload: AudioNodeModel):
             )
             logger.debug(f"[DSP] Render complete. Output length: {audio_out.shape[-1]} samples.")
 
-            from datetime import datetime
-            temp_dir = "temp_renders"
-            os.makedirs(temp_dir, exist_ok=True)
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            base_name = payload.filename or "output"
-            out_filename = f"{timestamp}_{base_name}_{payload.node_name}.wav"
-            out_path = os.path.join(temp_dir, out_filename)
+            target_dir, out_filename, file_url = resolve_render_export(payload)
+            out_path = os.path.join(target_dir, out_filename)
 
             write_started_at = perf_counter()
             sf.write(
@@ -132,7 +245,7 @@ def render_graph(payload: AudioNodeModel):
                 sys.sample_rate,
             )
             trace_runtime(
-                f"Render file written: {out_filename} "
+                f"Render file written: {out_filename} to {target_dir} "
                 f"({(perf_counter() - write_started_at) * 1000.0:.1f} ms)",
                 "common",
             )
@@ -140,8 +253,10 @@ def render_graph(payload: AudioNodeModel):
 
             return {
                 "status": "success",
-                "file_url": f"/temp_renders/{out_filename}",
+                "file_url": file_url,
                 "filename": out_filename,
+                "file_path": out_path,
+                "directory": target_dir,
                 "runtime_log": runtime_entries,
             }
     except Exception as e:
@@ -733,6 +848,70 @@ def export_render(payload: ExportRequest):
     shutil.move(temp_path, export_path)
     
     return {"status": "success", "file_url": f"/export/{payload.filename}"}
+
+@api_router.get("/renders/file", tags=["System"])
+def get_rendered_file(path: str):
+    from fastapi.responses import FileResponse, HTTPException
+    from urllib.parse import unquote
+    clean_path = unquote(path)
+    base_dir = os.path.abspath(os.getcwd())
+    full_path = os.path.normpath(clean_path if os.path.isabs(clean_path) else os.path.join(base_dir, clean_path))
+    if not os.path.exists(full_path) or not os.path.isfile(full_path):
+        raise HTTPException(status_code=404, detail="Rendered file not found")
+    return FileResponse(
+        full_path,
+        media_type="audio/wav",
+        filename=os.path.basename(full_path),
+        headers={"Accept-Ranges": "bytes"}
+    )
+
+@api_router.get("/directories", tags=["System"])
+def list_directories(path: Optional[str] = None):
+    from urllib.parse import unquote
+    base_dir = os.path.abspath(os.getcwd())
+    if not path or path.strip() in (".", "", "/"):
+        target = base_dir
+    else:
+        clean_p = unquote(path.strip())
+        target = os.path.abspath(clean_p if os.path.isabs(clean_p) else os.path.join(base_dir, clean_p))
+
+    if not os.path.exists(target) or not os.path.isdir(target):
+        target = base_dir
+
+    dirs = []
+    try:
+        with os.scandir(target) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir() and not entry.name.startswith("."):
+                        dirs.append(entry.name)
+                except OSError:
+                    pass
+        dirs.sort(key=lambda s: s.lower())
+    except Exception as exc:
+        logger.debug("[API /directories] scan failed for %s: %s", target, exc)
+
+    rel_current = os.path.relpath(target, base_dir).replace("\\", "/")
+    if rel_current == ".":
+        rel_current = ""
+
+    parent = os.path.dirname(target)
+    rel_parent = os.path.relpath(parent, base_dir).replace("\\", "/") if parent != target else None
+
+    common_roots = [
+        {"name": "exports", "path": "exports"},
+        {"name": "workspace", "path": ""},
+    ]
+    if os.path.exists(os.path.join(base_dir, "assets")):
+        common_roots.append({"name": "assets", "path": "assets"})
+
+    return {
+        "current_path": rel_current,
+        "absolute_path": target,
+        "parent_path": rel_parent,
+        "directories": dirs,
+        "roots": common_roots,
+    }
 
 def _get_gaia_metadata(filepath: str) -> Dict[str, Any]:
     metadata: Dict[str, Any] = {"bpm": None, "key": None}
@@ -1930,6 +2109,7 @@ if os.path.exists("assets"):
 # Render/export folders are created lazily by their endpoints. Avoid creating
 # workspace artifacts merely by importing the API (including during tests).
 app.mount("/export", StaticFiles(directory="export", check_dir=False), name="export")
+app.mount("/exports", StaticFiles(directory="exports", check_dir=False), name="exports")
 
 # Mount temp_renders directory for temporary rendered audio
 app.mount(

@@ -1265,7 +1265,22 @@ async function saveWorkspacePreset(name: string) {
     }
 }
 
-workspacePresetSelect.addEventListener('change', setWorkspaceControlsEnabled);
+export function getCurrentProjectName(): string {
+    const selected = workspacePresetSelect?.value?.trim();
+    if (selected) return selected;
+    const graph = (window as any).editorGraph as LGraph;
+    if ((graph as any)?.extra?.project_name) return String((graph as any).extra.project_name);
+    return 'project';
+}
+
+(window as any).getProjectName = getCurrentProjectName;
+
+workspacePresetSelect.addEventListener('change', () => {
+    setWorkspaceControlsEnabled();
+    window.dispatchEvent(new CustomEvent('project-name-changed', {
+        detail: { projectName: getCurrentProjectName() }
+    }));
+});
 
 newStageBtn.addEventListener('click', () => {
     const graph = (window as any).editorGraph as LGraph;
@@ -4509,7 +4524,12 @@ async function renderNode(nodeId: number) {
             return;
         }
 
-        payload.filename = `export_${nodeId}`;
+        payload.project_name = getCurrentProjectName();
+        if (targetNode?.properties) {
+            payload.export_directory = targetNode.properties.export_directory || 'exports';
+            payload.export_pattern = targetNode.properties.export_pattern || '{project}_{name}_{idx}';
+            payload.export_overwrite_mode = targetNode.properties.export_overwrite_mode || 'incremental';
+        }
 
         const res = await loggedTask('Render audio on server', () =>
             fetch('/api/render', {
@@ -4534,17 +4554,30 @@ async function renderNode(nodeId: number) {
         appendServerRuntimeLog(data.runtime_log);
 
         if (data.status === 'success' && data.filename) {
-            await updateTempRendersList(data.filename);
-            if (!loopEnabled) masterPlayer.play().catch(e => console.error(e));
-            runtimeLog(`Disk render complete (${Math.round(performance.now() - renderStartedAt)} ms)`, 'common');
+            if (data.file_url) {
+                masterPlayer.src = data.file_url;
+                if (!loopEnabled) masterPlayer.play().catch(e => console.error(e));
+            }
+            const outPath = data.file_path || data.filename;
+            runtimeLog(`Export complete: ${outPath} (${Math.round(performance.now() - renderStartedAt)} ms)`, 'common');
+            window.dispatchEvent(new CustomEvent('render-completed', {
+                detail: { nodeId, filename: data.filename, filePath: data.file_path, fileUrl: data.file_url }
+            }));
         } else {
             console.error("Render failed:", data);
+            window.dispatchEvent(new CustomEvent('render-failed', {
+                detail: { nodeId, error: data?.detail || 'Render failed' }
+            }));
             alert("Render failed, check console.");
         }
     } catch (err) {
         console.error("Error during render:", err);
-        runtimeLog(`Disk render failed: ${(err as Error).message || String(err)}`, 'error');
-        alert(`Error during render: ${(err as Error).message || err}`);
+        const errMsg = (err as Error).message || String(err);
+        runtimeLog(`Disk render failed: ${errMsg}`, 'error');
+        window.dispatchEvent(new CustomEvent('render-failed', {
+            detail: { nodeId, error: errMsg }
+        }));
+        alert(`Error during render: ${errMsg}`);
     } finally {
         if (targetNode?.renderBtn) {
             targetNode.renderBtn.label = 'R';

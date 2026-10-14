@@ -192,6 +192,7 @@ export class SampleNode extends BaseNode {
         this.boxcolor = "#059669";
         
         this.properties = {
+            ...this.properties,
             node_name: "New Sample",
             filepath: "",
             sample_type: "loop",

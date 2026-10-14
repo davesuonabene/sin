@@ -28,6 +28,11 @@ class AudioNodeModel(BaseModel):
     start_beat: float = 0.0
     bpm: float = 120.0
     filename: Optional[str] = None
+    project_name: Optional[str] = None
+    project: Optional[str] = None
+    export_directory: Optional[str] = None
+    export_pattern: Optional[str] = None
+    export_overwrite_mode: Optional[Literal["incremental", "overwrite"]] = "incremental"
     sequence: Optional[List[int]] = None
     step_parameters: Optional[List[Dict[str, Any]]] = None
     step_length: Optional[float] = None

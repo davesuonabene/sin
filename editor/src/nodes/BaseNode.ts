@@ -2,7 +2,7 @@ import { LiteGraph, LGraphNode } from 'litegraph.js';
 import { CanvasButton } from '../ui/CanvasButton.ts';
 import { getGhostSource, isGhostFieldLinked } from '../ghosts.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
-import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
+import { type NodePanelSchema, type PanelTabConfig } from '../fields/NodePanelSchema.ts';
 import {
     drawNeonIcon,
     normalizeNeonIcon,
@@ -76,7 +76,55 @@ export abstract class BaseNode extends LGraphNode {
     static badgeLabel = "NODE";
     static nodeType = "track";
     static defaultTab = "PARAMS";
-    static tabs = ["TRACK", "CHAIN", "COMMON"];
+    static tabs = ["TRACK", "CHAIN", "EXPORT", "COMMON"];
+
+    static exportFields: FieldSchema[] = [
+        {
+            key: 'export_root',
+            label: 'Root Folder',
+            type: 'directory',
+            default: 'exports',
+            tab: 'EXPORT',
+            description: 'Root folder for rendered audio'
+        },
+        {
+            key: 'export_subfolder',
+            label: 'Subfolder',
+            type: 'string',
+            default: '',
+            tab: 'EXPORT',
+            placeholder: 'e.g. stems (creates if new)',
+            description: 'Subfolder search or naming (auto-created if new)'
+        },
+        {
+            key: 'export_pattern',
+            label: 'Pattern',
+            type: 'string',
+            default: '{project}_{name}_{idx}',
+            tab: 'EXPORT',
+            description: 'Filename pattern with variables: {project}, {name}, {idx}, {bpm}, {bars}, {key}, {date}, {time}, {type}'
+        },
+        {
+            key: 'export_overwrite_mode',
+            label: 'Conflict',
+            type: 'radio',
+            default: 'incremental',
+            options: [
+                { value: 'incremental', label: 'Incremental' },
+                { value: 'overwrite', label: 'Overwrite' }
+            ],
+            tab: 'EXPORT',
+            description: 'How to handle existing files with the same name'
+        },
+        {
+            key: 'export_directory',
+            label: 'Target Directory',
+            type: 'string',
+            default: 'exports',
+            tab: 'EXPORT',
+            description: 'Resolved target directory path'
+        }
+    ];
 
     get nodeColor(): string {
         if (this.properties?.disabled || this.type === "Audio/Disabled") {
@@ -117,9 +165,17 @@ export abstract class BaseNode extends LGraphNode {
         return this.properties?.node_type || ctor.nodeType || "track";
     }
 
+    get isRenderable(): boolean {
+        return !this.isModifier && this.type !== 'Audio/Disabled';
+    }
+
     get propertiesTabs(): string[] {
+        const schema = this.getPanelSchema();
+        if (schema?.tabs?.length) {
+            return schema.tabs.map(t => t.id);
+        }
         const ctor = this.constructor as typeof BaseNode;
-        return ctor.tabs || ["TRACK", "CHAIN", "COMMON"];
+        return ctor.tabs || ["TRACK", "CHAIN", "EXPORT", "COMMON"];
     }
 
     get defaultPropertiesTab(): string {
@@ -185,36 +241,66 @@ export abstract class BaseNode extends LGraphNode {
 
     getFields(tab?: string): FieldSchema[] {
         const ctor = this.constructor as any;
-        const fields: FieldSchema[] = ctor.fields || [];
+        const baseFields: FieldSchema[] = ctor.fields || [];
+        const combined = tab === 'EXPORT'
+            ? BaseNode.exportFields
+            : [...baseFields, ...BaseNode.exportFields];
         if (tab) {
-            return fields.filter(f => !f.tab || f.tab === tab);
+            return combined.filter(f => !f.tab || f.tab === tab);
         }
-        return fields;
+        return combined;
     }
 
     getPanelSchema(): NodePanelSchema {
         const ctor = this.constructor as any;
+        let schema: NodePanelSchema;
+
         if (ctor.panelSchema) {
-            return ctor.panelSchema;
+            schema = {
+                tabs: ctor.panelSchema.tabs.map((t: any) => ({
+                    ...t,
+                    sections: [...t.sections]
+                }))
+            };
+        } else {
+            const tabs = ctor.tabs || ["TRACK", "CHAIN", "EXPORT", "COMMON"];
+            schema = {
+                tabs: tabs.map((tabId: string) => ({
+                    id: tabId,
+                    label: tabId.charAt(0) + tabId.slice(1).toLowerCase(),
+                    sections: tabId === 'COMMON'
+                        ? [
+                            { type: 'appearance' },
+                            { type: 'info_table' },
+                            {
+                                type: 'fields',
+                                fields: this.getFields('COMMON').filter(field => field.key !== 'node_name')
+                            }
+                        ]
+                        : tabId === 'EXPORT'
+                            ? [{ type: 'export_panel' }]
+                            : [{ type: 'fields', fields: this.getFields(tabId) }]
+                }))
+            };
         }
 
-        const tabs = this.propertiesTabs;
-        return {
-            tabs: tabs.map(tabId => ({
-                id: tabId,
-                label: tabId.charAt(0) + tabId.slice(1).toLowerCase(),
-                sections: tabId === 'COMMON'
-                    ? [
-                        { type: 'appearance' },
-                        { type: 'info_table' },
-                        {
-                            type: 'fields',
-                            fields: this.getFields('COMMON').filter(field => field.key !== 'node_name')
-                        }
-                    ]
-                    : [{ type: 'fields', fields: this.getFields(tabId) }]
-            }))
-        };
+        if (this.isRenderable && !schema.tabs.some(t => t.id === 'EXPORT')) {
+            const exportTab: PanelTabConfig = {
+                id: 'EXPORT',
+                label: 'Export',
+                sections: [
+                    { type: 'export_panel' }
+                ]
+            };
+            const commonIndex = schema.tabs.findIndex(t => t.id === 'COMMON');
+            if (commonIndex >= 0) {
+                schema.tabs.splice(commonIndex, 0, exportTab);
+            } else {
+                schema.tabs.push(exportTab);
+            }
+        }
+
+        return schema;
     }
 
     updateProperty(key: string, value: any): void {
@@ -505,6 +591,21 @@ export abstract class BaseNode extends LGraphNode {
         if (!this.properties.chain || !Array.isArray(this.properties.chain) || this.properties.chain.length === 0) {
             this.properties.chain = getDefaultFxChain();
         }
+        if (this.properties.export_directory === undefined) {
+            this.properties.export_directory = "exports";
+        }
+        if (this.properties.export_root === undefined) {
+            this.properties.export_root = "exports";
+        }
+        if (this.properties.export_subfolder === undefined) {
+            this.properties.export_subfolder = "";
+        }
+        if (this.properties.export_pattern === undefined) {
+            this.properties.export_pattern = "{project}_{name}_{idx}";
+        }
+        if (this.properties.export_overwrite_mode === undefined) {
+            this.properties.export_overwrite_mode = "incremental";
+        }
 
         // Action buttons positioned floating on the right side of the node
         this.previewBtn = new CanvasButton(
@@ -520,7 +621,7 @@ export abstract class BaseNode extends LGraphNode {
             () => {
                 window.dispatchEvent(new CustomEvent('render-node', { detail: { nodeId: this.id } }));
             },
-            "Render (Save to Temp)"
+            "Render Audio (Export)"
         );
 
         this.eyeBtn = new CanvasButton(

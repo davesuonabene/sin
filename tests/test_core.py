@@ -21,6 +21,7 @@ from api import (
     preview_graph_ram,
     render_graph,
     resolve_pool,
+    resolve_render_export,
     save_current_stage,
     stream_ram_preview,
 )
@@ -633,6 +634,74 @@ class TestCurrentStagePersistence(unittest.TestCase):
             finally:
                 sin_api.SAVES_DIR = original_saves_dir
                 sin_api.STAGE_SAVE_PATH = original_stage_path
+
+
+class TestRenderExportResolution(unittest.TestCase):
+    def test_export_variable_substitution_and_incremental_indexing(self):
+        with tempfile.TemporaryDirectory(prefix="sin-export-test-") as temp_dir:
+            payload = AudioNodeModel(
+                node_id=15,
+                node_name="Kick Drum",
+                node_type="sample",
+                bpm=124.0,
+                total_bars=4.0,
+                key="Am",
+                export_directory=temp_dir,
+                export_pattern="{name}_{bpm}bpm_{idx}",
+                export_overwrite_mode="incremental"
+            )
+
+            target_dir, filename_1, url_1 = resolve_render_export(payload)
+            self.assertEqual(filename_1, "Kick_Drum_124bpm_001.wav")
+            # Create the file on disk to simulate first render
+            (Path(target_dir) / filename_1).touch()
+
+            # Second render with same payload should increment to 002
+            _, filename_2, url_2 = resolve_render_export(payload)
+            self.assertEqual(filename_2, "Kick_Drum_124bpm_002.wav")
+            (Path(target_dir) / filename_2).touch()
+
+            # Third render should increment to 003
+            _, filename_3, _ = resolve_render_export(payload)
+            self.assertEqual(filename_3, "Kick_Drum_124bpm_003.wav")
+
+    def test_export_overwrite_mode(self):
+        with tempfile.TemporaryDirectory(prefix="sin-export-test-") as temp_dir:
+            payload = AudioNodeModel(
+                node_name="Bass Synth",
+                bpm=130.0,
+                export_directory=temp_dir,
+                export_pattern="{name}_{idx}",
+                export_overwrite_mode="overwrite"
+            )
+            target_dir, filename_1, _ = resolve_render_export(payload)
+            self.assertEqual(filename_1, "Bass_Synth_001.wav")
+            (Path(target_dir) / filename_1).touch()
+
+            # In overwrite mode, it stays 001
+            _, filename_2, _ = resolve_render_export(payload)
+            self.assertEqual(filename_2, "Bass_Synth_001.wav")
+
+    def test_export_project_variable_substitution(self):
+        with tempfile.TemporaryDirectory(prefix="sin-export-test-") as temp_dir:
+            payload = AudioNodeModel(
+                node_name="Lead Synth",
+                project_name="house_deep",
+                export_directory=temp_dir,
+                export_pattern="{project}_{name}_{idx}",
+                export_overwrite_mode="incremental"
+            )
+            target_dir, filename, _ = resolve_render_export(payload)
+            self.assertEqual(filename, "house_deep_Lead_Synth_001.wav")
+
+            # Test default pattern fallback when pattern is unset
+            payload_default = AudioNodeModel(
+                node_name="Kick",
+                project_name="techno_raw",
+                export_directory=temp_dir,
+            )
+            _, default_filename, _ = resolve_render_export(payload_default)
+            self.assertEqual(default_filename, "techno_raw_Kick_001.wav")
 
 
 if __name__ == "__main__":

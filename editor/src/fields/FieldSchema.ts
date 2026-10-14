@@ -1,4 +1,4 @@
-export type FieldType = 'string' | 'int' | 'float' | 'global_float' | 'select' | 'radio' | 'boolean' | 'db' | 'seed' | 'filepath' | 'slider';
+export type FieldType = 'string' | 'int' | 'float' | 'global_float' | 'select' | 'radio' | 'boolean' | 'db' | 'seed' | 'filepath' | 'slider' | 'directory';
 
 export interface SelectOption {
     value: string | number;

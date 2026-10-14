@@ -74,6 +74,7 @@ export class ArrangementNode extends BaseNode {
         this.boxcolor = "#d97706";
         
         this.properties = {
+            ...this.properties,
             node_name: "Arrangement",
             node_type: "arrangement",
             total_bars: 4.0,

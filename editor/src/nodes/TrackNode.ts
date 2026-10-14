@@ -1,9 +1,9 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode } from './BaseNode';
-import { type FieldSchema } from '../fields/FieldSchema';
-import { type NodePanelSchema } from '../fields/NodePanelSchema';
+import { BaseNode } from './BaseNode.ts';
+import { type FieldSchema } from '../fields/FieldSchema.ts';
+import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { WaveformRenderer, type RenderBox, type SignalTelemetry } from '../../../packages/iride/src/index.ts';
-import { globalAudioScheduler } from '../audioScheduler';
+import { globalAudioScheduler } from '../audioScheduler.ts';
 
 export class TrackNode extends BaseNode {
     private waveformRenderer = new WaveformRenderer({ accentColor: '#4f46e5' });
@@ -63,6 +63,7 @@ export class TrackNode extends BaseNode {
         this.boxcolor = "#4338ca";
         
         this.properties = {
+            ...this.properties,
             node_name: "Master Track",
             mix_mode: "sum",
             bpm: "global",
