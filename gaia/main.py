@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
 
-from . import import_jobs, models, database, profiles, vaults
+from . import import_jobs, models, database, profiles, vaults, project_manifest
 from .routers import items, media_edits, tags, projects, sin_proposals, vaults as vault_router, playlists
 
 # Migrate the removed SamplePack subtype before ORM mappings query legacy rows.
@@ -18,6 +18,7 @@ with database.SessionLocal() as db:
     vaults.migrate_custom_vault_layouts(db)
     vaults.ensure_default_vault(db)
     profiles.ensure_builtin_profile_bundles()
+    project_manifest.migrate_v1_project_layouts(db)
 import_jobs.cleanup_stale_staging()
 import_jobs.cleanup_abandoned_import_rows()
 
@@ -49,6 +50,10 @@ app.include_router(playlists.router)
 static_path = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_path, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+packages_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "packages")
+os.makedirs(packages_path, exist_ok=True)
+app.mount("/packages", StaticFiles(directory=packages_path), name="packages")
 
 @app.get("/")
 def read_root():

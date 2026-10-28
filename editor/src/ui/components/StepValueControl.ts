@@ -60,27 +60,110 @@ export class StepValueControl {
         if (field.max !== undefined) this.input.max = String(field.max);
         this.input.step = String(field.step ?? (field.type === 'int' ? 1 : 'any'));
 
+        let inputDebounceTimer: any = null;
         this.input.addEventListener('input', () => {
             const parsed = this.parseValue(this.input.value);
-            if (Number.isFinite(parsed)) this.renderValue(parsed);
+            if (Number.isFinite(parsed)) {
+                this.renderValue(parsed);
+                clearTimeout(inputDebounceTimer);
+                inputDebounceTimer = setTimeout(() => {
+                    const nextVal = this.normalizeValue(this.input.value);
+                    this.value = nextVal;
+                    onChange(nextVal);
+                }, 100);
+            }
         });
 
         this.input.addEventListener('change', () => {
+            clearTimeout(inputDebounceTimer);
             const nextValue = this.normalizeValue(this.input.value);
             this.setValue(nextValue);
             onChange(nextValue);
         });
+
+        const resolveWheelStep = (): number => {
+            if (field.type === 'int') {
+                return getParameterWheelStep(true);
+            }
+            if (typeof field.step === 'number' && field.step > 0 && field.step < 1.0) {
+                return field.step;
+            }
+            const min = field.min ?? 0;
+            const max = field.max ?? 1;
+            if (max - min <= 1.0) {
+                return 0.01;
+            }
+            return getParameterWheelStep(false);
+        };
 
         registerParameterWheelControl(this.input);
         this.input.addEventListener('wheel', event => {
             event.preventDefault();
             if (event.altKey) return;
             const direction = event.deltaY < 0 ? 1 : -1;
-            const increment = getParameterWheelStep(field.type === 'int');
+            const increment = resolveWheelStep();
             const nextValue = this.normalizeValue(this.value + increment * direction);
             this.setValue(nextValue);
             onChange(nextValue);
         }, { passive: false });
+
+        let isDragging = false;
+        let startY = 0;
+        let startVal = 0;
+        let hasMoved = false;
+
+        const onPointerDown = (e: PointerEvent) => {
+            if (e.button !== 0) return;
+            isDragging = true;
+            startY = e.clientY;
+            startVal = this.value;
+            hasMoved = false;
+        };
+
+        const onPointerMove = (e: PointerEvent) => {
+            if (!isDragging) return;
+            const dy = startY - e.clientY;
+            if (Math.abs(dy) > 3) {
+                if (!hasMoved) {
+                    hasMoved = true;
+                    try {
+                        this.element.setPointerCapture(e.pointerId);
+                    } catch {}
+                }
+            }
+            if (!hasMoved) return;
+
+            e.preventDefault();
+            const min = field.min ?? 0;
+            const max = field.max ?? (field.type === 'int' ? 100 : 1.0);
+            const span = max - min;
+            const sensitivity = e.shiftKey ? 0.2 : 1.0;
+            const delta = (dy / 140) * span * sensitivity;
+            const nextVal = this.normalizeValue(startVal + delta);
+            if (nextVal !== this.value) {
+                this.setValue(nextVal);
+                onChange(nextVal);
+            }
+        };
+
+        const onPointerUp = (e: PointerEvent) => {
+            if (isDragging) {
+                isDragging = false;
+                if (hasMoved) {
+                    try {
+                        this.element.releasePointerCapture(e.pointerId);
+                    } catch {}
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                hasMoved = false;
+            }
+        };
+
+        this.element.addEventListener('pointerdown', onPointerDown);
+        this.element.addEventListener('pointermove', onPointerMove);
+        this.element.addEventListener('pointerup', onPointerUp);
+        this.element.addEventListener('pointercancel', onPointerUp);
 
         this.element.append(visual, this.input);
         this.setValue(this.value);

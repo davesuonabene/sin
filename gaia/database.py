@@ -153,7 +153,7 @@ def migrate_item_residency() -> None:
         if "availability" not in columns:
             connection.execute(text("ALTER TABLE items ADD COLUMN availability VARCHAR NOT NULL DEFAULT 'ready'"))
         connection.execute(text("UPDATE items SET storage_mode = 'managed' WHERE storage_mode IS NULL"))
-        connection.execute(text("UPDATE items SET availability = 'ready' WHERE availability IS NULL"))
+        connection.execute(text("UPDATE items SET availability = 'ready' WHERE availability IS NULL OR availability = 'available'"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_items_storage_mode ON items (storage_mode)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_items_availability ON items (availability)"))
 

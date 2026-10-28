@@ -1,0 +1,7 @@
+{
+  "name": "@sin/graph-view",
+  "version": "1.0.0",
+  "description": "Lightweight, dependency-free SVG graph diagram viewer for SIN graphs",
+  "main": "src/GraphView.js",
+  "type": "module"
+}

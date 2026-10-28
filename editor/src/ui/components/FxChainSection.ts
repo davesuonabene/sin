@@ -107,14 +107,21 @@ export class FxChainSection {
             node.updateProperty('chain', node.properties.chain);
         }
 
-        const chain: any[] = node.properties.chain;
+        const rawChain: any[] = node.properties.chain;
+        const chain = rawChain.filter((m: any) => m && String(m.type || 'gain').toLowerCase() === 'gain');
+        if (chain.length === 0) {
+            chain.push(...getDefaultFxChain());
+        }
+        if (chain.length !== rawChain.length) {
+            node.properties.chain = chain;
+        }
 
         const wrapper = document.createElement('div');
         wrapper.className = 'td-param-group fx-chain-group';
         wrapper.innerHTML = `
             <div class="fx-chain-header" style="display: flex; justify-content: space-between; margin-bottom: 8px; font-weight: 600; font-size: 11px; color: #475569;">
-                <span class="fx-chain-title">Processing Chain</span>
-                <span class="fx-chain-count" style="font-size: 10px; color: #64748b;">${chain.length} Modules</span>
+                <span class="fx-chain-title">Gain Staging</span>
+                <span class="fx-chain-count" style="font-size: 10px; color: #64748b;">${chain.length} Stages</span>
             </div>
             <div class="fx-chain-list" id="fx-chain-list"></div>
         `;
@@ -126,18 +133,11 @@ export class FxChainSection {
 
         chain.forEach((module: any, index: number) => {
             const card = document.createElement('div');
-            const isPreGain = Boolean(module.fixed && index === 0);
-            const isPostGain = Boolean(module.fixed && index === chain.length - 1);
-            card.className = `fx-module-card ${module.fixed ? 'fixed' : ''} ${isPreGain ? 'pre-gain' : ''} ${isPostGain ? 'post-gain' : ''}`;
-            if (isPreGain || isPostGain) {
-                card.appendChild(makeGainControl(module, isPreGain ? 'Pre Gain' : 'Post Gain', node, chain));
-            } else {
-                card.style.cssText = 'padding: 8px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;';
-                card.innerHTML = `
-                    <span style="font-weight: 600; font-size: 11px; color: #334155;">${module.name || module.type}</span>
-                    <span style="font-size: 10px; color: #94a3b8;">#${index + 1}</span>
-                `;
-            }
+            const isPreGain = index === 0;
+            const isPostGain = index === chain.length - 1 && index > 0;
+            const label = isPreGain ? 'Pre Gain' : (isPostGain ? 'Post Gain' : (module.name || 'Gain'));
+            card.className = `fx-module-card fixed ${isPreGain ? 'pre-gain' : ''} ${isPostGain ? 'post-gain' : ''}`;
+            card.appendChild(makeGainControl(module, label, node, chain));
             listContainer.appendChild(card);
         });
     }

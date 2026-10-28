@@ -62,6 +62,10 @@
         projectSavePromise: null,
         projectSaveQueued: false,
         destinationAction: 'render',
+        graphView: null,
+        activeViewMode: 'player',
+        canonicalGraph: null,
+        graphPositions: null,
     };
 
     const $ = id => document.getElementById(id);
@@ -125,6 +129,138 @@
     const renderConflictCancel = $('media-render-conflict-cancel');
     const renderConflictOverride = $('media-render-conflict-override');
     const renderConflictNewVersion = $('media-render-conflict-new-version');
+    const editorGraphCanvas = $('media-editor-graph-canvas');
+    const viewTogglePlayer = $('view-toggle-player');
+    const viewToggleGraph = $('view-toggle-graph');
+    const viewToggleSplit = $('view-toggle-split');
+    const editorOpenSin = $('media-editor-open-sin');
+
+    let GraphViewModule = null;
+    async function loadGraphViewModule() {
+        if (!GraphViewModule) {
+            try {
+                const mod = await import('/packages/graph-view/src/GraphView.js');
+                GraphViewModule = mod.GraphView;
+            } catch (err) {
+                console.warn('Could not load GraphView component:', err);
+            }
+        }
+        return GraphViewModule;
+    }
+
+    async function ensureGraphLoaded(force = false) {
+        if (!state.rootId) return;
+        if (!force && state.canonicalGraph && state.graphView) return;
+        try {
+            const targetQuery = state.currentTargetId ? '?target_id=' + encodeURIComponent(state.currentTargetId) : '';
+            const graphRes = await fetch(`/items/${state.rootId}/graph${targetQuery}`);
+            if (graphRes.ok) {
+                const graphData = await graphRes.json();
+                state.canonicalGraph = graphData.graph;
+                state.graphPositions = graphData.positions || {};
+                const GraphClass = await loadGraphViewModule();
+                if (GraphClass && editorGraphCanvas) {
+                    if (!state.graphView) {
+                        state.graphView = new GraphClass(editorGraphCanvas, {
+                            onNodeSelect: (node) => {
+                                if (node.id.startsWith('ch-') || node.id.startsWith('src-')) {
+                                    const rawId = Number(node.id.replace(/^(ch|src)-/, ''));
+                                    if (state.layers.has(rawId)) {
+                                        selectLayer(rawId);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    state.graphView.setGraph(state.canonicalGraph, state.graphPositions);
+                    syncGraphCropState();
+                }
+            }
+        } catch (graphErr) {
+            console.warn('Could not load canonical graph for item:', graphErr);
+        }
+    }
+
+    function syncGraphCropState() {
+        if (!state.graphView || !state.canonicalGraph) return;
+        const totalFrames = Math.max(1, waveformFrames());
+        const sampleRate = Number(state.editor?.sample_rate) || 44100;
+        const cut = selectedCut();
+        const range = cut || state.mainRange || fullMainRange();
+        if (!range) return;
+
+        const startFrame = Math.max(0, Math.min(totalFrames, Number(range.start_frame) || 0));
+        const endFrame = Math.max(startFrame, Math.min(totalFrames, Number(range.end_frame) || totalFrames));
+
+        const startRatio = startFrame / totalFrames;
+        const endRatio = endFrame / totalFrames;
+        const startSec = startFrame / sampleRate;
+        const endSec = endFrame / sampleRate;
+        const label = cut ? (cut.label || 'Cut') : 'Crop';
+
+        // Find master sample node in canonicalGraph
+        let srcNodeId = null;
+        if (state.canonicalGraph?.nodes) {
+            const targetItemId = state.currentTarget?.item_id || (typeof state.currentTargetId === 'string' ? state.currentTargetId.replace(/^(root|item|stem):/, '') : null);
+            if (targetItemId) {
+                const matchNode = state.canonicalGraph.nodes.find(n => n.id === `src-${targetItemId}`);
+                if (matchNode) srcNodeId = matchNode.id;
+            }
+            if (!srcNodeId) {
+                const firstSample = state.canonicalGraph.nodes.find(n => n.type === 'sample');
+                if (firstSample) srcNodeId = firstSample.id;
+            }
+        }
+
+        if (srcNodeId) {
+            if (typeof state.graphView.updateCrop === 'function') {
+                state.graphView.updateCrop(srcNodeId, startRatio, endRatio, startSec, endSec, label);
+            } else {
+                state.graphView.updateNodeProperty(srcNodeId, 'crop_start', startRatio);
+                state.graphView.updateNodeProperty(srcNodeId, 'crop_end', endRatio);
+                state.graphView.updateNodeProperty(srcNodeId, 'crop_label', label);
+            }
+        }
+    }
+
+    async function setEditorViewMode(mode) {
+        state.activeViewMode = mode;
+        if (!editorWaveform || !editorGraphCanvas) return;
+
+        viewTogglePlayer?.classList.toggle('active', mode === 'player');
+        viewToggleGraph?.classList.toggle('active', mode === 'graph');
+        viewToggleSplit?.classList.toggle('active', mode === 'split');
+
+        if (mode === 'player') {
+            editorWaveform.classList.remove('hidden');
+            editorGraphCanvas.classList.add('hidden');
+            editorGraphCanvas.classList.remove('is-fullscreen');
+        } else if (mode === 'graph') {
+            editorWaveform.classList.add('hidden');
+            editorGraphCanvas.classList.remove('hidden');
+            editorGraphCanvas.classList.add('is-fullscreen');
+            await ensureGraphLoaded();
+            requestAnimationFrame(() => {
+                if (state.graphView && state.canonicalGraph) {
+                    state.graphView.setGraph(state.canonicalGraph, state.graphPositions);
+                    state.graphView.autoFit();
+                    syncGraphCropState();
+                }
+            });
+        } else if (mode === 'split') {
+            editorWaveform.classList.remove('hidden');
+            editorGraphCanvas.classList.remove('hidden');
+            editorGraphCanvas.classList.remove('is-fullscreen');
+            await ensureGraphLoaded();
+            requestAnimationFrame(() => {
+                if (state.graphView && state.canonicalGraph) {
+                    state.graphView.setGraph(state.canonicalGraph, state.graphPositions);
+                    state.graphView.autoFit();
+                    syncGraphCropState();
+                }
+            });
+        }
+    }
 
     if (!drawer || !targetButton) return;
 
@@ -158,6 +294,7 @@
         if (!entry) return null;
         if (entry.kind === 'content') return Number(entry.collection?.id) || null;
         if (entry.kind === 'reference') return Number(entry.collection?.id) || Number(entry.item?.id) || null;
+        if (entry.item?.project_id) return Number(entry.item.project_id);
         return Number(entry.item?.id) || null;
     }
 
@@ -167,6 +304,7 @@
 
     function targetIdForEntry(entry) {
         if (!entry) return null;
+        if (entry.item?.project_id) return null;
         if (entry.kind === 'reference') {
             const itemId = entry.item?.id || entry.reference?.to_item_id;
             if (itemId) {
@@ -313,7 +451,6 @@
     function selectLayer(itemId) {
         const layer = state.layers.get(Number(itemId));
         if (!layer) return;
-        disableCutLoop(state.selectedCutId);
         state.selectedLayerId = layer.item_id;
         state.selectedCutId = null;
         state.editingCutLabelId = null;
@@ -324,6 +461,7 @@
         editorNormalize.disabled = !state.editor;
         updateRenderButtons();
         drawWaveform();
+        syncGraphCropState();
     }
 
     function selectCut(cutId) {
@@ -343,6 +481,7 @@
         updateRenderButtons();
         drawWaveform();
         renderTransport();
+        syncGraphCropState();
     }
 
     function showMixerValue(input) {
@@ -414,6 +553,11 @@
             }
             const output = row?.querySelector('[data-layer-gain-value]');
             if (output) output.textContent = formatVolume(layer[key]);
+        }
+        if (key === 'volume') {
+            state.graphView?.updateNodeProperty(`ch-${layer.item_id}`, 'chain.fader.params.gain', layer[key]);
+        } else if (key === 'pre_gain_db') {
+            state.graphView?.updateNodeProperty(`ch-${layer.item_id}`, 'chain.pre.params.gain_db', layer[key]);
         }
         updateLiveLayerGain(layer.item_id);
         markDirty();
@@ -506,6 +650,8 @@
         playbackAudios(playback).forEach(audio => audio.pause());
         setPlaybackPosition(playback, range.start);
         state.playheadTime = range.start;
+        drawWaveform();
+        renderTransport();
         const resume = playback.kind === 'multi'
             ? playback.context.resume().then(() => {
                 if (!ownsPlaybackOperation(playback, operationId)) return [];
@@ -520,20 +666,22 @@
                 if (!ownsPlaybackOperation(playback, operationId) || !playback.range?.loop) return;
                 playback.loopRestarting = false;
                 schedulePlaybackRangeEnd(playback);
+                requestPlaybackFrame();
                 renderTransport();
+                drawWaveform();
             })
             .catch(error => {
                 if (!ownsPlaybackOperation(playback, operationId)) return;
                 playback.loopRestarting = false;
                 reportPlaybackError(error);
             });
-        renderTransport();
     }
 
     function enforcePlaybackRange() {
         const playback = state.ownPlayback;
         const range = playback?.range;
-        if (!range || !playbackIsRunning() || currentTime() < range.end) return false;
+        if (!range || !playbackIsRunning() || playback.loopRestarting) return false;
+        if (currentTime() < range.end) return false;
         if (range.loop) restartLoopPlayback(playback);
         else clearOwnPlayback(range.end);
         return true;
@@ -548,7 +696,9 @@
             const rangeHandled = enforcePlaybackRange();
             renderTransport();
             drawWaveform();
-            if (!rangeHandled && playbackIsRunning()) requestPlaybackFrame();
+            if ((playbackIsRunning() || state.ownPlayback?.loopRestarting) && (!rangeHandled || state.ownPlayback?.range?.loop)) {
+                requestPlaybackFrame();
+            }
         });
     }
 
@@ -743,7 +893,7 @@
                 }
                 clearOwnPlayback(range?.end ?? currentDuration());
             };
-            audios.forEach(audio => audio.addEventListener('ended', finish, { once: true }));
+            audios.forEach(audio => audio.addEventListener('ended', finish));
             playbackOperationId = playback.operationId;
             await context.resume();
             if (!ownsPlaybackOperation(playback, playbackOperationId)) return;
@@ -840,8 +990,8 @@
             renderTransport();
             return;
         }
-        const loopCut = state.loopCutId === state.selectedCutId ? selectedCut() : null;
-        if (loopCut) playCut(loopCut);
+        const loopCut = (state.loopCutId && state.cuts.find(c => c.id === state.loopCutId)) || selectedCut();
+        if (loopCut && state.loopCutId === loopCut.id) playCut(loopCut);
         else playActiveLayers(currentTime()).catch(reportPlaybackError);
     }
 
@@ -985,30 +1135,39 @@
     }
 
     function playCut(cut) {
-        const loopOptions = loopPlaybackOptions(cut);
-        const start = loopOptions.start;
-        const options = state.loopCutId === cut.id ? loopOptions : {};
+        const sampleRate = Number(state.editor?.sample_rate) || 44100;
+        const start = Math.max(0, Number(cut.start_frame) || 0) / sampleRate;
+        const end = Math.max(start, Number(cut.end_frame) || 0) / sampleRate;
+        const isLoop = state.loopCutId === cut.id;
+        const options = {
+            start: start,
+            endOffset: end,
+            loop: isLoop,
+            cutId: cut.id,
+        };
+        state.selectedCutId = cut.id;
+        state.playheadTime = start;
+        clearOwnPlayback(start);
+        syncGraphCropState();
         playActiveLayers(start, options).catch(reportPlaybackError);
     }
 
     function toggleCutLoop(cut) {
-        if (state.selectedCutId !== cut.id) selectCut(cut.id);
-        if (state.loopCutId === cut.id) disableCutLoop(cut.id);
-        else {
+        state.selectedCutId = cut.id;
+        if (state.loopCutId === cut.id) {
+            disableCutLoop(cut.id);
+            clearOwnPlayback();
+        } else {
             state.loopCutId = cut.id;
-            const playback = state.ownPlayback;
-            if (playback) {
-                const options = loopPlaybackOptions(cut);
-                const wasPlaying = playbackIsRunning();
-                const position = Math.max(options.start, Math.min(currentTime(), Math.max(options.start, options.endOffset - 0.001)));
-                clearOwnPlayback(position);
-                state.playheadTime = position;
-                if (wasPlaying) playActiveLayers(position, options).catch(reportPlaybackError);
-            }
+            const options = loopPlaybackOptions(cut);
+            state.playheadTime = options.start;
+            clearOwnPlayback(options.start);
+            playActiveLayers(options.start, options).catch(reportPlaybackError);
         }
         renderCuts();
         drawWaveform();
         renderTransport();
+        syncGraphCropState();
     }
 
     function syncLoopPlayback(cut) {
@@ -1395,8 +1554,9 @@
         drawRangeHandle(context, mainEnd, height, width, {
             color: '#f5d799', edge: 'end', handleId: 'main-end', label: 'main out',
         });
-        const visibleCuts = state.selectedCutId
-            ? state.cuts.filter(cut => cut.id === state.selectedCutId)
+        const activeCutId = state.selectedCutId || state.loopCutId;
+        const visibleCuts = activeCutId
+            ? state.cuts.filter(cut => cut.id === activeCutId)
             : [];
         [...visibleCuts, ...(state.draftRange ? [{ ...state.draftRange, id: 'draft' }] : [])].forEach(cut => {
             const start = ((cut.start_frame - windowState.startFrame) / windowState.visibleFrames) * width;
@@ -1742,6 +1902,14 @@
         state.editRevision = 0;
         renderEditor();
         await loadWaveforms();
+
+        // Load canonical sin-graph and sync GraphView
+        await ensureGraphLoaded(true);
+
+        if (editorOpenSin) {
+            editorOpenSin.disabled = !state.rootId;
+        }
+
         if (restored) setStatus('Saved project progress restored');
         else if (session.editor_state_warning) setStatus(session.editor_state_warning, true);
         if (state.sessionRequestController === controller) state.sessionRequestController = null;
@@ -2133,6 +2301,7 @@
         updateRenderButtons();
         drawWaveform();
         renderTransport();
+        syncGraphCropState();
     }
 
     function frameAtPointer(event, canvas) {
@@ -2165,6 +2334,7 @@
         else range.end_frame = Math.max(next, range.start_frame + 1);
         state.mainRange = range;
         drawWaveform();
+        syncGraphCropState();
     }
 
     function updateCutRange(cutId, edge, frame) {
@@ -2182,6 +2352,7 @@
         syncLoopPlayback(cut);
         scheduleBoundaryAudition(cut[`${edge}_frame`]);
         drawWaveform();
+        syncGraphCropState();
     }
 
     function bindWaveformPointer() {
@@ -2370,6 +2541,7 @@
         const playback = state.ownPlayback;
         selectLayer(layer.item_id);
         layer.muted = nextMuted;
+        state.graphView?.updateNodeProperty(`ch-${layer.item_id}`, 'chain.mute.enabled', nextMuted);
         if (playback?.kind === 'multi') {
             const gain = playback.gains.get(layer.item_id);
             if (gain) {
@@ -2507,6 +2679,7 @@
         if (event.target.matches('[data-cut-field="start"], [data-cut-field="end"]')) syncLoopPlayback(cut);
         markDirty();
         drawWaveform();
+        syncGraphCropState();
     }
 
     function handleCutRowClick(event) {
@@ -2573,7 +2746,97 @@
         },
     };
 
-    window.gaiaMediaEditor = { openForEntry, requestTarget: requestEditorTarget };
+    window.gaiaMediaEditor = {
+        openForEntry,
+        requestTarget: requestEditorTarget,
+        refresh: () => {
+            if (state.opened && state.rootId) loadSession(state.rootId);
+        },
+        setMode: setEditorViewMode,
+    };
+
+    viewTogglePlayer?.addEventListener('click', () => setEditorViewMode('player'));
+    viewToggleGraph?.addEventListener('click', () => setEditorViewMode('graph'));
+    viewToggleSplit?.addEventListener('click', () => setEditorViewMode('split'));
+
+    editorOpenSin?.addEventListener('click', () => {
+        const projectId = activeProjectId() || state.rootId;
+        if (projectId) {
+            const target = state.currentTargetId || (state.currentTarget?.item_id ? `item:${state.currentTarget.item_id}` : '');
+            const targetQuery = target ? `&target_id=${encodeURIComponent(target)}` : '';
+            window.open(`http://127.0.0.1:8000/?gaia_project=${encodeURIComponent(projectId)}${targetQuery}`, '_blank');
+        }
+    });
+
+    if (window.ResizeObserver && editorGraphCanvas) {
+        const ro = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+                    if (state.graphView && state.canonicalGraph && state.activeViewMode !== 'player') {
+                        state.graphView.autoFit();
+                    }
+                }
+            }
+        });
+        ro.observe(editorGraphCanvas);
+    }
+
+    // Drag-and-drop sample ingestion into project mix
+    [drawer, editorWaveform, editorGraphCanvas].forEach(el => {
+        if (!el) return;
+        el.addEventListener('dragover', (event) => {
+            if (event.dataTransfer?.types?.includes('application/x-gaia-item-ids') ||
+                event.dataTransfer?.types?.includes('application/x-gaia-library-item')) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'copy';
+            }
+        });
+        el.addEventListener('drop', async (event) => {
+            let itemIds = [];
+            const rawIds = event.dataTransfer?.getData('application/x-gaia-item-ids');
+            if (rawIds) {
+                try { itemIds = JSON.parse(rawIds); } catch {}
+            }
+            if (!itemIds.length) {
+                const rawItem = event.dataTransfer?.getData('application/x-gaia-library-item');
+                if (rawItem) {
+                    try {
+                        const parsed = JSON.parse(rawItem);
+                        if (parsed.gaia_item_id) itemIds.push(parsed.gaia_item_id);
+                        else if (parsed.items) itemIds.push(...parsed.items.map(i => i.gaia_item_id).filter(Boolean));
+                    } catch {}
+                }
+            }
+            if (!itemIds.length) return;
+            event.preventDefault();
+            event.stopPropagation();
+
+            const projectId = activeProjectId();
+            if (!projectId) {
+                setStatus('Open a project to add samples to the mix.', true);
+                return;
+            }
+
+            setStatus('Adding sample(s) to project mix…');
+            try {
+                for (const sampleId of itemIds) {
+                    const res = await fetch(`/items/${projectId}/graph/sample`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ sample_item_id: Number(sampleId) }),
+                    });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        throw new Error(err.detail || 'Failed to add sample');
+                    }
+                }
+                await loadSession(projectId);
+                setStatus('Sample(s) added to project mix');
+            } catch (err) {
+                setStatus(err.message || 'Could not add sample to project', true);
+            }
+        });
+    });
 
     targetButton.addEventListener('click', openTargetMenu);
     targetMenu.addEventListener('click', event => {
@@ -2674,6 +2937,7 @@
         renderCuts();
         drawWaveform();
         renderTransport();
+        syncGraphCropState();
     });
     editorNormalize.addEventListener('click', () => {
         normalizeSelectedLayer();

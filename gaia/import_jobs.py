@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 import zipfile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from sqlalchemy.orm import Session
@@ -172,10 +173,12 @@ def _file_entry(relative_path: str, size: int, modified_ns: int, index: int, sig
         "artifact_reason": artifact_reason,
         "profile_role": None,
         "profile_role_reason": None,
+        "already_in_db": False,
+        "existing_item_id": None,
     }
 
 
-def _folder_node(relative_path: str, name: str, depth: int) -> dict[str, Any]:
+def _folder_node(relative_path: str, name: str, depth: int, *, scan_complete: bool = True) -> dict[str, Any]:
     return {
         "node_id": f"folder:{relative_path}",
         "kind": "folder",
@@ -183,12 +186,15 @@ def _folder_node(relative_path: str, name: str, depth: int) -> dict[str, Any]:
         "parent_path": None if relative_path == "." else (PurePosixPath(relative_path).parent.as_posix() or "."),
         "name": name,
         "depth": depth,
+        "scan_complete": scan_complete,
         "detected_assignment": None,
         "suggested_assignment": None,
         "detection_label": None,
         "detection_reason": None,
         "warning_count": 0,
         "warning_messages": [],
+        "already_in_db": False,
+        "existing_item_id": None,
     }
 
 
@@ -305,7 +311,7 @@ def _annotate_h4_roles(entries: list[dict[str, Any]]) -> None:
 
 def _looks_like_multitrack(entries: list[dict[str, Any]], source: Path | None = None) -> bool:
     audio_entries = [entry for entry in entries if entry.get("family") == "audio"]
-    if len(audio_entries) < 2:
+    if len(audio_entries) < 2 or len(audio_entries) > 64:
         return False
 
     # Check for loop/sample/one-shot keywords: multitrack stems are synchronized song parts,
@@ -315,6 +321,24 @@ def _looks_like_multitrack(entries: list[dict[str, Any]], source: Path | None = 
         re.I,
     )
     if any(sample_loop_pattern.search(Path(entry["filename"]).stem) for entry in audio_entries):
+        return False
+
+    # Check stem roles first (pure in-memory check before any disk I/O):
+    # each file in a multitrack represents a distinct instrument role
+    role_pattern = re.compile(
+        r"(?:^|[_\s-])(drums?|bass|vocals?|guitars?|keys?|synth|percussion|stems?)(?=$|[_\s.-])",
+        re.I,
+    )
+    roles = set()
+    matching_count = 0
+    for entry in audio_entries:
+        match = role_pattern.search(Path(entry["filename"]).stem)
+        if match:
+            roles.add(match.group(1).casefold())
+            matching_count += 1
+
+    # Multitrack detection requires at least 2 distinct roles and >= 75% of files to be stems
+    if len(roles) < 2 or matching_count < max(2, int(len(audio_entries) * 0.75)):
         return False
 
     # Check duration variance if files exist on disk
@@ -351,23 +375,6 @@ def _looks_like_multitrack(entries: list[dict[str, Any]], source: Path | None = 
             if min_size > 0 and (max_size / min_size) > 1.35:
                 return False
 
-    # Check stem roles: each file in a multitrack represents a distinct instrument role
-    role_pattern = re.compile(
-        r"(?:^|[_\s-])(drums?|bass|vocals?|guitars?|keys?|synth|percussion|stems?)(?=$|[_\s.-])",
-        re.I,
-    )
-    roles = set()
-    matching_count = 0
-    for entry in audio_entries:
-        match = role_pattern.search(Path(entry["filename"]).stem)
-        if match:
-            roles.add(match.group(1).casefold())
-            matching_count += 1
-
-    # Multitrack detection requires at least 2 distinct roles and >= 75% of files to be stems
-    if len(roles) < 2 or matching_count < max(2, int(len(audio_entries) * 0.75)):
-        return False
-
     return True
 
 
@@ -391,22 +398,92 @@ def _available_profiles() -> list[dict[str, Any]]:
     ]
 
 
+PACK_TITLE_PATTERN = re.compile(
+    r"(?:^|[_\s.\-\(\)\[\]])"
+    r"(pack|kit|drumkit|soundbank|bundle|vol\.?\s*\d*|volume|edition|collection|library|samples?|loops?|oneshots?|one[-_]?shots?|drum|sound|vengeance|cymatics|kshmr|splice|capsun|loopmasters?)"
+    r"(?=$|[_\s.\-\(\)\[\]])",
+    re.I,
+)
+
+SUBFOLDER_PACK_PATTERN = re.compile(
+    r"(?:^|[_\s.\-\(\)\[\]])"
+    r"(pack|kit|drumkit|soundbank|bundle|vol\.?\s*\d+|volume\s*\d+|edition|collection|library|sample\s*pack|drum\s*kit|loop\s*pack|sound\s*pack|vengeance|cymatics|kshmr|splice|capsun|loopmasters?)"
+    r"(?=$|[_\s.\-\(\)\[\]])",
+    re.I,
+)
+
+CATEGORY_FOLDER_PATTERN = re.compile(
+    r"(?:^|[_\s.\-\(\)\[\]])"
+    r"(drums?|kicks?|snares?|hats?|hi[-_]?hats?|claps?|perc|percussion|cymbals?|rides?|crashes?|toms?|808s?|bass|subs?|synths?|leads?|pads?|plucks?|keys?|piano|guitars?|strings?|brass|vocals?|vox|chants?|s?fx|efx|risers?|impacts?|sweeps?|foley|loops?|melod(?:y|ies|ic)|oneshots?|one[-_]?shots?|shots?|hits?|stabs?|chops?|fills?|riffs?|arps?|midi|audio|wavs?|stems?|bonus|presets?)"
+    r"(?=$|[_\s.\-\(\)\[\]])",
+    re.I,
+)
+
+
 def _classify_folders(nodes: list[dict[str, Any]], entries: list[dict[str, Any]], source: Path | None = None) -> None:
-    folders = sorted([node for node in nodes if node["kind"] == "folder"], key=lambda n: n.get("depth", 0))
-    sample_pack_roots: set[str] = set()
+    folders = [node for node in nodes if node["kind"] == "folder"]
+    if not folders:
+        return
 
-    for folder in folders:
+    folders_asc = sorted(folders, key=lambda n: (n.get("depth", 0), n.get("relative_path", "")))
+    folders_desc = list(reversed(folders_asc))
+    folder_by_path = {f["relative_path"]: f for f in folders}
+
+    direct_by_folder: dict[str, list[dict[str, Any]]] = {f["relative_path"]: [] for f in folders}
+    for entry in entries:
+        parent = entry.get("parent_path", ".")
+        if parent in direct_by_folder:
+            direct_by_folder[parent].append(entry)
+
+    child_folders_by_parent: dict[str, list[dict[str, Any]]] = {f["relative_path"]: [] for f in folders}
+    for folder in folders_asc:
+        parent = folder.get("parent_path")
+        if parent and parent in child_folders_by_parent:
+            child_folders_by_parent[parent].append(folder)
+
+    # Bottom-up O(F + N) aggregation of descendant counts and warnings
+    total_count_by_folder: dict[str, int] = {}
+    media_count_by_folder: dict[str, int] = {}
+    warnings_by_folder: dict[str, set[str]] = {}
+    warning_count_by_folder: dict[str, int] = {}
+
+    for folder in folders_desc:
         fpath = folder["relative_path"]
-        prefix = "" if fpath == "." else fpath + "/"
-        direct = [entry for entry in entries if entry["parent_path"] == fpath]
-        descendants = [entry for entry in entries if fpath == "." or entry["relative_path"].startswith(prefix)]
+        direct = direct_by_folder.get(fpath, [])
+        t_count = len(direct)
+        m_count = sum(1 for e in direct if e.get("family") in {"audio", "midi"})
+        w_count = sum(1 for e in direct if e.get("artifact"))
+        w_msgs = {e["artifact_reason"] for e in direct if e.get("artifact") and e.get("artifact_reason")}
 
-        # Nested sample packs inside an already identified sample pack are not permitted
-        is_under_sample_pack = any(
-            (root == "." and fpath != ".") or (root != "." and fpath.startswith(f"{root}/"))
-            for root in sample_pack_roots
-        )
+        for child in child_folders_by_parent.get(fpath, []):
+            cpath = child["relative_path"]
+            t_count += total_count_by_folder.get(cpath, 0)
+            m_count += media_count_by_folder.get(cpath, 0)
+            w_count += warning_count_by_folder.get(cpath, 0)
+            w_msgs |= warnings_by_folder.get(cpath, set())
 
+        total_count_by_folder[fpath] = t_count
+        media_count_by_folder[fpath] = m_count
+        warning_count_by_folder[fpath] = w_count
+        warnings_by_folder[fpath] = w_msgs
+
+        folder["warning_count"] = w_count
+        folder["warning_messages"] = sorted(w_msgs)
+
+        # Reset classification before re-evaluating completed folders
+        folder["detected_assignment"] = None
+        folder["suggested_assignment"] = None
+        folder["detection_label"] = None
+        folder["detection_reason"] = None
+
+    # Pass 1: Evaluate Zoom H4 and Multitrack on completed folders
+    for folder in folders_asc:
+        if not folder.get("scan_complete", True):
+            continue
+        fpath = folder["relative_path"]
+        direct = direct_by_folder.get(fpath, [])
+        if not direct:
+            continue
         h4_roles = _h4_roles(direct)
         if len(h4_roles) >= 2 and ({"mic", "lr"} & h4_roles):
             _annotate_h4_roles(direct)
@@ -422,27 +499,473 @@ def _classify_folders(nodes: list[dict[str, Any]], entries: list[dict[str, Any]]
                 detection_reason="Distinct stem-role filenames were detected.",
             )
 
-        media_count = sum(entry["family"] in {"audio", "midi"} for entry in descendants)
-        # Only suggest sample pack if NOT inside another sample pack, and only when sensible:
-        if not folder.get("detected_assignment") and not is_under_sample_pack:
-            name_lower = folder.get("name", "").lower()
-            pack_keywords = {"pack", "kit", "sample", "samples", "loop", "loops", "drum", "sound", "oneshot", "one_shot"}
-            has_pack_name = any(kw in name_lower for kw in pack_keywords)
-            is_sample_candidate = (
-                (fpath == "." and media_count >= 1 and media_count >= max(1, len(descendants)) * 0.5)
-                or (has_pack_name and media_count >= 1 and media_count >= max(1, len(descendants)) * 0.5)
-            )
-            if is_sample_candidate:
-                folder.update(
+    # Pass 2: Evaluate Sample Pack candidates on completed folders
+    root_folder = folder_by_path.get(".")
+    root_name = root_folder.get("name", "") if root_folder else ""
+    root_has_pack_name = bool(PACK_TITLE_PATTERN.search(root_name))
+    root_direct_media = sum(1 for e in direct_by_folder.get(".", []) if e.get("family") in {"audio", "midi"})
+
+    # Check which subfolders (depth >= 1) look like standalone sample packs once their scan is complete
+    subfolder_pack_candidates: set[str] = set()
+    for folder in folders_asc:
+        fpath = folder["relative_path"]
+        if fpath == "." or not folder.get("scan_complete", True) or folder.get("detected_assignment"):
+            continue
+        t_count = total_count_by_folder.get(fpath, 0)
+        m_count = media_count_by_folder.get(fpath, 0)
+        if m_count < 1 or m_count < max(1, t_count) * 0.5:
+            continue
+
+        fname = folder.get("name", "")
+        has_explicit_pack_name = bool(SUBFOLDER_PACK_PATTERN.search(fname))
+        child_folders = child_folders_by_parent.get(fpath, [])
+        media_child_folders = [c for c in child_folders if media_count_by_folder.get(c["relative_path"], 0) > 0]
+        category_children = [c for c in media_child_folders if CATEGORY_FOLDER_PATTERN.search(c.get("name", ""))]
+
+        # A subfolder is a standalone sample pack candidate if:
+        # 1) It has an explicit pack/kit/vol/bundle title (and root itself isn't a single pack wrapping it), or
+        # 2) It has its own category subfolder structure (>= 2 media subfolders, at least 1 category folder) and root isn't named as a pack, or
+        # 3) Root is an umbrella folder (not named as a pack, no direct media files) and this top-level subfolder has pack/sample/loop keywords.
+        if has_explicit_pack_name and not root_has_pack_name:
+            subfolder_pack_candidates.add(fpath)
+        elif len(media_child_folders) >= 2 and len(category_children) >= 1 and not root_has_pack_name and root_direct_media == 0:
+            subfolder_pack_candidates.add(fpath)
+        elif folder.get("depth") == 1 and not root_has_pack_name and root_direct_media == 0 and bool(PACK_TITLE_PATTERN.search(fname)):
+            # Only treat a depth-1 category-named folder (like "Loops" or "Drums") as a standalone pack
+            # if it has its own subfolders or if it has explicit pack keywords; if root only has simple
+            # category folders (like source/Loops), root itself will be the sample pack once root finishes.
+            if has_explicit_pack_name or len(media_child_folders) >= 1:
+                subfolder_pack_candidates.add(fpath)
+
+    sample_pack_roots: set[str] = set()
+
+    # Evaluate root '.' ONLY when root '.' is completely scanned
+    if root_folder and root_folder.get("scan_complete", True) and not root_folder.get("detected_assignment"):
+        t_count = total_count_by_folder.get(".", 0)
+        m_count = media_count_by_folder.get(".", 0)
+        has_detected_sub_containers = any(
+            f.get("detected_assignment") for f in folders_asc if f["relative_path"] != "."
+        )
+        if m_count >= 1 and m_count >= max(1, t_count) * 0.5:
+            # Root is the overarching sample pack if:
+            # - Root is explicitly named like a pack, OR
+            # - Neither standalone subfolder sample packs nor multitrack/H4 subfolders were found under root.
+            if root_has_pack_name or (not subfolder_pack_candidates and not has_detected_sub_containers):
+                root_folder.update(
                     suggested_assignment="profile:sample_pack",
                     detection_label="Possible sample pack",
                     detection_reason="Media collection detected; subfolders will be organized as containers.",
                 )
-                sample_pack_roots.add(fpath)
+                sample_pack_roots.add(".")
 
-        artifact_entries = [entry for entry in descendants if entry["artifact"]]
-        folder["warning_count"] = len(artifact_entries)
-        folder["warning_messages"] = sorted({entry["artifact_reason"] for entry in artifact_entries if entry["artifact_reason"]})
+    # Now assign standalone subfolder sample packs (that are not inside an ancestor sample pack)
+    for folder in folders_asc:
+        fpath = folder["relative_path"]
+        if fpath == "." or not folder.get("scan_complete", True) or folder.get("detected_assignment"):
+            continue
+        is_under_sample_pack = any(
+            (root == "." and fpath != ".") or (root != "." and fpath.startswith(f"{root}/"))
+            for root in sample_pack_roots
+        )
+        if is_under_sample_pack:
+            continue
+        if fpath in subfolder_pack_candidates:
+            folder.update(
+                suggested_assignment="profile:sample_pack",
+                detection_label="Possible sample pack",
+                detection_reason="Media collection detected; subfolders will be organized as containers.",
+            )
+            sample_pack_roots.add(fpath)
+
+
+def _norm_key(path_str: str) -> str:
+    try:
+        return os.path.normcase(os.path.abspath(path_str))
+    except Exception:
+        return os.path.normcase(str(path_str))
+
+
+def _strip_hash_suffix(name: str) -> str:
+    return re.sub(r"_[0-9a-f]{6,8}$", "", name, flags=re.I)
+
+
+def _build_vault_lookup_index(db: Session, vault: models.Vault) -> dict[str, Any]:
+    by_source_path: dict[str, tuple[int, int | None]] = {}
+    by_rel_and_size: dict[tuple[str, int], int] = {}
+    by_name_and_size: dict[tuple[str, int], int] = {}
+    known_container_names: set[str] = set()
+    collection_manifests: dict[str, dict[str, Any]] = {}
+
+    collections = (
+        db.query(
+            models.FolderItem.id,
+            models.FolderItem.title,
+            models.FolderItem.source_path,
+            models.FolderItem.manifest_json,
+            models.FolderItem.absolute_path,
+        )
+        .filter(models.FolderItem.vault_id == vault.id)
+        .all()
+    )
+    container_info_by_id: dict[int, tuple[str | None, set[str]]] = {}
+    for col in collections:
+        col_names: set[str] = set()
+        if col.title:
+            t_cf = col.title.strip().casefold()
+            if t_cf:
+                col_names.add(t_cf)
+                col_names.add(_strip_hash_suffix(t_cf))
+        if col.absolute_path:
+            a_cf = Path(col.absolute_path).name.strip().casefold()
+            if a_cf:
+                col_names.add(a_cf)
+                col_names.add(_strip_hash_suffix(a_cf))
+        if col.source_path:
+            raw_src = col.source_path.split("::")[-1] if "::" in col.source_path else col.source_path
+            s_cf = Path(raw_src).name.strip().casefold()
+            if s_cf:
+                col_names.add(s_cf)
+                col_names.add(_strip_hash_suffix(s_cf))
+        col_names.discard("")
+        known_container_names.update(col_names)
+        container_info_by_id[col.id] = (col.absolute_path, col_names)
+
+    items = (
+        db.query(
+            models.Item.id,
+            models.Item.parent_id,
+            models.Item.absolute_path,
+            models.Item.size_bytes,
+            models.Item.metadata_json,
+            models.Item.type,
+        )
+        .filter(models.Item.vault_id == vault.id)
+        .all()
+    )
+    existing_ids = {row.id for row in items}
+    for row in items:
+        if row.type in {"collection", "multitrack", "project", "folder"} and row.absolute_path:
+            c_cf = Path(row.absolute_path).name.strip().casefold()
+            if c_cf:
+                known_container_names.add(c_cf)
+                known_container_names.add(_strip_hash_suffix(c_cf))
+        if row.absolute_path:
+            by_source_path[_norm_key(row.absolute_path)] = (row.id, row.size_bytes)
+            if row.size_bytes is not None and row.type not in {"collection", "multitrack", "project", "folder"}:
+                size_int = int(row.size_bytes)
+                fname_cf = Path(row.absolute_path).name.casefold()
+                by_name_and_size[(fname_cf, size_int)] = row.id
+                if row.parent_id and row.parent_id in container_info_by_id:
+                    parent_abs, parent_names = container_info_by_id[row.parent_id]
+                    if parent_abs:
+                        try:
+                            rel_to_parent = Path(row.absolute_path).relative_to(Path(parent_abs)).as_posix().casefold()
+                            if rel_to_parent and size_int > 0:
+                                by_rel_and_size[(rel_to_parent, size_int)] = row.id
+                                for pname in parent_names:
+                                    by_rel_and_size[(f"{pname}/{rel_to_parent}", size_int)] = row.id
+                        except Exception:
+                            pass
+        if row.metadata_json:
+            try:
+                meta = json.loads(row.metadata_json)
+                imp_src = (meta.get("import") or {}).get("source_path")
+                if imp_src:
+                    by_source_path[_norm_key(imp_src)] = (row.id, row.size_bytes)
+            except Exception:
+                pass
+
+    for col in collections:
+        _, col_names = container_info_by_id.get(col.id, (None, set()))
+        col_key = _norm_key(col.source_path) if col.source_path else None
+        if col_key:
+            by_source_path[col_key] = (col.id, None)
+        files_map: dict[str, tuple[int, int | None]] = {}
+        try:
+            manifest = json.loads(col.manifest_json or "[]")
+            for entry in manifest:
+                rel = PurePosixPath(entry.get("relative_path", "")).as_posix()
+                size = int(entry.get("size_bytes") or 0)
+                child_id = entry.get("child_id")
+                if child_id and child_id not in existing_ids:
+                    continue
+                target_id = child_id or col.id
+                rel_cf = rel.casefold()
+                files_map[rel_cf] = (size, target_id)
+                if rel_cf and size > 0:
+                    by_rel_and_size[(rel_cf, size)] = target_id
+                    for pname in col_names:
+                        by_rel_and_size[(f"{pname}/{rel_cf}", size)] = target_id
+                    fname_cf = PurePosixPath(rel).name.casefold()
+                    if (fname_cf, size) not in by_name_and_size:
+                        by_name_and_size[(fname_cf, size)] = target_id
+                entry_src = entry.get("source_path")
+                if entry_src:
+                    by_source_path[_norm_key(entry_src)] = (target_id, size)
+                if col.source_path and "::" not in col.source_path and rel:
+                    file_abs = str(Path(col.source_path) / Path(rel))
+                    by_source_path[_norm_key(file_abs)] = (target_id, size)
+        except Exception:
+            pass
+        if col_key:
+            collection_manifests[col_key] = {"item_id": col.id, "files": files_map}
+
+    logs = (
+        db.query(models.VaultImportLog.source_path, models.VaultImportLog.item_id)
+        .filter(
+            models.VaultImportLog.vault_id == vault.id,
+            models.VaultImportLog.item_id.isnot(None),
+        )
+        .all()
+    )
+    for log in logs:
+        if log.source_path and log.item_id in existing_ids:
+            key = _norm_key(log.source_path)
+            if key not in by_source_path:
+                by_source_path[key] = (log.item_id, None)
+
+    return {
+        "by_source_path": by_source_path,
+        "by_rel_and_size": by_rel_and_size,
+        "by_name_and_size": by_name_and_size,
+        "known_container_names": known_container_names,
+        "collection_manifests": collection_manifests,
+    }
+
+
+def _annotate_entries_db_matches(
+    entries: list[dict[str, Any]],
+    source: Path,
+    source_kind: str,
+    lookup_index: dict[str, Any],
+) -> None:
+    if not lookup_index or not entries:
+        return
+
+    by_source_path = lookup_index.get("by_source_path", {})
+    by_rel_and_size = lookup_index.get("by_rel_and_size", {})
+    by_name_and_size = lookup_index.get("by_name_and_size", {})
+    known_container_names = lookup_index.get("known_container_names", set())
+    collection_manifests = lookup_index.get("collection_manifests", {})
+
+    source_norm = _norm_key(str(source))
+    matched_col_data = collection_manifests.get(source_norm)
+    source_name_cf = (source.stem if source_kind == "zip" else source.name).strip().casefold()
+
+    for entry in entries:
+        rel = PurePosixPath(entry["relative_path"]).as_posix()
+        size_bytes = int(entry.get("size_bytes") or 0)
+        if source_kind == "file":
+            orig_path = str(source)
+        elif source_kind == "zip":
+            orig_path = f"{source}::{rel}"
+        else:
+            orig_path = str(source / Path(rel))
+        orig_key = _norm_key(orig_path)
+
+        match_id = None
+        if orig_key in by_source_path:
+            cand_id, cand_size = by_source_path[orig_key]
+            if cand_size is None or cand_size == size_bytes:
+                match_id = cand_id
+
+        if match_id is None and matched_col_data:
+            files_map = matched_col_data["files"]
+            if rel.casefold() in files_map:
+                cand_size, cand_id = files_map[rel.casefold()]
+                if cand_size == size_bytes:
+                    match_id = cand_id
+
+        if match_id is None and size_bytes > 0 and by_rel_and_size:
+            full_rel_cf = f"{source_name_cf}/{rel.casefold()}" if source_name_cf else rel.casefold()
+            parts = [p for p in full_rel_cf.split("/") if p and p != "."]
+            # Check multi-segment relative path suffixes (e.g. "<pack>/<subpath>/<file>" or "<subpath>/<file>")
+            for i in range(len(parts) - 1):
+                suffix = "/".join(parts[i:])
+                cand_id = by_rel_and_size.get((suffix, size_bytes))
+                if cand_id is not None:
+                    match_id = cand_id
+                    break
+
+        if match_id is None and size_bytes > 0:
+            if source_kind == "file":
+                match_id = by_name_and_size.get((entry["filename"].casefold(), size_bytes))
+            elif known_container_names:
+                rel_parts = [source_name_cf] + [p.casefold() for p in PurePosixPath(rel).parts[:-1]]
+                if any(
+                    part in known_container_names or _strip_hash_suffix(part) in known_container_names
+                    for part in rel_parts
+                    if part
+                ):
+                    match_id = by_name_and_size.get((entry["filename"].casefold(), size_bytes))
+
+        if match_id is not None:
+            entry["already_in_db"] = True
+            entry["existing_item_id"] = match_id
+
+
+def _is_wrapper_or_auxiliary_file(entry: dict[str, Any]) -> bool:
+    if entry.get("artifact"):
+        return True
+    if entry.get("family") in {"audio", "midi", "sequence"}:
+        return False
+    fname = str(entry.get("filename") or "").casefold()
+    if fname.startswith(".") or fname.endswith("_torrent.txt"):
+        return True
+    ext = str(entry.get("extension") or "").casefold()
+    return ext in {".md", ".txt", ".pdf", ".rtf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".zip", ".rar", ".7z", ".nfo", ".url"}
+
+
+def _annotate_folder_db_matches(
+    nodes: list[dict[str, Any]],
+    entries: list[dict[str, Any]],
+) -> None:
+    folders = [node for node in nodes if node.get("kind") == "folder"]
+    if not folders:
+        return
+    folders_desc = sorted(folders, key=lambda n: (n.get("depth", 0), n.get("relative_path", "")), reverse=True)
+    child_folders_by_parent: dict[str, list[dict[str, Any]]] = {f["relative_path"]: [] for f in folders}
+    for folder in folders:
+        parent = folder.get("parent_path")
+        if parent and parent in child_folders_by_parent:
+            child_folders_by_parent[parent].append(folder)
+
+    direct_by_folder: dict[str, list[dict[str, Any]]] = {f["relative_path"]: [] for f in folders}
+    for entry in entries:
+        parent = entry.get("parent_path", ".")
+        if parent in direct_by_folder:
+            direct_by_folder[parent].append(entry)
+
+    total_files_by_folder: dict[str, int] = {}
+    media_files_by_folder: dict[str, int] = {}
+    matched_media_by_folder: dict[str, int] = {}
+    primary_files_by_folder: dict[str, int] = {}
+    matched_primary_by_folder: dict[str, int] = {}
+    matched_all_by_folder: dict[str, int] = {}
+    first_id_by_folder: dict[str, int | None] = {}
+
+    for folder in folders_desc:
+        fpath = folder["relative_path"]
+        direct = direct_by_folder.get(fpath, [])
+        t_files = len(direct)
+        m_files = sum(1 for e in direct if e.get("family") in {"audio", "midi", "sequence"})
+        m_matched = sum(1 for e in direct if e.get("family") in {"audio", "midi", "sequence"} and e.get("already_in_db"))
+        p_files = sum(1 for e in direct if not _is_wrapper_or_auxiliary_file(e))
+        p_matched = sum(1 for e in direct if not _is_wrapper_or_auxiliary_file(e) and e.get("already_in_db"))
+        a_matched = sum(1 for e in direct if e.get("already_in_db"))
+        first_id = next((e.get("existing_item_id") for e in direct if e.get("existing_item_id")), None)
+
+        for child in child_folders_by_parent.get(fpath, []):
+            cpath = child["relative_path"]
+            t_files += total_files_by_folder.get(cpath, 0)
+            m_files += media_files_by_folder.get(cpath, 0)
+            m_matched += matched_media_by_folder.get(cpath, 0)
+            p_files += primary_files_by_folder.get(cpath, 0)
+            p_matched += matched_primary_by_folder.get(cpath, 0)
+            a_matched += matched_all_by_folder.get(cpath, 0)
+            if first_id is None:
+                first_id = first_id_by_folder.get(cpath)
+
+        total_files_by_folder[fpath] = t_files
+        media_files_by_folder[fpath] = m_files
+        matched_media_by_folder[fpath] = m_matched
+        primary_files_by_folder[fpath] = p_files
+        matched_primary_by_folder[fpath] = p_matched
+        matched_all_by_folder[fpath] = a_matched
+        first_id_by_folder[fpath] = first_id
+
+        if m_files > 0:
+            is_match = m_matched == m_files
+        elif p_files > 0:
+            is_match = p_matched == p_files
+        else:
+            is_match = t_files > 0 and a_matched == t_files
+
+        if folder.get("scan_complete", True) and t_files > 0 and is_match:
+            folder["already_in_db"] = True
+            folder["existing_item_id"] = first_id
+        else:
+            folder["already_in_db"] = False
+            folder["existing_item_id"] = None
+
+    # Mark wrapper/auxiliary files inside completed already_in_db folders so they default to skipped
+    in_db_folder_ids = {
+        f["relative_path"]: f.get("existing_item_id")
+        for f in folders
+        if f.get("already_in_db") and f.get("scan_complete", True)
+    }
+    if in_db_folder_ids:
+        for entry in entries:
+            if entry.get("already_in_db"):
+                continue
+            parent = entry.get("parent_path", ".")
+            if parent in in_db_folder_ids:
+                entry["already_in_db"] = True
+                entry["existing_item_id"] = in_db_folder_ids[parent]
+                continue
+            if "." in in_db_folder_ids:
+                entry["already_in_db"] = True
+                entry["existing_item_id"] = in_db_folder_ids["."]
+                continue
+            parts = PurePosixPath(parent).parts
+            cur = ""
+            for part in parts:
+                cur = part if not cur else f"{cur}/{part}"
+                if cur in in_db_folder_ids:
+                    entry["already_in_db"] = True
+                    entry["existing_item_id"] = in_db_folder_ids[cur]
+                    break
+
+
+def _annotate_db_matches(
+    nodes: list[dict[str, Any]],
+    entries: list[dict[str, Any]],
+    source: Path,
+    source_kind: str,
+    lookup_index: dict[str, Any],
+) -> None:
+    if not lookup_index:
+        return
+    _annotate_entries_db_matches(entries, source, source_kind, lookup_index)
+    _annotate_folder_db_matches(nodes, entries)
+
+
+def _compute_filter_options(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    type_counts: dict[str, int] = {}
+    extension_counts: dict[str, int] = {}
+    for entry in entries:
+        family = entry.get("family", "file")
+        type_counts[family] = type_counts.get(family, 0) + 1
+        extension = entry.get("extension", "")
+        extension_counts[extension] = extension_counts.get(extension, 0) + 1
+    type_labels = {"audio": "Audio", "midi": "MIDI", "sequence": "Sequence", "file": "Other files"}
+    return {
+        "types": [
+            {"value": value, "label": type_labels.get(value, value.title()), "count": count}
+            for value, count in sorted(type_counts.items(), key=lambda pair: pair[0])
+        ],
+        "extensions": [
+            {"value": value, "label": value or "(no extension)", "count": count}
+            for value, count in sorted(extension_counts.items(), key=lambda pair: (pair[0] == "", pair[0]))
+        ],
+    }
+
+
+def _recompute_preview_stats(
+    preview: dict[str, Any],
+    source: Path,
+    source_kind: str,
+    *,
+    compute_fingerprint: bool = True,
+) -> None:
+    entries = preview["entries"]
+    nodes = preview["nodes"]
+    preview["file_count"] = len(entries)
+    preview["folder_count"] = sum(node["kind"] == "folder" for node in nodes)
+    preview["size_bytes"] = sum(entry["size_bytes"] for entry in entries)
+    if compute_fingerprint:
+        preview["source_fingerprint"] = _stat_fingerprint(source, source_kind, entries)
+    preview["filter_options"] = _compute_filter_options(entries)
 
 
 def _find_conflicts(db: Session, vault: models.Vault, source: Path, source_kind: str) -> list[dict[str, Any]]:
@@ -463,7 +986,12 @@ def _find_conflicts(db: Session, vault: models.Vault, source: Path, source_kind:
     }]
 
 
-def create_preview(source_path: str, vault_id: int | None, db: Session) -> dict[str, Any]:
+def create_preview(
+    source_path: str,
+    vault_id: int | None,
+    db: Session,
+    progressive: bool = False,
+) -> dict[str, Any]:
     started = time.perf_counter()
     source = Path(collection_importer.canonical_source_path(source_path)).resolve()
     source_kind = _source_kind(source)
@@ -471,17 +999,82 @@ def create_preview(source_path: str, vault_id: int | None, db: Session) -> dict[
     store = vaults.vault_store(vault).resolve()
     if source == store or store in source.parents or source in store.parents:
         raise ImportPreviewError("Choose a source outside the destination vault's managed asset store")
+    lookup_index = _build_vault_lookup_index(db, vault)
+    profile_options = _available_profiles()
+
+    if progressive and source_kind == "folder":
+        entries: list[dict[str, Any]] = []
+        scan_queue: deque[tuple[Path, str, int]] = deque()
+        try:
+            with os.scandir(source) as it:
+                items = list(it)
+            dirs = sorted([d for d in items if d.is_dir() and not d.is_symlink() and not d.name.startswith(".")], key=lambda d: d.name.casefold())
+            files = sorted([f for f in items if f.is_file() and not f.is_symlink()], key=lambda f: f.name.casefold())
+            root_complete = len(dirs) == 0
+            nodes: list[dict[str, Any]] = [_folder_node(".", source.name, 0, scan_complete=root_complete)]
+            for d in dirs:
+                nodes.append(_folder_node(d.name, d.name, 1, scan_complete=False))
+                scan_queue.append((Path(d.path), d.name, 1))
+            for f in files:
+                stat = f.stat()
+                entry = _file_entry(f.name, stat.st_size, stat.st_mtime_ns, len(entries))
+                entries.append(entry)
+                nodes.append(entry)
+        except OSError as exc:
+            raise ImportPreviewError(f"Cannot read source directory: {exc}") from exc
+
+        _annotate_entries_db_matches(entries, source, source_kind, lookup_index)
+        folder_nodes = [n for n in nodes if n.get("kind") == "folder"]
+        if not scan_queue:
+            _classify_folders(folder_nodes, entries, source=source)
+            _annotate_folder_db_matches(folder_nodes, entries)
+        preview_id = uuid.uuid4().hex
+        scan_status = "completed" if not scan_queue else "scanning"
+        discovered_dirs_count = 1 + len(scan_queue)
+        scan_progress_pct = 100 if not scan_queue else max(1, min(99, round((1 / max(1, discovered_dirs_count)) * 100)))
+        preview = {
+            "preview_id": preview_id,
+            "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "source_path": str(source),
+            "source_kind": source_kind,
+            "vault_id": vault.id,
+            "source_fingerprint": _stat_fingerprint(source, source_kind, entries) if not scan_queue else "",
+            "title": source.name,
+            "entries": entries,
+            "nodes": nodes,
+            "file_count": len(entries),
+            "folder_count": len(folder_nodes),
+            "size_bytes": sum(entry["size_bytes"] for entry in entries),
+            "inspection_ms": round((time.perf_counter() - started) * 1000),
+            "profiles": profile_options,
+            "folder_type_options": [
+                {"value": "action:contain", "label": "Container"},
+                {"value": "action:ignore", "label": "Ignore"},
+            ],
+            "filter_options": _compute_filter_options(entries),
+            "conflicts": _find_conflicts(db, vault, source, source_kind),
+            "warnings": [],
+            "scan_status": scan_status,
+            "scan_progress_pct": scan_progress_pct,
+            "scanned_folders": 1,
+            "total_discovered_folders": discovered_dirs_count,
+            "_folder_nodes": folder_nodes,
+            "_top_folders_total": max(1, len(dirs)),
+            "_scanned_dirs_count": 1,
+            "_discovered_dirs_count": discovered_dirs_count,
+            "_last_classify_time": time.perf_counter(),
+            "_scan_queue": scan_queue,
+            "_lookup_index": lookup_index,
+            "_user_deselected_folders": set(),
+            "_started_time": started,
+            "created_epoch": time.time(),
+        }
+        return preview
+
     entries, nodes = _scan_source(source, source_kind)
     _classify_folders(nodes, entries, source=source if source_kind == "folder" else None)
-    profile_options = _available_profiles()
-    type_counts: dict[str, int] = {}
-    extension_counts: dict[str, int] = {}
-    for entry in entries:
-        family = entry.get("family", "file")
-        type_counts[family] = type_counts.get(family, 0) + 1
-        extension = entry.get("extension", "")
-        extension_counts[extension] = extension_counts.get(extension, 0) + 1
-    type_labels = {"audio": "Audio", "midi": "MIDI", "sequence": "Sequence", "file": "Other files"}
+    _annotate_db_matches(nodes, entries, source, source_kind, lookup_index)
+    folder_count = sum(node["kind"] == "folder" for node in nodes)
     return {
         "preview_id": uuid.uuid4().hex,
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -493,7 +1086,7 @@ def create_preview(source_path: str, vault_id: int | None, db: Session) -> dict[
         "entries": entries,
         "nodes": nodes,
         "file_count": len(entries),
-        "folder_count": sum(node["kind"] == "folder" for node in nodes),
+        "folder_count": folder_count,
         "size_bytes": sum(entry["size_bytes"] for entry in entries),
         "inspection_ms": round((time.perf_counter() - started) * 1000),
         "profiles": profile_options,
@@ -501,18 +1094,14 @@ def create_preview(source_path: str, vault_id: int | None, db: Session) -> dict[
             {"value": "action:contain", "label": "Container"},
             {"value": "action:ignore", "label": "Ignore"},
         ],
-        "filter_options": {
-            "types": [
-                {"value": value, "label": type_labels.get(value, value.title()), "count": count}
-                for value, count in sorted(type_counts.items(), key=lambda pair: pair[0])
-            ],
-            "extensions": [
-                {"value": value, "label": value or "(no extension)", "count": count}
-                for value, count in sorted(extension_counts.items(), key=lambda pair: (pair[0] == "", pair[0]))
-            ],
-        },
+        "filter_options": _compute_filter_options(entries),
         "conflicts": _find_conflicts(db, vault, source, source_kind),
         "warnings": [],
+        "scan_status": "completed",
+        "scan_progress_pct": 100,
+        "scanned_folders": max(1, folder_count),
+        "total_discovered_folders": max(1, folder_count),
+        "created_epoch": time.time(),
     }
 
 
@@ -520,39 +1109,63 @@ def _relative_is_within(relative_path: str, folder_path: str) -> bool:
     return folder_path == "." or relative_path == folder_path or relative_path.startswith(folder_path + "/")
 
 
-def _is_contained_by(relative_path: str, target_path: str, assignments: dict[str, str]) -> bool:
-    """Check if relative_path is contained within target_path without an intervening action:ignore."""
-    if not _relative_is_within(relative_path, target_path):
-        return False
-    entry_pp = PurePosixPath(relative_path)
-    if target_path == ".":
-        parts = entry_pp.parts
+def _is_intervening_ignored(path: str, parent: str, assignments: dict[str, str]) -> bool:
+    path_pp = PurePosixPath(path)
+    if parent == ".":
+        parts = path_pp.parts
         current = PurePosixPath()
         for part in parts[:-1]:
             current = current / part
             if assignments.get(current.as_posix()) == "action:ignore":
-                return False
-        return True
+                return True
+        return False
     else:
-        target_pp = PurePosixPath(target_path)
+        parent_pp = PurePosixPath(parent)
         try:
-            rel = entry_pp.relative_to(target_pp)
+            rel = path_pp.relative_to(parent_pp)
         except ValueError:
             return False
-        current = target_pp
+        current = parent_pp
         for part in rel.parts[:-1]:
             current = current / part
             if assignments.get(current.as_posix()) == "action:ignore":
-                return False
-        return True
+                return True
+        return False
 
 
 def _topmost_folder_targets(assignments: dict[str, str]) -> list[tuple[str, str]]:
     targets: list[tuple[str, str]] = []
-    for path, assignment in sorted(assignments.items(), key=lambda pair: (0 if pair[0] == "." else len(PurePosixPath(pair[0]).parts), pair[0])):
-        if assignment and assignment != "action:ignore" and not any(_is_contained_by(path, parent, assignments) for parent, _ in targets):
+    for path, assignment in sorted(
+        assignments.items(),
+        key=lambda pair: (0 if pair[0] == "." else len(PurePosixPath(pair[0]).parts), pair[0]),
+    ):
+        if not assignment or assignment == "action:ignore":
+            continue
+        contained = False
+        for parent, parent_assignment in targets:
+            if not _relative_is_within(path, parent):
+                continue
+            if parent_assignment.startswith("profile:") or parent_assignment.startswith("type:"):
+                contained = True
+                break
+            if not _is_intervening_ignored(path, parent, assignments):
+                contained = True
+                break
+        if not contained:
             targets.append((path, assignment))
     return targets
+
+
+def _find_target_for_entry(entry_rel: str, targets: list[dict[str, Any]]) -> dict[str, Any] | None:
+    matching = [t for t in targets if _relative_is_within(entry_rel, t["relative_path"])]
+    if not matching:
+        return None
+    return max(matching, key=lambda t: (0 if t["relative_path"] == "." else len(PurePosixPath(t["relative_path"]).parts)))
+
+
+def _is_contained_by(relative_path: str, target_path: str, assignments: dict[str, str] | None = None) -> bool:
+    """Check if relative_path is contained within target_path."""
+    return _relative_is_within(relative_path, target_path)
 
 
 def _resolve_folder_assignment(assignment: str, available_profiles: list[dict[str, Any]]) -> tuple[str, str | None]:
@@ -955,12 +1568,231 @@ class ImportJobManager:
         self._previews = {key: value for key, value in self._previews.items() if now - value["created_epoch"] < PREVIEW_TTL_SECONDS}
         self._jobs = {key: value for key, value in self._jobs.items() if value["status"] not in TERMINAL_STATUSES or now - value["created_epoch"] < JOB_RETENTION_SECONDS}
 
-    def create_preview(self, source_path: str, vault_id: int | None, db: Session) -> dict[str, Any]:
-        preview = create_preview(source_path, vault_id, db)
+    def create_preview(
+        self,
+        source_path: str,
+        vault_id: int | None,
+        db: Session,
+        progressive: bool = False,
+    ) -> dict[str, Any]:
+        preview = create_preview(source_path, vault_id, db, progressive=progressive)
         with self._lock:
             self._prune()
-            self._previews[preview["preview_id"]] = {**preview, "created_epoch": time.time()}
-        return preview
+            self._previews[preview["preview_id"]] = preview
+            if preview.get("scan_status") == "scanning":
+                source = Path(preview["source_path"])
+                self._executor.submit(self._run_progressive_scan, preview["preview_id"], source, preview["vault_id"])
+        return self._public_preview(preview)
+
+    def _public_preview(self, preview: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in preview.items() if not k.startswith("_")}
+
+    def get_preview(self, preview_id: str, since_index: int | None = None) -> dict[str, Any]:
+        with self._lock:
+            self._prune()
+            preview = self._previews.get(preview_id)
+            if not preview:
+                raise ImportPreviewError("Preview expired or was not found. Inspect the source again.")
+            if since_index is not None:
+                idx = max(0, int(since_index))
+                folder_nodes = preview.get("_folder_nodes")
+                if folder_nodes is None:
+                    folder_nodes = [n for n in preview["nodes"] if n.get("kind") == "folder"]
+                # Cap per-poll entry chunk so a single 100k-file burst doesn't stall JSON serialization
+                max_chunk = 8000
+                entries_list = preview["entries"]
+                new_entries = entries_list[idx : idx + max_chunk]
+                delta = {
+                    "preview_id": preview["preview_id"],
+                    "scan_status": "scanning" if (idx + len(new_entries) < len(entries_list)) else preview["scan_status"],
+                    "scan_progress_pct": preview.get("scan_progress_pct", 100 if preview["scan_status"] == "completed" else 0),
+                    "scanned_folders": preview.get("scanned_folders", preview.get("folder_count", 1)),
+                    "total_discovered_folders": preview.get("total_discovered_folders", preview.get("folder_count", 1)),
+                    "file_count": preview["file_count"],
+                    "folder_count": preview["folder_count"],
+                    "size_bytes": preview["size_bytes"],
+                    "inspection_ms": preview["inspection_ms"],
+                    "filter_options": preview["filter_options"],
+                    "conflicts": preview["conflicts"],
+                    "warnings": preview["warnings"],
+                    "folder_nodes": list(folder_nodes),
+                    "new_entries": list(new_entries),
+                    "since_index": idx,
+                    "next_index": idx + len(new_entries),
+                    "total_entries": len(entries_list),
+                }
+                return json.loads(json.dumps(delta))
+            safe = self._public_preview(preview)
+            return json.loads(json.dumps(safe))
+
+    def skip_preview_folder(self, preview_id: str, folder_path: str, skip: bool = True) -> dict[str, Any]:
+        with self._lock:
+            self._prune()
+            preview = self._previews.get(preview_id)
+            if not preview:
+                raise ImportPreviewError("Preview not found")
+            deselected = preview.setdefault("_user_deselected_folders", set())
+            if skip:
+                deselected.add(folder_path)
+            else:
+                deselected.discard(folder_path)
+            return {"status": "ok", "folder_path": folder_path, "skip": skip}
+
+    def _run_progressive_scan(self, preview_id: str, source: Path, vault_id: int) -> None:
+        try:
+            while True:
+                batch_targets: list[tuple[Path, str, int]] = []
+                with self._lock:
+                    preview = self._previews.get(preview_id)
+                    if not preview or preview.get("scan_status") != "scanning":
+                        return
+                    scan_queue = preview.get("_scan_queue")
+                    deselected = set(preview.get("_user_deselected_folders") or set())
+                    lookup_idx = preview.get("_lookup_index") or {}
+                    while scan_queue and len(batch_targets) < 16:
+                        cand_dir, cand_rel, cand_depth = scan_queue.popleft()
+                        if any(cand_rel == p or cand_rel.startswith(f"{p}/") for p in deselected):
+                            continue
+                        batch_targets.append((cand_dir, cand_rel, cand_depth))
+
+                    if not batch_targets and not scan_queue:
+                        folder_nodes = preview.get("_folder_nodes") or [n for n in preview["nodes"] if n.get("kind") == "folder"]
+                        for node in folder_nodes:
+                            node["scan_complete"] = True
+                        _classify_folders(folder_nodes, preview["entries"], source=source)
+                        _annotate_folder_db_matches(folder_nodes, preview["entries"])
+                        _recompute_preview_stats(preview, source, "folder", compute_fingerprint=True)
+                        preview["scan_progress_pct"] = 100
+                        preview["scanned_folders"] = len(folder_nodes)
+                        preview["total_discovered_folders"] = len(folder_nodes)
+                        preview["scan_status"] = "completed"
+                        preview["inspection_ms"] = round((time.perf_counter() - preview.get("_started_time", time.perf_counter())) * 1000)
+                        return
+
+                batch_folders: list[dict[str, Any]] = []
+                batch_nodes: list[dict[str, Any]] = []
+                batch_entries: list[dict[str, Any]] = []
+                discovered_dirs: list[tuple[Path, str, int]] = []
+                batch_bytes = 0
+
+                for current_dir, current_rel, current_depth in batch_targets:
+                    try:
+                        with os.scandir(current_dir) as it:
+                            items = list(it)
+                        dirs = sorted([d for d in items if d.is_dir() and not d.is_symlink() and not d.name.startswith(".")], key=lambda d: d.name.casefold())
+                        files = sorted([f for f in items if f.is_file() and not f.is_symlink()], key=lambda f: f.name.casefold())
+
+                        for d in dirs:
+                            child_rel = f"{current_rel}/{d.name}"
+                            fnode = _folder_node(child_rel, d.name, current_depth + 1, scan_complete=False)
+                            batch_folders.append(fnode)
+                            batch_nodes.append(fnode)
+                            discovered_dirs.append((Path(d.path), child_rel, current_depth + 1))
+
+                        for f in files:
+                            child_rel = f"{current_rel}/{f.name}"
+                            stat = f.stat()
+                            entry = _file_entry(child_rel, stat.st_size, stat.st_mtime_ns, 0)
+                            batch_entries.append(entry)
+                            batch_nodes.append(entry)
+                            batch_bytes += int(stat.st_size)
+                    except OSError:
+                        continue
+
+                if batch_entries and lookup_idx:
+                    _annotate_entries_db_matches(batch_entries, source, "folder", lookup_idx)
+
+                with self._lock:
+                    preview = self._previews.get(preview_id)
+                    if not preview:
+                        return
+                    scan_queue = preview.get("_scan_queue")
+                    deselected = set(preview.get("_user_deselected_folders") or set())
+                    added_dirs = 0
+                    for d_item in discovered_dirs:
+                        if not any(d_item[1] == p or d_item[1].startswith(f"{p}/") for p in deselected):
+                            scan_queue.append(d_item)
+                            added_dirs += 1
+
+                    folder_nodes = preview.setdefault("_folder_nodes", [n for n in preview["nodes"] if n.get("kind") == "folder"])
+                    folder_nodes.extend(batch_folders)
+
+                    start_idx = len(preview["entries"])
+                    for i, e in enumerate(batch_entries):
+                        e["index"] = start_idx + i
+                        e["node_id"] = f"file:{e['index']}"
+                    preview["entries"].extend(batch_entries)
+                    preview["nodes"].extend(batch_nodes)
+
+                    preview["file_count"] = len(preview["entries"])
+                    preview["folder_count"] = len(folder_nodes)
+                    preview["size_bytes"] = int(preview.get("size_bytes", 0)) + batch_bytes
+
+                    scanned_dirs = int(preview.get("_scanned_dirs_count", 1)) + len(batch_targets)
+                    discovered_total = max(scanned_dirs, scanned_dirs + len(scan_queue))
+                    preview["_scanned_dirs_count"] = scanned_dirs
+                    preview["_discovered_dirs_count"] = discovered_total
+                    preview["scanned_folders"] = scanned_dirs
+                    preview["total_discovered_folders"] = discovered_total
+
+                    pending_paths = {q_rel for _, q_rel, _ in scan_queue}
+                    newly_completed = False
+                    newly_completed_top = False
+                    top_completed_count = 0
+                    top_total = max(1, int(preview.get("_top_folders_total", 1)))
+
+                    for node in folder_nodes:
+                        fpath = node["relative_path"]
+                        was_complete = bool(node.get("scan_complete", False))
+                        now_complete = (
+                            (len(pending_paths) == 0)
+                            if fpath == "."
+                            else not any(p == fpath or p.startswith(f"{fpath}/") for p in pending_paths)
+                        )
+                        node["scan_complete"] = now_complete
+                        if node.get("depth") == 1 and now_complete:
+                            top_completed_count += 1
+                        if now_complete and not was_complete:
+                            newly_completed = True
+                            if node.get("depth", 0) <= 2:
+                                newly_completed_top = True
+
+                    is_finished = len(scan_queue) == 0
+                    now_perf = time.perf_counter()
+                    last_classify = float(preview.get("_last_classify_time", 0.0))
+                    should_reclassify = is_finished or newly_completed_top or (newly_completed and (now_perf - last_classify) >= 0.25)
+
+                    if should_reclassify:
+                        _classify_folders(folder_nodes, preview["entries"], source=source)
+                        _annotate_folder_db_matches(folder_nodes, preview["entries"])
+                        preview["filter_options"] = _compute_filter_options(preview["entries"])
+                        preview["_last_classify_time"] = time.perf_counter()
+
+                    if is_finished:
+                        _recompute_preview_stats(preview, source, "folder", compute_fingerprint=True)
+                        preview["scan_progress_pct"] = 100
+                        preview["scan_status"] = "completed"
+                        preview["inspection_ms"] = round((time.perf_counter() - preview.get("_started_time", time.perf_counter())) * 1000)
+                        return
+
+                    dir_ratio = scanned_dirs / max(1, discovered_total)
+                    top_ratio = top_completed_count / top_total
+                    blended_pct = round((0.55 * top_ratio + 0.45 * dir_ratio) * 100)
+                    prev_pct = int(preview.get("scan_progress_pct", 1))
+                    preview["scan_progress_pct"] = max(prev_pct, min(99, max(1, blended_pct)))
+                    preview["inspection_ms"] = round((time.perf_counter() - preview.get("_started_time", time.perf_counter())) * 1000)
+        except Exception:
+            with self._lock:
+                preview = self._previews.get(preview_id)
+                if preview:
+                    folder_nodes = preview.get("_folder_nodes") or [n for n in preview.get("nodes", []) if n.get("kind") == "folder"]
+                    for node in folder_nodes:
+                        node["scan_complete"] = True
+                    _classify_folders(folder_nodes, preview.get("entries", []), source=source)
+                    _annotate_folder_db_matches(folder_nodes, preview.get("entries", []))
+                    _recompute_preview_stats(preview, source, "folder", compute_fingerprint=True)
+                    preview["scan_progress_pct"] = 100
+                    preview["scan_status"] = "completed"
 
     def _preview(self, preview_id: str) -> dict[str, Any]:
         with self._lock:
@@ -968,7 +1800,8 @@ class ImportJobManager:
             preview = self._previews.get(preview_id)
             if not preview:
                 raise ImportPreviewError("Preview expired or was not found. Inspect the source again.")
-            return json.loads(json.dumps(preview))
+            safe = self._public_preview(preview)
+            return json.loads(json.dumps(safe))
 
     def _log_path(self, job_id: str) -> Path:
         now = dt.datetime.now(dt.timezone.utc)
@@ -1037,7 +1870,8 @@ class ImportJobManager:
         )
         item_types = {str(index): value for index, value in request.item_types.items()}
         for entry in preview["entries"]:
-            selected = item_types.get(str(entry["index"]), entry["type"])
+            default_type = entry["type"]
+            selected = item_types.get(str(entry["index"]), default_type)
             if selected not in entry["allowed_types"]:
                 raise ImportPreviewError(f"{entry['relative_path']} cannot be assigned type {selected}")
             item_types[str(entry["index"])] = selected
@@ -1046,11 +1880,15 @@ class ImportJobManager:
             raise ImportPreviewError("Keep at least one file in the import")
         targets = [
             target for target in targets
-            if any(_is_contained_by(entry["relative_path"], target["relative_path"], folder_assignments) for entry in included_entries)
+            if any(_find_target_for_entry(entry["relative_path"], targets) == target for entry in included_entries)
         ]
-        if preview["conflicts"] and request.conflict_action is None:
-            raise ImportPreviewError("Choose how to handle the conflict shown in the preview")
-        covered = {entry["index"] for entry in included_entries if any(_is_contained_by(entry["relative_path"], target["relative_path"], folder_assignments) for target in targets)}
+        conflict_action = request.conflict_action
+        if preview["conflicts"] and conflict_action is None:
+            if all(entry["index"] in excluded_indexes for entry in preview["entries"] if entry.get("already_in_db")):
+                conflict_action = "skip"
+            else:
+                raise ImportPreviewError("Choose how to handle the conflict shown in the preview")
+        covered = {entry["index"] for entry in included_entries if _find_target_for_entry(entry["relative_path"], targets) is not None}
         loose = [entry["index"] for entry in included_entries if entry["index"] not in covered]
         job_id = uuid.uuid4().hex
         task = {
@@ -1068,7 +1906,7 @@ class ImportJobManager:
             "transfer_mode": request.transfer_mode,
             "skip_track_analysis": request.skip_track_analysis,
             "excluded_indexes": sorted(excluded_indexes),
-            "conflict_action": request.conflict_action,
+            "conflict_action": conflict_action,
         }
         try:
             self._append_log(task, "queued", target_count=len(targets), loose_file_count=len(loose), excluded_count=len(excluded_indexes))
@@ -1132,19 +1970,23 @@ class ImportJobManager:
                 self._append_log(task, "preview_invalidated", error=task["error"])
                 return
             if preview["conflicts"] and task["conflict_action"] == "skip":
-                self._update(
-                    task,
-                    status="completed",
-                    phase="completed",
-                    completed=task["total"],
-                    registration_completed=task["registration_total"],
-                    staging_completed=task["staging_total"],
-                    staging_bytes_completed=task["staging_bytes_total"],
-                    processing_completed=task["processing_total"],
-                    skipped=task["total"],
-                )
-                self._append_log(task, "completed", reason="source_conflict_skipped")
-                return
+                already_in_db_indexes = {e["index"] for e in preview["entries"] if e.get("already_in_db")}
+                active_entries = [e for e in preview["entries"] if e["index"] not in task["excluded_indexes"] and e["index"] not in already_in_db_indexes]
+                if not active_entries:
+                    self._update(
+                        task,
+                        status="completed",
+                        phase="completed",
+                        completed=task["total"],
+                        registration_completed=task["registration_total"],
+                        staging_completed=task["staging_total"],
+                        staging_bytes_completed=task["staging_bytes_total"],
+                        processing_completed=task["processing_total"],
+                        skipped=task["total"],
+                    )
+                    self._append_log(task, "completed", reason="source_conflict_skipped")
+                    return
+                task["skipped"] += (task["total"] - len(active_entries))
             vault = _vault_for_request(db, preview["vault_id"])
             store = vaults.vault_store(vault).resolve()
             transfer_mode = task["transfer_mode"]
@@ -1172,6 +2014,9 @@ class ImportJobManager:
                     entry for entry in preview["entries"]
                     if entry["index"] not in task["excluded_indexes"]
                 ]
+                if preview["conflicts"] and task["conflict_action"] == "skip":
+                    already_in_db_indexes = {e["index"] for e in preview["entries"] if e.get("already_in_db")}
+                    included_entries = [e for e in included_entries if e["index"] not in already_in_db_indexes]
 
                 # Stage 1: create all library rows from preview metadata before
                 # reading file contents or changing any source path.
@@ -1182,10 +2027,24 @@ class ImportJobManager:
                 for target in task["targets"]:
                     entries = [
                         entry for entry in included_entries
-                        if _is_contained_by(entry["relative_path"], target["relative_path"], task["folder_assignments"])
+                        if _find_target_for_entry(entry["relative_path"], task["targets"]) == target
                     ]
+                    if not entries:
+                        continue
                     prefix = PurePosixPath() if target["relative_path"] == "." else PurePosixPath(target["relative_path"])
-                    if transfer_mode == "keep":
+                    existing_col = None
+                    if task.get("conflict_action") != "new_snapshot":
+                        if target["relative_path"] == ".":
+                            target_src = preview["source_path"]
+                        elif preview["source_kind"] == "zip":
+                            target_src = f"{preview['source_path']}::{target['relative_path']}"
+                        else:
+                            target_src = str(Path(preview["source_path"]) / Path(target["relative_path"]))
+                        existing_col = crud.get_collection_by_source(db, target_src, vault.id)
+
+                    if existing_col and transfer_mode != "keep":
+                        destination = Path(existing_col.absolute_path)
+                    elif transfer_mode == "keep":
                         destination = root if target["relative_path"] == "." else root.joinpath(*prefix.parts)
                     else:
                         base_name = _safe_name(target["title"])
@@ -1193,33 +2052,69 @@ class ImportJobManager:
                         while str(destination).casefold() in reserved_directories or destination.exists():
                             destination = store / f"{base_name}_{uuid.uuid4().hex[:8]}"
                         reserved_directories.add(str(destination).casefold())
-                    seeds = []
-                    for index, entry in enumerate(entries):
-                        relative = PurePosixPath(entry["relative_path"])
-                        rebased = relative if target["relative_path"] == "." else relative.relative_to(prefix)
-                        seeds.append(_manifest_seed(preview, entry, rebased.as_posix(), index))
-                    snapshot = _container_snapshot(
-                        preview,
-                        destination,
-                        target,
-                        seeds,
-                        [],
-                        analyze=False,
-                        storage_mode=storage_mode,
-                        availability=initial_availability,
-                    )
-                    container = _create_container(db, snapshot, vault, task, target)
-                    results.append(container)
-                    for entry, seed in zip(entries, snapshot["contents"]):
-                        registered_entries.append({
-                            "item_id": seed["child_id"],
-                            "parent_id": container.id,
-                            "content_index": seed["index"],
-                            "manifest_relative_path": seed["relative_path"],
-                            "source": root.joinpath(*PurePosixPath(entry["relative_path"]).parts),
-                            "destination": destination.joinpath(*PurePosixPath(seed["relative_path"]).parts),
-                            "entry": entry,
-                        })
+
+                    if existing_col and task.get("conflict_action") != "new_snapshot":
+                        existing_contents = json.loads(existing_col.manifest_json or "[]")
+                        start_idx = max((c.get("index", -1) for c in existing_contents), default=-1) + 1
+                        seeds = []
+                        for idx_offset, entry in enumerate(entries):
+                            relative = PurePosixPath(entry["relative_path"])
+                            rebased = relative if target["relative_path"] == "." else relative.relative_to(prefix)
+                            seeds.append(_manifest_seed(preview, entry, rebased.as_posix(), start_idx + idx_offset))
+                        snapshot = _container_snapshot(
+                            preview,
+                            destination,
+                            target,
+                            seeds,
+                            [],
+                            analyze=False,
+                            storage_mode=storage_mode,
+                            availability=initial_availability,
+                        )
+                        _index_children(db, snapshot, vault.id, existing_col.id, task, target["relative_path"])
+                        crud.save_collection_contents(db, existing_col, existing_contents + snapshot["contents"], commit=False, flush=False)
+                        tags = _collection_tags(snapshot["contents"])
+                        if tags:
+                            crud.set_items_tags(db, [(existing_col, tags)])
+                        results.append(existing_col)
+                        for entry, seed in zip(entries, snapshot["contents"]):
+                            registered_entries.append({
+                                "item_id": seed["child_id"],
+                                "parent_id": existing_col.id,
+                                "content_index": seed["index"],
+                                "manifest_relative_path": seed["relative_path"],
+                                "source": root.joinpath(*PurePosixPath(entry["relative_path"]).parts),
+                                "destination": destination.joinpath(*PurePosixPath(seed["relative_path"]).parts),
+                                "entry": entry,
+                            })
+                    else:
+                        seeds = []
+                        for index, entry in enumerate(entries):
+                            relative = PurePosixPath(entry["relative_path"])
+                            rebased = relative if target["relative_path"] == "." else relative.relative_to(prefix)
+                            seeds.append(_manifest_seed(preview, entry, rebased.as_posix(), index))
+                        snapshot = _container_snapshot(
+                            preview,
+                            destination,
+                            target,
+                            seeds,
+                            [],
+                            analyze=False,
+                            storage_mode=storage_mode,
+                            availability=initial_availability,
+                        )
+                        container = _create_container(db, snapshot, vault, task, target)
+                        results.append(container)
+                        for entry, seed in zip(entries, snapshot["contents"]):
+                            registered_entries.append({
+                                "item_id": seed["child_id"],
+                                "parent_id": container.id,
+                                "content_index": seed["index"],
+                                "manifest_relative_path": seed["relative_path"],
+                                "source": root.joinpath(*PurePosixPath(entry["relative_path"]).parts),
+                                "destination": destination.joinpath(*PurePosixPath(seed["relative_path"]).parts),
+                                "entry": entry,
+                            })
 
                 loose = [entry for entry in included_entries if entry["index"] in task["loose_indexes"]]
                 if loose:

@@ -30,6 +30,7 @@ IGNORE_FILENAMES = {
     "current.json",
     "desktop.ini",
     "manifest.json",
+    "project.json",
     "thumbs.db",
 }
 

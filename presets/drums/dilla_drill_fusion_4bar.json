@@ -1,0 +1,2711 @@
+{
+  "format": "sin-graph",
+  "version": 1,
+  "settings": {
+    "bpm": 140,
+    "total_bars": 4,
+    "key": "Dm"
+  },
+  "output": "master",
+  "nodes": [
+    {
+      "id": "sub-808-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Trap Drill 808 Pool",
+        "selected_items": [
+          {
+            "id": 2894
+          },
+          {
+            "id": 2895
+          },
+          {
+            "id": 2896
+          },
+          {
+            "id": 2897
+          },
+          {
+            "id": 2898
+          },
+          {
+            "id": 2899
+          },
+          {
+            "id": 2900
+          },
+          {
+            "id": 2901
+          },
+          {
+            "id": 2902
+          },
+          {
+            "id": 2903
+          },
+          {
+            "id": 2072
+          },
+          {
+            "id": 2073
+          },
+          {
+            "id": 2074
+          },
+          {
+            "id": 2075
+          },
+          {
+            "id": 2076
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 141,
+        "output_type": "asset_path"
+      }
+    },
+    {
+      "id": "sub-808-src",
+      "type": "sample",
+      "properties": {
+        "node_name": "808 Sub Core",
+        "sample_type": "one_shot",
+        "key": "C",
+        "key_match_mode": "follow",
+        "key_match_algorithm": "nearest",
+        "key_match_transpose": 2.0,
+        "transpose": 0.0,
+        "chain": [
+          {
+            "id": "pre_gain_900",
+            "type": "gain",
+            "name": "Pre Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 0.3548,
+              "gain_db": -9.0
+            }
+          },
+          {
+            "id": "post_gain_0",
+            "type": "gain",
+            "name": "Post Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 1.0,
+              "gain_db": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "sub-808-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "808 Pattern Pool",
+        "selected_items": [
+          {
+            "id": 7354
+          },
+          {
+            "id": 7356
+          },
+          {
+            "id": 7274
+          },
+          {
+            "id": 7276
+          },
+          {
+            "id": 7279
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 142,
+        "output_type": "asset_path",
+        "accepted_asset_type": "sequence_source"
+      }
+    },
+    {
+      "id": "sub-808-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "808 Drill Rhythm",
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "total_bars": 4,
+        "seed": 143,
+        "seed_mode": "moving",
+        "sequence": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          1,
+          0,
+          0
+        ],
+        "step_parameters": [
+          {
+            "velocity": 0.95,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.88,
+            "offset": 0.012,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.9,
+            "offset": -0.01,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          }
+        ]
+      }
+    },
+    {
+      "id": "sub-808-rnd",
+      "type": "random",
+      "properties": {
+        "node_name": "808 Humanizer",
+        "refresh_mode": "global",
+        "seed": 144,
+        "destinations": [
+          {
+            "id": "808-vel",
+            "paramKey": "velocity",
+            "paramLabel": "Velocity",
+            "minPercent": -10,
+            "maxPercent": 5,
+            "baseValue": 0.95,
+            "enabled": true
+          },
+          {
+            "id": "808-off",
+            "paramKey": "offset",
+            "paramLabel": "Offset",
+            "minPercent": -15,
+            "maxPercent": 15,
+            "baseValue": 0.0,
+            "enabled": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "808-bus",
+      "type": "track",
+      "properties": {
+        "node_name": "808 Bass Bus"
+      }
+    },
+    {
+      "id": "kick-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Punch Trap Kick Pool",
+        "selected_items": [
+          {
+            "id": 3532
+          },
+          {
+            "id": 3533
+          },
+          {
+            "id": 3534
+          },
+          {
+            "id": 3535
+          },
+          {
+            "id": 3536
+          },
+          {
+            "id": 3537
+          },
+          {
+            "id": 3538
+          },
+          {
+            "id": 3539
+          },
+          {
+            "id": 3540
+          },
+          {
+            "id": 3541
+          },
+          {
+            "id": 3542
+          },
+          {
+            "id": 3543
+          },
+          {
+            "id": 3544
+          },
+          {
+            "id": 3545
+          },
+          {
+            "id": 3546
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 151,
+        "output_type": "asset_path"
+      }
+    },
+    {
+      "id": "kick-src",
+      "type": "sample",
+      "properties": {
+        "node_name": "Kick Punch",
+        "sample_type": "one_shot",
+        "chain": [
+          {
+            "id": "pre_gain_900",
+            "type": "gain",
+            "name": "Pre Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 0.3548,
+              "gain_db": -9.0
+            }
+          },
+          {
+            "id": "post_gain_0",
+            "type": "gain",
+            "name": "Post Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 1.0,
+              "gain_db": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "kick-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Kick Pattern Pool",
+        "selected_items": [
+          {
+            "id": 7354
+          },
+          {
+            "id": 7355
+          },
+          {
+            "id": 7364
+          },
+          {
+            "id": 7267
+          },
+          {
+            "id": 7272
+          },
+          {
+            "id": 4170
+          },
+          {
+            "id": 4171
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 152,
+        "output_type": "asset_path",
+        "accepted_asset_type": "sequence_source"
+      }
+    },
+    {
+      "id": "kick-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Kick Dilla Groove",
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "total_bars": 4,
+        "seed": 153,
+        "seed_mode": "moving",
+        "sequence": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          1,
+          0,
+          0
+        ],
+        "step_parameters": [
+          {
+            "velocity": 1.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.92,
+            "offset": 0.015,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.95,
+            "offset": -0.01,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          }
+        ]
+      }
+    },
+    {
+      "id": "kick-rnd",
+      "type": "random",
+      "properties": {
+        "node_name": "Kick Dynamics",
+        "refresh_mode": "global",
+        "seed": 154,
+        "destinations": [
+          {
+            "id": "kick-vel",
+            "paramKey": "velocity",
+            "paramLabel": "Velocity",
+            "minPercent": -8,
+            "maxPercent": 5,
+            "baseValue": 1.0,
+            "enabled": true
+          },
+          {
+            "id": "kick-off",
+            "paramKey": "offset",
+            "paramLabel": "Offset",
+            "minPercent": -10,
+            "maxPercent": 15,
+            "baseValue": 0.0,
+            "enabled": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "snare-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Drill Snare & Clap Pool",
+        "selected_items": [
+          {
+            "id": 3851
+          },
+          {
+            "id": 3852
+          },
+          {
+            "id": 3853
+          },
+          {
+            "id": 3854
+          },
+          {
+            "id": 3855
+          },
+          {
+            "id": 3856
+          },
+          {
+            "id": 3857
+          },
+          {
+            "id": 3858
+          },
+          {
+            "id": 3859
+          },
+          {
+            "id": 3860
+          },
+          {
+            "id": 3096
+          },
+          {
+            "id": 3097
+          },
+          {
+            "id": 3098
+          },
+          {
+            "id": 3099
+          },
+          {
+            "id": 3100
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 161,
+        "output_type": "asset_path"
+      }
+    },
+    {
+      "id": "snare-src",
+      "type": "sample",
+      "properties": {
+        "node_name": "Snare Clap",
+        "sample_type": "one_shot",
+        "chain": [
+          {
+            "id": "pre_gain_900",
+            "type": "gain",
+            "name": "Pre Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 0.3548,
+              "gain_db": -9.0
+            }
+          },
+          {
+            "id": "post_gain_0",
+            "type": "gain",
+            "name": "Post Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 1.0,
+              "gain_db": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "snare-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Snare Pattern Pool",
+        "selected_items": [
+          {
+            "id": 7357
+          },
+          {
+            "id": 7358
+          },
+          {
+            "id": 7365
+          },
+          {
+            "id": 7268
+          },
+          {
+            "id": 7270
+          },
+          {
+            "id": 4175
+          },
+          {
+            "id": 4176
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 162,
+        "output_type": "asset_path",
+        "accepted_asset_type": "sequence_source"
+      }
+    },
+    {
+      "id": "snare-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Snare Halftime Pocket",
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "total_bars": 4,
+        "seed": 163,
+        "seed_mode": "moving",
+        "sequence": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "step_parameters": [
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 1.0,
+            "offset": 0.012,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          }
+        ]
+      }
+    },
+    {
+      "id": "snare-rnd",
+      "type": "random",
+      "properties": {
+        "node_name": "Snare Humanizer",
+        "refresh_mode": "global",
+        "seed": 164,
+        "destinations": [
+          {
+            "id": "snare-vel",
+            "paramKey": "velocity",
+            "paramLabel": "Velocity",
+            "minPercent": -6,
+            "maxPercent": 4,
+            "baseValue": 1.0,
+            "enabled": true
+          },
+          {
+            "id": "snare-off",
+            "paramKey": "offset",
+            "paramLabel": "Offset",
+            "minPercent": -10,
+            "maxPercent": 20,
+            "baseValue": 0.012,
+            "enabled": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "hat-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Drill Swung Hat Pool",
+        "selected_items": [
+          {
+            "id": 3431
+          },
+          {
+            "id": 3432
+          },
+          {
+            "id": 3433
+          },
+          {
+            "id": 3434
+          },
+          {
+            "id": 3435
+          },
+          {
+            "id": 3436
+          },
+          {
+            "id": 3437
+          },
+          {
+            "id": 3438
+          },
+          {
+            "id": 3439
+          },
+          {
+            "id": 3440
+          },
+          {
+            "id": 3441
+          },
+          {
+            "id": 3442
+          },
+          {
+            "id": 3443
+          },
+          {
+            "id": 3444
+          },
+          {
+            "id": 3445
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 171,
+        "output_type": "asset_path"
+      }
+    },
+    {
+      "id": "hat-src",
+      "type": "sample",
+      "properties": {
+        "node_name": "Closed Hat",
+        "sample_type": "one_shot",
+        "chain": [
+          {
+            "id": "pre_gain_1300",
+            "type": "gain",
+            "name": "Pre Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 0.2239,
+              "gain_db": -13.0
+            }
+          },
+          {
+            "id": "post_gain_0",
+            "type": "gain",
+            "name": "Post Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 1.0,
+              "gain_db": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "hat-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Hat Pattern Pool",
+        "selected_items": [
+          {
+            "id": 7360
+          },
+          {
+            "id": 7361
+          },
+          {
+            "id": 7366
+          },
+          {
+            "id": 7269
+          },
+          {
+            "id": 7271
+          },
+          {
+            "id": 4160
+          },
+          {
+            "id": 4161
+          },
+          {
+            "id": 4162
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 172,
+        "output_type": "asset_path",
+        "accepted_asset_type": "sequence_source"
+      }
+    },
+    {
+      "id": "hat-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Hat Drill Rolls",
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "total_bars": 4,
+        "seed": 173,
+        "seed_mode": "moving",
+        "sequence": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "step_parameters": [
+          {
+            "velocity": 0.85,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.5,
+            "offset": 0.02,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.75,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.6,
+            "offset": 0.02,
+            "subdivisions": 2,
+            "subdivision_enabled": true,
+            "probability": 100
+          },
+          {
+            "velocity": 0.85,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.55,
+            "offset": 0.02,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.7,
+            "offset": 0.0,
+            "subdivisions": 3,
+            "subdivision_enabled": true,
+            "probability": 90
+          },
+          {
+            "velocity": 0.65,
+            "offset": 0.02,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.88,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.52,
+            "offset": 0.02,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.75,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.58,
+            "offset": 0.02,
+            "subdivisions": 2,
+            "subdivision_enabled": true,
+            "probability": 100
+          },
+          {
+            "velocity": 0.82,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.6,
+            "offset": 0.02,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.72,
+            "offset": 0.015,
+            "subdivisions": 3,
+            "subdivision_enabled": true,
+            "probability": 95
+          },
+          {
+            "velocity": 0.65,
+            "offset": 0.02,
+            "subdivisions": 2,
+            "subdivision_enabled": true,
+            "probability": 100
+          }
+        ]
+      }
+    },
+    {
+      "id": "hat-rnd",
+      "type": "random",
+      "properties": {
+        "node_name": "Hat Velocity Wave",
+        "refresh_mode": "global",
+        "seed": 174,
+        "destinations": [
+          {
+            "id": "hat-vel",
+            "paramKey": "velocity",
+            "paramLabel": "Velocity",
+            "minPercent": -20,
+            "maxPercent": 15,
+            "baseValue": 0.75,
+            "enabled": true
+          },
+          {
+            "id": "hat-off",
+            "paramKey": "offset",
+            "paramLabel": "Offset",
+            "minPercent": -15,
+            "maxPercent": 25,
+            "baseValue": 0.015,
+            "enabled": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "perc-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Ghost Snare & Layer Pool",
+        "selected_items": [
+          {
+            "id": 3927
+          },
+          {
+            "id": 3928
+          },
+          {
+            "id": 3929
+          },
+          {
+            "id": 3930
+          },
+          {
+            "id": 3931
+          },
+          {
+            "id": 3932
+          },
+          {
+            "id": 3933
+          },
+          {
+            "id": 3934
+          },
+          {
+            "id": 3851
+          },
+          {
+            "id": 3852
+          },
+          {
+            "id": 3853
+          },
+          {
+            "id": 3854
+          },
+          {
+            "id": 3855
+          },
+          {
+            "id": 3856
+          },
+          {
+            "id": 3709
+          },
+          {
+            "id": 3710
+          },
+          {
+            "id": 3711
+          },
+          {
+            "id": 3712
+          },
+          {
+            "id": 3713
+          },
+          {
+            "id": 3714
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 181,
+        "output_type": "asset_path"
+      }
+    },
+    {
+      "id": "perc-src",
+      "type": "sample",
+      "properties": {
+        "node_name": "Ghost Snare / Rim Layer",
+        "sample_type": "one_shot",
+        "chain": [
+          {
+            "id": "pre_gain_1400",
+            "type": "gain",
+            "name": "Pre Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 0.1995,
+              "gain_db": -14.0
+            }
+          },
+          {
+            "id": "post_gain_0",
+            "type": "gain",
+            "name": "Post Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 1.0,
+              "gain_db": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "perc-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Ghost Pattern Pool",
+        "selected_items": [
+          {
+            "id": 7363
+          },
+          {
+            "id": 7367
+          },
+          {
+            "id": 7275
+          },
+          {
+            "id": 7278
+          },
+          {
+            "id": 7281
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 182,
+        "output_type": "asset_path",
+        "accepted_asset_type": "sequence_source"
+      }
+    },
+    {
+      "id": "perc-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Ghost Snare Pocket",
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "total_bars": 4,
+        "seed": 183,
+        "seed_mode": "moving",
+        "sequence": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          0,
+          0,
+          1,
+          0,
+          1,
+          0,
+          0
+        ],
+        "step_parameters": [
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.38,
+            "offset": -0.015,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 85
+          },
+          {
+            "velocity": 0.75,
+            "offset": 0.005,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          },
+          {
+            "velocity": 0.42,
+            "offset": 0.02,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 80
+          },
+          {
+            "velocity": 0.0,
+            "offset": 0.0,
+            "subdivisions": 1,
+            "subdivision_enabled": false,
+            "probability": 100
+          }
+        ]
+      }
+    },
+    {
+      "id": "perc-rnd",
+      "type": "random",
+      "properties": {
+        "node_name": "Ghost Velocity Jitter",
+        "refresh_mode": "global",
+        "seed": 184,
+        "destinations": [
+          {
+            "id": "perc-vel",
+            "paramKey": "velocity",
+            "paramLabel": "Velocity",
+            "minPercent": -20,
+            "maxPercent": 15,
+            "baseValue": 0.6,
+            "enabled": true
+          },
+          {
+            "id": "perc-off",
+            "paramKey": "offset",
+            "paramLabel": "Offset",
+            "minPercent": -15,
+            "maxPercent": 25,
+            "baseValue": 0.005,
+            "enabled": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "drum-bus",
+      "type": "track",
+      "properties": {
+        "node_name": "Punch Drum Bus"
+      }
+    },
+    {
+      "id": "texture-short-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Vinyl Scratch & Foley Pool",
+        "selected_items": [
+          {
+            "id": 3353
+          },
+          {
+            "id": 3399
+          },
+          {
+            "id": 3420
+          },
+          {
+            "id": 3348
+          },
+          {
+            "id": 3335
+          },
+          {
+            "id": 3791
+          },
+          {
+            "id": 2272
+          },
+          {
+            "id": 2273
+          },
+          {
+            "id": 2274
+          },
+          {
+            "id": 2275
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 185,
+        "output_type": "asset_path"
+      }
+    },
+    {
+      "id": "texture-short-src",
+      "type": "sample",
+      "properties": {
+        "node_name": "Vinyl Scratch & Foley FX",
+        "sample_type": "one_shot",
+        "chain": [
+          {
+            "id": "pre_gain_1400",
+            "type": "gain",
+            "name": "Pre Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 0.1995,
+              "gain_db": -14.0
+            }
+          },
+          {
+            "id": "post_gain_0",
+            "type": "gain",
+            "name": "Post Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 1.0,
+              "gain_db": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "texture-short-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Texture Accent Sequence",
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "total_bars": 4,
+        "seed": 186,
+        "sequence": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "id": "texture-long-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Vintage Tape & Vinyl Bed Pool",
+        "selected_items": [
+          {
+            "id": 482
+          },
+          {
+            "id": 7266
+          },
+          {
+            "id": 7265
+          },
+          {
+            "id": 7263
+          },
+          {
+            "id": 11848
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 187,
+        "output_type": "asset_path"
+      }
+    },
+    {
+      "id": "texture-long-src",
+      "type": "sample",
+      "properties": {
+        "node_name": "Vintage Vinyl & Tape Bed",
+        "sample_type": "loop",
+        "total_bars": 4,
+        "chain": [
+          {
+            "id": "pre_gain_1800",
+            "type": "gain",
+            "name": "Pre Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 0.1259,
+              "gain_db": -18.0
+            }
+          },
+          {
+            "id": "post_gain_0",
+            "type": "gain",
+            "name": "Post Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 1.0,
+              "gain_db": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "texture-long-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Texture Bed Sustained",
+        "step_length": 0.25,
+        "play_mode": "trigger",
+        "total_bars": 4,
+        "seed": 188,
+        "sequence": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "id": "texture-bus",
+      "type": "track",
+      "properties": {
+        "node_name": "Texture & Foley Bus"
+      }
+    },
+    {
+      "id": "sample-loop-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Vintage Crate Loop Pool",
+        "selected_items": [
+          {
+            "id": 626
+          },
+          {
+            "id": 627
+          },
+          {
+            "id": 628
+          },
+          {
+            "id": 629
+          },
+          {
+            "id": 630
+          },
+          {
+            "id": 631
+          },
+          {
+            "id": 632
+          },
+          {
+            "id": 633
+          },
+          {
+            "id": 634
+          },
+          {
+            "id": 635
+          },
+          {
+            "id": 636
+          },
+          {
+            "id": 637
+          },
+          {
+            "id": 13287
+          },
+          {
+            "id": 13288
+          },
+          {
+            "id": 13289
+          },
+          {
+            "id": 13290
+          },
+          {
+            "id": 13291
+          },
+          {
+            "id": 13294
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 191,
+        "output_type": "asset_path"
+      }
+    },
+    {
+      "id": "sample-loop-src",
+      "type": "sample",
+      "properties": {
+        "node_name": "Vintage Melodic Source",
+        "sample_type": "loop",
+        "total_bars": 4,
+        "key": "Dm",
+        "key_match_mode": "lead",
+        "key_match_algorithm": "nearest",
+        "key_match_transpose": 0.0,
+        "transpose": 0.0,
+        "chain": [
+          {
+            "id": "pre_gain_1050",
+            "type": "gain",
+            "name": "Pre Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 0.2985,
+              "gain_db": -10.5
+            }
+          },
+          {
+            "id": "post_gain_0",
+            "type": "gain",
+            "name": "Post Gain",
+            "enabled": true,
+            "fixed": true,
+            "params": {
+              "gain": 1.0,
+              "gain_db": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "sample-loop-pattern-pool",
+      "type": "asset_filter",
+      "properties": {
+        "node_name": "Melodic Chop Pattern Pool",
+        "selected_items": [
+          {
+            "id": 4220
+          },
+          {
+            "id": 4221
+          },
+          {
+            "id": 4205
+          },
+          {
+            "id": 4193
+          },
+          {
+            "id": 4192
+          },
+          {
+            "id": 4208
+          },
+          {
+            "id": 4206
+          },
+          {
+            "id": 4207
+          },
+          {
+            "id": 4180
+          },
+          {
+            "id": 4224
+          },
+          {
+            "id": 4217
+          },
+          {
+            "id": 4213
+          },
+          {
+            "id": 4214
+          },
+          {
+            "id": 4228
+          },
+          {
+            "id": 4225
+          },
+          {
+            "id": 7267
+          },
+          {
+            "id": 7271
+          },
+          {
+            "id": 7272
+          },
+          {
+            "id": 7277
+          },
+          {
+            "id": 7278
+          },
+          {
+            "id": 7280
+          },
+          {
+            "id": 7281
+          },
+          {
+            "id": 7282
+          },
+          {
+            "id": 7285
+          }
+        ],
+        "playbackMode": "Random",
+        "refresh_mode": "global",
+        "seed": 193,
+        "output_type": "asset_path",
+        "accepted_asset_type": "sequence_source"
+      }
+    },
+    {
+      "id": "sample-loop-rnd",
+      "type": "random",
+      "properties": {
+        "node_name": "Chop Dynamics Jitter",
+        "refresh_mode": "global",
+        "seed": 194,
+        "destinations": [
+          {
+            "id": "p1-chop-vel",
+            "paramKey": "velocity",
+            "paramLabel": "Velocity",
+            "minPercent": -10,
+            "maxPercent": 8,
+            "baseValue": 0.92,
+            "enabled": true
+          },
+          {
+            "id": "p1-chop-off",
+            "paramKey": "offset",
+            "paramLabel": "Offset",
+            "minPercent": -10,
+            "maxPercent": 15,
+            "baseValue": 0.0,
+            "enabled": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "sample-loop-seq",
+      "type": "sequence",
+      "properties": {
+        "node_name": "Melodic Chops Sequencer",
+        "step_length": 0.5,
+        "play_mode": "gate",
+        "release": 0.08,
+        "total_bars": 4,
+        "seed": 192,
+        "sequence": [
+          1,
+          0,
+          1,
+          0,
+          1,
+          1,
+          0,
+          1,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          1,
+          1,
+          0,
+          1,
+          0,
+          1,
+          1,
+          0,
+          1,
+          1,
+          0,
+          1,
+          0,
+          1,
+          1,
+          1,
+          0
+        ],
+        "step_parameters": [
+          {
+            "sample_start": 0.0,
+            "gate_length": 0.9,
+            "velocity": 0.95
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.25,
+            "gate_length": 0.85,
+            "velocity": 0.9
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.125,
+            "gate_length": 0.78,
+            "velocity": 0.88
+          },
+          {
+            "sample_start": 0.375,
+            "gate_length": 0.82,
+            "velocity": 0.92
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.5,
+            "gate_length": 0.92,
+            "velocity": 0.95
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 0.9,
+            "velocity": 0.95
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.25,
+            "gate_length": 0.85,
+            "velocity": 0.9
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.625,
+            "gate_length": 0.8,
+            "velocity": 0.9
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.75,
+            "gate_length": 0.75,
+            "velocity": 0.92
+          },
+          {
+            "sample_start": 0.875,
+            "gate_length": 0.88,
+            "velocity": 0.95
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 0.9,
+            "velocity": 0.95
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.25,
+            "gate_length": 0.85,
+            "velocity": 0.9
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.125,
+            "gate_length": 0.78,
+            "velocity": 0.88
+          },
+          {
+            "sample_start": 0.375,
+            "gate_length": 0.82,
+            "velocity": 0.92
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.5,
+            "gate_length": 0.92,
+            "velocity": 0.95
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 0.9,
+            "velocity": 0.95
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.25,
+            "gate_length": 0.85,
+            "velocity": 0.9
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          },
+          {
+            "sample_start": 0.75,
+            "gate_length": 0.7,
+            "velocity": 0.88
+          },
+          {
+            "sample_start": 0.625,
+            "gate_length": 0.75,
+            "velocity": 0.9
+          },
+          {
+            "sample_start": 0.875,
+            "gate_length": 0.85,
+            "velocity": 0.95
+          },
+          {
+            "sample_start": 0.0,
+            "gate_length": 1.0,
+            "velocity": 0.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "sample-bus",
+      "type": "track",
+      "properties": {
+        "node_name": "Sample Loop Bus"
+      }
+    },
+    {
+      "id": "master",
+      "type": "track",
+      "role": "master",
+      "properties": {
+        "node_name": "Master Output"
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "kick-src",
+      "to": "kick-seq",
+      "type": "audio"
+    },
+    {
+      "from": "kick-seq",
+      "to": "drum-bus",
+      "type": "audio"
+    },
+    {
+      "from": "snare-src",
+      "to": "snare-seq",
+      "type": "audio"
+    },
+    {
+      "from": "snare-seq",
+      "to": "drum-bus",
+      "type": "audio"
+    },
+    {
+      "from": "hat-src",
+      "to": "hat-seq",
+      "type": "audio"
+    },
+    {
+      "from": "hat-seq",
+      "to": "drum-bus",
+      "type": "audio"
+    },
+    {
+      "from": "perc-src",
+      "to": "perc-seq",
+      "type": "audio"
+    },
+    {
+      "from": "perc-seq",
+      "to": "drum-bus",
+      "type": "audio"
+    },
+    {
+      "from": "sub-808-src",
+      "to": "sub-808-seq",
+      "type": "audio"
+    },
+    {
+      "from": "sub-808-seq",
+      "to": "808-bus",
+      "type": "audio"
+    },
+    {
+      "from": "texture-short-src",
+      "to": "texture-short-seq",
+      "type": "audio"
+    },
+    {
+      "from": "texture-short-seq",
+      "to": "texture-bus",
+      "type": "audio"
+    },
+    {
+      "from": "texture-long-src",
+      "to": "texture-long-seq",
+      "type": "audio"
+    },
+    {
+      "from": "texture-long-seq",
+      "to": "texture-bus",
+      "type": "audio"
+    },
+    {
+      "from": "sample-loop-src",
+      "to": "sample-loop-seq",
+      "type": "audio"
+    },
+    {
+      "from": "sample-loop-seq",
+      "to": "sample-bus",
+      "type": "audio"
+    },
+    {
+      "from": "drum-bus",
+      "to": "master",
+      "type": "audio"
+    },
+    {
+      "from": "808-bus",
+      "to": "master",
+      "type": "audio"
+    },
+    {
+      "from": "sample-bus",
+      "to": "master",
+      "type": "audio"
+    },
+    {
+      "from": "texture-bus",
+      "to": "master",
+      "type": "audio"
+    }
+  ],
+  "attachments": [
+    {
+      "owner": "sub-808-src",
+      "modifier": "sub-808-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "sub-808-seq",
+      "modifier": "sub-808-pattern-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "sub-808-seq",
+      "modifier": "sub-808-rnd",
+      "type": "random"
+    },
+    {
+      "owner": "kick-src",
+      "modifier": "kick-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "kick-seq",
+      "modifier": "kick-pattern-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "kick-seq",
+      "modifier": "kick-rnd",
+      "type": "random"
+    },
+    {
+      "owner": "snare-src",
+      "modifier": "snare-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "snare-seq",
+      "modifier": "snare-pattern-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "snare-seq",
+      "modifier": "snare-rnd",
+      "type": "random"
+    },
+    {
+      "owner": "hat-src",
+      "modifier": "hat-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "hat-seq",
+      "modifier": "hat-pattern-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "hat-seq",
+      "modifier": "hat-rnd",
+      "type": "random"
+    },
+    {
+      "owner": "perc-src",
+      "modifier": "perc-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "perc-seq",
+      "modifier": "perc-pattern-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "perc-seq",
+      "modifier": "perc-rnd",
+      "type": "random"
+    },
+    {
+      "owner": "texture-short-src",
+      "modifier": "texture-short-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "texture-long-src",
+      "modifier": "texture-long-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "sample-loop-src",
+      "modifier": "sample-loop-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "sample-loop-seq",
+      "modifier": "sample-loop-pattern-pool",
+      "type": "asset_pool"
+    },
+    {
+      "owner": "sample-loop-seq",
+      "modifier": "sample-loop-rnd",
+      "type": "random"
+    }
+  ]
+}

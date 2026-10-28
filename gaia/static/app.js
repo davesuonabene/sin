@@ -159,6 +159,11 @@ function initializeGaiaLibrary() {
     const assetDropOverlay = document.getElementById('asset-drop-overlay');
     const assetDropOverlayTitle = document.getElementById('asset-drop-overlay-title');
     const summary = document.getElementById('library-summary');
+    const libraryLayout = document.getElementById('library-layout');
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    const sidebarVaultList = document.getElementById('sidebar-vault-list');
+    const sidebarPlaylistList = document.getElementById('sidebar-playlist-list');
+    const sidebarNewPlaylistButton = document.getElementById('sidebar-new-playlist');
     const vaultPicker = document.getElementById('vault-picker');
     const activeVaultName = document.getElementById('active-vault-name');
     const vaultMenu = document.getElementById('vault-menu');
@@ -2273,6 +2278,19 @@ function initializeGaiaLibrary() {
                         if (entry.fileVersionGroup) {
                             state.versionSelections.set(entry.fileVersionGroup, String(selected.item.id));
                         }
+                        const projectId = Number(entry.collection?.id);
+                        if (projectId) {
+                            fetch(`/items/${projectId}/graph/sample-version`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    channel_id: '',
+                                    target_item_id: Number(selected.item.id),
+                                }),
+                            }).then(() => {
+                                window.gaiaMediaEditor?.refresh?.();
+                            }).catch(() => { });
+                        }
                         renderAssets();
                     }
                 }
@@ -2720,6 +2738,10 @@ function initializeGaiaLibrary() {
         }
     }
 
+    function stopDragAutoScroll() {
+        // No persistent timer to clean up for direct delta scroll
+    }
+
     function selectAllEntries() {
         const entries = selectionEntries();
         if (!entries.length) return;
@@ -2755,9 +2777,9 @@ function initializeGaiaLibrary() {
                 const payload = JSON.stringify(entries.length === 1
                     ? dragPayload(entries[0])
                     : { type: 'library-items', items: entries.map(dragPayload) });
-                navigator.clipboard.writeText(payload).catch(() => {});
+                navigator.clipboard.writeText(payload).catch(() => { });
             }
-        } catch (_err) {}
+        } catch (_err) { }
         if (summary) {
             const label = itemIds.length === 1 ? '1 item' : `${itemIds.length} items`;
             summary.textContent = `Copied ${label} to clipboard`;
@@ -3218,11 +3240,11 @@ function initializeGaiaLibrary() {
         loadSourcePicker(null);
     }
 
-    async function requestImportPreview(path, vaultId) {
+    async function requestImportPreview(path, vaultId, progressive = true) {
         const response = await fetch('/items/import/preview', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ source_path: path, vault_id: vaultId }),
+            body: JSON.stringify({ source_path: path, vault_id: vaultId, progressive }),
         });
         const preview = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(preview.detail || 'Could not inspect source');
@@ -3234,7 +3256,7 @@ function initializeGaiaLibrary() {
         renderProjectSourcePreview();
         projectResult.className = 'result hidden';
         try {
-            const preview = await requestImportPreview(path, selectedProjectVaultId());
+            const preview = await requestImportPreview(path, selectedProjectVaultId(), false);
             const pendingId = `pending-import:${Date.now()}:${state.projectPendingImports.length}`;
             const sourceType = preview.source_kind === 'file'
                 ? preview.entries?.[0]?.type || 'item'
@@ -3715,8 +3737,8 @@ function initializeGaiaLibrary() {
             addSourcesButton.type = 'button';
             addSourcesButton.className = 'secondary toolbar-type-action sin-menu-item';
             addSourcesButton.textContent = 'Add files';
-             addSourcesButton.title = 'Add files to project';
-             addSourcesButton.setAttribute('aria-label', 'Add files to project');
+            addSourcesButton.title = 'Add files to project';
+            addSourcesButton.setAttribute('aria-label', 'Add files to project');
             addSourcesButton.addEventListener('click', event => {
                 event.stopPropagation();
                 openProjectFilesDialog(projectEntry.item);
@@ -3727,7 +3749,7 @@ function initializeGaiaLibrary() {
             adoptOrphansButton.type = 'button';
             adoptOrphansButton.className = 'secondary toolbar-type-action sin-menu-item';
             adoptOrphansButton.textContent = 'Adopt orphans';
-             adoptOrphansButton.title = 'Move linked loose files directly into this project';
+            adoptOrphansButton.title = 'Move linked loose files directly into this project';
             adoptOrphansButton.setAttribute('aria-label', 'Adopt orphan assets into project');
             adoptOrphansButton.addEventListener('click', async event => {
                 event.stopPropagation();
@@ -4673,8 +4695,84 @@ function initializeGaiaLibrary() {
         vaultPicker?.setAttribute('aria-expanded', 'false');
     }
 
+    function selectVaultOption(value) {
+        state.selectedPlaylistId = null;
+        state.selectedVaultId = value;
+        closeVaultMenu();
+        reconcileFilterSelection();
+        renderVaults();
+        renderFilterUI();
+        renderAssets();
+        loadVaultImportLog();
+        loadLibrary({ force: true, resetNested: true });
+        checkVaultSync(value);
+    }
+
+    function selectPlaylistOption(playlistId) {
+        state.selectedVaultId = null;
+        state.selectedPlaylistId = playlistId;
+        closeVaultMenu();
+        reconcileFilterSelection();
+        renderVaults();
+        renderFilterUI();
+        renderAssets();
+        loadLibrary({ force: true, resetNested: true });
+    }
+
+    function renderSidebar() {
+        const showAll = state.selectedVaultId === null && state.selectedPlaylistId === null;
+        if (sidebarVaultList) {
+            sidebarVaultList.replaceChildren();
+            const addSidebarVault = (value, label, selected) => {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = `sidebar-nav-item${selected ? ' active' : ''}`;
+                item.setAttribute('role', 'listitem');
+                item.setAttribute('aria-current', selected ? 'true' : 'false');
+                const text = document.createElement('span');
+                text.className = 'sidebar-nav-item-label';
+                text.textContent = label;
+                item.appendChild(text);
+                item.addEventListener('click', () => selectVaultOption(value));
+                sidebarVaultList.appendChild(item);
+            };
+
+            addSidebarVault(null, 'Show all', showAll);
+            state.vaults.forEach(vault => {
+                addSidebarVault(vault.id, vault.name, state.selectedPlaylistId === null && vault.id === state.selectedVaultId);
+            });
+        }
+
+        if (sidebarPlaylistList) {
+            sidebarPlaylistList.replaceChildren();
+            if (state.playlists && state.playlists.length) {
+                state.playlists.forEach(pl => {
+                    const selected = state.selectedPlaylistId === pl.id;
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = `sidebar-nav-item${selected ? ' active' : ''}`;
+                    item.setAttribute('role', 'listitem');
+                    item.setAttribute('aria-current', selected ? 'true' : 'false');
+                    const label = document.createElement('span');
+                    label.className = 'sidebar-nav-item-label';
+                    label.textContent = pl.name;
+                    const count = document.createElement('span');
+                    count.className = 'sidebar-nav-item-count';
+                    count.textContent = String(pl.item_count ?? 0);
+                    item.append(label, count);
+                    item.addEventListener('click', () => selectPlaylistOption(pl.id));
+                    sidebarPlaylistList.appendChild(item);
+                });
+            } else {
+                const empty = document.createElement('div');
+                empty.className = 'sidebar-empty';
+                empty.textContent = 'No playlists';
+                sidebarPlaylistList.appendChild(empty);
+            }
+        }
+    }
+
     function renderVaultMenu() {
-        if (!vaultMenuList) return;
         const activeVault = selectedVault();
         const activePlaylist = selectedPlaylist();
         const showAll = state.selectedVaultId === null && state.selectedPlaylistId === null;
@@ -4690,6 +4788,9 @@ function initializeGaiaLibrary() {
         if (playlistMenuRenameButton) playlistMenuRenameButton.disabled = !activePlaylist;
         if (playlistMenuDeleteButton) playlistMenuDeleteButton.disabled = !activePlaylist;
 
+        renderSidebar();
+
+        if (!vaultMenuList) return;
         vaultMenuList.replaceChildren();
         const addOption = (value, label, selected) => {
             const option = document.createElement('button');
@@ -4702,40 +4803,7 @@ function initializeGaiaLibrary() {
             option.append(text);
             option.addEventListener('click', event => {
                 event.stopPropagation();
-                state.selectedPlaylistId = null;
-                state.selectedVaultId = value;
-                closeVaultMenu();
-                reconcileFilterSelection();
-                renderVaults();
-                renderFilterUI();
-                renderAssets();
-                loadVaultImportLog();
-                loadLibrary({ force: true, resetNested: true });
-                checkVaultSync(value);
-            });
-
-            vaultMenuList.appendChild(option);
-        };
-
-        const addPlaylistOption = (playlistId, label, selected) => {
-            const option = document.createElement('button');
-            option.type = 'button';
-            option.className = `vault-menu-option sin-menu-item${selected ? ' active' : ''}`;
-            option.setAttribute('role', 'option');
-            option.setAttribute('aria-selected', String(selected));
-            const text = document.createElement('span');
-            text.textContent = `♪ ${label}`;
-            option.append(text);
-            option.addEventListener('click', event => {
-                event.stopPropagation();
-                state.selectedVaultId = null;
-                state.selectedPlaylistId = playlistId;
-                closeVaultMenu();
-                reconcileFilterSelection();
-                renderVaults();
-                renderFilterUI();
-                renderAssets();
-                loadLibrary({ force: true, resetNested: true });
+                selectVaultOption(value);
             });
 
             vaultMenuList.appendChild(option);
@@ -4749,34 +4817,6 @@ function initializeGaiaLibrary() {
             vaultMenuList.appendChild(divider);
         }
         state.vaults.forEach(vault => addOption(vault.id, vault.name, state.selectedPlaylistId === null && vault.id === state.selectedVaultId));
-
-        const plDivider = document.createElement('div');
-        plDivider.className = 'vault-menu-divider sin-menu-divider';
-        plDivider.setAttribute('aria-hidden', 'true');
-        vaultMenuList.appendChild(plDivider);
-
-        const header = document.createElement('div');
-        header.style.cssText = 'padding: 4px 10px; font-size: 11px; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;';
-        header.textContent = 'Playlists';
-        vaultMenuList.appendChild(header);
-
-        if (state.playlists && state.playlists.length) {
-            state.playlists.forEach(pl => addPlaylistOption(pl.id, `${pl.name} (${pl.item_count})`, state.selectedPlaylistId === pl.id));
-        }
-
-        const newPlOption = document.createElement('button');
-        newPlOption.type = 'button';
-        newPlOption.className = 'vault-menu-option sin-menu-item';
-        newPlOption.setAttribute('role', 'option');
-        const newPlText = document.createElement('span');
-        newPlText.textContent = '＋ New playlist…';
-        newPlOption.append(newPlText);
-        newPlOption.addEventListener('click', event => {
-            event.stopPropagation();
-            closeVaultMenu();
-            openPlaylistDialog('create');
-        });
-        vaultMenuList.appendChild(newPlOption);
     }
 
     function openVaultDialog(mode) {
@@ -5332,7 +5372,7 @@ function initializeGaiaLibrary() {
             if (cancelBtn) {
                 cancelBtn.onclick = async () => {
                     if (currentAnalysisTaskId) {
-                        await fetch(`/items/analyze-batch/${currentAnalysisTaskId}/cancel`, { method: 'POST' }).catch(() => {});
+                        await fetch(`/items/analyze-batch/${currentAnalysisTaskId}/cancel`, { method: 'POST' }).catch(() => { });
                     }
                     stopBatchAnalysisPolling();
                     if (progressContainer) progressContainer.classList.add('hidden');
@@ -5625,6 +5665,35 @@ function initializeGaiaLibrary() {
     vaultMenuSyncButton?.addEventListener('click', () => {
         closeAppMenus();
         openVaultSyncDialog();
+    });
+
+    function setSidebarOpen(isOpen, { persist = true } = {}) {
+        const open = Boolean(isOpen);
+        libraryLayout?.classList.toggle('sidebar-collapsed', !open);
+        sidebarToggle?.setAttribute('aria-expanded', String(open));
+        sidebarToggle?.classList.toggle('is-active', open);
+        if (persist) {
+            try {
+                localStorage.setItem('gaia_sidebar_open', open ? 'true' : 'false');
+            } catch (_err) {
+                // Ignore storage errors
+            }
+        }
+    }
+
+    try {
+        setSidebarOpen(localStorage.getItem('gaia_sidebar_open') === 'true', { persist: false });
+    } catch (_err) {
+        setSidebarOpen(false, { persist: false });
+    }
+
+    sidebarToggle?.addEventListener('click', () => {
+        const currentlyCollapsed = libraryLayout?.classList.contains('sidebar-collapsed') ?? true;
+        setSidebarOpen(currentlyCollapsed);
+    });
+
+    sidebarNewPlaylistButton?.addEventListener('click', () => {
+        openPlaylistDialog('create');
     });
 
     vaultPicker?.addEventListener('click', event => {
@@ -6158,7 +6227,7 @@ function initializeGaiaLibrary() {
     document.addEventListener('click', event => {
         if (event.button !== 0) return;
         if (event.target.closest('.asset-row, .subfolder-row')) return;
-        if (event.target.closest('button, input, select, textarea, label, dialog, .sin-menu-surface, .sin-menu-item, .app-menu-bar, .media-editor-dock, .filter-chip, .column-resizer, .file-version-selector')) {
+        if (event.target.closest('button, input, select, textarea, label, dialog, .sin-menu-surface, .sin-menu-item, .app-header, .app-menu-bar, .library-sidebar, .media-editor-dock, .filter-chip, .column-resizer, .file-version-selector')) {
             return;
         }
         clearSelection();
@@ -6252,6 +6321,10 @@ function initializeGaiaLibrary() {
 
     function inspectImportSource() {
         return importWizard?.inspectImportSource();
+    }
+
+    function loadSourcePicker(path = null) {
+        return importWizard?.loadSourcePicker(path);
     }
 
     document.getElementById('version-delete-close')?.addEventListener('click', () => versionDeleteDialog?.close());

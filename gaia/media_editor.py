@@ -215,6 +215,11 @@ def build_editor_session(
     if not root:
         raise ValueError("Item not found")
 
+    owning_proj = project_service._find_owning_project(db, root)
+    if owning_proj and owning_proj.id != root.id:
+        target_id = target_id or _target_id_for_item(root)
+        root = owning_proj
+
     if root.type in AUDIO_TYPES:
         candidates = [root]
     elif root.type == "multitrack":

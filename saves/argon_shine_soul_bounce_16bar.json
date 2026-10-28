@@ -1,0 +1,5148 @@
+{
+  "version": 2,
+  "savedAt": "2026-10-10T12:00:00.000Z",
+  "graph": {
+    "last_node_id": 45,
+    "last_link_id": 24,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Argon Deep 808 Pool",
+          "selected_items": [
+            {
+              "id": 2894
+            },
+            {
+              "id": 2895
+            },
+            {
+              "id": 2896
+            },
+            {
+              "id": 2897
+            },
+            {
+              "id": 2898
+            },
+            {
+              "id": 2899
+            },
+            {
+              "id": 2900
+            },
+            {
+              "id": 2901
+            },
+            {
+              "id": 2902
+            },
+            {
+              "id": 2903
+            },
+            {
+              "id": 2072
+            },
+            {
+              "id": 2073
+            },
+            {
+              "id": 2074
+            },
+            {
+              "id": 2075
+            },
+            {
+              "id": 2076
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 2
+        }
+      },
+      {
+        "id": 2,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              1
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Argon 808 Sub Core",
+          "sample_type": "one_shot",
+          "key_match_mode": "follow",
+          "key_match_algorithm": "nearest",
+          "chain": [
+            {
+              "id": "pre_gain_300",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7079,
+                "gain_db": -3.0
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "sample",
+          "asset_modifier_id": 1
+        }
+      },
+      {
+        "id": 3,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "808 Pocket Pattern Pool",
+          "selected_items": [
+            {
+              "id": 7354
+            },
+            {
+              "id": 7356
+            },
+            {
+              "id": 7274
+            },
+            {
+              "id": 7276
+            },
+            {
+              "id": 7279
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 4
+        }
+      },
+      {
+        "id": 4,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 1
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              2
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "808 Syncopated Glide Pocket",
+          "step_length": 0.25,
+          "total_bars": 4.0,
+          "play_mode": "gate",
+          "release": 0.06,
+          "sequence": [
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0.0,
+              "gate_length": 0.92,
+              "velocity": 0.96,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 0.92,
+              "velocity": 0.84,
+              "offset": 0.015,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 0.92,
+              "velocity": 0.9,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 0.92,
+              "velocity": 0.9,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 0.92,
+              "velocity": 0.84,
+              "offset": 0.015,
+              "probability": 85,
+              "subdivisions": 2,
+              "subdivision_enabled": true
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "node_type": "sequence",
+          "asset_modifier_id": 3
+        }
+      },
+      {
+        "id": 5,
+        "type": "Audio/Random",
+        "pos": [
+          380,
+          210
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "808 Sub Groove Modulator",
+          "seed": 108.0,
+          "seed_mode": "moving",
+          "refresh_mode": "global",
+          "destinations": [
+            {
+              "id": "rnd-808-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Sub Velocity Dynamics",
+              "minPercent": -10,
+              "maxPercent": 10,
+              "baseValue": 0.9,
+              "enabled": true,
+              "baseValueArray": [
+                0.96,
+                0.0,
+                0.0,
+                0.84,
+                0.0,
+                0.0,
+                0.9,
+                0.0,
+                0.0,
+                0.0,
+                0.9,
+                0.0,
+                0.0,
+                0.84,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "id": "rnd-808-off",
+              "paramKey": "offset",
+              "paramLabel": "Pocket Micro-Timing",
+              "minPercent": -6,
+              "maxPercent": 8,
+              "baseValue": 0.0,
+              "enabled": true,
+              "baseValueArray": [
+                0.0,
+                0.0,
+                0.0,
+                0.015,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.015,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "id": "rnd-808-prob",
+              "paramKey": "probability",
+              "paramLabel": "Turnaround Glide Probability",
+              "minPercent": -10,
+              "maxPercent": 0,
+              "baseValue": 100,
+              "enabled": true,
+              "baseValueArray": [
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                85,
+                100,
+                100
+              ]
+            }
+          ],
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -10.0,
+              "max": 10.0,
+              "type": "relative_percent"
+            }
+          ],
+          "node_type": "random",
+          "parentId": 4
+        }
+      },
+      {
+        "id": 6,
+        "type": "Audio/Arrangement",
+        "pos": [
+          880,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 2
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              3
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Arrangement",
+        "properties": {
+          "node_name": "808 4-Section Arrangement",
+          "total_bars": 16.0,
+          "section_points": [
+            4.0,
+            8.0,
+            12.0
+          ],
+          "section_probability": [
+            0.9,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "section_sample_start": [
+            0.0,
+            0.0,
+            0.25,
+            0.5
+          ],
+          "section_quant": [
+            "auto",
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start",
+            "start",
+            "start"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "node_type": "arrangement"
+        }
+      },
+      {
+        "id": 7,
+        "type": "Audio/Track",
+        "pos": [
+          1160,
+          120
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 3
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              4
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "Sub Bass Bus",
+          "chain": [
+            {
+              "id": "pre_gain_200",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7943,
+                "gain_db": -2.0
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "track"
+        }
+      },
+      {
+        "id": 8,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Argon Punch Kick Pool",
+          "selected_items": [
+            {
+              "id": 3532
+            },
+            {
+              "id": 3533
+            },
+            {
+              "id": 3534
+            },
+            {
+              "id": 3535
+            },
+            {
+              "id": 3536
+            },
+            {
+              "id": 3537
+            },
+            {
+              "id": 3538
+            },
+            {
+              "id": 3539
+            },
+            {
+              "id": 3540
+            },
+            {
+              "id": 3541
+            },
+            {
+              "id": 3542
+            },
+            {
+              "id": 3543
+            },
+            {
+              "id": 3544
+            },
+            {
+              "id": 3545
+            },
+            {
+              "id": 3546
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 9
+        }
+      },
+      {
+        "id": 9,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              5
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Crisp Punch Kick",
+          "sample_type": "one_shot",
+          "chain": [
+            {
+              "id": "pre_gain_150",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.8414,
+                "gain_db": -1.5
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "sample",
+          "asset_modifier_id": 8
+        }
+      },
+      {
+        "id": 10,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 9,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Kick Swing Pattern Pool",
+          "selected_items": [
+            {
+              "id": 7354
+            },
+            {
+              "id": 7355
+            },
+            {
+              "id": 7364
+            },
+            {
+              "id": 7267
+            },
+            {
+              "id": 7272
+            },
+            {
+              "id": 4170
+            },
+            {
+              "id": 4171
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 11
+        }
+      },
+      {
+        "id": 11,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 10,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 5
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              6
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Kick Soul Bounce Pocket",
+          "step_length": 0.25,
+          "total_bars": 4.0,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.98,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.9,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.62,
+              "offset": 0.024,
+              "probability": 82,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.9,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.9,
+              "offset": 0.018,
+              "probability": 92,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "node_type": "sequence",
+          "asset_modifier_id": 10
+        }
+      },
+      {
+        "id": 12,
+        "type": "Audio/Random",
+        "pos": [
+          380,
+          370
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 11,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Kick Pocket Humanizer",
+          "seed": 208.0,
+          "seed_mode": "moving",
+          "refresh_mode": "global",
+          "destinations": [
+            {
+              "id": "rnd-kick-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Kick Punch Velocity",
+              "minPercent": -8,
+              "maxPercent": 6,
+              "baseValue": 0.92,
+              "enabled": true,
+              "baseValueArray": [
+                0.98,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.9,
+                0.62,
+                0.0,
+                0.0,
+                0.9,
+                0.0,
+                0.0,
+                0.0,
+                0.9,
+                0.0
+              ]
+            },
+            {
+              "id": "rnd-kick-off",
+              "paramKey": "offset",
+              "paramLabel": "Dilla Swing Offset",
+              "minPercent": -5,
+              "maxPercent": 8,
+              "baseValue": 0.0,
+              "enabled": true,
+              "baseValueArray": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.024,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.018,
+                0.0
+              ]
+            },
+            {
+              "id": "rnd-kick-prob",
+              "paramKey": "probability",
+              "paramLabel": "Ghost Ruff Probability",
+              "minPercent": -12,
+              "maxPercent": 0,
+              "baseValue": 100,
+              "enabled": true,
+              "baseValueArray": [
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                82,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                92,
+                100
+              ]
+            }
+          ],
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -8.0,
+              "max": 6.0,
+              "type": "relative_percent"
+            }
+          ],
+          "node_type": "random",
+          "parentId": 11
+        }
+      },
+      {
+        "id": 13,
+        "type": "Audio/Arrangement",
+        "pos": [
+          880,
+          280
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 12,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 6
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              7
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Arrangement",
+        "properties": {
+          "node_name": "Kick 4-Section Arrangement",
+          "total_bars": 16.0,
+          "section_points": [
+            4.0,
+            8.0,
+            12.0
+          ],
+          "section_probability": [
+            0.95,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "section_sample_start": [
+            0.0,
+            0.0,
+            0.25,
+            0.0
+          ],
+          "section_quant": [
+            "auto",
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start",
+            "start",
+            "start"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "node_type": "arrangement"
+        }
+      },
+      {
+        "id": 14,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          440
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 13,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Snap Snare & Clap Pool",
+          "selected_items": [
+            {
+              "id": 3851
+            },
+            {
+              "id": 3852
+            },
+            {
+              "id": 3853
+            },
+            {
+              "id": 3854
+            },
+            {
+              "id": 3855
+            },
+            {
+              "id": 3856
+            },
+            {
+              "id": 3857
+            },
+            {
+              "id": 3858
+            },
+            {
+              "id": 3859
+            },
+            {
+              "id": 3860
+            },
+            {
+              "id": 3096
+            },
+            {
+              "id": 3097
+            },
+            {
+              "id": 3098
+            },
+            {
+              "id": 3099
+            },
+            {
+              "id": 3100
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 15
+        }
+      },
+      {
+        "id": 15,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          440
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 14,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              8
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Layered Snap Snare",
+          "sample_type": "one_shot",
+          "chain": [
+            {
+              "id": "pre_gain_200",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7943,
+                "gain_db": -2.0
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "sample",
+          "asset_modifier_id": 14
+        }
+      },
+      {
+        "id": 16,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          440
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 15,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Snare Backbeat Pattern Pool",
+          "selected_items": [
+            {
+              "id": 7357
+            },
+            {
+              "id": 7358
+            },
+            {
+              "id": 7365
+            },
+            {
+              "id": 7268
+            },
+            {
+              "id": 7270
+            },
+            {
+              "id": 4175
+            },
+            {
+              "id": 4176
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 17
+        }
+      },
+      {
+        "id": 17,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          440
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 16,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 8
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              9
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Snare Lazy Backbeat & Fill",
+          "step_length": 0.25,
+          "total_bars": 4.0,
+          "sequence": [
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.95,
+              "offset": 0.018,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.95,
+              "offset": 0.018,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.66,
+              "offset": 0.012,
+              "probability": 76,
+              "subdivisions": 2,
+              "subdivision_enabled": true
+            }
+          ],
+          "node_type": "sequence",
+          "asset_modifier_id": 16
+        }
+      },
+      {
+        "id": 18,
+        "type": "Audio/Random",
+        "pos": [
+          380,
+          530
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 17,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Snare Dynamics & Flam Modulator",
+          "seed": 308.0,
+          "seed_mode": "moving",
+          "refresh_mode": "global",
+          "destinations": [
+            {
+              "id": "rnd-snare-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Backbeat Crack Velocity",
+              "minPercent": -10,
+              "maxPercent": 6,
+              "baseValue": 0.95,
+              "enabled": true,
+              "baseValueArray": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.95,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.95,
+                0.0,
+                0.0,
+                0.66
+              ]
+            },
+            {
+              "id": "rnd-snare-off",
+              "paramKey": "offset",
+              "paramLabel": "Lazy Pocket Drag",
+              "minPercent": -4,
+              "maxPercent": 10,
+              "baseValue": 0.018,
+              "enabled": true,
+              "baseValueArray": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.018,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.018,
+                0.0,
+                0.0,
+                0.012
+              ]
+            },
+            {
+              "id": "rnd-snare-prob",
+              "paramKey": "probability",
+              "paramLabel": "Turnaround Fill Probability",
+              "minPercent": -18,
+              "maxPercent": 0,
+              "baseValue": 100,
+              "enabled": true,
+              "baseValueArray": [
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                76
+              ]
+            }
+          ],
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -10.0,
+              "max": 6.0,
+              "type": "relative_percent"
+            }
+          ],
+          "node_type": "random",
+          "parentId": 17
+        }
+      },
+      {
+        "id": 19,
+        "type": "Audio/Arrangement",
+        "pos": [
+          880,
+          440
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 18,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 9
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              10
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Arrangement",
+        "properties": {
+          "node_name": "Snare 4-Section Arrangement",
+          "total_bars": 16.0,
+          "section_points": [
+            4.0,
+            8.0,
+            12.0
+          ],
+          "section_probability": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "section_sample_start": [
+            0.0,
+            0.0,
+            0.0,
+            0.25
+          ],
+          "section_quant": [
+            "auto",
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start",
+            "start",
+            "end"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "node_type": "arrangement"
+        }
+      },
+      {
+        "id": 20,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          600
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 19,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Shimmer Crisp Hi-Hat Pool",
+          "selected_items": [
+            {
+              "id": 3431
+            },
+            {
+              "id": 3432
+            },
+            {
+              "id": 3433
+            },
+            {
+              "id": 3434
+            },
+            {
+              "id": 3435
+            },
+            {
+              "id": 3436
+            },
+            {
+              "id": 3437
+            },
+            {
+              "id": 3438
+            },
+            {
+              "id": 3439
+            },
+            {
+              "id": 3440
+            },
+            {
+              "id": 3441
+            },
+            {
+              "id": 3442
+            },
+            {
+              "id": 3443
+            },
+            {
+              "id": 3444
+            },
+            {
+              "id": 3445
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 21
+        }
+      },
+      {
+        "id": 21,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          600
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 20,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              11
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Shimmer Closed Hat",
+          "sample_type": "one_shot",
+          "chain": [
+            {
+              "id": "pre_gain_450",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5957,
+                "gain_db": -4.5
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "sample",
+          "asset_modifier_id": 20
+        }
+      },
+      {
+        "id": 22,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          600
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 21,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Hat 16th Roll Pattern Pool",
+          "selected_items": [
+            {
+              "id": 7360
+            },
+            {
+              "id": 7361
+            },
+            {
+              "id": 7366
+            },
+            {
+              "id": 7269
+            },
+            {
+              "id": 7271
+            },
+            {
+              "id": 4160
+            },
+            {
+              "id": 4161
+            },
+            {
+              "id": 4162
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 23
+        }
+      },
+      {
+        "id": 23,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          600
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 22,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 11
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              12
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Hat Swung 16th & Ratchet Rolls",
+          "step_length": 0.125,
+          "total_bars": 4.0,
+          "sequence": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.94,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 88,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.94,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 3,
+              "subdivision_enabled": true
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 88,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.94,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 88,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.94,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 88,
+              "subdivisions": 2,
+              "subdivision_enabled": true
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.86,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.58,
+              "offset": 0.022,
+              "probability": 100,
+              "subdivisions": 2,
+              "subdivision_enabled": true
+            }
+          ],
+          "node_type": "sequence",
+          "asset_modifier_id": 22
+        }
+      },
+      {
+        "id": 24,
+        "type": "Audio/Random",
+        "pos": [
+          380,
+          690
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 23,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Hat Shimmer Groove Modulator",
+          "seed": 408.0,
+          "seed_mode": "moving",
+          "refresh_mode": "global",
+          "destinations": [
+            {
+              "id": "rnd-hat-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Hat Wave Velocity",
+              "minPercent": -18,
+              "maxPercent": 12,
+              "baseValue": 0.75,
+              "enabled": true,
+              "baseValueArray": [
+                0.94,
+                0.58,
+                0.86,
+                0.58,
+                0.86,
+                0.58,
+                0.86,
+                0.0,
+                0.94,
+                0.58,
+                0.86,
+                0.58,
+                0.86,
+                0.58,
+                0.86,
+                0.58,
+                0.94,
+                0.58,
+                0.0,
+                0.58,
+                0.86,
+                0.58,
+                0.86,
+                0.58,
+                0.94,
+                0.58,
+                0.86,
+                0.58,
+                0.86,
+                0.58,
+                0.86,
+                0.58
+              ]
+            },
+            {
+              "id": "rnd-hat-off",
+              "paramKey": "offset",
+              "paramLabel": "16th Swing Micro-Offset",
+              "minPercent": -10,
+              "maxPercent": 12,
+              "baseValue": 0.015,
+              "enabled": true,
+              "baseValueArray": [
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.0,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022,
+                0.0,
+                0.022
+              ]
+            },
+            {
+              "id": "rnd-hat-prob",
+              "paramKey": "probability",
+              "paramLabel": "Skip & Roll Probability",
+              "minPercent": -14,
+              "maxPercent": 0,
+              "baseValue": 100,
+              "enabled": true,
+              "baseValueArray": [
+                100,
+                100,
+                100,
+                100,
+                100,
+                88,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                88,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                88,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                88,
+                100,
+                100
+              ]
+            }
+          ],
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -18.0,
+              "max": 12.0,
+              "type": "relative_percent"
+            }
+          ],
+          "node_type": "random",
+          "parentId": 23
+        }
+      },
+      {
+        "id": 25,
+        "type": "Audio/Arrangement",
+        "pos": [
+          880,
+          600
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 24,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 12
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              13
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Arrangement",
+        "properties": {
+          "node_name": "Hat 4-Section Arrangement",
+          "total_bars": 16.0,
+          "section_points": [
+            4.0,
+            8.0,
+            12.0
+          ],
+          "section_probability": [
+            0.9,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "section_sample_start": [
+            0.0,
+            0.25,
+            0.5,
+            0.75
+          ],
+          "section_quant": [
+            "auto",
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start",
+            "end",
+            "end"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "node_type": "arrangement"
+        }
+      },
+      {
+        "id": 26,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 25,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Crystal Rim & Shaker Perc Pool",
+          "selected_items": [
+            {
+              "id": 3927
+            },
+            {
+              "id": 3928
+            },
+            {
+              "id": 3929
+            },
+            {
+              "id": 3930
+            },
+            {
+              "id": 3931
+            },
+            {
+              "id": 3932
+            },
+            {
+              "id": 3933
+            },
+            {
+              "id": 3934
+            },
+            {
+              "id": 3851
+            },
+            {
+              "id": 3852
+            },
+            {
+              "id": 3853
+            },
+            {
+              "id": 3854
+            },
+            {
+              "id": 3855
+            },
+            {
+              "id": 3856
+            },
+            {
+              "id": 3709
+            },
+            {
+              "id": 3710
+            },
+            {
+              "id": 3711
+            },
+            {
+              "id": 3712
+            },
+            {
+              "id": 3713
+            },
+            {
+              "id": 3714
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 27
+        }
+      },
+      {
+        "id": 27,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 26,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              14
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Crystal Ghost Rim & Perc",
+          "sample_type": "one_shot",
+          "chain": [
+            {
+              "id": "pre_gain_600",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5012,
+                "gain_db": -6.0
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "sample",
+          "asset_modifier_id": 26
+        }
+      },
+      {
+        "id": 28,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 27,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Ghost Counter-Rhythm Pool",
+          "selected_items": [
+            {
+              "id": 7363
+            },
+            {
+              "id": 7367
+            },
+            {
+              "id": 7275
+            },
+            {
+              "id": 7278
+            },
+            {
+              "id": 7281
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 29
+        }
+      },
+      {
+        "id": 29,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 28,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 14
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              15
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Ghost Rim Syncopated Pocket",
+          "step_length": 0.125,
+          "total_bars": 4.0,
+          "sequence": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.72,
+              "offset": -0.01,
+              "probability": 88,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.56,
+              "offset": 0.02,
+              "probability": 78,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.56,
+              "offset": 0.02,
+              "probability": 88,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.72,
+              "offset": -0.01,
+              "probability": 88,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.72,
+              "offset": -0.01,
+              "probability": 88,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.56,
+              "offset": 0.02,
+              "probability": 88,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.56,
+              "offset": 0.02,
+              "probability": 78,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.56,
+              "offset": 0.02,
+              "probability": 88,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.72,
+              "offset": -0.01,
+              "probability": 78,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.56,
+              "offset": 0.02,
+              "probability": 88,
+              "subdivisions": 2,
+              "subdivision_enabled": true
+            }
+          ],
+          "node_type": "sequence",
+          "asset_modifier_id": 28
+        }
+      },
+      {
+        "id": 30,
+        "type": "Audio/Random",
+        "pos": [
+          380,
+          850
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 29,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Ghost Perc Dynamics Modulator",
+          "seed": 508.0,
+          "seed_mode": "moving",
+          "refresh_mode": "global",
+          "destinations": [
+            {
+              "id": "rnd-perc-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Ghost Note Accent",
+              "minPercent": -22,
+              "maxPercent": 15,
+              "baseValue": 0.64,
+              "enabled": true,
+              "baseValueArray": [
+                0.0,
+                0.0,
+                0.72,
+                0.0,
+                0.0,
+                0.56,
+                0.0,
+                0.0,
+                0.0,
+                0.56,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.72,
+                0.0,
+                0.0,
+                0.0,
+                0.72,
+                0.0,
+                0.0,
+                0.56,
+                0.0,
+                0.56,
+                0.0,
+                0.56,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.72,
+                0.56
+              ]
+            },
+            {
+              "id": "rnd-perc-off",
+              "paramKey": "offset",
+              "paramLabel": "Syncopated Jitter",
+              "minPercent": -12,
+              "maxPercent": 12,
+              "baseValue": 0.0,
+              "enabled": true,
+              "baseValueArray": [
+                0.0,
+                0.0,
+                -0.01,
+                0.0,
+                0.0,
+                0.02,
+                0.0,
+                0.0,
+                0.0,
+                0.02,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -0.01,
+                0.0,
+                0.0,
+                0.0,
+                -0.01,
+                0.0,
+                0.0,
+                0.02,
+                0.0,
+                0.02,
+                0.0,
+                0.02,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -0.01,
+                0.02
+              ]
+            },
+            {
+              "id": "rnd-perc-prob",
+              "paramKey": "probability",
+              "paramLabel": "Ghost Trigger Probability",
+              "minPercent": -20,
+              "maxPercent": 0,
+              "baseValue": 88,
+              "enabled": true,
+              "baseValueArray": [
+                100,
+                100,
+                88,
+                100,
+                100,
+                78,
+                100,
+                100,
+                100,
+                88,
+                100,
+                100,
+                100,
+                100,
+                88,
+                100,
+                100,
+                100,
+                88,
+                100,
+                100,
+                88,
+                100,
+                78,
+                100,
+                88,
+                100,
+                100,
+                100,
+                100,
+                78,
+                88
+              ]
+            }
+          ],
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -22.0,
+              "max": 15.0,
+              "type": "relative_percent"
+            }
+          ],
+          "node_type": "random",
+          "parentId": 29
+        }
+      },
+      {
+        "id": 31,
+        "type": "Audio/Arrangement",
+        "pos": [
+          880,
+          760
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 30,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 15
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              16
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Arrangement",
+        "properties": {
+          "node_name": "Ghost Perc Arrangement",
+          "total_bars": 16.0,
+          "section_points": [
+            4.0,
+            8.0,
+            12.0
+          ],
+          "section_probability": [
+            0.7,
+            0.95,
+            0.85,
+            1.0
+          ],
+          "section_sample_start": [
+            0.0,
+            0.25,
+            0.5,
+            0.0
+          ],
+          "section_quant": [
+            "auto",
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start",
+            "start",
+            "start"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "node_type": "arrangement"
+        }
+      },
+      {
+        "id": 32,
+        "type": "Audio/Track",
+        "pos": [
+          1160,
+          520
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 31,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 7
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 10
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 13
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 16
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              17
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "Punch Drum Bus",
+          "chain": [
+            {
+              "id": "pre_gain_150",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.8414,
+                "gain_db": -1.5
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "track"
+        }
+      },
+      {
+        "id": 33,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          920
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 32,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Vinyl & Organic Atmosphere Pool",
+          "selected_items": [
+            {
+              "id": 482
+            },
+            {
+              "id": 7266
+            },
+            {
+              "id": 7265
+            },
+            {
+              "id": 7263
+            },
+            {
+              "id": 11848
+            },
+            {
+              "id": 3353
+            },
+            {
+              "id": 3399
+            },
+            {
+              "id": 3420
+            },
+            {
+              "id": 3348
+            },
+            {
+              "id": 3335
+            },
+            {
+              "id": 3791
+            },
+            {
+              "id": 2272
+            },
+            {
+              "id": 2273
+            },
+            {
+              "id": 2274
+            },
+            {
+              "id": 2275
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 34
+        }
+      },
+      {
+        "id": 34,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          920
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 33,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              18
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Warm Vinyl & Field Bed",
+          "sample_type": "loop",
+          "chain": [
+            {
+              "id": "pre_gain_1450",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.1884,
+                "gain_db": -14.5
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "sample",
+          "asset_modifier_id": 33
+        }
+      },
+      {
+        "id": 35,
+        "type": "Audio/Arrangement",
+        "pos": [
+          600,
+          920
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 34,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 18
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              19
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Arrangement",
+        "properties": {
+          "node_name": "Atmosphere Arrangement",
+          "total_bars": 16.0,
+          "section_points": [
+            8.0
+          ],
+          "section_probability": [
+            1.0,
+            1.0
+          ],
+          "section_sample_start": [
+            0.0,
+            0.15
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "node_type": "arrangement"
+        }
+      },
+      {
+        "id": 36,
+        "type": "Audio/Track",
+        "pos": [
+          880,
+          920
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 35,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 19
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              20
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "Atmosphere Bus",
+          "chain": [
+            {
+              "id": "pre_gain_0",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "track"
+        }
+      },
+      {
+        "id": 37,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          100,
+          1080
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 36,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Argon Soul & Analog Synth Crate Pool",
+          "selected_items": [
+            {
+              "id": 626
+            },
+            {
+              "id": 627
+            },
+            {
+              "id": 628
+            },
+            {
+              "id": 629
+            },
+            {
+              "id": 630
+            },
+            {
+              "id": 631
+            },
+            {
+              "id": 632
+            },
+            {
+              "id": 633
+            },
+            {
+              "id": 634
+            },
+            {
+              "id": 635
+            },
+            {
+              "id": 636
+            },
+            {
+              "id": 637
+            },
+            {
+              "id": 13287
+            },
+            {
+              "id": 13288
+            },
+            {
+              "id": 13289
+            },
+            {
+              "id": 13290
+            },
+            {
+              "id": 13291
+            },
+            {
+              "id": 13294
+            },
+            {
+              "id": 13295
+            },
+            {
+              "id": 13296
+            },
+            {
+              "id": 13299
+            },
+            {
+              "id": 13300
+            },
+            {
+              "id": 13301
+            },
+            {
+              "id": 13302
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 38
+        }
+      },
+      {
+        "id": 38,
+        "type": "Audio/Sample",
+        "pos": [
+          320,
+          1080
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 37,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              21
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sample",
+        "properties": {
+          "node_name": "Prism Soul & Synth Lead Source",
+          "sample_type": "loop",
+          "key": "Cm",
+          "key_match_mode": "lead",
+          "chain": [
+            {
+              "id": "pre_gain_300",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7079,
+                "gain_db": -3.0
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "sample",
+          "asset_modifier_id": 37
+        }
+      },
+      {
+        "id": 39,
+        "type": "Audio/AssetFilter",
+        "pos": [
+          380,
+          1080
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 38,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool",
+        "properties": {
+          "node_name": "Melodic Slice Pattern Pool",
+          "selected_items": [
+            {
+              "id": 4220
+            },
+            {
+              "id": 4221
+            },
+            {
+              "id": 4205
+            },
+            {
+              "id": 4193
+            },
+            {
+              "id": 4192
+            },
+            {
+              "id": 4208
+            },
+            {
+              "id": 4206
+            },
+            {
+              "id": 4207
+            },
+            {
+              "id": 4180
+            },
+            {
+              "id": 4224
+            },
+            {
+              "id": 4217
+            },
+            {
+              "id": 4213
+            },
+            {
+              "id": 4214
+            },
+            {
+              "id": 4228
+            },
+            {
+              "id": 4225
+            },
+            {
+              "id": 7267
+            },
+            {
+              "id": 7271
+            },
+            {
+              "id": 7272
+            },
+            {
+              "id": 7277
+            },
+            {
+              "id": 7278
+            },
+            {
+              "id": 7280
+            },
+            {
+              "id": 7281
+            },
+            {
+              "id": 7282
+            },
+            {
+              "id": 7285
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "output_type": "asset_path",
+          "node_type": "asset_filter",
+          "parentId": 40
+        }
+      },
+      {
+        "id": 40,
+        "type": "Audio/Sequence",
+        "pos": [
+          600,
+          1080
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 39,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 21
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              22
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Sequence",
+        "properties": {
+          "node_name": "Prism Melodic Chop Sequencer",
+          "step_length": 0.125,
+          "total_bars": 4.0,
+          "play_mode": "gate",
+          "release": 0.08,
+          "sequence": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0.0,
+              "gate_length": 0.92,
+              "velocity": 0.95,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.125,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.25,
+              "gate_length": 0.92,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.375,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.5,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.012,
+              "probability": 92,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 0.92,
+              "velocity": 0.95,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.25,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.5,
+              "gate_length": 0.92,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.625,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.012,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.75,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.012,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.125,
+              "gate_length": 0.92,
+              "velocity": 0.95,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.375,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.5,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.012,
+              "probability": 92,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.25,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.012,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.625,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 0.92,
+              "velocity": 0.95,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.0,
+              "gate_length": 1.0,
+              "velocity": 0.0,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.375,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.5,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.012,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.625,
+              "gate_length": 0.92,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.75,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.012,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.875,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.0,
+              "probability": 92,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0.5,
+              "gate_length": 0.85,
+              "velocity": 0.88,
+              "offset": 0.012,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "node_type": "sequence",
+          "asset_modifier_id": 39
+        }
+      },
+      {
+        "id": 41,
+        "type": "Audio/Random",
+        "pos": [
+          380,
+          1170
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 40,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Melodic Chops Expression Modulator",
+          "seed": 608.0,
+          "seed_mode": "moving",
+          "refresh_mode": "global",
+          "destinations": [
+            {
+              "id": "rnd-mel-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Chop Phrasing Velocity",
+              "minPercent": -12,
+              "maxPercent": 8,
+              "baseValue": 0.9,
+              "enabled": true,
+              "baseValueArray": [
+                0.95,
+                0.0,
+                0.88,
+                0.0,
+                0.88,
+                0.0,
+                0.88,
+                0.88,
+                0.95,
+                0.0,
+                0.88,
+                0.0,
+                0.88,
+                0.88,
+                0.0,
+                0.88,
+                0.95,
+                0.0,
+                0.88,
+                0.88,
+                0.0,
+                0.88,
+                0.88,
+                0.0,
+                0.95,
+                0.0,
+                0.88,
+                0.88,
+                0.88,
+                0.88,
+                0.88,
+                0.88
+              ]
+            },
+            {
+              "id": "rnd-mel-off",
+              "paramKey": "offset",
+              "paramLabel": "MPC Chop Swing",
+              "minPercent": -5,
+              "maxPercent": 6,
+              "baseValue": 0.0,
+              "enabled": true,
+              "baseValueArray": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.012,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.012,
+                0.0,
+                0.012,
+                0.0,
+                0.0,
+                0.0,
+                0.012,
+                0.0,
+                0.012,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.012,
+                0.0,
+                0.012,
+                0.0,
+                0.012
+              ]
+            },
+            {
+              "id": "rnd-mel-prob",
+              "paramKey": "probability",
+              "paramLabel": "Pickup Chop Probability",
+              "minPercent": -10,
+              "maxPercent": 0,
+              "baseValue": 100,
+              "enabled": true,
+              "baseValueArray": [
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                92,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                92,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                92,
+                100
+              ]
+            }
+          ],
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -12.0,
+              "max": 8.0,
+              "type": "relative_percent"
+            }
+          ],
+          "node_type": "random",
+          "parentId": 40
+        }
+      },
+      {
+        "id": 42,
+        "type": "Audio/Arrangement",
+        "pos": [
+          880,
+          1080
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 41,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 22
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              23
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Arrangement",
+        "properties": {
+          "node_name": "Melodic 4-Section Progression",
+          "total_bars": 16.0,
+          "section_points": [
+            4.0,
+            8.0,
+            12.0
+          ],
+          "section_probability": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "section_sample_start": [
+            0.0,
+            0.25,
+            0.5,
+            0.75
+          ],
+          "section_quant": [
+            "auto",
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start",
+            "start",
+            "start"
+          ],
+          "quant": "auto",
+          "quant_anchor": "start",
+          "node_type": "arrangement"
+        }
+      },
+      {
+        "id": 43,
+        "type": "Audio/Random",
+        "pos": [
+          660,
+          1080
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 42,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Random",
+        "properties": {
+          "node_name": "Section Slice Progression Modulator",
+          "seed": 708.0,
+          "seed_mode": "moving",
+          "refresh_mode": "global",
+          "destinations": [
+            {
+              "id": "rnd-mel-arr-start",
+              "paramKey": "section_sample_start",
+              "paramLabel": "Section Phrase Offset",
+              "minPercent": -15,
+              "maxPercent": 15,
+              "baseValue": 0.25,
+              "enabled": true,
+              "baseValueArray": [
+                0.0,
+                0.25,
+                0.5,
+                0.75
+              ]
+            }
+          ],
+          "targets": [
+            {
+              "field": "section_sample_start",
+              "min": -15.0,
+              "max": 15.0,
+              "type": "relative_percent"
+            }
+          ],
+          "node_type": "random",
+          "parentId": 42
+        }
+      },
+      {
+        "id": 44,
+        "type": "Audio/Track",
+        "pos": [
+          1160,
+          1080
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 43,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 23
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              24
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "Melodic Prism Bus",
+          "chain": [
+            {
+              "id": "pre_gain_150",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.8414,
+                "gain_db": -1.5
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1.0,
+                "gain_db": 0.0
+              }
+            }
+          ],
+          "node_type": "track"
+        }
+      },
+      {
+        "id": 45,
+        "type": "Audio/Track",
+        "pos": [
+          1440,
+          660
+        ],
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 44,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 4
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 17
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 20
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 24
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": null,
+            "slot_index": 0
+          }
+        ],
+        "title": "Track",
+        "properties": {
+          "node_name": "Master Output",
+          "chain": [
+            {
+              "id": "pre_gain_250",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7499,
+                "gain_db": -2.5
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7079,
+                "gain_db": -3.0
+              }
+            }
+          ],
+          "node_type": "track"
+        }
+      }
+    ],
+    "links": [
+      [
+        1,
+        2,
+        0,
+        4,
+        0,
+        "audio"
+      ],
+      [
+        2,
+        4,
+        0,
+        6,
+        0,
+        "audio"
+      ],
+      [
+        3,
+        6,
+        0,
+        7,
+        0,
+        "audio"
+      ],
+      [
+        4,
+        7,
+        0,
+        45,
+        0,
+        "audio"
+      ],
+      [
+        5,
+        9,
+        0,
+        11,
+        0,
+        "audio"
+      ],
+      [
+        6,
+        11,
+        0,
+        13,
+        0,
+        "audio"
+      ],
+      [
+        7,
+        13,
+        0,
+        32,
+        0,
+        "audio"
+      ],
+      [
+        8,
+        15,
+        0,
+        17,
+        0,
+        "audio"
+      ],
+      [
+        9,
+        17,
+        0,
+        19,
+        0,
+        "audio"
+      ],
+      [
+        10,
+        19,
+        0,
+        32,
+        1,
+        "audio"
+      ],
+      [
+        11,
+        21,
+        0,
+        23,
+        0,
+        "audio"
+      ],
+      [
+        12,
+        23,
+        0,
+        25,
+        0,
+        "audio"
+      ],
+      [
+        13,
+        25,
+        0,
+        32,
+        2,
+        "audio"
+      ],
+      [
+        14,
+        27,
+        0,
+        29,
+        0,
+        "audio"
+      ],
+      [
+        15,
+        29,
+        0,
+        31,
+        0,
+        "audio"
+      ],
+      [
+        16,
+        31,
+        0,
+        32,
+        3,
+        "audio"
+      ],
+      [
+        17,
+        32,
+        0,
+        45,
+        1,
+        "audio"
+      ],
+      [
+        18,
+        34,
+        0,
+        35,
+        0,
+        "audio"
+      ],
+      [
+        19,
+        35,
+        0,
+        36,
+        0,
+        "audio"
+      ],
+      [
+        20,
+        36,
+        0,
+        45,
+        2,
+        "audio"
+      ],
+      [
+        21,
+        38,
+        0,
+        40,
+        0,
+        "audio"
+      ],
+      [
+        22,
+        40,
+        0,
+        42,
+        0,
+        "audio"
+      ],
+      [
+        23,
+        42,
+        0,
+        44,
+        0,
+        "audio"
+      ],
+      [
+        24,
+        44,
+        0,
+        45,
+        3,
+        "audio"
+      ]
+    ],
+    "groups": [],
+    "config": {
+      "links_ontop": true
+    },
+    "extra": {
+      "global_parameters": {
+        "bpm": 136.0,
+        "total_bars": 16,
+        "key": "Cm"
+      },
+      "main_preview": {
+        "node_id": 45,
+        "mode": "auto"
+      }
+    },
+    "version": 0.4
+  }
+}

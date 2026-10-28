@@ -1,0 +1,5603 @@
+{
+  "version": 2,
+  "savedAt": "2026-10-28T09:38:31.523Z",
+  "graph": {
+    "last_node_id": 44,
+    "last_link_id": 25,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 228,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Trap Drill 808 Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 2894
+            },
+            {
+              "id": 2895
+            },
+            {
+              "id": 2896
+            },
+            {
+              "id": 2897
+            },
+            {
+              "id": 2898
+            },
+            {
+              "id": 2899
+            },
+            {
+              "id": 2900
+            },
+            {
+              "id": 2901
+            },
+            {
+              "id": 2902
+            },
+            {
+              "id": 2903
+            },
+            {
+              "id": 2072
+            },
+            {
+              "id": 2073
+            },
+            {
+              "id": 2074
+            },
+            {
+              "id": 2075
+            },
+            {
+              "id": 2076
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.6351693504765011,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "parentId": 2,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "is_main_preview": false,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 2,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              1
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_300",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7079,
+                "gain_db": -3
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "808 Sub Core",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "follow",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": -3,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "node_type": "sample",
+          "asset_modifier_id": 1,
+          "is_main_preview": false,
+          "key_match_target": "F#"
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 3,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 660,
+          "1": 228,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "808 Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 7354
+            },
+            {
+              "id": 7356
+            },
+            {
+              "id": 7274
+            },
+            {
+              "id": 7276
+            },
+            {
+              "id": 7279
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.5068401179429648,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 4,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 4,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 26,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 1
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              2
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Lo-Fi Kick - Dilla Swing",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_yosxn7",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_5yw7np",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Lo-Fi Kick - Dilla Swing",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0.035,
+              "velocity": 0.85,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0.02,
+              "velocity": 0.92,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "gate",
+          "release": 0.05,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 1195,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "asset_modifier_id": 3,
+          "target_bpm": 120,
+          "length_source_id": 5
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 6,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 716,
+          "1": 228,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_7ymvkp",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_z0kgib",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "808 Humanizer",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 18198,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -10,
+              "max": 10,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 4,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 7,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1160,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 40,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 3
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              4
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_obv3ys",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_7agehs",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "808 Sub Track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 8,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 388,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Punch Trap Kick Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 3532
+            },
+            {
+              "id": 3533
+            },
+            {
+              "id": 3534
+            },
+            {
+              "id": 3535
+            },
+            {
+              "id": 3536
+            },
+            {
+              "id": 3537
+            },
+            {
+              "id": 3538
+            },
+            {
+              "id": 3539
+            },
+            {
+              "id": 3540
+            },
+            {
+              "id": 3541
+            },
+            {
+              "id": 3542
+            },
+            {
+              "id": 3543
+            },
+            {
+              "id": 3544
+            },
+            {
+              "id": 3545
+            },
+            {
+              "id": 3546
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.4400585639416348,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 9,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 9,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 280,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              5
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_100",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.8913,
+                "gain_db": -1
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Kick Punch",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 8,
+          "key_match_target": ""
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 10,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 660,
+          "1": 388,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Kick Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 7354
+            },
+            {
+              "id": 7355
+            },
+            {
+              "id": 7364
+            },
+            {
+              "id": 7267
+            },
+            {
+              "id": 7272
+            },
+            {
+              "id": 4170
+            },
+            {
+              "id": 4171
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.45238905225203996,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 11,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 12,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 280,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 34,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 6
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              7
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_pk2sub",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_1mnxmq",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Kick Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.020199265788936716,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "quant": "auto",
+          "quant_anchor": "start",
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 13,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 716,
+          "1": 388,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_h5maaw",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_qz7dfm",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Kick Velocity Randomizer",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 501619,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -6,
+              "max": 6,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 11,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 14,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 548,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Drill Snare & Clap Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 3851
+            },
+            {
+              "id": 3852
+            },
+            {
+              "id": 3853
+            },
+            {
+              "id": 3854
+            },
+            {
+              "id": 3855
+            },
+            {
+              "id": 3856
+            },
+            {
+              "id": 3857
+            },
+            {
+              "id": 3858
+            },
+            {
+              "id": 3859
+            },
+            {
+              "id": 3860
+            },
+            {
+              "id": 3096
+            },
+            {
+              "id": 3097
+            },
+            {
+              "id": 3098
+            },
+            {
+              "id": 3099
+            },
+            {
+              "id": 3100
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.5350898841219173,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 15,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 16,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 660,
+          "1": 548,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 9,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Snare Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 7357
+            },
+            {
+              "id": 7358
+            },
+            {
+              "id": 7365
+            },
+            {
+              "id": 7268
+            },
+            {
+              "id": 7270
+            },
+            {
+              "id": 4175
+            },
+            {
+              "id": 4176
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.033207634336331004,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 17,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 17,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 440,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 32,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 8
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              9
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "00100010",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_5dlfjx",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_n1osgo",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "00100010",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "gate",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 5773,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "asset_modifier_id": 16,
+          "target_bpm": 120,
+          "length_source_id": 18
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 19,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 716,
+          "1": 548,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 10,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_kyxf72",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_dk3kxs",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Snare Dynamics Modulator",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 430846,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -8,
+              "max": 5,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 17,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 20,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 708,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 11,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Drill Swung Hat Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 3431
+            },
+            {
+              "id": 3432
+            },
+            {
+              "id": 3433
+            },
+            {
+              "id": 3434
+            },
+            {
+              "id": 3435
+            },
+            {
+              "id": 3436
+            },
+            {
+              "id": 3437
+            },
+            {
+              "id": 3438
+            },
+            {
+              "id": 3439
+            },
+            {
+              "id": 3440
+            },
+            {
+              "id": 3441
+            },
+            {
+              "id": 3442
+            },
+            {
+              "id": 3443
+            },
+            {
+              "id": 3444
+            },
+            {
+              "id": 3445
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.23390617211832543,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 21,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 21,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 600,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 12,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              11
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_400",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.631,
+                "gain_db": -4
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Closed Hat",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 20,
+          "key_match_target": ""
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 22,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 660,
+          "1": 708,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 13,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Hat Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 7360
+            },
+            {
+              "id": 7361
+            },
+            {
+              "id": 7366
+            },
+            {
+              "id": 7269
+            },
+            {
+              "id": 7271
+            },
+            {
+              "id": 4160
+            },
+            {
+              "id": 4161
+            },
+            {
+              "id": 4162
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.22047855390794924,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 23,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 24,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 600,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 35,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 12
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              13
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_x4cfei",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_askpgs",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Hat Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "end"
+          ],
+          "seed": 0.7295179287957531,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "quant": "auto",
+          "quant_anchor": "start",
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 25,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 716,
+          "1": 708,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 14,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_jyhue7",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_orzqa5",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Hat Swing & Velocity Humanizer",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 842624,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -15,
+              "max": 10,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 23,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 26,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 868,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 15,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Ghost Snare & Layer Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 3927
+            },
+            {
+              "id": 3928
+            },
+            {
+              "id": 3929
+            },
+            {
+              "id": 3930
+            },
+            {
+              "id": 3931
+            },
+            {
+              "id": 3932
+            },
+            {
+              "id": 3933
+            },
+            {
+              "id": 3934
+            },
+            {
+              "id": 3851
+            },
+            {
+              "id": 3852
+            },
+            {
+              "id": 3853
+            },
+            {
+              "id": 3854
+            },
+            {
+              "id": 3855
+            },
+            {
+              "id": 3856
+            },
+            {
+              "id": 3709
+            },
+            {
+              "id": 3710
+            },
+            {
+              "id": 3711
+            },
+            {
+              "id": 3712
+            },
+            {
+              "id": 3713
+            },
+            {
+              "id": 3714
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.10348873317708263,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 27,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 27,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 760,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 16,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              14
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_600",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5012,
+                "gain_db": -6
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Ghost Snare / Rim Layer",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 26,
+          "key_match_target": ""
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 28,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 660,
+          "1": 868,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 17,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Ghost Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 7363
+            },
+            {
+              "id": 7367
+            },
+            {
+              "id": 7275
+            },
+            {
+              "id": 7278
+            },
+            {
+              "id": 7281
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.9813039134354352,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 29,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 29,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 760,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 29,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 14
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              15
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "01020102",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_kk0dr0",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_53rp7h",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "01020102",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.125,
+          "play_mode": "gate",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 7905,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "asset_modifier_id": 28,
+          "target_bpm": 120,
+          "length_source_id": 30
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 30,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 760,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 36,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 15
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              16
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_l9po6w",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_5nho8m",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Ghost Snare Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            0.75,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.17952653540714747,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "quant": "auto",
+          "quant_anchor": "start",
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 31,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 716,
+          "1": 868,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 18,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_xxgffq",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_zgnxog",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Ghost Dynamics Modulator",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 993447,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -20,
+              "max": 15,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 29,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 32,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1160,
+          "1": 520,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 42,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 7
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 25
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 13
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 16
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              17
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_1jmy46",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_937mmd",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Drums Bus",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 33,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 1028,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 19,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Vinyl & Tape Atmosphere Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 482
+            },
+            {
+              "id": 7266
+            },
+            {
+              "id": 7265
+            },
+            {
+              "id": 7263
+            },
+            {
+              "id": 11848
+            },
+            {
+              "id": 3353
+            },
+            {
+              "id": 3399
+            },
+            {
+              "id": 3420
+            },
+            {
+              "id": 3348
+            },
+            {
+              "id": 3335
+            },
+            {
+              "id": 3791
+            },
+            {
+              "id": 2272
+            },
+            {
+              "id": 2273
+            },
+            {
+              "id": 2274
+            },
+            {
+              "id": 2275
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.6329134974328589,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 34,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 34,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 920,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 20,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              18
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_1400",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.1995,
+                "gain_db": -14
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Vinyl & Tape Atmosphere",
+          "sample_type": "loop",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 33,
+          "key_match_target": "",
+          "length_inherited": true,
+          "length_source_id": 35
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 35,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 600,
+          "1": 920,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 30,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 18
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              19
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_46kiqg",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_16bjec",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Texture Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0.1
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.6417825038800543,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "quant": "auto",
+          "quant_anchor": "start",
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 36,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 880,
+          "1": 920,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 37,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 19
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              20
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_67tcm5",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_dftgcd",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Texture Track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 37,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 1188,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 21,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Vintage Crate Loop Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 626
+            },
+            {
+              "id": 627
+            },
+            {
+              "id": 628
+            },
+            {
+              "id": 629
+            },
+            {
+              "id": 630
+            },
+            {
+              "id": 631
+            },
+            {
+              "id": 632
+            },
+            {
+              "id": 633
+            },
+            {
+              "id": 634
+            },
+            {
+              "id": 635
+            },
+            {
+              "id": 636
+            },
+            {
+              "id": 637
+            },
+            {
+              "id": 13287
+            },
+            {
+              "id": 13288
+            },
+            {
+              "id": 13289
+            },
+            {
+              "id": 13290
+            },
+            {
+              "id": 13291
+            },
+            {
+              "id": 13294
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.9818230743998849,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 38,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 38,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 22,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              21
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_300",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7079,
+                "gain_db": -3
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Vintage Melodic Source",
+          "sample_type": "loop",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 37,
+          "key_match_target": "",
+          "length_inherited": true,
+          "length_source_id": 40
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 39,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 660,
+          "1": 1188,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 23,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Melodic Chop Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 4220
+            },
+            {
+              "id": 4221
+            },
+            {
+              "id": 4205
+            },
+            {
+              "id": 4193
+            },
+            {
+              "id": 4192
+            },
+            {
+              "id": 4208
+            },
+            {
+              "id": 4206
+            },
+            {
+              "id": 4207
+            },
+            {
+              "id": 4180
+            },
+            {
+              "id": 4224
+            },
+            {
+              "id": 4217
+            },
+            {
+              "id": 4213
+            },
+            {
+              "id": 4214
+            },
+            {
+              "id": 4228
+            },
+            {
+              "id": 4225
+            },
+            {
+              "id": 7267
+            },
+            {
+              "id": 7271
+            },
+            {
+              "id": 7272
+            },
+            {
+              "id": 7277
+            },
+            {
+              "id": 7278
+            },
+            {
+              "id": 7280
+            },
+            {
+              "id": 7281
+            },
+            {
+              "id": 7282
+            },
+            {
+              "id": 7285
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 0.5428948891211007,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 40,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 40,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 31,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 21
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              22
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "10100001",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_nbf67b",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_lb8jle",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "10100001",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.125,
+          "play_mode": "gate",
+          "release": 0.08,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 8971,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "asset_modifier_id": 39,
+          "target_bpm": 120,
+          "length_source_id": 41
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 42,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 716,
+          "1": 1188,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 24,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_12no56",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_q21zwk",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Melodic Dynamics Modulator",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 390352,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -10,
+              "max": 8,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 40,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 11,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 280,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 27,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 5
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              6
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Cloud Kick - Heavy Offbeat Drive",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_v9p9ir",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_apmejl",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Cloud Kick - Heavy Offbeat Drive",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0.02,
+              "velocity": 0.85,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "gate",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 6750,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "asset_modifier_id": 10,
+          "target_bpm": 120,
+          "length_source_id": 12
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 23,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 600,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 28,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 11
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              12
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "10101010",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_j1zp3t",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_ua31vb",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "10101010",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "gate",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 9488,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "asset_modifier_id": 22,
+          "target_bpm": 120,
+          "length_source_id": 24
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 5,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 33,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 2
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              3
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_hzf6ww",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_cods4e",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "808 Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8,
+            11.75
+          ],
+          "section_probability": [
+            1,
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0.25,
+            0
+          ],
+          "section_quant": [
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start",
+            "start"
+          ],
+          "seed": 0.6168844859599186,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 41,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 38,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 22
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              23
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_sa6wxl",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_zt4gyq",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Melodic Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 8,
+          "section_points": [
+            4
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0.4
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.1478627735683321,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 43,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1160,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 41,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 23
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              24
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_idxosm",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_576eir",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Melodic Chops Track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 44,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1436,
+          "1": 662,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 43,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 4
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 17
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 20
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 24
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": null,
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": false,
+          "chain": [
+            {
+              "id": "pre_gain_qjoh1r",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_zauno4",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Master Output",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": true,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 15,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 440,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 25,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              8
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_200",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7943,
+                "gain_db": -2
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Snare Clap",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": -6,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 14,
+          "key_match_target": ""
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 18,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 440,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 39,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 9
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              25
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_8k3sl9",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_r1lvuz",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Snare Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.8864907835441023,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "quant": "auto",
+          "quant_anchor": "start",
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      }
+    ],
+    "links": [
+      [
+        1,
+        2,
+        0,
+        4,
+        0,
+        "audio"
+      ],
+      [
+        2,
+        4,
+        0,
+        5,
+        0,
+        "audio"
+      ],
+      [
+        3,
+        5,
+        0,
+        7,
+        0,
+        "audio"
+      ],
+      [
+        4,
+        7,
+        0,
+        44,
+        0,
+        "audio"
+      ],
+      [
+        5,
+        9,
+        0,
+        11,
+        0,
+        "audio"
+      ],
+      [
+        6,
+        11,
+        0,
+        12,
+        0,
+        "audio"
+      ],
+      [
+        7,
+        12,
+        0,
+        32,
+        0,
+        "audio"
+      ],
+      [
+        8,
+        15,
+        0,
+        17,
+        0,
+        "audio"
+      ],
+      [
+        9,
+        17,
+        0,
+        18,
+        0,
+        "audio"
+      ],
+      [
+        11,
+        21,
+        0,
+        23,
+        0,
+        "audio"
+      ],
+      [
+        12,
+        23,
+        0,
+        24,
+        0,
+        "audio"
+      ],
+      [
+        13,
+        24,
+        0,
+        32,
+        2,
+        "audio"
+      ],
+      [
+        14,
+        27,
+        0,
+        29,
+        0,
+        "audio"
+      ],
+      [
+        15,
+        29,
+        0,
+        30,
+        0,
+        "audio"
+      ],
+      [
+        16,
+        30,
+        0,
+        32,
+        3,
+        "audio"
+      ],
+      [
+        17,
+        32,
+        0,
+        44,
+        1,
+        "audio"
+      ],
+      [
+        18,
+        34,
+        0,
+        35,
+        0,
+        "audio"
+      ],
+      [
+        19,
+        35,
+        0,
+        36,
+        0,
+        "audio"
+      ],
+      [
+        20,
+        36,
+        0,
+        44,
+        2,
+        "audio"
+      ],
+      [
+        21,
+        38,
+        0,
+        40,
+        0,
+        "audio"
+      ],
+      [
+        22,
+        40,
+        0,
+        41,
+        0,
+        "audio"
+      ],
+      [
+        23,
+        41,
+        0,
+        43,
+        0,
+        "audio"
+      ],
+      [
+        24,
+        43,
+        0,
+        44,
+        3,
+        "audio"
+      ],
+      [
+        25,
+        18,
+        0,
+        32,
+        1,
+        "audio"
+      ]
+    ],
+    "groups": [],
+    "config": {
+      "links_ontop": true
+    },
+    "extra": {
+      "global_parameters": {
+        "bpm": 142,
+        "total_bars": 8,
+        "key": "F#m"
+      },
+      "main_preview": {
+        "node_id": 44,
+        "mode": "auto"
+      }
+    },
+    "version": 0.4
+  }
+}

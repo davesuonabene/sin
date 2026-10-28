@@ -20,16 +20,26 @@ from . import models, reference_service
 
 
 MANIFEST_SCHEMA = "gaia-project-state"
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
+PROJECT_FORMAT = "gaia-project"
+PROJECT_FORMAT_VERSION = 2
 EDITOR_STATE_SCHEMA = "gaia-media-edit"
 MANIFEST_STAGE = "edit"
 MANIFEST_FILENAME = "current.json"
+PROJECT_DOCUMENT_FILENAME = "project.json"
 _KEEP_EDITOR_STATE = object()
 
 
 def manifest_path(project: models.ProjectItem) -> Path:
     """Return the one managed document for a project."""
-    return Path(project.absolute_path).resolve() / "files" / MANIFEST_STAGE / MANIFEST_FILENAME
+    project_root = Path(project.absolute_path).resolve()
+    canonical = project_root / PROJECT_DOCUMENT_FILENAME
+    legacy = project_root / "files" / MANIFEST_STAGE / MANIFEST_FILENAME
+    if canonical.is_file():
+        return canonical
+    if legacy.is_file():
+        return legacy
+    return canonical
 
 
 def _read_document(path: Path) -> dict[str, Any] | None:
@@ -38,7 +48,10 @@ def _read_document(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         raise ValueError("The project manifest is not a regular file")
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        content = path.read_text(encoding="utf-8")
+        if not content.strip():
+            return {}
+        document = json.loads(content)
     except (OSError, TypeError, ValueError) as exc:
         raise ValueError(f"The project manifest could not be read: {exc}") from exc
     if not isinstance(document, dict):
@@ -46,12 +59,26 @@ def _read_document(path: Path) -> dict[str, Any] | None:
     return document
 
 
+def read_project_manifest(project: models.ProjectItem) -> dict[str, Any]:
+    """Read the parsed project document from project.json (or fallback)."""
+    path = manifest_path(project)
+    doc = _read_document(path)
+    return doc if isinstance(doc, dict) else {}
+
+
+def write_project_manifest(project: models.ProjectItem, document: dict[str, Any]) -> None:
+    """Atomically write the project document to project.json."""
+    project_root = Path(project.absolute_path).resolve()
+    canonical_path = project_root / PROJECT_DOCUMENT_FILENAME
+    _atomic_write(canonical_path, document)
+
+
 def editor_state_document(project: models.ProjectItem, target_id: str | None = None) -> dict[str, Any] | None:
     """Read either the current envelope or the previous editor-only document."""
     document = _read_document(manifest_path(project))
-    if document is None:
+    if document is None or document == {}:
         return None
-    if document.get("schema") == MANIFEST_SCHEMA:
+    if document.get("schema") == MANIFEST_SCHEMA or document.get("format") == PROJECT_FORMAT:
         if target_id:
             edits = document.get("edits")
             if isinstance(edits, dict) and target_id in edits:
@@ -289,8 +316,11 @@ def sync_project_manifest(
     if not project:
         raise ValueError("Project not found")
 
-    path = manifest_path(project)
-    existing_doc = _read_document(path)
+    project_root = Path(project.absolute_path).resolve()
+    canonical_path = project_root / PROJECT_DOCUMENT_FILENAME
+    legacy_path = project_root / "files" / MANIFEST_STAGE / MANIFEST_FILENAME
+
+    existing_doc = _read_document(manifest_path(project)) or {}
     existing_edits: dict[str, Any] = {}
     if existing_doc and isinstance(existing_doc.get("edits"), dict):
         existing_edits = dict(existing_doc["edits"])
@@ -310,7 +340,8 @@ def sync_project_manifest(
     else:
         raise ValueError("The project manifest editor state is invalid")
 
-    _remove_legacy_editor_item(db, project, path)
+    _remove_legacy_editor_item(db, project, canonical_path)
+    _remove_legacy_editor_item(db, project, legacy_path)
     _drop_placeholder_metadata(db, project.id)
     references: list[dict[str, Any]] = []
     for reference in reference_service.list_references(db, project.id):
@@ -319,15 +350,52 @@ def sync_project_manifest(
             references.append(_reference_entry(project, item, reference))
 
     document = {
+        "format": PROJECT_FORMAT,
+        "version": PROJECT_FORMAT_VERSION,
         "schema": MANIFEST_SCHEMA,
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "project_id": project.id,
         "updated_at": datetime.now(timezone.utc).isoformat(),
+        "graph": existing_doc.get("graph") if isinstance(existing_doc, dict) else None,
+        "snapshots": existing_doc.get("snapshots", []) if isinstance(existing_doc, dict) else [],
+        "view": existing_doc.get("view", {}) if isinstance(existing_doc, dict) else {},
         "editor": editor,
         "edits": edits,
         "references": references,
     }
-    previous = _atomic_write(path, document)
+
+    from . import graph_builder
+    if not isinstance(document.get("graph"), dict) or document["graph"].get("format") != "sin-graph":
+        try:
+            document["graph"] = graph_builder.build_item_sin_graph(project.id, db)
+        except Exception:
+            pass
+
+    if editor and isinstance(editor, dict):
+        try:
+            from . import media_editor
+            playables = media_editor._project_playables(db, project)
+            graph, snapshots = graph_builder.migrate_legacy_editor_state(editor, playables, project=project)
+            document["graph"] = graph
+            if snapshots:
+                existing_snapshots = list(document.get("snapshots") or [])
+                seen_ids = {s.get("id") for s in existing_snapshots if isinstance(s, dict)}
+                for snap in snapshots:
+                    if snap.get("id") not in seen_ids:
+                        existing_snapshots.append(snap)
+                        seen_ids.add(snap.get("id"))
+                document["snapshots"] = existing_snapshots
+        except Exception:
+            pass
+
+    previous = _atomic_write(canonical_path, document)
+    if legacy_path.is_file() and canonical_path.is_file():
+        legacy_path.unlink(missing_ok=True)
+        try:
+            legacy_path.parent.rmdir()
+        except OSError:
+            pass
+
     try:
         if commit:
             db.commit()
@@ -339,7 +407,86 @@ def sync_project_manifest(
     # the old projection can simply be retried on the next sync.
     removed_markdown = remove_legacy_markdown(project) if commit else []
     return {
-        "manifest": str(path),
+        "manifest": str(canonical_path),
         "removed_markdown": removed_markdown,
         "previous": previous,
     }
+
+
+def migrate_v1_project_layouts(db: Session) -> dict[str, Any]:
+    """Migrate legacy project layouts to the canonical project.json and files/ layout."""
+    from . import vaults
+
+    migrated_projects = 0
+    moved_files_count = 0
+    path_rewrites = []
+
+    for project in db.query(models.ProjectItem).all():
+        project_root = Path(project.absolute_path).resolve()
+        if not project_root.is_dir():
+            continue
+
+        canonical_json = project_root / PROJECT_DOCUMENT_FILENAME
+        legacy_json = project_root / "files" / MANIFEST_STAGE / MANIFEST_FILENAME
+
+        # 1. Ensure project.json exists
+        if not canonical_json.is_file():
+            if legacy_json.is_file():
+                try:
+                    sync_project_manifest(db, project.id, commit=False)
+                    migrated_projects += 1
+                except Exception:
+                    pass
+            else:
+                canonical_json.write_text("{}\n", encoding="utf-8")
+                migrated_projects += 1
+
+        # 2. Ensure files/ and files/derived/ directories exist
+        files_dir = project_root / "files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+        derived_dir = files_dir / "derived"
+        derived_dir.mkdir(parents=True, exist_ok=True)
+
+        # 3. Move files from legacy locations (files/source, files/cuts, files/mixdown)
+        for stage_name, target_dir in [
+            ("source", files_dir),
+            ("cuts", derived_dir),
+            ("mixdown", derived_dir),
+        ]:
+            legacy_stage_dir = files_dir / stage_name
+            if legacy_stage_dir.is_dir():
+                for p in list(legacy_stage_dir.iterdir()):
+                    if p.is_file() and p.name != MANIFEST_FILENAME:
+                        dest = target_dir / p.name
+                        if dest.exists() and dest != p:
+                            stem, suffix = p.stem, p.suffix
+                            cnt = 2
+                            while (target_dir / f"{stem}_{cnt}{suffix}").exists():
+                                cnt += 1
+                            dest = target_dir / f"{stem}_{cnt}{suffix}"
+                        if dest != p:
+                            p.replace(dest)
+                            path_rewrites.append({"source": str(p.resolve()), "target": str(dest.resolve())})
+                            moved_files_count += 1
+                try:
+                    legacy_stage_dir.rmdir()
+                except OSError:
+                    pass
+
+        # Also clean up legacy files/edit if current.json was removed and it's empty
+        legacy_edit_dir = files_dir / "edit"
+        if legacy_edit_dir.is_dir():
+            legacy_file = legacy_edit_dir / MANIFEST_FILENAME
+            if legacy_file.is_file() and canonical_json.is_file():
+                legacy_file.unlink(missing_ok=True)
+            try:
+                legacy_edit_dir.rmdir()
+            except OSError:
+                pass
+
+    if path_rewrites:
+        vaults.rewrite_managed_paths(db.connection(), path_rewrites)
+        db.commit()
+
+    return {"migrated_projects": migrated_projects, "moved_files": moved_files_count}
+

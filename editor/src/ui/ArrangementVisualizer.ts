@@ -1,4 +1,8 @@
+import { drawRoundRect, drawPlayhead } from '../../../packages/iride/src/utils/drawingUtils.ts';
+import { defaultTransportClock } from '../../../packages/iride/src/index.ts';
+
 export type ArrangementAnchor = 'start' | 'end';
+export type ArrangementVisualizerMode = 'select' | 'edit';
 
 export interface ArrangementSourceVisual {
     bars: number;
@@ -15,7 +19,8 @@ export interface ArrangementVisualizerOptions {
     sectionQuant?: string[];
     sectionQuantAnchor?: ArrangementAnchor[];
     selectedSection: number;
-    source: ArrangementSourceVisual | null;
+    mode?: ArrangementVisualizerMode;
+    source?: ArrangementSourceVisual | null;
     onSectionStructureChange: (
         points: number[],
         probability?: number[],
@@ -24,28 +29,31 @@ export interface ArrangementVisualizerOptions {
         anchor?: ArrangementAnchor[]
     ) => void;
     onSectionSelect: (index: number) => void;
+    onSplitAtBar?: (bar: number) => void;
+    onMergeCut?: (cutIndex: number) => void;
 }
 
 /**
- * Minimal section editor. It intentionally shows source blocks only once the
- * direct input reports a dependable rendered length; until then the timeline
- * is a concise map of each section's own settings.
+ * Clean, lightweight IRIDE-style arrangement visualizer with dual Selection / Edit modes.
  */
 export class ArrangementVisualizer {
     private readonly canvas: HTMLCanvasElement;
     private readonly context: CanvasRenderingContext2D;
     private readonly resizeObserver: ResizeObserver;
     private options: ArrangementVisualizerOptions;
-    private hoverBars: number | null = null;
+    private mode: ArrangementVisualizerMode = 'select';
     private hoverSection: number | null = null;
-    private hoverMode: 'ruler' | 'section' | null = null;
+    private hoverCutIndex: number | null = null;
+    private hoverMergeCutIndex: number | null = null;
+    private hoverSnapBar: number | null = null;
+    private draggingCutIndex: number | null = null;
+    private didDragCut: boolean = false;
+    private dragStartX: number = 0;
+    private dragStartY: number = 0;
     private width = 0;
-    private readonly height = 146;
-    private readonly inset = 8;
-    private readonly rulerY = 25;
-    private readonly barY = 51;
-    private readonly barHeight = 66;
-    private readonly rulerHitRadius = 12;
+    private readonly height = 60;
+    private readonly padding = 3;
+    private animationFrameId: number | null = null;
 
     constructor(options: ArrangementVisualizerOptions) {
         this.options = {
@@ -56,61 +64,115 @@ export class ArrangementVisualizer {
             sectionQuant: [...(options.sectionQuant || [])],
             sectionQuantAnchor: [...(options.sectionQuantAnchor || [])]
         };
+        this.mode = options.mode || 'select';
         this.canvas = document.createElement('canvas');
         this.canvas.className = 'arrangement-visualizer-canvas';
-        this.canvas.setAttribute('aria-label', 'Arrangement timeline. Click the ruler to add or remove section markers. Click a section to edit it.');
+        this.canvas.setAttribute('aria-label', 'Arrangement timeline. Click a section to select it, or use Edit mode to modify subdivisions.');
         this.canvas.tabIndex = 0;
         const context = this.canvas.getContext('2d');
         if (!context) throw new Error('Canvas 2D context is unavailable');
         this.context = context;
         options.container.replaceChildren(this.canvas);
 
+        this.canvas.addEventListener('pointerdown', this.handlePointerDown);
         this.canvas.addEventListener('pointermove', this.handlePointerMove);
+        this.canvas.addEventListener('pointerup', this.handlePointerUp);
+        this.canvas.addEventListener('pointercancel', this.handlePointerUp);
         this.canvas.addEventListener('pointerleave', this.handlePointerLeave);
         this.canvas.addEventListener('click', this.handleClick);
         this.resizeObserver = new ResizeObserver(() => this.resize());
         this.resizeObserver.observe(options.container);
         this.resize();
+
+        // Animate playhead while playing
+        this.tick = this.tick.bind(this);
+        this.startPlayheadLoop();
     }
 
-    destroy() {
+    destroy(): void {
+        if (this.animationFrameId !== null) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
         this.resizeObserver.disconnect();
+        this.canvas.removeEventListener('pointerdown', this.handlePointerDown);
         this.canvas.removeEventListener('pointermove', this.handlePointerMove);
+        this.canvas.removeEventListener('pointerup', this.handlePointerUp);
+        this.canvas.removeEventListener('pointercancel', this.handlePointerUp);
         this.canvas.removeEventListener('pointerleave', this.handlePointerLeave);
         this.canvas.removeEventListener('click', this.handleClick);
         this.canvas.remove();
     }
 
-    setSectionProbability(index: number, probability: number) {
-        if (index < 0 || index >= this.getBoundaries().length - 1) return;
+    setMode(mode: ArrangementVisualizerMode): void {
+        this.mode = mode;
+        this.hoverCutIndex = null;
+        this.hoverMergeCutIndex = null;
+        this.hoverSnapBar = null;
+        this.canvas.style.cursor = 'default';
+        this.draw();
+    }
+
+    getMode(): ArrangementVisualizerMode {
+        return this.mode;
+    }
+
+    setTotalBars(totalBars: number): void {
+        this.options.totalBars = Math.max(0.25, Number(totalBars) || 4);
+        this.draw();
+    }
+
+    setSectionPoints(points: number[]): void {
+        this.options.sectionPoints = [...points];
+        this.draw();
+    }
+
+    setSectionProbability(index: number, probability: number): void {
         if (!this.options.sectionProbability) this.options.sectionProbability = [];
         this.options.sectionProbability[index] = Math.max(0, Math.min(1, Number(probability) || 0));
         this.draw();
     }
 
-    setSectionSampleStart(index: number, sampleStart: number) {
-        if (index < 0 || index >= this.getBoundaries().length - 1) return;
+    setSectionSampleStart(index: number, sampleStart: number): void {
         if (!this.options.sectionSampleStart) this.options.sectionSampleStart = [];
         this.options.sectionSampleStart[index] = Math.max(0, Math.min(1, Number(sampleStart) || 0));
         this.draw();
     }
 
-    setSectionQuant(index: number, quant: string) {
-        if (index < 0 || index >= this.getBoundaries().length - 1) return;
+    setSectionQuant(index: number, quant: string): void {
         if (!this.options.sectionQuant) this.options.sectionQuant = [];
         this.options.sectionQuant[index] = quant;
         this.draw();
     }
 
-    setSectionQuantAnchor(index: number, anchor: ArrangementAnchor) {
-        if (index < 0 || index >= this.getBoundaries().length - 1) return;
+    setSectionQuantAnchor(index: number, anchor: ArrangementAnchor): void {
         if (!this.options.sectionQuantAnchor) this.options.sectionQuantAnchor = [];
         this.options.sectionQuantAnchor[index] = anchor;
         this.draw();
     }
 
-    private resize() {
-        const cssWidth = Math.max(260, this.options.container.clientWidth);
+    setSelectedSection(index: number): void {
+        this.options.selectedSection = index;
+        this.draw();
+    }
+
+    private startPlayheadLoop(): void {
+        const loop = () => {
+            const telemetry = defaultTransportClock.getTelemetry();
+            if (telemetry?.isPlaying) {
+                this.draw();
+            }
+            this.animationFrameId = requestAnimationFrame(loop);
+        };
+        this.animationFrameId = requestAnimationFrame(loop);
+    }
+
+    private tick(): void {
+        this.draw();
+    }
+
+    private resize(): void {
+        const cssWidth = Math.max(200, this.options.container.clientWidth);
         const ratio = Math.max(1, window.devicePixelRatio || 1);
         this.width = cssWidth;
         this.canvas.style.width = `${cssWidth}px`;
@@ -121,381 +183,353 @@ export class ArrangementVisualizer {
         this.draw();
     }
 
-    private get plotWidth() {
-        return Math.max(1, this.width - this.inset * 2);
+    private getBoundaries(): number[] {
+        return [0, ...this.options.sectionPoints, this.options.totalBars]
+            .filter((p, i, a) => p >= 0 && p <= this.options.totalBars && a.indexOf(p) === i)
+            .sort((a, b) => a - b);
     }
 
-    private barsToX(bars: number) {
-        return this.inset + (bars / this.options.totalBars) * this.plotWidth;
+    private getCutAtX(x: number): number | null {
+        const availWidth = Math.max(1, this.width - this.padding * 2);
+        const totalBars = Math.max(0.25, this.options.totalBars);
+        const barWidth = availWidth / totalBars;
+        for (let i = 0; i < this.options.sectionPoints.length; i++) {
+            const cutX = this.padding + this.options.sectionPoints[i] * barWidth;
+            if (Math.abs(x - cutX) <= 8) return i;
+        }
+        return null;
     }
 
-    private eventToBars(event: PointerEvent | MouseEvent) {
-        const rect = this.canvas.getBoundingClientRect();
-        const x = Math.max(this.inset, Math.min(this.width - this.inset, event.clientX - rect.left));
-        return ((x - this.inset) / this.plotWidth) * this.options.totalBars;
-    }
-
-    private formatBars(value: number) {
-        if (Math.abs(value - Math.round(value)) < 0.001) return String(Math.round(value));
-        return value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
-    }
-
-    private getSectionProbability(index: number): number {
-        const probability = this.options.sectionProbability?.[index];
-        return probability != null && Number.isFinite(probability)
-            ? Math.max(0, Math.min(1, probability))
-            : 1;
-    }
-
-    private getSectionSampleStart(index: number): number {
-        const sampleStart = this.options.sectionSampleStart?.[index];
-        return sampleStart != null && Number.isFinite(sampleStart)
-            ? Math.max(0, Math.min(1, sampleStart))
-            : 0;
-    }
-
-    private getSectionQuant(index: number): string {
-        return String(this.options.sectionQuant?.[index] || 'none').toLowerCase();
-    }
-
-    private getSectionAnchor(index: number): ArrangementAnchor {
-        return this.options.sectionQuantAnchor?.[index] === 'end' ? 'end' : 'start';
-    }
-
-    private getSectionAt(bars: number) {
+    private getSectionAtX(x: number): number {
         const boundaries = this.getBoundaries();
-        for (let index = 0; index < boundaries.length - 1; index++) {
-            if (bars < boundaries[index + 1] || index === boundaries.length - 2) return index;
+        const availWidth = Math.max(1, this.width - this.padding * 2);
+        const totalBars = Math.max(0.25, this.options.totalBars);
+        const bar = ((x - this.padding) / availWidth) * totalBars;
+
+        for (let i = 0; i < boundaries.length - 1; i++) {
+            if (bar < boundaries[i + 1] || i === boundaries.length - 2) return i;
         }
         return boundaries.length - 2;
     }
 
-    private getBoundaries() {
-        return [0, ...this.options.sectionPoints, this.options.totalBars]
-            .filter((point, index, values) => point >= 0 && point <= this.options.totalBars && values.indexOf(point) === index)
-            .sort((a, b) => a - b);
-    }
-
-    private isRulerHit(localY: number) {
-        return Math.abs(localY - this.rulerY) <= this.rulerHitRadius;
-    }
-
-    private handlePointerMove = (event: PointerEvent) => {
+    private handlePointerDown = (event: PointerEvent): void => {
         const rect = this.canvas.getBoundingClientRect();
-        const localY = event.clientY - rect.top;
-        const bars = this.eventToBars(event);
-        if (this.isRulerHit(localY)) {
-            this.hoverMode = 'ruler';
-            this.hoverBars = Math.round(bars);
-            this.hoverSection = null;
-            this.canvas.style.cursor = 'crosshair';
-        } else if (localY >= this.barY && localY <= this.barY + this.barHeight) {
-            this.hoverMode = 'section';
-            this.hoverBars = null;
-            this.hoverSection = this.getSectionAt(bars);
-            this.canvas.style.cursor = 'pointer';
-        } else {
-            this.hoverMode = null;
-            this.hoverBars = null;
-            this.hoverSection = null;
-            this.canvas.style.cursor = 'default';
-        }
-        this.draw();
-    };
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
 
-    private handlePointerLeave = () => {
-        this.hoverMode = null;
-        this.hoverBars = null;
-        this.hoverSection = null;
-        this.canvas.style.cursor = 'default';
-        this.draw();
-    };
-
-    private handleClick = (event: MouseEvent) => {
-        const rect = this.canvas.getBoundingClientRect();
-        const localY = event.clientY - rect.top;
-        const rawBars = this.eventToBars(event);
-
-        if (localY >= this.barY && localY <= this.barY + this.barHeight) {
-            this.options.selectedSection = this.getSectionAt(rawBars);
-            this.options.onSectionSelect(this.options.selectedSection);
-            this.draw();
+        // Check if clicking merge button in edit mode
+        const cutIdx = this.getCutAtX(x);
+        if (this.mode === 'edit' && cutIdx !== null && y <= this.padding + 22) {
+            // Merge action handled in handleClick
             return;
         }
-        if (!this.isRulerHit(localY)) return;
 
-        const snapped = Math.round(rawBars);
-        if (snapped <= 0 || snapped >= this.options.totalBars) return;
-        const existingIndex = this.options.sectionPoints.findIndex(point => Math.abs(point - snapped) < 0.001);
-        const nextProbability = [...(this.options.sectionProbability || [])];
-        const nextSampleStart = [...(this.options.sectionSampleStart || [])];
-        const nextQuant = [...(this.options.sectionQuant || [])];
-        const nextAnchor = [...(this.options.sectionQuantAnchor || [])];
-        let points: number[];
+        // Allow dragging section border dividers in both selection and edit modes
+        if (cutIdx !== null) {
+            this.draggingCutIndex = cutIdx;
+            this.dragStartX = x;
+            this.dragStartY = y;
+            this.didDragCut = false;
+            try {
+                this.canvas.setPointerCapture(event.pointerId);
+            } catch {}
+            event.preventDefault();
+            this.draw();
+        }
+    };
 
-        if (existingIndex !== -1) {
-            points = this.options.sectionPoints.filter((_, index) => index !== existingIndex);
-            nextProbability.splice(existingIndex + 1, 1);
-            nextSampleStart.splice(existingIndex + 1, 1);
-            nextQuant.splice(existingIndex + 1, 1);
-            nextAnchor.splice(existingIndex + 1, 1);
-            if (this.options.selectedSection > existingIndex) this.options.selectedSection--;
-        } else {
-            const splitSection = this.getSectionAt(snapped);
-            points = [...this.options.sectionPoints, snapped].sort((a, b) => a - b);
-            nextProbability.splice(splitSection + 1, 0, nextProbability[splitSection] ?? 1);
-            nextSampleStart.splice(splitSection + 1, 0, nextSampleStart[splitSection] ?? 0);
-            nextQuant.splice(splitSection + 1, 0, nextQuant[splitSection] ?? 'auto');
-            nextAnchor.splice(splitSection + 1, 0, nextAnchor[splitSection] ?? 'start');
+    private handlePointerMove = (event: PointerEvent): void => {
+        const rect = this.canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        if (this.draggingCutIndex !== null) {
+            if (Math.abs(x - this.dragStartX) > 2 || Math.abs(y - this.dragStartY) > 2) {
+                this.didDragCut = true;
+            }
+            const availWidth = Math.max(1, this.width - this.padding * 2);
+            const totalBars = Math.max(0.25, this.options.totalBars);
+            let rawBar = ((x - this.padding) / availWidth) * totalBars;
+            let newBar = Math.round(rawBar);
+
+            const prevBoundary = this.draggingCutIndex > 0 ? this.options.sectionPoints[this.draggingCutIndex - 1] : 0;
+            const nextBoundary = this.draggingCutIndex < this.options.sectionPoints.length - 1
+                ? this.options.sectionPoints[this.draggingCutIndex + 1]
+                : totalBars;
+            const minGap = totalBars >= 2 ? 1 : 0.25;
+            newBar = Math.max(prevBoundary + minGap, Math.min(nextBoundary - minGap, newBar));
+
+            if (this.options.sectionPoints[this.draggingCutIndex] !== newBar) {
+                this.options.sectionPoints[this.draggingCutIndex] = newBar;
+                this.didDragCut = true;
+                // Live visual redraw at 60fps without audio preview invalidation storm
+                this.draw();
+            }
+            return;
         }
 
-        this.options.sectionPoints = points;
-        this.options.sectionProbability = nextProbability;
-        this.options.sectionSampleStart = nextSampleStart;
-        this.options.sectionQuant = nextQuant;
-        this.options.sectionQuantAnchor = nextAnchor;
-        this.options.selectedSection = Math.min(this.options.selectedSection, points.length);
-        this.options.onSectionStructureChange(points, nextProbability, nextSampleStart, nextQuant, nextAnchor);
-        this.options.onSectionSelect(this.options.selectedSection);
+        const cutIdx = this.getCutAtX(x);
+        if (cutIdx !== null) {
+            if (this.mode === 'edit' && y <= this.padding + 22) {
+                this.hoverMergeCutIndex = cutIdx;
+                this.hoverCutIndex = null;
+                this.hoverSnapBar = null;
+                this.canvas.style.cursor = 'pointer';
+            } else {
+                this.hoverMergeCutIndex = null;
+                this.hoverCutIndex = cutIdx;
+                this.hoverSnapBar = null;
+                this.canvas.style.cursor = 'col-resize';
+            }
+        } else {
+            this.hoverCutIndex = null;
+            this.hoverMergeCutIndex = null;
+            this.hoverSection = this.getSectionAtX(x);
+
+            if (this.mode === 'edit') {
+                const availWidth = Math.max(1, this.width - this.padding * 2);
+                const totalBars = Math.max(0.25, this.options.totalBars);
+                const rawBar = ((x - this.padding) / availWidth) * totalBars;
+                const nearestInt = Math.round(rawBar);
+                const dist = Math.abs(rawBar - nearestInt);
+
+                if (
+                    nearestInt > 0
+                    && nearestInt < totalBars
+                    && dist < 0.4
+                    && !this.options.sectionPoints.includes(nearestInt)
+                ) {
+                    this.hoverSnapBar = nearestInt;
+                    this.canvas.style.cursor = 'copy';
+                } else {
+                    this.hoverSnapBar = null;
+                    this.canvas.style.cursor = 'pointer';
+                }
+            } else {
+                this.hoverSnapBar = null;
+                this.canvas.style.cursor = 'pointer';
+            }
+        }
         this.draw();
     };
 
-    private chooseTickInterval() {
-        const idealTicks = Math.max(2, Math.floor(this.plotWidth / 54));
-        const raw = this.options.totalBars / idealTicks;
-        return [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64].find(candidate => candidate >= raw) || 128;
-    }
+    private handlePointerUp = (event: PointerEvent): void => {
+        if (this.draggingCutIndex !== null) {
+            try {
+                this.canvas.releasePointerCapture(event.pointerId);
+            } catch {}
+            const wasDragged = this.didDragCut;
+            this.draggingCutIndex = null;
 
-    private drawRuler() {
-        const ctx = this.context;
-        const endX = this.width - this.inset;
-        ctx.strokeStyle = '#cbd5e1';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(this.inset, this.rulerY);
-        ctx.lineTo(endX, this.rulerY);
-        ctx.stroke();
-
-        const tickInterval = this.chooseTickInterval();
-        ctx.font = '600 9px Inter, system-ui, sans-serif';
-        ctx.fillStyle = '#64748b';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        for (let bar = 0; bar <= this.options.totalBars + 0.0001; bar += tickInterval) {
-            const x = this.barsToX(Math.min(bar, this.options.totalBars));
-            ctx.beginPath();
-            ctx.moveTo(x, this.rulerY - 3);
-            ctx.lineTo(x, this.rulerY + 3);
-            ctx.stroke();
-            if (bar < this.options.totalBars) ctx.fillText(this.formatBars(bar), x, this.rulerY + 6);
+            // Commit single clean update to node model & audio scheduler on release if dragged
+            if (wasDragged) {
+                this.options.onSectionStructureChange?.(
+                    this.options.sectionPoints,
+                    this.options.sectionProbability,
+                    this.options.sectionSampleStart,
+                    this.options.sectionQuant,
+                    this.options.sectionQuantAnchor
+                );
+            }
+            this.draw();
         }
-        ctx.textAlign = 'right';
-        ctx.fillText(`${this.formatBars(this.options.totalBars)} bars`, endX, 3);
-    }
+    };
 
-    private quantLabel(quant: string) {
-        switch (quant) {
-            case 'auto':
-            case 'continuous': return 'continuous';
-            case 'bar': return '1 bar';
-            case '0.5': return '½ bar';
-            case 'beat': return 'beat';
-            case 'none':
-            case 'off':
-            case 'once': return 'once';
-            default: return `${quant} bars`;
+    private handlePointerLeave = (): void => {
+        if (this.draggingCutIndex === null) {
+            this.hoverSection = null;
+            this.hoverCutIndex = null;
+            this.hoverMergeCutIndex = null;
+            this.hoverSnapBar = null;
+            this.canvas.style.cursor = 'default';
+            this.draw();
         }
-    }
+    };
 
-    private sectionLabel(index: number) {
-        const probability = Math.round(this.getSectionProbability(index) * 100);
-        const offset = Math.round(this.getSectionSampleStart(index) * 100);
-        const anchor = this.getSectionAnchor(index) === 'end' ? 'end' : 'start';
-        return `S${index + 1}  ${this.quantLabel(this.getSectionQuant(index))} · ${anchor} · ${probability}% · +${offset}%`;
-    }
+    private handleClick = (event: MouseEvent): void => {
+        if (this.didDragCut) {
+            this.didDragCut = false;
+            return;
+        }
 
-    private drawTextWithin(text: string, x: number, y: number, width: number, color: string) {
-        if (width < 24) return;
+        const rect = this.canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        if (this.mode === 'edit') {
+            const cutIdx = this.getCutAtX(x);
+            // Clicked merge button on divider
+            if (cutIdx !== null && y <= this.padding + 22) {
+                this.options.onMergeCut?.(cutIdx);
+                return;
+            }
+            if (cutIdx !== null) return;
+
+            // Clicked integer snap bar to split
+            if (this.hoverSnapBar !== null) {
+                const targetBar = this.hoverSnapBar;
+                this.hoverSnapBar = null;
+                this.options.onSplitAtBar?.(targetBar);
+                return;
+            }
+        }
+
+        // Selection mode or clicking inside a section in edit mode
+        const clickedIndex = this.getSectionAtX(x);
+        this.options.selectedSection = clickedIndex;
+        this.options.onSectionSelect(clickedIndex);
+        this.draw();
+    };
+
+    private draw(): void {
         const ctx = this.context;
-        ctx.font = '600 9px Inter, system-ui, sans-serif';
-        ctx.fillStyle = color;
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        let visible = text;
-        while (visible.length > 1 && ctx.measureText(`${visible}…`).width > width) visible = visible.slice(0, -1);
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(x, y - 7, width, 14);
-        ctx.clip();
-        ctx.fillText(visible === text ? text : `${visible}…`, x, y);
-        ctx.restore();
-    }
+        const width = this.width;
+        const height = this.height;
+        if (width <= 0 || height <= 0) return;
 
-    private drawTimeline() {
-        const ctx = this.context;
-        const boundaries = this.getBoundaries();
-        const hasSource = this.options.source !== null;
+        ctx.clearRect(0, 0, width, height);
 
+        // Frame
+        drawRoundRect(ctx, 0, 0, width, height, 4);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
         ctx.strokeStyle = '#e2e8f0';
         ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(this.inset, this.barY);
-        ctx.lineTo(this.width - this.inset, this.barY);
         ctx.stroke();
 
-        for (let index = 0; index < boundaries.length - 1; index++) {
-            const start = boundaries[index];
-            const end = boundaries[index + 1];
-            const startX = this.barsToX(start);
-            const width = this.barsToX(end) - startX;
-            const selected = index === this.options.selectedSection;
-            const hovered = index === this.hoverSection && this.hoverMode === 'section';
+        const boundaries = this.getBoundaries();
+        const sectionCount = boundaries.length - 1;
+        const totalBars = Math.max(0.25, this.options.totalBars);
+        const availWidth = width - this.padding * 2;
+        const barWidth = availWidth / totalBars;
 
-            if (selected || hovered) {
-                ctx.fillStyle = selected ? 'rgba(245, 158, 11, .07)' : 'rgba(14, 165, 233, .05)';
-                ctx.fillRect(startX, this.barY, width, this.barHeight);
-            }
+        const telemetry = defaultTransportClock.getTelemetry();
+        const currentBar = telemetry?.isPlaying ? (telemetry.bar % totalBars) : -1;
 
-            this.drawTextWithin(
-                this.sectionLabel(index),
-                startX + 6,
-                this.barY + 12,
-                Math.max(0, width - 12),
-                '#64748b'
-            );
-
-            ctx.strokeStyle = selected ? '#f59e0b' : '#cbd5e1';
-            ctx.lineWidth = selected ? 2 : 1;
-            ctx.beginPath();
-            ctx.moveTo(startX + (selected ? 1 : 0), this.barY);
-            ctx.lineTo(startX + (selected ? 1 : 0), this.barY + this.barHeight);
-            ctx.stroke();
-            if (index === boundaries.length - 2) {
+        // In edit mode: draw subtle whole-bar grid tick marks
+        if (this.mode === 'edit') {
+            ctx.strokeStyle = '#f1f5f9';
+            ctx.lineWidth = 1;
+            for (let b = 1; b < totalBars; b++) {
+                const gx = this.padding + b * barWidth;
                 ctx.beginPath();
-                ctx.moveTo(this.barsToX(end), this.barY);
-                ctx.lineTo(this.barsToX(end), this.barY + this.barHeight);
+                ctx.moveTo(gx, this.padding);
+                ctx.lineTo(gx, height - this.padding);
                 ctx.stroke();
             }
         }
 
-        if (hasSource) this.drawPlacements(boundaries);
-        else {
-            ctx.font = '500 9px Inter, system-ui, sans-serif';
-            ctx.fillStyle = '#94a3b8';
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'bottom';
-            ctx.fillText('Waiting for a known input duration', this.inset, this.height - 5);
-        }
+        // Render Section Boxes (Label-Free: Section Numbers Only)
+        for (let i = 0; i < sectionCount; i++) {
+            const startBar = boundaries[i];
+            const endBar = boundaries[i + 1];
+            const lengthBars = endBar - startBar;
+            const secX = this.padding + startBar * barWidth;
+            const secW = Math.max(2, lengthBars * barWidth - 1);
+            const secH = height - this.padding * 2;
 
-        for (const point of this.options.sectionPoints) {
-            const x = this.barsToX(point);
-            ctx.strokeStyle = '#f59e0b';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.moveTo(x, this.rulerY - 5);
-            ctx.lineTo(x, this.barY + this.barHeight);
+            const prob = typeof this.options.sectionProbability?.[i] === 'number'
+                ? Math.max(0, Math.min(1, this.options.sectionProbability[i]))
+                : 1.0;
+
+            const isSelected = this.options.selectedSection === i;
+            const isHovered = this.hoverSection === i;
+            const isPlayingInSec = currentBar >= startBar && currentBar < endBar;
+
+            // Section background styling
+            if (isSelected) {
+                ctx.fillStyle = '#f59e0b';
+            } else if (isPlayingInSec) {
+                ctx.fillStyle = 'rgba(245, 158, 11, 0.75)';
+            } else if (isHovered) {
+                ctx.fillStyle = `rgba(245, 158, 11, ${0.28 + prob * 0.35})`;
+            } else {
+                ctx.fillStyle = `rgba(245, 158, 11, ${0.12 + prob * 0.35})`;
+            }
+
+            drawRoundRect(ctx, secX, this.padding, secW, secH, 3);
+            ctx.fill();
+
+            // Border
+            ctx.strokeStyle = isSelected ? '#b45309' : isHovered ? '#d97706' : 'rgba(245, 158, 11, 0.45)';
+            ctx.lineWidth = isSelected ? 1.5 : 0.75;
             ctx.stroke();
+
+            // Label-free: Only Section Number S1, S2...
+            if (secW > 12) {
+                ctx.fillStyle = isSelected ? '#ffffff' : '#0f172a';
+                ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const label = secW >= 28 ? `S${i + 1}` : `${i + 1}`;
+                ctx.fillText(label, secX + secW / 2, this.padding + secH / 2);
+            }
         }
-    }
 
-    private quantInterval(quant: string, sourceBars: number): number | null {
-        if (quant === 'none' || quant === 'off' || quant === 'once') return null;
-        if (quant === 'auto' || quant === 'continuous' || !quant) return sourceBars;
-        if (quant === 'bar') return 1;
-        if (quant === '0.5') return 0.5;
-        if (quant === 'beat') return 0.25;
-        const value = Number.parseFloat(quant);
-        return Number.isFinite(value) && value > 0 ? value : null;
-    }
-
-    private drawPlacements(boundaries: number[]) {
-        const source = this.options.source;
-        if (!source || !Number.isFinite(source.bars) || source.bars <= 0) return;
-        let placementIndex = 0;
-
-        for (let sectionIndex = 0; sectionIndex < boundaries.length - 1; sectionIndex++) {
-            const sectionStart = boundaries[sectionIndex];
-            const sectionEnd = boundaries[sectionIndex + 1];
-            const probability = this.getSectionProbability(sectionIndex);
-            if (probability <= 0) continue;
-            const interval = this.quantInterval(this.getSectionQuant(sectionIndex), source.bars);
-            const playableBars = source.bars * (1 - this.getSectionSampleStart(sectionIndex));
-            const anchor = this.getSectionAnchor(sectionIndex);
-            let cellStart = sectionStart;
-
-            do {
-                const cellEnd = interval === null ? sectionEnd : Math.min(sectionEnd, cellStart + interval);
-                const eventStart = anchor === 'start' ? cellStart : cellEnd - playableBars;
-                const eventEnd = eventStart + playableBars;
-                // This is the same gate used by ArrangementObject.render: an
-                // event cannot spill outside its section or quant cell.
-                const visibleStart = Math.max(sectionStart, cellStart, eventStart);
-                const visibleEnd = Math.min(sectionEnd, cellEnd, eventEnd);
-                if (visibleEnd > visibleStart) {
-                    this.drawSourceBlock(visibleStart, visibleEnd, source, placementIndex++, anchor, probability);
-                }
-                if (interval === null || interval <= 0) break;
-                cellStart += interval;
-            } while (cellStart < sectionEnd - 0.0001 && placementIndex < 256);
+        // In Edit Mode: Draw subtle hover split guide without text badge
+        if (this.mode === 'edit' && this.hoverSnapBar !== null) {
+            const snapX = this.padding + this.hoverSnapBar * barWidth;
+            ctx.strokeStyle = '#d97706';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.moveTo(snapX, this.padding);
+            ctx.lineTo(snapX, height - this.padding);
+            ctx.stroke();
+            ctx.setLineDash([]);
         }
-    }
 
-    private drawSourceBlock(
-        startBars: number,
-        endBars: number,
-        source: ArrangementSourceVisual,
-        index: number,
-        anchor: ArrangementAnchor,
-        probability: number
-    ) {
-        const ctx = this.context;
-        const x = this.barsToX(startBars);
-        const width = Math.max(1, this.barsToX(endBars) - x);
-        const y = this.barY + 25;
-        const height = 25;
-        ctx.save();
-        ctx.globalAlpha = Math.max(0.28, probability);
-        ctx.fillStyle = source.kind === 'sample' ? '#475569' : '#0f766e';
-        ctx.fillRect(x + 1, y, Math.max(1, width - 2), height);
-        ctx.strokeStyle = 'rgba(15, 23, 42, .35)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x + 1, y + .5, Math.max(1, width - 2), height - 1);
-        const anchorX = anchor === 'end' ? x + width - 4 : x + 4;
-        ctx.strokeStyle = 'rgba(255,255,255,.85)';
-        ctx.beginPath();
-        ctx.moveTo(anchorX, y + 6);
-        ctx.lineTo(anchorX, y + height - 6);
-        ctx.stroke();
-        if (index === 0) this.drawTextWithin(source.label, x + 7, y + height / 2, Math.max(0, width - 14), '#ffffff');
-        ctx.restore();
-    }
+        // Draw cut dividers and interactive drag handles
+        for (let pIdx = 0; pIdx < this.options.sectionPoints.length; pIdx++) {
+            const cutBar = this.options.sectionPoints[pIdx];
+            const cutX = this.padding + cutBar * barWidth;
+            const isCutHovered = this.hoverCutIndex === pIdx || this.draggingCutIndex === pIdx;
+            const isMergeHovered = this.hoverMergeCutIndex === pIdx;
 
-    private drawHover() {
-        if (this.hoverMode !== 'ruler' || this.hoverBars === null) return;
-        const ctx = this.context;
-        const x = this.barsToX(this.hoverBars);
-        ctx.strokeStyle = 'rgba(100, 116, 139, .65)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 3]);
-        ctx.beginPath();
-        ctx.moveTo(x, this.rulerY - 5);
-        ctx.lineTo(x, this.barY + this.barHeight);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        const boundary = this.hoverBars <= 0 || this.hoverBars >= this.options.totalBars;
-        this.drawTextWithin(
-            boundary ? `bar ${this.formatBars(this.hoverBars)}` : `cut ${this.formatBars(this.hoverBars)}`,
-            Math.max(this.inset, Math.min(this.width - 74, x + 5)),
-            this.height - 6,
-            70,
-            '#64748b'
-        );
-    }
+            // Divider vertical line
+            ctx.strokeStyle = isCutHovered ? '#b45309' : '#d97706';
+            ctx.lineWidth = isCutHovered ? 2.5 : 1.5;
+            ctx.beginPath();
+            ctx.moveTo(cutX, this.padding);
+            ctx.lineTo(cutX, height - this.padding);
+            ctx.stroke();
 
-    private draw() {
-        this.context.clearRect(0, 0, this.width, this.height);
-        this.drawRuler();
-        this.drawTimeline();
-        this.drawHover();
+            // Handle notch at bottom
+            ctx.fillStyle = isCutHovered ? '#b45309' : '#d97706';
+            ctx.beginPath();
+            ctx.arc(cutX, height - this.padding - 5, isCutHovered ? 3.5 : 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Handle notch or merge (×) button at top
+            if (this.mode === 'edit') {
+                const mergeBtnY = this.padding + 10;
+                const mergeRadius = isMergeHovered ? 7.5 : 6;
+                ctx.fillStyle = isMergeHovered ? '#ef4444' : 'rgba(245, 158, 11, 0.9)';
+                ctx.beginPath();
+                ctx.arc(cutX, mergeBtnY, mergeRadius, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1.25;
+                const crossSize = 3;
+                ctx.beginPath();
+                ctx.moveTo(cutX - crossSize, mergeBtnY - crossSize);
+                ctx.lineTo(cutX + crossSize, mergeBtnY + crossSize);
+                ctx.moveTo(cutX + crossSize, mergeBtnY - crossSize);
+                ctx.lineTo(cutX - crossSize, mergeBtnY + crossSize);
+                ctx.stroke();
+            } else {
+                ctx.beginPath();
+                ctx.arc(cutX, this.padding + 5, isCutHovered ? 3.5 : 2.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // Live playhead across total bars
+        if (telemetry?.isPlaying && currentBar >= 0) {
+            const playheadX = this.padding + (currentBar / totalBars) * availWidth;
+            drawPlayhead(ctx, playheadX, this.padding, height - this.padding, '#ffffff');
+        }
     }
 }
+

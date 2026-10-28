@@ -54,21 +54,25 @@
                 return;
             }
 
-            vaultSyncPill.classList.remove('hidden');
-            if (status.in_sync) {
-                vaultSyncPill.classList.remove('is-unsynced');
+            vaultSyncPill.classList.remove('hidden', 'is-synced', 'is-unsynced', 'is-error');
+            if (status.error) {
+                vaultSyncPill.classList.add('is-error');
+                vaultSyncPillText.textContent = 'sync error';
+                vaultSyncPill.title = 'Could not check vault sync status. Click to retry.';
+            } else if (status.in_sync) {
                 vaultSyncPill.classList.add('is-synced');
-                vaultSyncPill.title = 'Vault folders and database are in sync';
-                vaultSyncPillText.textContent = 'In sync';
+                vaultSyncPill.title = 'Vault folders and database are in sync. Click to review.';
+                vaultSyncPillText.textContent = 'synced';
             } else {
                 vaultSyncPill.classList.add('is-unsynced');
-                vaultSyncPill.classList.remove('is-synced');
                 const untracked = status.untracked?.length || 0;
                 const missing = status.missing?.length || 0;
+                const moved = status.moved?.length || 0;
                 const parts = [];
                 if (untracked > 0) parts.push(`+${untracked} new`);
                 if (missing > 0) parts.push(`-${missing} missing`);
-                const summaryText = parts.join(', ') || 'Unsynced';
+                if (moved > 0) parts.push(`${moved} moved`);
+                const summaryText = parts.length ? `unsynced (${parts.join(', ')})` : 'unsynced';
                 vaultSyncPillText.textContent = summaryText;
                 vaultSyncPill.title = `Vault out of sync: ${summaryText}. Click to review.`;
             }
@@ -81,12 +85,15 @@
             state.isCheckingSync = true;
             try {
                 const response = await fetch(`/vaults/${targetVaultId}/sync-status`);
-                if (!response.ok) return;
+                if (!response.ok) {
+                    renderSyncPill({ error: true });
+                    return;
+                }
                 const status = await response.json();
                 state.vaultSyncStatus = status;
                 renderSyncPill(status);
             } catch (_err) {
-                // Non-blocking background sync check
+                renderSyncPill({ error: true });
             } finally {
                 state.isCheckingSync = false;
             }
@@ -255,6 +262,12 @@
 
         // Bind dialog and action listeners
         vaultSyncPill?.addEventListener('click', openVaultSyncDialog);
+        vaultSyncPill?.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openVaultSyncDialog();
+            }
+        });
         vaultSyncDialogClose?.addEventListener('click', closeVaultSyncDialog);
         vaultSyncDialogCancel?.addEventListener('click', closeVaultSyncDialog);
 

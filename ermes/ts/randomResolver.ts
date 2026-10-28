@@ -11,6 +11,7 @@ export type RandomRefreshMode = 'local' | 'parent' | 'ancestor' | 'global' | 'of
 export interface RandomResolutionRequest {
     kind: 'preview' | 'render';
     globalPreview?: boolean;
+    globalFreeze?: boolean;
 }
 
 export interface RandomDestination {
@@ -172,7 +173,7 @@ export function isFieldMappableToRandom(node: any, paramKey: string): boolean {
     const stepMatch = paramKey.match(/^step_parameters\.(\d+)\.(.+)$/);
     if (stepMatch) {
         const subKey = stepMatch[2];
-        return ['probability', 'offset', 'velocity', 'subdivisions'].includes(subKey);
+        return ['probability', 'offset', 'velocity', 'subdivisions', 'sample_start', 'gate_length'].includes(subKey);
     }
     const field = findFieldSchema(node, paramKey);
     if (!field) {
@@ -472,7 +473,13 @@ export async function resolveAssignedRandomModifiers(
             const refreshMode = normalizeRandomRefreshMode(modNode.properties?.refresh_mode);
             if (modNode.properties) modNode.properties.refresh_mode = refreshMode;
 
-            const shouldRefresh = shouldRefreshRandom(
+            const isFrozen = Boolean(request.globalFreeze) && (
+                node?.properties
+                    ? node.properties.freeze_refresh !== false
+                    : modNode?.properties?.freeze_refresh !== false
+            );
+
+            const shouldRefresh = !isFrozen && shouldRefreshRandom(
                 refreshMode,
                 nodeId,
                 rootNodeId,
@@ -503,5 +510,12 @@ export async function resolveAssignedRandomModifiers(
         await Promise.all(adjacentIds.map(childId => visit(childId)));
     };
 
-    await visit(rootNodeId);
+    if (rootNodeId != null) {
+        await visit(rootNodeId);
+    } else {
+        const allNodes = (((graph as any)._nodes || (graph as any).nodes || []) as any[]);
+        for (const n of allNodes) {
+            if (n && n.id != null) await visit(n.id);
+        }
+    }
 }

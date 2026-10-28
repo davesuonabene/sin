@@ -40,6 +40,7 @@ from ermes import (
     graph_to_workspace,
 )
 from core.engines import get_renderer_for_node
+from core.runtime_trace import collect_runtime_trace
 from core.system import System
 from core.qa import analyze_audio_buffer, analyze_audio_file, AudioQAResult
 
@@ -191,35 +192,36 @@ def render(
     sys_env = System(bpm=model.bpm, render_mode=mode)
     renderer = get_renderer_for_node(model.node_type)
 
-    try:
-        audio_out = renderer.render(model, sys_env)
-    except Exception as e:
-        typer.secho(f"DSP Render Error: {e}", fg=typer.colors.RED, err=True)
-        if json_output:
-            print(json.dumps({"status": "error", "message": f"DSP error: {e}"}))
-        raise typer.Exit(code=1)
+    with collect_runtime_trace():
+        try:
+            audio_out = renderer.render(model, sys_env)
+        except Exception as e:
+            typer.secho(f"DSP Render Error: {e}", fg=typer.colors.RED, err=True)
+            if json_output:
+                print(json.dumps({"status": "error", "message": f"DSP error: {e}"}))
+            raise typer.Exit(code=1)
 
-    # Export main audio
-    out.parent.mkdir(parents=True, exist_ok=True)
-    export_data = np.moveaxis(audio_out, -1, 0) if audio_out.ndim > 1 else audio_out
-    sf.write(str(out), export_data, sys_env.sample_rate)
+        # Export main audio
+        out.parent.mkdir(parents=True, exist_ok=True)
+        export_data = np.moveaxis(audio_out, -1, 0) if audio_out.ndim > 1 else audio_out
+        sf.write(str(out), export_data, sys_env.sample_rate)
 
-    # Render stems if requested
-    stem_files: List[str] = []
-    if stems and model.children:
-        stems_dir = out.parent / f"{out.stem}_stems"
-        stems_dir.mkdir(parents=True, exist_ok=True)
-        for idx, child in enumerate(model.children):
-            c_renderer = get_renderer_for_node(child.node_type)
-            try:
-                c_audio = c_renderer.render(child, sys_env)
-                clean_name = "".join(c for c in child.node_name if c.isalnum() or c in ("-", "_")).strip() or f"stem_{idx+1}"
-                stem_path = stems_dir / f"{idx+1:02d}_{clean_name}.wav"
-                c_export = np.moveaxis(c_audio, -1, 0) if c_audio.ndim > 1 else c_audio
-                sf.write(str(stem_path), c_export, sys_env.sample_rate)
-                stem_files.append(str(stem_path))
-            except Exception as se:
-                typer.secho(f"Warning: Failed rendering stem '{child.node_name}': {se}", fg=typer.colors.YELLOW, err=True)
+        # Render stems if requested
+        stem_files: List[str] = []
+        if stems and model.children:
+            stems_dir = out.parent / f"{out.stem}_stems"
+            stems_dir.mkdir(parents=True, exist_ok=True)
+            for idx, child in enumerate(model.children):
+                c_renderer = get_renderer_for_node(child.node_type)
+                try:
+                    c_audio = c_renderer.render(child, sys_env)
+                    clean_name = "".join(c for c in child.node_name if c.isalnum() or c in ("-", "_")).strip() or f"stem_{idx+1}"
+                    stem_path = stems_dir / f"{idx+1:02d}_{clean_name}.wav"
+                    c_export = np.moveaxis(c_audio, -1, 0) if c_audio.ndim > 1 else c_audio
+                    sf.write(str(stem_path), c_export, sys_env.sample_rate)
+                    stem_files.append(str(stem_path))
+                except Exception as se:
+                    typer.secho(f"Warning: Failed rendering stem '{child.node_name}': {se}", fg=typer.colors.YELLOW, err=True)
 
     elapsed = time.perf_counter() - start_time
     qa_metrics = analyze_audio_buffer(audio_out, sys_env.sample_rate)

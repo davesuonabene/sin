@@ -8,8 +8,13 @@ export class CanvasButton {
     label: string;
     color: string;
     hoverColor: string;
+    activeColor?: string;
+    activeHoverColor?: string;
     isHovered: boolean = false;
     tooltip?: string;
+    activeTooltip?: string;
+    isToggled?: (node: LGraphNode) => boolean;
+    getTooltip?: (node: LGraphNode) => string;
     onClick: (e?: MouseEvent) => void;
 
     constructor(
@@ -21,7 +26,11 @@ export class CanvasButton {
         color: string,
         hoverColor: string,
         onClick: (e?: MouseEvent) => void,
-        tooltip?: string
+        tooltip?: string,
+        isToggled?: (node: LGraphNode) => boolean,
+        activeColor?: string,
+        activeHoverColor?: string,
+        activeTooltip?: string
     ) {
         this.x = x;
         this.y = y;
@@ -32,10 +41,24 @@ export class CanvasButton {
         this.hoverColor = hoverColor;
         this.onClick = onClick;
         this.tooltip = tooltip;
+        this.isToggled = isToggled;
+        this.activeColor = activeColor;
+        this.activeHoverColor = activeHoverColor;
+        this.activeTooltip = activeTooltip;
     }
 
     draw(ctx: CanvasRenderingContext2D, node: LGraphNode) {
-        ctx.fillStyle = this.isHovered ? this.hoverColor : this.color;
+        const toggled = Boolean(this.isToggled?.(node));
+        let fillColor: string;
+        if (toggled) {
+            fillColor = this.isHovered
+                ? (this.activeHoverColor || this.hoverColor)
+                : (this.activeColor || this.color);
+        } else {
+            fillColor = this.isHovered ? this.hoverColor : this.color;
+        }
+
+        ctx.fillStyle = fillColor;
         
         // Handle negative x/y as right/bottom offsets
         const finalX = this.x < 0 ? node.size[0] + this.x : this.x;
@@ -56,6 +79,12 @@ export class CanvasButton {
         ctx.font = "bold 11px sans-serif";
         
         ctx.fillText(this.label, finalX + this.width / 2, finalY + this.height / 2 + 1);
+    }
+
+    resolveTooltip(node: LGraphNode): string | undefined {
+        if (this.getTooltip) return this.getTooltip(node);
+        if (this.isToggled?.(node) && this.activeTooltip) return this.activeTooltip;
+        return this.tooltip;
     }
 
     checkHit(local_x: number, local_y: number, node: LGraphNode, paddingX: number = 0, paddingY: number = 0): boolean {

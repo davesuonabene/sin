@@ -33,7 +33,9 @@ export class WidgetFactory {
             validatedVal = 'global' as unknown as T;
         } else if (field.type === 'float' || field.type === 'global_float' || field.type === 'db' || field.type === 'slider') {
             let num = typeof val === 'number' ? val : parseFloat(String(val));
-            if (isNaN(num)) num = typeof field.default === 'number' ? field.default : 0;
+            if (isNaN(num)) {
+                num = typeof field.default === 'number' ? field.default : (field.key === 'target_bpm' || field.key === 'bpm' ? 120 : 0);
+            }
             if (field.min !== undefined) num = Math.max(field.min, num);
             if (field.max !== undefined) num = Math.min(field.max, num);
             validatedVal = num as unknown as T;
@@ -277,6 +279,15 @@ export class WidgetFactory {
             onChange(field.key, updated, previousValue);
         };
 
+        const resolveWheelStep = (): number => {
+            if (field.type === 'int') return getParameterWheelStep(true);
+            if (typeof field.step === 'number' && field.step > 0 && field.step < 1.0) return field.step;
+            const min = field.min ?? 0;
+            const max = field.max ?? 1;
+            if (max - min <= 1.0) return 0.01;
+            return getParameterWheelStep(false);
+        };
+
         range.addEventListener('input', () => {
             update(parseFloat(range.value));
         });
@@ -286,7 +297,7 @@ export class WidgetFactory {
             if (event.altKey) return;
             const direction = event.deltaY < 0 ? 1 : -1;
             const currentValue = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
-            update(currentValue + direction * getParameterWheelStep(field.type === 'int'));
+            update(currentValue + direction * resolveWheelStep());
         }, { passive: false });
 
         wrapper.appendChild(range);
@@ -414,13 +425,42 @@ export class WidgetFactory {
             }
         };
 
-        input.addEventListener('change', commit);
+        let numDebounceTimer: any = null;
+        input.addEventListener('input', () => {
+            clearTimeout(numDebounceTimer);
+            numDebounceTimer = setTimeout(() => {
+                const raw = field.type === 'int' ? parseInt(input.value, 10) : parseFloat(input.value);
+                if (Number.isFinite(raw) && this.mayEditField(node, field, raw)) {
+                    const previousValue = this.getFieldValue(node, field);
+                    const updated = this.setFieldValue(node, field, raw);
+                    if (!Object.is(updated, previousValue)) {
+                        onChange(field.key, updated, previousValue);
+                    }
+                }
+            }, 100);
+        });
+
+        input.addEventListener('change', () => {
+            clearTimeout(numDebounceTimer);
+            commit();
+        });
         input.addEventListener('keydown', event => {
             if (event.key !== 'Enter') return;
             event.preventDefault();
+            clearTimeout(numDebounceTimer);
             commit();
             input.blur();
         });
+
+        const resolveWheelStep = (): number => {
+            if (field.type === 'int') return getParameterWheelStep(true);
+            if (typeof field.step === 'number' && field.step > 0 && field.step < 1.0) return field.step;
+            const min = field.min ?? 0;
+            const max = field.max ?? 1;
+            if (max - min <= 1.0) return 0.01;
+            return getParameterWheelStep(false);
+        };
+
         registerParameterWheelControl(input);
         input.addEventListener('wheel', event => {
             event.preventDefault();
@@ -428,7 +468,7 @@ export class WidgetFactory {
             const currentValue = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
             const direction = event.deltaY < 0 ? 1 : -1;
             const previousValue = this.getFieldValue(node, field);
-            const nextValue = currentValue + direction * getParameterWheelStep(field.type === 'int');
+            const nextValue = currentValue + direction * resolveWheelStep();
             if (!this.mayEditField(node, field, nextValue)) {
                 input.value = String(previousValue);
                 return;
@@ -464,9 +504,25 @@ export class WidgetFactory {
         input.step = String(field.step ?? 0.01);
 
         const getGlobalValue = () => {
+            const graph = (window as any).editorGraph;
+            const paramKey = (field.key === 'target_bpm' || field.key === 'bpm') ? 'bpm' : field.key;
+
+            if (graph && node.id != null) {
+                const trackNodesMap = (window as any).trackNodes as Map<number, any> | undefined;
+                const nodeData = trackNodesMap?.get(node.id);
+                if (nodeData?.parentId != null) {
+                    const parentData = trackNodesMap?.get(nodeData.parentId);
+                    const parentNode = graph.getNodeById(nodeData.parentId);
+                    const parentBpm = parentData?.target_bpm ?? parentData?.bpm ?? parentNode?.properties?.target_bpm ?? parentNode?.properties?.bpm;
+                    if (Number.isFinite(Number(parentBpm))) {
+                        return Number(parentBpm);
+                    }
+                }
+            }
+
             const getter = (window as any).getGlobalParameter;
-            const value = typeof getter === 'function' ? Number(getter(field.key)) : Number.NaN;
-            return Number.isFinite(value) ? value : (typeof field.default === 'number' ? field.default : 0);
+            const value = typeof getter === 'function' ? Number(getter(paramKey)) : Number.NaN;
+            return Number.isFinite(value) ? value : (typeof field.default === 'number' ? field.default : (paramKey === 'bpm' ? 120 : 0));
         };
         let lastLocalValue: number | null = null;
         const refresh = () => {
@@ -479,6 +535,18 @@ export class WidgetFactory {
             input.value = String(isGlobal ? getGlobalValue() : current);
             input.title = isGlobal ? `Inherited from global ${field.label.toLowerCase()}` : 'Custom local value';
         };
+
+        const onGlobalParamChange = () => {
+            if (!wrapper.isConnected) {
+                window.removeEventListener('global-parameters-changed', onGlobalParamChange);
+                return;
+            }
+            const current = this.getFieldValue(node, field);
+            if (String(current).toLowerCase() === 'global') {
+                input.value = String(getGlobalValue());
+            }
+        };
+        window.addEventListener('global-parameters-changed', onGlobalParamChange);
         const commit = () => {
             const previousValue = this.getFieldValue(node, field);
             const raw = parseFloat(input.value);

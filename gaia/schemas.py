@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Any, List, Optional, Literal
 from datetime import datetime
 
@@ -22,8 +22,15 @@ class ItemBase(BaseModel):
     vault_id: Optional[int] = None
     parent_id: Optional[int] = None
     storage_mode: Literal["managed", "external_reference"] = "managed"
-    availability: Literal["pending", "transferring", "ready", "missing", "failed"] = "ready"
+    availability: Literal["pending", "transferring", "ready", "available", "missing", "failed"] = "ready"
     attributes: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("availability", mode="before")
+    @classmethod
+    def _normalize_availability(cls, value: Any) -> str:
+        if value in {"available", None, ""}:
+            return "ready"
+        return str(value)
 
 class ItemCreate(ItemBase):
     type: str = "item"
@@ -141,7 +148,14 @@ class CollectionContent(BaseModel):
     streamable: bool = False
     child_id: Optional[int] = None
     storage_mode: Literal["managed", "external_reference"] = "managed"
-    availability: Literal["pending", "transferring", "ready", "missing", "failed"] = "ready"
+    availability: Literal["pending", "transferring", "ready", "available", "missing", "failed"] = "ready"
+
+    @field_validator("availability", mode="before")
+    @classmethod
+    def _normalize_availability(cls, value: Any) -> str:
+        if value in {"available", None, ""}:
+            return "ready"
+        return str(value)
 
 
 class CollectionContentPage(BaseModel):
@@ -159,8 +173,15 @@ class ItemSummary(BaseModel):
     vault_id: int
     parent_id: Optional[int] = None
     storage_mode: Literal["managed", "external_reference"] = "managed"
-    availability: Literal["pending", "transferring", "ready", "missing", "failed"] = "ready"
+    availability: Literal["pending", "transferring", "ready", "available", "missing", "failed"] = "ready"
     attributes: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("availability", mode="before")
+    @classmethod
+    def _normalize_availability(cls, value: Any) -> str:
+        if value in {"available", None, ""}:
+            return "ready"
+        return str(value)
     id: int
     created_at: datetime
     updated_at: datetime
@@ -320,6 +341,12 @@ class ProjectItem(CollectionItem):
 class ImportPreviewRequest(BaseModel):
     source_path: str
     vault_id: Optional[int] = None
+    progressive: bool = False
+
+
+class ImportPreviewSkipFolderRequest(BaseModel):
+    folder_path: str
+    skip: bool = True
 
 
 class ImportJobCreateRequest(BaseModel):

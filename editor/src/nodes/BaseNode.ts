@@ -59,6 +59,8 @@ export abstract class BaseNode extends LGraphNode {
     buttons: CanvasButton[] = [];
     previewBtn: CanvasButton;
     renderBtn: CanvasButton;
+    renderToggleBtn: CanvasButton;
+    freezeToggleBtn: CanvasButton;
     removeBtn: CanvasButton;
     eyeBtn: CanvasButton;
 
@@ -206,7 +208,9 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     get isVisualizationActive(): boolean {
-        return Boolean(this.properties?.visualization_enabled) && this.isVisualizationSupported;
+        const val = this.properties?.visualization_enabled;
+        const enabled = val !== undefined ? Boolean(val) : true;
+        return enabled && this.isVisualizationSupported;
     }
 
     toggleVisualization(): void {
@@ -379,7 +383,9 @@ export abstract class BaseNode extends LGraphNode {
             this.drawVisualization(ctx, viewport, telemetry);
         } else {
             this.drawSelectionRing(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview);
-            this.drawBody(ctx);
+            if (!this.isModifier) {
+                this.drawBody(ctx);
+            }
             this.drawIcon(ctx);
             if (!this.isModifier) {
                 this.drawSlots(ctx);
@@ -486,7 +492,7 @@ export abstract class BaseNode extends LGraphNode {
         } else if (isHovered || isLibraryDropTarget) {
             traceNodeShape(ctx, this.nodeShape, offset - 3, offset - 3, size + 6);
             ctx.lineWidth = isLibraryDropTarget ? 2.5 : 1.5;
-            ctx.strokeStyle = isLibraryDropTarget ? "#22c55e" : "rgba(255, 255, 255, 0.72)";
+            ctx.strokeStyle = isLibraryDropTarget ? "#22c55e" : (this.isModifier ? "rgba(126, 34, 206, 0.45)" : "rgba(255, 255, 255, 0.72)");
             ctx.stroke();
         }
     }
@@ -501,7 +507,8 @@ export abstract class BaseNode extends LGraphNode {
 
     protected drawIcon(ctx: CanvasRenderingContext2D): void {
         const center = BaseNode.visualSize / 2;
-        drawNeonIcon(ctx, this.nodeIcon, center, center, 21);
+        const iconColor = this.isModifier ? (this.nodeColor || '#7e22ce') : '#f8fafc';
+        drawNeonIcon(ctx, this.nodeIcon, center, center, this.isModifier ? 24 : 21, iconColor);
     }
 
     protected drawSlots(ctx: CanvasRenderingContext2D): void {
@@ -588,6 +595,15 @@ export abstract class BaseNode extends LGraphNode {
         if (!this.properties) {
             this.properties = {};
         }
+        if (this.properties.visualization_enabled === undefined && this.isVisualizationSupported) {
+            this.properties.visualization_enabled = true;
+        }
+        if (this.properties.freeze_refresh === undefined) {
+            this.properties.freeze_refresh = true;
+        }
+        if (this.properties.render_enabled === undefined) {
+            this.properties.render_enabled = true;
+        }
         if (!this.properties.chain || !Array.isArray(this.properties.chain) || this.properties.chain.length === 0) {
             this.properties.chain = getDefaultFxChain();
         }
@@ -607,7 +623,7 @@ export abstract class BaseNode extends LGraphNode {
             this.properties.export_overwrite_mode = "incremental";
         }
 
-        // Action buttons positioned floating on the right side of the node
+        // Action buttons positioned floating on the right side of the node or header
         this.previewBtn = new CanvasButton(
             48, 0, 16, 16, "▶", "#0f3b5f", "#0369a1",
             () => {
@@ -616,13 +632,36 @@ export abstract class BaseNode extends LGraphNode {
             "Preview (RAM)"
         );
 
-        this.renderBtn = new CanvasButton(
-            48, 18, 16, 16, "R", "#064e3b", "#059669",
+        this.renderToggleBtn = new CanvasButton(
+            48, 18, 16, 16, "R",
+            "rgba(30, 41, 59, 0.7)", "#334155",
             () => {
-                window.dispatchEvent(new CustomEvent('render-node', { detail: { nodeId: this.id } }));
+                const current = this.properties?.render_enabled !== false;
+                this.updateProperty('render_enabled', !current);
+                this.setDirtyCanvas(true, true);
             },
-            "Render Audio (Export)"
+            "Include in Global Render: OFF",
+            (node: any) => node.properties?.render_enabled !== false,
+            "#059669", "#10b981",
+            "Include in Global Render: ON"
         );
+
+        this.freezeToggleBtn = new CanvasButton(
+            48, 36, 16, 16, "❄",
+            "rgba(30, 41, 59, 0.7)", "#334155",
+            () => {
+                const current = this.properties?.freeze_refresh !== false;
+                this.updateProperty('freeze_refresh', !current);
+                this.setDirtyCanvas(true, true);
+            },
+            "Freeze Refresh: OFF (Refreshes on Global Recalculate)",
+            (node: any) => node.properties?.freeze_refresh !== false,
+            "#0284c7", "#38bdf8",
+            "Freeze Refresh: ON (Protected during Global Freeze)"
+        );
+
+        // Keep renderBtn referencing renderToggleBtn for backwards compatibility
+        this.renderBtn = this.renderToggleBtn;
 
         this.eyeBtn = new CanvasButton(
             2, 2, 13, 13, "👁", "rgba(15, 23, 42, 0.75)", "#0284c7",
@@ -633,7 +672,7 @@ export abstract class BaseNode extends LGraphNode {
         );
 
         this.removeBtn = new CanvasButton(
-            48, 36, 16, 16, "×", "#5f1720", "#b91c1c",
+            48, 54, 16, 16, "×", "#5f1720", "#b91c1c",
             () => {
                 if (this.graph) {
                     this.graph.remove(this);
@@ -645,16 +684,35 @@ export abstract class BaseNode extends LGraphNode {
         );
 
         this.addButton(this.previewBtn);
-        this.addButton(this.renderBtn);
+        this.addButton(this.renderToggleBtn);
+        this.addButton(this.freezeToggleBtn);
         this.addButton(this.eyeBtn);
         this.addButton(this.removeBtn);
+        this.size = this.computeSize();
+        this.resizable = this.isVisualizationActive;
+        this.updateButtonLayout();
+    }
+
+    onConfigure(_info: any): void {
+        if (this.properties.visualization_enabled === undefined && this.isVisualizationSupported) {
+            this.properties.visualization_enabled = true;
+        }
+        if (this.properties.freeze_refresh === undefined) {
+            this.properties.freeze_refresh = true;
+        }
+        if (this.properties.render_enabled === undefined) {
+            this.properties.render_enabled = true;
+        }
+        this.size = this.computeSize();
+        this.resizable = this.isVisualizationActive;
         this.updateButtonLayout();
     }
 
     updateButtonLayout(): void {
         if (this.isVisualizationActive) {
-            this.previewBtn.x = -80; this.previewBtn.y = 3; this.previewBtn.width = 16; this.previewBtn.height = 16;
-            this.renderBtn.x = -60; this.renderBtn.y = 3; this.renderBtn.width = 16; this.renderBtn.height = 16;
+            this.previewBtn.x = -100; this.previewBtn.y = 3; this.previewBtn.width = 16; this.previewBtn.height = 16;
+            this.renderToggleBtn.x = -80; this.renderToggleBtn.y = 3; this.renderToggleBtn.width = 16; this.renderToggleBtn.height = 16;
+            this.freezeToggleBtn.x = -60; this.freezeToggleBtn.y = 3; this.freezeToggleBtn.width = 16; this.freezeToggleBtn.height = 16;
             this.eyeBtn.x = -40; this.eyeBtn.y = 3; this.eyeBtn.width = 16; this.eyeBtn.height = 16;
             this.eyeBtn.color = "#0284c7"; this.eyeBtn.hoverColor = "#38bdf8";
             this.removeBtn.x = -20; this.removeBtn.y = 3; this.removeBtn.width = 16; this.removeBtn.height = 16;
@@ -662,8 +720,9 @@ export abstract class BaseNode extends LGraphNode {
             this.eyeBtn.x = 2; this.eyeBtn.y = 2; this.eyeBtn.width = 13; this.eyeBtn.height = 13;
             this.eyeBtn.color = "rgba(15, 23, 42, 0.75)"; this.eyeBtn.hoverColor = "#0284c7";
             this.previewBtn.x = 48; this.previewBtn.y = 0; this.previewBtn.width = 16; this.previewBtn.height = 16;
-            this.renderBtn.x = 48; this.renderBtn.y = 18; this.renderBtn.width = 16; this.renderBtn.height = 16;
-            this.removeBtn.x = 48; this.removeBtn.y = 36; this.removeBtn.width = 16; this.removeBtn.height = 16;
+            this.renderToggleBtn.x = 48; this.renderToggleBtn.y = 18; this.renderToggleBtn.width = 16; this.renderToggleBtn.height = 16;
+            this.freezeToggleBtn.x = 48; this.freezeToggleBtn.y = 36; this.freezeToggleBtn.width = 16; this.freezeToggleBtn.height = 16;
+            this.removeBtn.x = 48; this.removeBtn.y = 54; this.removeBtn.width = 16; this.removeBtn.height = 16;
         }
     }
 
@@ -711,7 +770,7 @@ export abstract class BaseNode extends LGraphNode {
         const isHoveredOrSelected = Boolean(this.is_selected || ((window as any).editorCanvas?.node_over === this));
         const extraRight = this.isVisualizationActive ? 8 : 28;
         const extraTop = isHoveredOrSelected && !this.isVisualizationActive ? 32 : 0;
-        const extraBottom = 16;
+        const extraBottom = this.isVisualizationActive ? 16 : 32;
 
         return (
             x >= this.pos[0] - margin - 8 &&
@@ -757,8 +816,9 @@ export abstract class BaseNode extends LGraphNode {
                 btn.isHovered = hit;
                 dirty = true;
             }
-            if (hit && btn.tooltip) {
-                hoveredTooltip = btn.tooltip;
+            if (hit) {
+                const tip = typeof btn.resolveTooltip === 'function' ? btn.resolveTooltip(this) : btn.tooltip;
+                if (tip) hoveredTooltip = tip;
             }
         }
         if (canvas?.canvas) {

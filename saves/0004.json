@@ -1,0 +1,4406 @@
+{
+  "version": 2,
+  "savedAt": "2026-10-28T10:51:57.107Z",
+  "frozen": true,
+  "graph": {
+    "last_node_id": 44,
+    "last_link_id": 24,
+    "nodes": [
+      {
+        "id": 6,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 688,
+          "1": 228,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_80v5jr",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_q88rej",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "808 Humanizer",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 390963,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -10,
+              "max": 10,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 4,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 7,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1160,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 27,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 3
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              4
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_wv4pyv",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_be1l4y",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "808 Sub Track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 11,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 280,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 17,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 5
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              6
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Midi Kick 2",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_9ul6b5",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_hrpco3",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Midi Kick 2",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": true,
+              "subdivisions": 2
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "gate",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 2140,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "length_source_id": 12,
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\patterns\\@Renegadeofficial1_'The_Matrix'_Midi_Pack\\@Renegadeofficial1 'The Matrix' Midi Pack\\1. Drum Midi Files\\Midi Kicks (130 - 150)\\Midi Kick 2.mid",
+          "library_item_id": 4171,
+          "original_bpm": 130,
+          "duration_seconds": 1.6901360544217687
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 13,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 688,
+          "1": 388,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_b708ss",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_y2jezd",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Kick Velocity Randomizer",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 734552,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -6,
+              "max": 6,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 11,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 15,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 440,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              8
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_200",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7943,
+                "gain_db": -2
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Snare Clap",
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\!Mike Zara's Stash\\Claps\\Common Claps\\MZ Clap [3Dirty].wav",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "original_bpm": 120,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key": "none",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "key_match_target": "",
+          "library_item_id": 3098,
+          "duration_seconds": 0.075
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 17,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 440,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 13,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 8
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              9
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Midi Snare 1",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_g14x39",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_1dhugb",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Midi Snare 1",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 0.7874,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 0.54724,
+              "probability": 100,
+              "subdivision_enabled": true,
+              "subdivisions": 2
+            },
+            {
+              "offset": 0.33333,
+              "velocity": 0.70079,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 0.71916,
+              "probability": 100,
+              "subdivision_enabled": true,
+              "subdivisions": 2
+            },
+            {
+              "offset": 0.33333,
+              "velocity": 0.77165,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0.33333,
+              "velocity": 0.7874,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": -0.33333,
+              "velocity": 0.7874,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 0.7874,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "gate",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 9914,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "length_source_id": 18,
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\patterns\\@Renegadeofficial1_'The_Matrix'_Midi_Pack\\@Renegadeofficial1 'The Matrix' Midi Pack\\1. Drum Midi Files\\Midi Snares (130 - 150)\\Midi Snare 1.mid",
+          "library_item_id": 4175,
+          "original_bpm": 130,
+          "duration_seconds": 1.6901360544217687
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 18,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 440,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 20,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 9
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_c5as59",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_vhmybp",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Snare Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.8701184197008645,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "quant": "auto",
+          "quant_anchor": "start",
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 19,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 688,
+          "1": 548,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_0ltakm",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_t7enig",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Snare Dynamics Modulator",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 555853,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -8,
+              "max": 5,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 17,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 23,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 600,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 15,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 11
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              12
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "10101010",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_2h7oux",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_wk57ha",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "10101010",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.125,
+          "play_mode": "gate",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 82,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "length_source_id": 24,
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\default-vault\\sequences\\10101010.seq",
+          "library_item_id": 7271,
+          "duration_seconds": 0.8738095238095238
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 25,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 688,
+          "1": 708,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_c0pqnk",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_3z8hnn",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Hat Swing & Velocity Humanizer",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 1943,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -15,
+              "max": 10,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 23,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 27,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 760,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              14
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_600",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5012,
+                "gain_db": -6
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Ghost Snare / Rim Layer",
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\!Mike Zara's Stash\\Snares\\Common Snares\\MZ Snare [909].wav",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "original_bpm": 120,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key": "none",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "key_match_target": "",
+          "library_item_id": 3852,
+          "duration_seconds": 0.2301875
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 29,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 760,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 14,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 14
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              15
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "01020102",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_2ypfoe",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_wm6616",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "01020102",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1
+          ],
+          "step_parameters": [
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 100,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.125,
+          "play_mode": "gate",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 5026,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "length_source_id": 30,
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\default-vault\\sequences\\01020102.seq",
+          "library_item_id": 7281,
+          "duration_seconds": 1.0224489795918368
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 31,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 688,
+          "1": 868,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_17j58x",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_0qu9u3",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Ghost Dynamics Modulator",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 410006,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -20,
+              "max": 15,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 29,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 35,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 600,
+          "1": 920,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 18,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 18
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              19
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_4c1vg3",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_s1mkzh",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Texture Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0.1
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.4565691736652061,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "quant": "auto",
+          "quant_anchor": "start",
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 36,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 880,
+          "1": 920,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 25,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 19
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              20
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_uk2qf0",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_6kwj4f",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Texture Track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 41,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 26,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 22
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              23
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_9hcisw",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_3o1ejg",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Melodic Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0.5
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.09644148564112609,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "quant": "auto",
+          "quant_anchor": "start",
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 42,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 688,
+          "1": 1188,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_ox2qbt",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_5c9j8e",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Melodic Dynamics Modulator",
+          "color": "#7e22ce",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 531219,
+          "destinations": [],
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "targets": [
+            {
+              "field": "step_parameters.velocity",
+              "min": -10,
+              "max": 8,
+              "type": "relative_percent"
+            }
+          ],
+          "parentId": 40,
+          "target_bpm": 120
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 43,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1160,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 29,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 23
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              24
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_otol6l",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_g914f2",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Melodic Chops Track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 21,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 600,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              11
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_400",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.631,
+                "gain_db": -4
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Closed Hat",
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\!Mike Zara's Stash\\Hi Hats\\MZ Hi Hat [Blur].wav",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "original_bpm": 120,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key": "none",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": -20,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "key_match_target": "",
+          "library_item_id": 3440,
+          "duration_seconds": 0.24
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 2,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 9,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              1
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_300",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7079,
+                "gain_db": -3
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "808 Sub Core",
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\artist drumkits\\808-A\\808 (Ambjaay - Uno).wav",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "original_bpm": 120,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key": "A",
+          "key_match_mode": "follow",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": -3,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "key_match_target": "F#",
+          "library_item_id": 2075,
+          "duration_seconds": 2.4508843537414964
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 9,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 280,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 10,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              5
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_100",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.8913,
+                "gain_db": -1
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Kick Punch",
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\!Mike Zara's Stash\\Kicks\\MZ Kick [Behold].wav",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "original_bpm": 120,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key": "none",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "key_match_target": "",
+          "library_item_id": 3540,
+          "duration_seconds": 0.11718820861678005
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 34,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 325,
+          "1": 920,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 11,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              18
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_1400",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.1995,
+                "gain_db": -14
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Vinyl & Tape Atmosphere",
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\artist drumkits\\FX-A\\Denzel Curry - The Cave Siren.wav",
+          "sample_type": "loop",
+          "start_beat": 0,
+          "original_bpm": 120,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key": "none",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "key_match_target": "",
+          "length_inherited": true,
+          "length_source_id": 35,
+          "library_item_id": 2274,
+          "duration_seconds": 3.961269841269841
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 38,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 12,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              21
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_300",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.7079,
+                "gain_db": -3
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Vintage Melodic Source",
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\Chaos Hip Hop Melodies (BETA)\\Analog\\Cymatics - Manifest - 140 BPM A Min (OB6+P6).wav",
+          "sample_type": "loop",
+          "start_beat": 0,
+          "original_bpm": 140,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key": "Amin",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "key_match_target": "",
+          "length_inherited": true,
+          "length_source_id": 40,
+          "library_item_id": 13291,
+          "duration_seconds": 13.521133786848072
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 12,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 888,
+          "1": 280,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 24,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 6
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              7
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_rd5v7t",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_reiloj",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Kick Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            5,
+            8
+          ],
+          "section_probability": [
+            1,
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0,
+            0
+          ],
+          "section_quant": [
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start",
+            "start"
+          ],
+          "seed": 0.6346400070967473,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 30,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 760,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 21,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 15
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_1bsvaw",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_8m85wp",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Ghost Snare Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            0.75,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.09637057659044301,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 44,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1440,
+          "1": 660,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 30,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 4
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 17
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 20
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 24
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": null,
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_bslxou",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_owysvn",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Master Output",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": true,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 32,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1160,
+          "1": 520,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 28,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 7
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 13
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              17
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_xpe711",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_wkrwha",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Drums Bus",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 142,
+          "total_bars": "global",
+          "color": "#4f46e5",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca",
+        "shape": 1
+      },
+      {
+        "id": 24,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 600,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 22,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 12
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              13
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_ghvtln",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_3m0fko",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Hat Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "end"
+          ],
+          "seed": 0.15716027417014555,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 4,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 16,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 1
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              2
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Cloud Kick - Sparse Halftime",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_tf08a4",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_zdoe6r",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Cloud Kick - Sparse Halftime",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0.88,
+              "offset": -0.015,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "gate",
+          "release": 0.05,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 6564,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "length_source_id": 5,
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\default-vault\\sequences\\Cloud Kick - Sparse Halftime.seq",
+          "library_item_id": 7354,
+          "duration_seconds": 3.5056462585034014
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 5,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 880,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 23,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 2
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              3
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_pnnkz1",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_c0inrj",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "808 Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 16,
+          "section_points": [
+            8
+          ],
+          "section_probability": [
+            1,
+            1
+          ],
+          "section_sample_start": [
+            0,
+            0.25
+          ],
+          "section_quant": [
+            "auto",
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start",
+            "start"
+          ],
+          "seed": 0.8530116174591862,
+          "start_beat": 0,
+          "color": "#f59e0b",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "duration_seconds": 27.042244897959183
+        },
+        "color": "#f59e0b",
+        "bgcolor": "#f59e0b",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 40,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": true,
+          "hidden": false
+        },
+        "order": 19,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 21
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              22
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "22222222",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_0267hz",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_vo7zkf",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "22222222",
+          "node_type": "sequence",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 1,
+              "offset": 0,
+              "probability": 100,
+              "subdivisions": 1,
+              "subdivision_enabled": false
+            }
+          ],
+          "step_length": 0.125,
+          "play_mode": "gate",
+          "release": 0.08,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 4994,
+          "seed_mode": "moving",
+          "color": "#ec4899",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "length_source_id": 41,
+          "filepath": "C:\\web-projects\\sin\\assets\\vaults\\default-vault\\sequences\\22222222.seq",
+          "library_item_id": 7285,
+          "duration_seconds": 14.313378684807256
+        },
+        "color": "#ec4899",
+        "bgcolor": "#ec4899",
+        "boxcolor": "#db2777",
+        "shape": 1
+      }
+    ],
+    "links": [
+      [
+        1,
+        2,
+        0,
+        4,
+        0,
+        "audio"
+      ],
+      [
+        2,
+        4,
+        0,
+        5,
+        0,
+        "audio"
+      ],
+      [
+        3,
+        5,
+        0,
+        7,
+        0,
+        "audio"
+      ],
+      [
+        4,
+        7,
+        0,
+        44,
+        0,
+        "audio"
+      ],
+      [
+        5,
+        9,
+        0,
+        11,
+        0,
+        "audio"
+      ],
+      [
+        6,
+        11,
+        0,
+        12,
+        0,
+        "audio"
+      ],
+      [
+        7,
+        12,
+        0,
+        32,
+        0,
+        "audio"
+      ],
+      [
+        8,
+        15,
+        0,
+        17,
+        0,
+        "audio"
+      ],
+      [
+        9,
+        17,
+        0,
+        18,
+        0,
+        "audio"
+      ],
+      [
+        11,
+        21,
+        0,
+        23,
+        0,
+        "audio"
+      ],
+      [
+        12,
+        23,
+        0,
+        24,
+        0,
+        "audio"
+      ],
+      [
+        13,
+        24,
+        0,
+        32,
+        2,
+        "audio"
+      ],
+      [
+        14,
+        27,
+        0,
+        29,
+        0,
+        "audio"
+      ],
+      [
+        15,
+        29,
+        0,
+        30,
+        0,
+        "audio"
+      ],
+      [
+        17,
+        32,
+        0,
+        44,
+        1,
+        "audio"
+      ],
+      [
+        18,
+        34,
+        0,
+        35,
+        0,
+        "audio"
+      ],
+      [
+        19,
+        35,
+        0,
+        36,
+        0,
+        "audio"
+      ],
+      [
+        20,
+        36,
+        0,
+        44,
+        2,
+        "audio"
+      ],
+      [
+        21,
+        38,
+        0,
+        40,
+        0,
+        "audio"
+      ],
+      [
+        22,
+        40,
+        0,
+        41,
+        0,
+        "audio"
+      ],
+      [
+        23,
+        41,
+        0,
+        43,
+        0,
+        "audio"
+      ],
+      [
+        24,
+        43,
+        0,
+        44,
+        3,
+        "audio"
+      ]
+    ],
+    "groups": [],
+    "config": {
+      "links_ontop": true
+    },
+    "extra": {
+      "global_parameters": {
+        "bpm": 142,
+        "total_bars": 16,
+        "key": "F#m"
+      },
+      "main_preview": {
+        "node_id": 44,
+        "mode": "auto"
+      },
+      "global_freeze": true
+    },
+    "version": 0.4
+  }
+}

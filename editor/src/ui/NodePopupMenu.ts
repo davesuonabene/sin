@@ -32,7 +32,7 @@ export class NodePopupMenu {
         { type: "preset_synth", label: "Synth Lead", category: "PRESETS", badge: "PSET", badgeColor: "#84cc16", isCallable: false },
 
         // MODULATORS
-        { type: "random", label: "Random Modifier", category: "MODULATORS", badge: "RND", badgeColor: "#ec4899", isCallable: true },
+        { type: "random", label: "Random Modifier", category: "MODULATORS", badge: "RND", badgeColor: "#7e22ce", isCallable: true },
         { type: "mod_lfo", label: "LFO Generator", category: "MODULATORS", badge: "MOD", badgeColor: "#06b6d4", isCallable: false },
         { type: "mod_env", label: "ADSR Envelope", category: "MODULATORS", badge: "MOD", badgeColor: "#06b6d4", isCallable: false },
 

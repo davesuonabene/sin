@@ -10,6 +10,8 @@ export interface SequenceChannel {
     offset: number[];
     velocity: number[];
     subdivisions: number[];
+    sample_start?: number[];
+    gate_length?: number[];
 }
 
 export interface SequenceDocument {
@@ -22,7 +24,7 @@ export interface SequenceDocument {
 export class SequenceNode extends BaseNode {
     private sequenceRenderer = new SequenceRenderer({ accentColor: '#ec4899' });
     static readonly stepCount = 16;
-    static readonly stepParameterKeys = ['probability', 'offset', 'velocity', 'subdivisions'];
+    static readonly stepParameterKeys = ['sample_start', 'gate_length', 'velocity', 'offset', 'probability', 'subdivisions'];
 
     static panelSchema: NodePanelSchema = {
         tabs: [
@@ -31,7 +33,7 @@ export class SequenceNode extends BaseNode {
                 label: 'Sequence',
                 sections: [
                     { type: 'sequence_grid' },
-                    { type: 'fields', fields: ['step_length', 'play_mode', 'fade_ms', 'seed', 'seed_mode'] }
+                    { type: 'fields', fields: ['total_bars', 'step_length', 'play_mode', 'release', 'fade_ms', 'seed', 'seed_mode'] }
                 ]
             },
             {
@@ -54,12 +56,16 @@ export class SequenceNode extends BaseNode {
 
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Sequence', tab: 'COMMON' },
-        { key: 'probability', label: 'Probability', type: 'int', default: 100, min: 0, max: 100, step: 1, unit: '%', tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' } },
-        { key: 'offset', label: 'Offset', type: 'float', default: 0, min: -0.5, max: 0.5, step: 0.01, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'bipolar', direction: 'horizontal' } },
+        { key: 'total_bars', label: 'Total Bars', type: 'global_float', default: 'global', min: 0.25, max: 128, step: 0.25, unit: 'bars', tab: 'SEQUENCE', description: 'Pattern playback duration. "global" inherits from parent track or project setting.' },
+        { key: 'sample_start', label: 'Sample Start', type: 'float', default: 0, min: 0, max: 100, step: 1, unit: '%', tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' }, description: 'Sample playback start position for this step.' },
+        { key: 'gate_length', label: 'Gate Length', type: 'float', default: 1.0, min: 0.0, max: 1.0, step: 0.01, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' }, description: 'Multiplier for current step length (0.0 to 1.0), followed by release.' },
         { key: 'velocity', label: 'Velocity', type: 'float', default: 1, min: 0, max: 1, step: 0.01, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' } },
+        { key: 'offset', label: 'Offset', type: 'float', default: 0, min: -0.5, max: 0.5, step: 0.01, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'bipolar', direction: 'horizontal' } },
+        { key: 'probability', label: 'Probability', type: 'int', default: 100, min: 0, max: 100, step: 1, unit: '%', tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' } },
         { key: 'subdivisions', label: 'Subdivisions', type: 'int', default: 1, min: 1, max: 16, step: 1, tab: 'SEQUENCE', stepVisual: { mode: 'fragments' } },
         { key: 'step_length', label: 'Step Length', type: 'float', default: 0.25, min: 0.0625, max: 4.0, step: 0.0625, unit: 'bars', tab: 'SEQUENCE' },
-        { key: 'play_mode', label: 'Play Mode', type: 'radio', default: 'gate', options: [{ value: 'gate', label: 'Gate' }, { value: 'trigger', label: 'Trigger' }], tab: 'SEQUENCE' },
+        { key: 'play_mode', label: 'Voice Mode', type: 'radio', default: 'gate', options: [{ value: 'gate', label: 'Mono' }, { value: 'trigger', label: 'Multivoice' }], tab: 'SEQUENCE', description: 'Mono cuts previous playing sample when a note comes in; Multivoice allows overlapping voices.' },
+        { key: 'release', label: 'Release', type: 'float', default: 0.0, min: 0.0, max: 1.0, step: 0.01, tab: 'SEQUENCE', description: 'Fade-out release mapped to sample percentage (0.0 to 1.0).' },
         { key: 'fade_ms', label: 'Step Fade', type: 'float', default: 0, min: 0, max: 5, step: 0.1, unit: 'ms', tab: 'SEQUENCE', description: 'Applies a short gain fade at the start and end of every triggered sample.' },
         { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'SEQUENCE' },
         { key: 'seed_mode', label: 'Seed Mode', type: 'radio', default: 'moving', options: [{ value: 'moving', label: 'Moving (per iteration)' }, { value: 'fixed', label: 'Fixed (looped by arranger)' }], tab: 'SEQUENCE' }
@@ -97,6 +103,8 @@ export class SequenceNode extends BaseNode {
                 offset: sequence.map((_, index) => valueFor('offset', index, 0)),
                 velocity: sequence.map((_, index) => valueFor('velocity', index, 1)),
                 subdivisions: sequence.map((_, index) => valueFor('subdivisions', index, 1)),
+                sample_start: sequence.map((_, index) => valueFor('sample_start', index, 0)),
+                gate_length: sequence.map((_, index) => valueFor('gate_length', index, 1.0)),
             }]
         };
     }
@@ -113,13 +121,19 @@ export class SequenceNode extends BaseNode {
             const numeric = Number(value);
             return Number.isFinite(numeric) ? Math.max(min, Math.min(max, numeric)) : fallback;
         };
-        const stepParameters = Array.from({ length: stepCount }, (_, index) => ({
-            probability: Math.round(bounded(channel.probability[index], 0, 100, 100)),
-            offset: bounded(channel.offset[index], -0.5, 0.5, 0),
-            velocity: bounded(channel.velocity[index], 0, 1, 1),
-            subdivisions: Math.round(bounded(channel.subdivisions[index], 1, 16, 1)),
-            subdivision_enabled: bounded(channel.subdivisions[index], 1, 16, 1) > 1,
-        }));
+        const stepParameters = Array.from({ length: stepCount }, (_, index) => {
+            const rawGate = Number(channel.gate_length?.[index] ?? 1.0);
+            const normGate = rawGate > 1.0 ? rawGate / 100.0 : rawGate;
+            return {
+                probability: Math.round(bounded(channel.probability[index], 0, 100, 100)),
+                offset: bounded(channel.offset[index], -0.5, 0.5, 0),
+                velocity: bounded(channel.velocity[index], 0, 1, 1),
+                subdivisions: Math.round(bounded(channel.subdivisions[index], 1, 16, 1)),
+                subdivision_enabled: bounded(channel.subdivisions[index], 1, 16, 1) > 1,
+                sample_start: bounded(channel.sample_start?.[index], 0, 100, 0),
+                gate_length: bounded(normGate, 0.0, 1.0, 1.0),
+            };
+        });
         this.updateProperty('node_name', document.name || 'Sequence');
         this.updateProperty('sequence', channel.on.map(value => value ? 1 : 0));
         this.updateProperty('step_parameters', stepParameters);
@@ -139,8 +153,12 @@ export class SequenceNode extends BaseNode {
             ...this.properties,
             node_name: "Sequence",
             node_type: "sequence",
+            total_bars: "global",
+            length_inherited: true,
             sequence: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
             step_parameters: Array.from({ length: SequenceNode.stepCount }, () => ({
+                sample_start: 0,
+                gate_length: 1.0,
                 offset: 0,
                 velocity: 1,
                 probability: 100,
@@ -149,6 +167,7 @@ export class SequenceNode extends BaseNode {
             })),
             step_length: 0.25,
             play_mode: "gate",
+            release: 0,
             fade_ms: 0,
             selected_step: 0,
             seed: Math.floor(Math.random() * 10000),
@@ -207,12 +226,17 @@ export class SequenceNode extends BaseNode {
             const velocity = typeof param.velocity === 'number' ? param.velocity : 1.0;
             const subdivisions = Number(param.subdivisions) || 1;
             const probability = typeof param.probability === 'number' ? param.probability / 100 : 1.0;
+            const sampleStart = typeof param.sample_start === 'number' ? param.sample_start / 100 : 0.0;
+            const rawGate = typeof param.gate_length === 'number' ? param.gate_length : 1.0;
+            const gateLength = rawGate > 1.0 ? rawGate / 100 : Math.max(0.0, Math.min(1.0, rawGate));
 
             steps.push({
                 gate: isGateOn,
                 velocity,
                 subdivisions,
-                probability
+                probability,
+                sampleStart,
+                gateLength
             });
         }
 

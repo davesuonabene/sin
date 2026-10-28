@@ -107,7 +107,7 @@ export class SampleNode extends BaseNode {
             tab: 'SAMPLE',
             description: 'Used locally now and staged as a proposal for GAIA to review before changing the library asset.'
         },
-        { key: 'target_bpm', label: 'Target BPM', type: 'float', default: 120, min: 20, max: 300, unit: 'BPM', tab: 'SAMPLE' },
+        { key: 'target_bpm', label: 'Target BPM', type: 'global_float', default: 'global', min: 20, max: 300, unit: 'BPM', tab: 'SAMPLE' },
         {
             key: 'key',
             label: 'Key',
@@ -198,8 +198,8 @@ export class SampleNode extends BaseNode {
             sample_type: "loop",
             start_beat: 0,
             original_bpm: 120,
-            target_bpm: 120,
-            bpm: 120,
+            target_bpm: "global",
+            bpm: "global",
             key: "",
             key_match_mode: "off",
             key_match_algorithm: "nearest",
@@ -243,6 +243,13 @@ export class SampleNode extends BaseNode {
                 this.graph,
                 key === 'key_match_mode' && value === 'lead' ? this : undefined
             );
+        }
+    }
+
+    override onConfigure(data: any): void {
+        super.onConfigure?.(data);
+        if (this.properties && (this.properties.target_bpm === undefined || this.properties.target_bpm === null)) {
+            this.properties.target_bpm = 'global';
         }
     }
 
@@ -643,14 +650,31 @@ export class SampleNode extends BaseNode {
                         const isStepOn = typeof stepVal === 'number' ? stepVal > 0 : Boolean(stepVal);
 
                         if (isStepOn) {
+                            const stepParams = Array.isArray(parentSequenceNode.properties?.step_parameters)
+                                ? parentSequenceNode.properties.step_parameters[stepIdx]
+                                : null;
+                            const sampleStartRatio = Math.max(0, Math.min(100, Number(stepParams?.sample_start ?? 0))) / 100;
+                            const rawGate = Number(stepParams?.gate_length ?? 1.0);
+                            const gateLenRatio = Math.max(0, Math.min(1.0, rawGate > 1.0 ? rawGate / 100 : rawGate));
+                            const relPct = Math.max(0, Math.min(1.0, Number(parentSequenceNode.properties?.release ?? 0)));
                             const elapsedInStep = timeInPattern - (stepIdx * stepDuration);
-                            const sampleTime = elapsedInStep * effectivePitchRate;
-                            const sampleProgress = sampleActiveDuration > 0 ? (sampleTime / sampleActiveDuration) : 0;
-                            const progressInCrop = this.properties?.sample_type === 'loop'
-                                ? (sampleProgress % 1.0)
-                                : Math.max(0, Math.min(1, sampleProgress));
-                            playbackProgress = cropStart + progressInCrop * activeSpan;
-                            isTriggered = true;
+                            const sampleDurationSec = effectivePitchRate > 0 ? (sampleActiveDuration / effectivePitchRate) : sampleActiveDuration;
+                            const gateDuration = Math.min(sampleDurationSec, stepDuration * gateLenRatio);
+                            const tailDuration = Math.max(0, sampleDurationSec - gateDuration);
+                            const releaseDuration = relPct > 0 ? tailDuration * relPct : 0;
+                            const totalActiveDuration = Math.min(sampleDurationSec, gateDuration + releaseDuration);
+
+                            if (elapsedInStep <= totalActiveDuration) {
+                                const sampleTime = elapsedInStep * effectivePitchRate;
+                                const sampleProgress = sampleActiveDuration > 0 ? (sampleTime / sampleActiveDuration) : 0;
+                                const progressInCrop = this.properties?.sample_type === 'loop'
+                                    ? ((sampleStartRatio + sampleProgress) % 1.0)
+                                    : Math.max(0, Math.min(1, sampleStartRatio + sampleProgress));
+                                playbackProgress = cropStart + progressInCrop * activeSpan;
+                                isTriggered = true;
+                            } else {
+                                isTriggered = false;
+                            }
                         } else {
                             isTriggered = false;
                         }

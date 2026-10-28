@@ -27,6 +27,23 @@ from . import (
 
 
 PROJECT_FILES_DIRECTORY = "files"
+PROJECT_DERIVED_DIRECTORY = "derived"
+
+
+def project_root_path(project: models.ProjectItem) -> Path:
+    return Path(project.absolute_path).resolve()
+
+
+def project_document_path(project: models.ProjectItem) -> Path:
+    return project_root_path(project) / "project.json"
+
+
+def project_files_dir(project: models.ProjectItem) -> Path:
+    return project_root_path(project) / PROJECT_FILES_DIRECTORY
+
+
+def project_derived_dir(project: models.ProjectItem) -> Path:
+    return project_files_dir(project) / PROJECT_DERIVED_DIRECTORY
 
 
 def _safe_name(value: str, *, field_name: str = "Name") -> str:
@@ -42,7 +59,9 @@ def _safe_name(value: str, *, field_name: str = "Name") -> str:
 def project_stage_directory(project: models.ProjectItem, stage_name: str) -> Path:
     """Return the canonical directory for project-owned generated files."""
     stage = _safe_name(stage_name, field_name="Stage name")
-    return Path(project.absolute_path).resolve() / PROJECT_FILES_DIRECTORY / stage
+    if stage == "derived":
+        return project_derived_dir(project)
+    return project_files_dir(project) / stage
 
 
 def _project_schema(project_type: str):
@@ -222,11 +241,14 @@ def _prepare_project(
     destination = vault_root / title
     if destination.exists():
         raise ValueError(f"A managed project folder named '{title}' already exists")
-    destination.mkdir(parents=False, exist_ok=False)
     files_root = destination / PROJECT_FILES_DIRECTORY
     files_root.mkdir(parents=True, exist_ok=True)
-    for stage_name in ("edit", "source", "derived"):
+    (files_root / PROJECT_DERIVED_DIRECTORY).mkdir(parents=True, exist_ok=True)
+    for stage_name in ("edit", "source"):
         (files_root / stage_name).mkdir(parents=True, exist_ok=True)
+    project_json = destination / "project.json"
+    if not project_json.exists():
+        project_json.write_text("{}\n", encoding="utf-8")
     schema = _project_schema(project_type)(
         absolute_path=str(destination),
         vault_id=vault.id,
@@ -576,9 +598,13 @@ def place_items(
 
 
     if mode == "copy":
-        target_root = Path(target.absolute_path).resolve()
-        if not target_root.exists() or not target_root.is_dir():
-            raise ValueError("Target folder is missing from disk")
+        if isinstance(target, models.ProjectItem):
+            target_root = project_files_dir(target)
+            target_root.mkdir(parents=True, exist_ok=True)
+        else:
+            target_root = Path(target.absolute_path).resolve()
+            if not target_root.exists() or not target_root.is_dir():
+                raise ValueError("Target folder is missing from disk")
         copied_items = _top_level_selection(ordered_items)
         created_paths: list[Path] = []
         cloned_ids: list[int] = []
@@ -964,10 +990,10 @@ def adopt_orphans(db: Session, project_id: int) -> dict:
     copied_paths: list[Path] = []
     try:
         for item, source, is_external in validated:
-            destination_root = project_stage_directory(project, "source") if is_external else project_root
+            destination_root = project_files_dir(project)
             destination_root.mkdir(parents=True, exist_ok=True)
             destination = destination_root / source.name
-            if source.parent == project_root:
+            if source.parent == destination_root:
                 destination = source
             elif destination.exists():
                 if destination != source:
@@ -1023,15 +1049,15 @@ def _import_external_file(db: Session, project: models.ProjectItem, source_path:
     if existing:
         return existing
 
-    vault = vaults.get_vault(db, project.vault_id)
-    store = vaults.vault_store(vault).resolve()
-    destination = source if _is_within(store, source) else _unique_destination(store, source.name)
+    target_dir = project_files_dir(project)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    destination = source if _is_within(target_dir, source) else _unique_destination(target_dir, source.name)
     copied = False
     if destination != source:
         shutil.copy2(source, destination)
         copied = True
     try:
-        item_schema, tags = file_schema_for_path(destination, project.vault_id)
+        item_schema, tags = file_schema_for_path(destination, project.vault_id, parent_id=project.id)
         item = crud.create_item(db, item_schema, commit=False)
         if tags:
             crud.set_item_tags(db, item.id, tags, commit=False)
@@ -1181,11 +1207,13 @@ def create_from_items(
                     if not source_path.is_file():
                         raise ValueError(f"'{source_path.name}' is missing from disk")
                     owning_project = source_project(source, project)
+                    target_dir = project_files_dir(project)
+                    target_dir.mkdir(parents=True, exist_ok=True)
                     if owning_project is not None:
-                        destination = _unique_destination(path, source_path.name)
+                        destination = _unique_destination(target_dir, source_path.name)
                         linked_item_id = clone_project_file(source, source_path, destination, project).id
                     elif source.parent_id is None:
-                        destination = _unique_destination(path, source_path.name)
+                        destination = _unique_destination(target_dir, source_path.name)
                         source_path.replace(destination)
                         moved_files.append((source_path, destination))
                         source.absolute_path = str(destination.resolve())

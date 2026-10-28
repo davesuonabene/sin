@@ -9,8 +9,48 @@ render cleanly and beautifully in the browser canvas.
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Dict, List, Optional, Tuple, Set
 from ermes.py.schemas import AudioNodeModel, FxModuleModel
+
+
+def parse_musical_key(value: str) -> Optional[Tuple[int, Optional[str]]]:
+    """Parse a key string like 'Dm', 'C#min', 'F', 'Eb' into (pitch_class, mode)."""
+    if not value or not isinstance(value, str):
+        return None
+    val = value.strip().replace("♯", "#").replace("♭", "b")
+    m = re.match(r"^([A-Ga-g])([#b]?)(?:[\s_-]*(maj(?:or)?|min(?:or)?|m))?$", val, re.IGNORECASE)
+    if not m:
+        return None
+    natural = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+    letter = m.group(1).upper()
+    acc = 1 if m.group(2) == "#" else (-1 if m.group(2) == "b" else 0)
+    pitch_class = (natural.get(letter, 0) + acc + 12) % 12
+    suffix = (m.group(3) or "").lower()
+    mode = "minor" if (suffix == "m" or suffix.startswith("min")) else ("major" if suffix.startswith("maj") else None)
+    return pitch_class, mode
+
+
+def calculate_key_match_transpose(source_key: str, lead_key: str, algorithm: str = "nearest") -> float:
+    """Calculate transposition semitones matching SampleNode.calculateKeyMatch in frontend."""
+    src = parse_musical_key(source_key)
+    lead = parse_musical_key(lead_key)
+    if not src or not lead:
+        return 0.0
+    src_pitch, src_mode = src
+    lead_pitch, lead_mode = lead
+    target_pitch = lead_pitch
+    if src_mode and lead_mode and src_mode != lead_mode:
+        target_pitch = (lead_pitch + 3) % 12 if lead_mode == "minor" else (lead_pitch + 9) % 12
+    upward = (target_pitch - src_pitch + 12) % 12
+    algo = (algorithm or "nearest").lower().strip()
+    if algo == "higher":
+        transpose = upward
+    elif algo == "lower":
+        transpose = 0 if upward == 0 else upward - 12
+    else:
+        transpose = upward - 12 if upward > 6 else upward
+    return float(transpose)
 
 
 DEFAULT_NODE_NAMES = {
@@ -216,12 +256,11 @@ def validate_graph(doc: Dict[str, Any]) -> Tuple[bool, List[str]]:
 AUDIO_NODE_TYPES = frozenset({"sample", "sequence", "arrangement", "track"})
 
 # Properties the compiler reads that are not AudioNodeModel fields themselves.
-COMPILER_CONSUMED_PROPERTIES = frozenset({"node_name"})
+COMPILER_CONSUMED_PROPERTIES = frozenset({"node_name", "key_match_transpose"})
 
-# Must stay in sync with core.fx.FX_PROCESSORS (guarded by a test).
+# Must stay in sync with core.fx.FX_PROCESSORS (gain staging only).
 KNOWN_FX_TYPES = frozenset({
-    "gain", "eq", "compressor", "delay", "reverb",
-    "filter", "distortion", "chorus", "limiter",
+    "gain",
 })
 
 
@@ -266,6 +305,7 @@ def graph_to_workspace(doc: Dict[str, Any]) -> Dict[str, Any]:
     settings = doc.get("settings", {"bpm": 120, "total_bars": 4, "key": "C"})
 
     numeric_ids: Dict[str, int] = {node["id"]: idx + 1 for idx, node in enumerate(nodes)}
+    nodes_by_id: Dict[str, Dict[str, Any]] = {node["id"]: node for node in nodes}
 
     incoming_counts: Dict[str, int] = {}
     target_slots: Dict[int, int] = {}
@@ -309,12 +349,27 @@ def graph_to_workspace(doc: Dict[str, Any]) -> Dict[str, Any]:
         props.setdefault("node_name", node.get("name", DEFAULT_NODE_NAMES.get(ntype, "AudioNode")))
         props.setdefault("node_type", ntype)
 
+        if "chain" in props and isinstance(props["chain"], list):
+            for mod in props["chain"]:
+                if isinstance(mod, dict) and not mod.get("name"):
+                    mod["name"] = mod.get("id", "Module").capitalize()
+
         # Attachments mapping
         for att in attachments:
-            if att.get("owner") == nid and att.get("modifier") in numeric_ids:
-                props["asset_modifier_id"] = numeric_ids[att["modifier"]]
-            elif att.get("modifier") == nid and att.get("owner") in numeric_ids:
-                props["parentId"] = numeric_ids[att["owner"]]
+            owner_nid = att.get("owner")
+            mod_nid = att.get("modifier")
+            att_type = att.get("type")
+            mod_node = nodes_by_id.get(mod_nid, {})
+            mod_type = mod_node.get("type")
+
+            # Only asset_pool attachments (or asset_filter nodes) set asset_modifier_id on the owner
+            if owner_nid == nid and mod_nid in numeric_ids:
+                if att_type == "asset_pool" or mod_type == "asset_filter":
+                    props["asset_modifier_id"] = numeric_ids[mod_nid]
+
+            # All modifiers (asset_pool, random, modulator, etc.) record their parent owner via parentId
+            if mod_nid == nid and owner_nid in numeric_ids:
+                props["parentId"] = numeric_ids[owner_nid]
 
         lite_nodes.append({
             "id": num_id,
@@ -370,7 +425,8 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
     if not valid:
         raise ValueError(f"Invalid sin-graph document: {'; '.join(errors)}")
 
-    nodes_by_id: Dict[str, Dict[str, Any]] = {n["id"]: n for n in doc.get("nodes", [])}
+    nodes = doc.get("nodes", [])
+    nodes_by_id: Dict[str, Dict[str, Any]] = {n["id"]: n for n in nodes}
     connections = doc.get("connections", [])
     attachments = doc.get("attachments", [])
     settings = doc.get("settings", {"bpm": 120.0, "total_bars": 4.0, "key": "C"})
@@ -396,7 +452,17 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
     if not target_root or target_root not in nodes_by_id:
         raise ValueError(f"Root node '{target_root}' not found in graph.")
 
-    def build_node(nid: str) -> AudioNodeModel:
+    # Detect lead key for key matching
+    lead_key = None
+    for n in nodes:
+        n_props = n.get("properties", {})
+        if n_props.get("key_match_mode") == "lead" and n_props.get("key"):
+            lead_key = str(n_props.get("key")).strip()
+            break
+    if not lead_key:
+        lead_key = str(settings.get("key", "C")).strip()
+
+    def build_node(nid: str, parent_total_bars: Optional[float] = None) -> AudioNodeModel:
         raw_node = nodes_by_id[nid]
         props = copy.deepcopy(raw_node.get("properties", {}))
         ntype = raw_node.get("type", "track")
@@ -432,20 +498,31 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
                     params=fx.get("params", {}),
                 ))
 
+        target_bpm = props.get("target_bpm") or props.get("bpm") or global_bpm
+        if str(target_bpm).lower() == "global":
+            target_bpm = global_bpm
+
+        raw_total_bars = props.get("total_bars")
+        if raw_total_bars is None or str(raw_total_bars).lower() == "global":
+            total_bars = parent_total_bars if parent_total_bars is not None else (global_bars if ntype in ("sequence", "arrangement", "track") else None)
+        else:
+            total_bars = float(raw_total_bars)
+
         # Children recursion
         child_ids = incoming_audio.get(nid, [])
         children: List[AudioNodeModel] = []
         for cid in child_ids:
             if cid in nodes_by_id:
-                children.append(build_node(cid))
+                children.append(build_node(cid, parent_total_bars=total_bars))
 
-        target_bpm = props.get("target_bpm") or props.get("bpm") or global_bpm
-        if str(target_bpm).lower() == "global":
-            target_bpm = global_bpm
-
-        total_bars = props.get("total_bars") or (global_bars if ntype in ("sequence", "arrangement") else None)
-        if str(total_bars).lower() == "global":
-            total_bars = global_bars
+        base_transpose = float(props.get("transpose", 0.0))
+        if props.get("key_match_mode") == "follow":
+            if props.get("key_match_transpose") is not None:
+                base_transpose += float(props.get("key_match_transpose", 0.0))
+            elif lead_key:
+                src_key = str(props.get("key") or "C").strip()
+                algo = str(props.get("key_match_algorithm", "nearest")).strip()
+                base_transpose += calculate_key_match_transpose(src_key, lead_key, algo)
 
         return AudioNodeModel(
             node_name=name,
@@ -461,6 +538,7 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             step_parameters=props.get("step_parameters"),
             step_length=props.get("step_length"),
             play_mode=props.get("play_mode", "gate"),
+            release=float(props.get("release", 0.0)),
             fade_ms=float(props.get("fade_ms", 0.0)),
             selected_items=props.get("selected_items"),
             playbackMode=props.get("playbackMode"),
@@ -479,7 +557,7 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             quant_anchor=props.get("quant_anchor", "start"),
             crop_start=float(props.get("crop_start", 0.0)),
             crop_end=float(props.get("crop_end", 1.0)),
-            transpose=float(props.get("transpose", 0.0)),
+            transpose=base_transpose,
             cents=float(props.get("cents", 0.0)),
             stretch_mode=props.get("stretch_mode", "time_stretch"),
             stretch_factor=float(props.get("stretch_factor", 1.0)),
@@ -530,7 +608,17 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
     if target_root_id not in nodes_by_num_id:
         raise ValueError(f"Root node {target_root_id} not found in workspace preset.")
 
-    def build_node(num_id: int) -> AudioNodeModel:
+    # Detect lead key for key matching
+    lead_key = None
+    for n in nodes:
+        n_props = n.get("properties", {})
+        if n_props.get("key_match_mode") == "lead" and n_props.get("key"):
+            lead_key = str(n_props.get("key")).strip()
+            break
+    if not lead_key:
+        lead_key = str(globals_params.get("key", "C")).strip()
+
+    def build_node(num_id: int, parent_total_bars: Optional[float] = None) -> AudioNodeModel:
         raw_node = nodes_by_num_id[num_id]
         props = copy.deepcopy(raw_node.get("properties", {}))
         lite_type = raw_node.get("type", "Audio/Track")
@@ -539,14 +627,29 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
 
         # Resolve asset pool if modifier attached
         modifier_id = props.get("asset_modifier_id")
+        if not modifier_id or (modifier_id in nodes_by_num_id and nodes_by_num_id[modifier_id].get("type") != "Audio/AssetFilter"):
+            for cand in nodes:
+                if cand.get("type") == "Audio/AssetFilter" and cand.get("properties", {}).get("parentId") == num_id:
+                    modifier_id = cand.get("id")
+                    break
+
         if modifier_id and modifier_id in nodes_by_num_id:
-            mod_props = nodes_by_num_id[modifier_id].get("properties", {})
-            props.setdefault("selected_items", mod_props.get("selected_items", []))
-            props.setdefault("playbackMode", mod_props.get("playbackMode", "Random"))
-            props.setdefault("refresh_mode", mod_props.get("refresh_mode", "global"))
-            props.setdefault("seed", mod_props.get("seed"))
-            if mod_props.get("output_value") and not props.get("filepath"):
-                props["filepath"] = mod_props["output_value"]
+            mod_node = nodes_by_num_id[modifier_id]
+            if mod_node.get("type") == "Audio/AssetFilter":
+                mod_props = mod_node.get("properties", {})
+                props.setdefault("selected_items", mod_props.get("selected_items", []))
+                props.setdefault("playbackMode", mod_props.get("playbackMode", "Random"))
+                props.setdefault("refresh_mode", mod_props.get("refresh_mode", "global"))
+                props.setdefault("seed", mod_props.get("seed"))
+                if mod_props.get("output_value") and not props.get("filepath"):
+                    props["filepath"] = mod_props["output_value"]
+
+        # Resolve random modifiers attached via parentId
+        for cand in nodes:
+            if cand.get("type") == "Audio/Random" and cand.get("properties", {}).get("parentId") == num_id:
+                cand_props = cand.get("properties", {})
+                props.setdefault("random_destinations", cand_props.get("destinations", []))
+                props.setdefault("seed", cand_props.get("seed"))
 
         raw_chain = props.get("chain", [])
         fx_chain: List[FxModuleModel] = []
@@ -561,19 +664,30 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
                     params=fx.get("params", {}),
                 ))
 
-        child_ids = incoming_audio.get(num_id, [])
-        children: List[AudioNodeModel] = []
-        for cid in child_ids:
-            if cid in nodes_by_num_id:
-                children.append(build_node(cid))
-
         target_bpm = props.get("target_bpm") or props.get("bpm") or global_bpm
         if str(target_bpm).lower() == "global":
             target_bpm = global_bpm
 
-        total_bars = props.get("total_bars") or (global_bars if ntype in ("sequence", "arrangement") else None)
-        if str(total_bars).lower() == "global":
-            total_bars = global_bars
+        raw_total_bars = props.get("total_bars")
+        if raw_total_bars is None or str(raw_total_bars).lower() == "global":
+            total_bars = parent_total_bars if parent_total_bars is not None else (global_bars if ntype in ("sequence", "arrangement", "track") else None)
+        else:
+            total_bars = float(raw_total_bars)
+
+        child_ids = incoming_audio.get(num_id, [])
+        children: List[AudioNodeModel] = []
+        for cid in child_ids:
+            if cid in nodes_by_num_id:
+                children.append(build_node(cid, parent_total_bars=total_bars))
+
+        base_transpose = float(props.get("transpose", 0.0))
+        if props.get("key_match_mode") == "follow":
+            if props.get("key_match_transpose") is not None:
+                base_transpose += float(props.get("key_match_transpose", 0.0))
+            elif lead_key:
+                src_key = str(props.get("key") or "C").strip()
+                algo = str(props.get("key_match_algorithm", "nearest")).strip()
+                base_transpose += calculate_key_match_transpose(src_key, lead_key, algo)
 
         return AudioNodeModel(
             node_name=name,
@@ -589,6 +703,7 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             step_parameters=props.get("step_parameters"),
             step_length=props.get("step_length"),
             play_mode=props.get("play_mode", "gate"),
+            release=float(props.get("release", 0.0)),
             fade_ms=float(props.get("fade_ms", 0.0)),
             selected_items=props.get("selected_items"),
             playbackMode=props.get("playbackMode"),
@@ -607,7 +722,7 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             quant_anchor=props.get("quant_anchor", "start"),
             crop_start=float(props.get("crop_start", 0.0)),
             crop_end=float(props.get("crop_end", 1.0)),
-            transpose=float(props.get("transpose", 0.0)),
+            transpose=base_transpose,
             cents=float(props.get("cents", 0.0)),
             stretch_mode=props.get("stretch_mode", "time_stretch"),
             stretch_factor=float(props.get("stretch_factor", 1.0)),

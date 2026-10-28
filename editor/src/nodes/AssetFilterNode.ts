@@ -1,8 +1,8 @@
 import { LiteGraph } from 'litegraph.js';
-import { ModulatorNode } from './ModulatorNode';
-import { type FieldSchema } from '../fields/FieldSchema';
-import { type NodePanelSchema } from '../fields/NodePanelSchema';
-import { refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from '../api';
+import { ModulatorNode } from './ModulatorNode.ts';
+import { type FieldSchema } from '../fields/FieldSchema.ts';
+import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
+import { refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from '../api.ts';
 
 /**
  * A typed modifier that selects one item from an explicit ordered asset pool.
@@ -51,7 +51,7 @@ export class AssetFilterNode extends ModulatorNode {
         }
     ];
 
-    static defaultColor = "#7c3aed";
+    static defaultColor = "#7e22ce";
     static defaultIcon = "search";
     static defaultShape = "diamond" as const;
     static badgeLabel = "PATH";
@@ -62,9 +62,9 @@ export class AssetFilterNode extends ModulatorNode {
     constructor() {
         super();
         this.title = "Asset Pool";
-        this.color = "#7c3aed";
-        this.bgcolor = "#7c3aed";
-        this.boxcolor = "#6d28d9";
+        this.color = "#7e22ce";
+        this.bgcolor = "#7e22ce";
+        this.boxcolor = "#6b21a8";
 
         this.properties = {
             node_name: "Asset Pool",
@@ -77,7 +77,7 @@ export class AssetFilterNode extends ModulatorNode {
             refresh_mode: "global",
             sequence_index: -1,
             seed: 0,
-            color: "#7c3aed",
+            color: "#7e22ce",
             icon: "search",
             shape: "diamond"
         };

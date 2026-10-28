@@ -1,9 +1,9 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode } from './BaseNode';
-import { CanvasButton } from '../ui/CanvasButton';
-import { type FieldSchema } from '../fields/FieldSchema';
-import { type NodePanelSchema } from '../fields/NodePanelSchema';
-import { type NodeShape } from './NodeVisuals';
+import { BaseNode } from './BaseNode.ts';
+import { CanvasButton } from '../ui/CanvasButton.ts';
+import { type FieldSchema } from '../fields/FieldSchema.ts';
+import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
+import { type NodeShape } from './NodeVisuals.ts';
 
 export function getDefaultModulatorChain() {
     return [
@@ -46,7 +46,7 @@ export class ModulatorNode extends BaseNode {
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Modulator', tab: 'COMMON' }
     ];
-    static defaultColor = "#9333ea";
+    static defaultColor = "#7e22ce";
     static defaultIcon = "pulse";
     static defaultShape: NodeShape = "triangle";
     static badgeLabel = "MOD";
@@ -59,16 +59,16 @@ export class ModulatorNode extends BaseNode {
         this.size = this.computeSize();
         this.shape = LiteGraph.BOX_SHAPE || 1;
 
-        this.color = "#9333ea";
-        this.bgcolor = "#9333ea";
-        this.boxcolor = "#7e22ce";
+        this.color = "#7e22ce";
+        this.bgcolor = "#7e22ce";
+        this.boxcolor = "#6b21a8";
 
         if (!this.properties) {
             this.properties = {};
         }
         this.properties.node_type = "modulator";
         this.properties.node_name = this.properties.node_name || "Modulator";
-        this.properties.color = this.properties.color || "#9333ea";
+        this.properties.color = this.properties.color || "#7e22ce";
         this.properties.icon = this.properties.icon || "pulse";
         this.properties.shape = this.properties.shape || "triangle";
         if (!this.properties.chain || !Array.isArray(this.properties.chain) || this.properties.chain.length === 0) {

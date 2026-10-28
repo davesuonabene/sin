@@ -7,7 +7,7 @@ from unittest.mock import patch
 import numpy as np
 import soundfile as sf
 
-from gaia import crud, integrity, media_editor, models, project_service, reference_service, schemas, vaults
+from gaia import crud, integrity, media_editor, models, project_manifest, project_service, reference_service, schemas, vaults
 from tests.support import GaiaTestCase
 
 
@@ -260,7 +260,7 @@ class TestGaiaMediaEditor(GaiaTestCase):
         state.layers[0].gain_db = -3.5
         second = media_editor.save_project_editor_state(self.db, project.id, state)
 
-        state_path = Path(project.absolute_path) / "files" / "edit" / "current.json"
+        state_path = project_manifest.manifest_path(project)
         self.assertTrue(state_path.is_file())
         self.assertEqual(first["schema"], "gaia-media-edit")
         self.assertEqual(second["layers"][0]["gain_db"], -3.5)
@@ -335,7 +335,7 @@ class TestGaiaMediaEditor(GaiaTestCase):
             layers=[schemas.MediaEditLayer(item_id=source.id, gain_db=-2)],
         )
         media_editor.save_project_editor_state(self.db, project.id, state)
-        state_path = Path(project.absolute_path) / "files" / "edit" / "current.json"
+        state_path = project_manifest.manifest_path(project)
         original = state_path.read_bytes()
         state.layers[0].gain_db = -8
 
@@ -394,7 +394,7 @@ class TestGaiaMediaEditor(GaiaTestCase):
         self.assertEqual(session_b["editor_state"]["layers"][0]["gain_db"], 2)
 
         # Verify manifest current.json
-        state_path = Path(project.absolute_path) / "files" / "edit" / "current.json"
+        state_path = project_manifest.manifest_path(project)
         manifest = json.loads(state_path.read_text(encoding="utf-8"))
         self.assertIn("edits", manifest)
         self.assertIn(f"item:{source_a.id}", manifest["edits"])

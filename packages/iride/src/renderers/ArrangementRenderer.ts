@@ -73,17 +73,6 @@ export class ArrangementRenderer extends BaseSignalRenderer {
                 ctx.lineWidth = isActiveSection ? 1.5 : 0.75;
                 ctx.stroke();
 
-                // Sample start tick
-                if (sec.sampleStart > 0) {
-                    const startX = secX + sec.sampleStart * secW;
-                    ctx.strokeStyle = '#0284c7';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.moveTo(startX, y + padding);
-                    ctx.lineTo(startX, y + height - padding);
-                    ctx.stroke();
-                }
-
                 // Section index label
                 ctx.fillStyle = isActiveSection ? '#ffffff' : '#1e293b';
                 ctx.font = 'bold 9px Inter, sans-serif';

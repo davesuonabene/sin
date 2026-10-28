@@ -4,104 +4,134 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GAIA Library</title>
-    <link rel="stylesheet" href="/static/styles.css?v=63">
+    <link rel="stylesheet" href="/static/styles.css?v=64">
     <link rel="stylesheet" href="/static/menu-system.css?v=1">
 </head>
 <body>
     <div class="app-shell">
         <main class="main-content">
             <section id="library-view" class="view">
-                <nav id="app-menu-bar" class="app-menu-bar" aria-label="Application menu">
-                    <div class="app-menu-left">
-                    <div class="app-menu-root" data-app-menu="gaia">
-                        <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">GAIA</button>
-                        <div class="app-menu-panel gaia-menu-panel sin-menu-surface" role="menu" aria-label="GAIA options"></div>
-                    </div>
-                    <div class="app-menu-root" data-app-menu="file">
-                        <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">File</button>
-                        <div class="app-menu-panel sin-menu-surface" role="menu" aria-label="File menu">
-                            <button id="file-new-project" class="app-menu-item sin-menu-item" type="button" role="menuitem">New project</button>
-                            <button id="file-import" class="app-menu-item sin-menu-item" type="button" role="menuitem">Import assets</button>
-                            <button id="file-refresh" class="app-menu-item sin-menu-item" type="button" role="menuitem">Refresh library</button>
-                            <div class="app-menu-divider sin-menu-divider"></div>
-                            <button class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled title="Saving is not available yet">Save library…</button>
-                        </div>
-                    </div>
-                    <div class="app-menu-root" data-app-menu="selection">
-                        <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Selection</button>
-                        <div class="app-menu-panel selection-menu-panel sin-menu-surface" role="menu" aria-label="Selection menu">
-                            <div id="move-bar" class="menu-selection-actions" aria-label="Commands for the current selection">
-                                <span id="move-count" class="selection-count">No selection</span>
-                                <button id="analyze-selection" class="app-menu-item sin-menu-item" type="button" role="menuitem" title="Analyze selected assets" disabled>Analyze metadata</button>
-                                <div id="selection-move-submenu" class="app-menu-submenu">
-                                    <button id="selection-move-trigger" class="app-menu-item app-menu-submenu-trigger sin-menu-item" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" disabled>
-                                        <span>Move to</span><span class="menu-chevron" aria-hidden="true">▸</span>
-                                    </button>
-                                    <div id="move-target-menu" class="app-menu-panel app-menu-submenu-panel sin-menu-surface" role="menu" aria-label="Move selected assets to vault">
-                                        <div id="move-target-options"></div>
-                                    </div>
-                                </div>
-                                <div id="selection-playlist-submenu" class="app-menu-submenu">
-                                    <button id="selection-playlist-trigger" class="app-menu-item app-menu-submenu-trigger sin-menu-item" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" disabled>
-                                        <span>Add to playlist</span><span class="menu-chevron" aria-hidden="true">▸</span>
-                                    </button>
-                                    <div id="playlist-target-menu" class="app-menu-panel app-menu-submenu-panel sin-menu-surface" role="menu" aria-label="Add selected assets to playlist">
-                                        <div id="playlist-target-options"></div>
-                                    </div>
-                                </div>
-                                <button id="remove-from-playlist-button" class="app-menu-item sin-menu-item hidden" type="button" role="menuitem">Remove from playlist</button>
-                                <button id="delete-selection" class="app-menu-item danger-menu-item sin-menu-item" type="button" role="menuitem" title="Delete selected assets" disabled>Delete selected</button>
-                                <div class="app-menu-divider sin-menu-divider"></div>
-                                <span id="selection-type-actions" class="selection-type-actions"></span>
+                <header id="app-header" class="app-header" aria-label="Application header">
+                    <nav id="app-menu-bar" class="app-menu-bar" aria-label="Application menu">
+                        <div class="app-menu-left">
+                            <div class="app-menu-root" data-app-menu="gaia">
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">GAIA</button>
+                                <div class="app-menu-panel gaia-menu-panel sin-menu-surface" role="menu" aria-label="GAIA options"></div>
                             </div>
-                        </div>
-                    </div>
-                    <div class="app-menu-root" data-app-menu="vault">
-                        <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Vault</button>
-                        <div class="app-menu-panel sin-menu-surface" role="menu" aria-label="Vault menu">
-                            <button id="vault-menu-create" class="app-menu-item sin-menu-item" type="button" role="menuitem">Create vault</button>
-                            <button id="vault-menu-sync" class="app-menu-item sin-menu-item" type="button" role="menuitem">Check folder sync</button>
-                            <button id="vault-menu-options" class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled>Vault options</button>
-                            <button id="vault-menu-delete" class="app-menu-item danger-menu-item sin-menu-item" type="button" role="menuitem" disabled>Delete active vault</button>
-                        </div>
-                    </div>
-                    <div class="app-menu-root" data-app-menu="playlists">
-                        <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Playlists</button>
-                        <div class="app-menu-panel sin-menu-surface" role="menu" aria-label="Playlists menu">
-                            <button id="playlist-menu-create" class="app-menu-item sin-menu-item" type="button" role="menuitem">New playlist…</button>
-                            <button id="playlist-menu-rename" class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled>Rename active playlist</button>
-                            <button id="playlist-menu-delete" class="app-menu-item danger-menu-item sin-menu-item" type="button" role="menuitem" disabled>Delete active playlist</button>
-                        </div>
-                    </div>
-                    </div>
-                    <div class="vault-heading">
-                        <div class="vault-title-row">
-                            <div class="vault-picker-wrap">
-                                <h1>
-                                    <button id="vault-picker" class="vault-picker" type="button" aria-haspopup="listbox" aria-expanded="false">
-                                        <span id="active-vault-name">Show all</span>
-                                        <span class="vault-picker-chevron" aria-hidden="true">⌄</span>
-                                    </button>
-                                </h1>
-                                <div id="vault-menu" class="vault-menu sin-menu-surface hidden" role="listbox" aria-label="Choose a vault">
-                                    <div id="vault-menu-list"></div>
+                            <div class="app-menu-root" data-app-menu="file">
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">File</button>
+                                <div class="app-menu-panel sin-menu-surface" role="menu" aria-label="File menu">
+                                    <button id="file-new-project" class="app-menu-item sin-menu-item" type="button" role="menuitem">New project</button>
+                                    <button id="file-import" class="app-menu-item sin-menu-item" type="button" role="menuitem">Import assets</button>
+                                    <button id="file-refresh" class="app-menu-item sin-menu-item" type="button" role="menuitem">Refresh library</button>
+                                    <div class="app-menu-divider sin-menu-divider"></div>
+                                    <button class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled title="Saving is not available yet">Save library…</button>
+                                </div>
+                            </div>
+                            <div class="app-menu-root" data-app-menu="selection">
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Selection</button>
+                                <div class="app-menu-panel selection-menu-panel sin-menu-surface" role="menu" aria-label="Selection menu">
+                                    <div id="move-bar" class="menu-selection-actions" aria-label="Commands for the current selection">
+                                        <span id="move-count" class="selection-count">No selection</span>
+                                        <button id="analyze-selection" class="app-menu-item sin-menu-item" type="button" role="menuitem" title="Analyze selected assets" disabled>Analyze metadata</button>
+                                        <div id="selection-move-submenu" class="app-menu-submenu">
+                                            <button id="selection-move-trigger" class="app-menu-item app-menu-submenu-trigger sin-menu-item" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" disabled>
+                                                <span>Move to</span><span class="menu-chevron" aria-hidden="true">▸</span>
+                                            </button>
+                                            <div id="move-target-menu" class="app-menu-panel app-menu-submenu-panel sin-menu-surface" role="menu" aria-label="Move selected assets to vault">
+                                                <div id="move-target-options"></div>
+                                            </div>
+                                        </div>
+                                        <div id="selection-playlist-submenu" class="app-menu-submenu">
+                                            <button id="selection-playlist-trigger" class="app-menu-item app-menu-submenu-trigger sin-menu-item" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" disabled>
+                                                <span>Add to playlist</span><span class="menu-chevron" aria-hidden="true">▸</span>
+                                            </button>
+                                            <div id="playlist-target-menu" class="app-menu-panel app-menu-submenu-panel sin-menu-surface" role="menu" aria-label="Add selected assets to playlist">
+                                                <div id="playlist-target-options"></div>
+                                            </div>
+                                        </div>
+                                        <button id="remove-from-playlist-button" class="app-menu-item sin-menu-item hidden" type="button" role="menuitem">Remove from playlist</button>
+                                        <button id="delete-selection" class="app-menu-item danger-menu-item sin-menu-item" type="button" role="menuitem" title="Delete selected assets" disabled>Delete selected</button>
+                                        <div class="app-menu-divider sin-menu-divider"></div>
+                                        <span id="selection-type-actions" class="selection-type-actions"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="app-menu-root" data-app-menu="vault">
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Vault</button>
+                                <div class="app-menu-panel sin-menu-surface" role="menu" aria-label="Vault menu">
+                                    <button id="vault-menu-create" class="app-menu-item sin-menu-item" type="button" role="menuitem">Create vault</button>
+                                    <button id="vault-menu-sync" class="app-menu-item sin-menu-item" type="button" role="menuitem">Check folder sync</button>
+                                    <button id="vault-menu-options" class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled>Vault options</button>
+                                    <button id="vault-menu-delete" class="app-menu-item danger-menu-item sin-menu-item" type="button" role="menuitem" disabled>Delete active vault</button>
+                                </div>
+                            </div>
+                            <div class="app-menu-root" data-app-menu="playlists">
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Playlists</button>
+                                <div class="app-menu-panel sin-menu-surface" role="menu" aria-label="Playlists menu">
+                                    <button id="playlist-menu-create" class="app-menu-item sin-menu-item" type="button" role="menuitem">New playlist…</button>
+                                    <button id="playlist-menu-rename" class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled>Rename active playlist</button>
+                                    <button id="playlist-menu-delete" class="app-menu-item danger-menu-item sin-menu-item" type="button" role="menuitem" disabled>Delete active playlist</button>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    <div class="quick-toolbar" aria-label="Quick actions">
-                        <button id="vault-sync-pill" class="vault-sync-pill hidden" type="button" title="Folder sync status" aria-label="Folder sync status">
-                            <span class="vault-sync-pill-dot" aria-hidden="true"></span>
-                            <span class="vault-sync-pill-icon" aria-hidden="true">⚡</span>
-                            <span id="vault-sync-pill-text">Sync</span>
-                        </button>
-                        <button id="create-project" class="primary toolbar-icon-button" type="button" title="Create project" aria-label="Create project"><span class="toolbar-icon" aria-hidden="true">＋</span></button>
-                        <button id="open-import" class="secondary toolbar-icon-button" type="button" title="Import assets" aria-label="Import assets"><span class="toolbar-icon" aria-hidden="true">⇩</span></button>
-                        <button id="review-sin-proposals" class="secondary toolbar-icon-button" type="button" title="Review SIN proposals" aria-label="Review SIN proposals"><span class="toolbar-icon" aria-hidden="true">⌁</span></button>
-                        <button id="refresh" class="secondary toolbar-icon-button" type="button" title="Refresh library" aria-label="Refresh library"><span class="toolbar-icon" aria-hidden="true">↻</span></button>
-                    </div>
+                    </nav>
 
-                </nav>
+                    <div id="header-toolbar-row" class="header-toolbar-row">
+                        <div class="header-toolbar-left">
+                            <button id="sidebar-toggle" class="toolbar-icon-button squared-btn sidebar-toggle-btn" type="button" title="Toggle playlists & vaults panel" aria-label="Toggle playlists and vaults panel" aria-expanded="false" aria-controls="library-sidebar">
+                                <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                    <rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect>
+                                    <line x1="9" y1="4" x2="9" y2="20"></line>
+                                </svg>
+                            </button>
+                            <div class="vault-heading">
+                                <div class="vault-title-row">
+                                    <div class="vault-picker-wrap">
+                                        <button id="vault-picker" class="vault-picker" type="button" aria-haspopup="listbox" aria-expanded="false">
+                                            <span id="active-vault-name">Show all</span>
+                                            <svg class="vault-picker-chevron" viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                                        </button>
+                                        <div id="vault-menu" class="vault-menu sin-menu-surface hidden" role="listbox" aria-label="Choose a vault">
+                                            <div id="vault-menu-list"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="quick-toolbar" aria-label="Quick actions">
+                            <span id="vault-sync-pill" class="vault-sync-link hidden" role="button" tabindex="0" title="Folder sync status" aria-label="Folder sync status">
+                                <span id="vault-sync-pill-text">synced</span>
+                            </span>
+                            <div class="quick-toolbar-buttons">
+                                <button id="create-project" class="primary toolbar-icon-button squared-btn" type="button" title="Create project" aria-label="Create project">
+                                    <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                                    </svg>
+                                </button>
+                                <button id="open-import" class="secondary toolbar-icon-button squared-btn" type="button" title="Import assets" aria-label="Import assets">
+                                    <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                        <polyline points="7 10 12 15 17 10"></polyline>
+                                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                                    </svg>
+                                </button>
+                                <button id="review-sin-proposals" class="secondary toolbar-icon-button squared-btn" type="button" title="Review SIN proposals" aria-label="Review SIN proposals">
+                                    <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                                    </svg>
+                                </button>
+                                <button id="refresh" class="secondary toolbar-icon-button squared-btn" type="button" title="Refresh library" aria-label="Refresh library">
+                                    <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                        <polyline points="23 4 23 10 17 10"></polyline>
+                                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </header>
 
                 <div id="import-progress-container" class="background-job-strip hidden" role="status" aria-live="polite">
                     <div class="background-job-copy">
@@ -152,7 +182,28 @@
                     </div>
                 </div>
 
-                <div id="library-layout" class="library-layout">
+                <div id="library-layout" class="library-layout sidebar-collapsed">
+                    <aside id="library-sidebar" class="library-sidebar" aria-label="Vaults and playlists">
+                        <div class="sidebar-section">
+                            <div class="sidebar-section-header">
+                                <span class="sidebar-section-title">Vaults</span>
+                            </div>
+                            <div id="sidebar-vault-list" class="sidebar-nav-list" role="list"></div>
+                        </div>
+                        <div class="sidebar-divider" aria-hidden="true"></div>
+                        <div class="sidebar-section">
+                            <div class="sidebar-section-header">
+                                <span class="sidebar-section-title">Playlists</span>
+                                <button id="sidebar-new-playlist" class="sidebar-action-btn" type="button" title="New playlist" aria-label="New playlist">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div id="sidebar-playlist-list" class="sidebar-nav-list" role="list"></div>
+                        </div>
+                    </aside>
                     <section class="asset-panel" aria-label="Assets">
                         <div class="asset-list-toolbar">
                             <span id="library-summary" class="summary" aria-live="polite">Loading assets…</span>
@@ -205,6 +256,12 @@
                     <span id="media-editor-detail" class="media-editor-detail">Choose a playable asset.</span>
                 </div>
                 <div class="media-editor-heading-actions">
+                    <div class="media-editor-view-toggle" role="group" aria-label="Editor View">
+                        <button id="view-toggle-player" class="micro-btn active" type="button" title="Waveform Player">𝄜 Player</button>
+                        <button id="view-toggle-graph" class="micro-btn secondary" type="button" title="Interactive Graph">☍ Graph</button>
+                        <button id="view-toggle-split" class="micro-btn secondary" type="button" title="Split View">◫ Split</button>
+                    </div>
+                    <button id="media-editor-open-sin" class="secondary micro-btn" type="button" title="Open read-only project copy in SIN Node Editor">Open in SIN ↗</button>
                     <button id="media-editor-save" class="secondary micro-btn" type="button" disabled>Save progress</button>
                     <button id="media-editor-render" class="primary micro-btn" type="button" disabled>Render main</button>
                     <button id="media-editor-render-all" class="secondary micro-btn" type="button" disabled>Render all</button>
@@ -224,6 +281,7 @@
                 </div>
                 <div id="media-editor-mixer-rail" class="media-editor-mixer-rail" aria-label="Layer mixer"></div>
             </div>
+            <div id="media-editor-graph-canvas" class="media-editor-graph-canvas hidden" aria-label="Interactive Node Graph"></div>
             <div class="media-editor-toolbar">
                 <div class="media-editor-toolbar-left">
                     <button id="media-editor-add-cut" class="secondary micro-btn" type="button" disabled>Add cut</button>
@@ -508,6 +566,15 @@
                 <div id="import-heading-source" class="import-heading-source hidden"></div>
                 <button id="import-dialog-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
             </div>
+            <div id="import-inspect-progress" class="import-inspect-progress hidden" role="status" aria-live="polite">
+                <div class="import-inspect-progress-meta">
+                    <span id="import-inspect-progress-label" class="import-inspect-progress-label">Scanning source folders…</span>
+                    <span id="import-inspect-progress-pct" class="import-inspect-progress-pct">0%</span>
+                </div>
+                <div class="import-inspect-progress-track">
+                    <div id="import-inspect-progress-fill" class="import-inspect-progress-fill" style="width: 0%"></div>
+                </div>
+            </div>
             <p id="import-vault-create-result" class="inline-error hidden" role="status"></p>
             <p id="import-result" class="result hidden" role="status"></p>
             <div id="import-source-step" class="import-source-step">
@@ -690,9 +757,9 @@
         </div>
     </dialog>
 
-<script src="/static/media-editor.js?v=41"></script>
-    <script src="/static/vault-reconciler.js?v=2"></script>
-    <script src="/static/import-wizard.js?v=2"></script>
-    <script src="/static/app.js?v=89"></script>
+    <script src="/static/media-editor.js?v=41"></script>
+    <script src="/static/vault-reconciler.js?v=3"></script>
+    <script src="/static/import-wizard.js?v=4"></script>
+    <script src="/static/app.js?v=91"></script>
 </body>
 </html>

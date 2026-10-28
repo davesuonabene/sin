@@ -124,7 +124,7 @@ def _child_content(
         "streamable": child.type in {"audio", "track", "sample"},
         "child_id": child.id,
         "storage_mode": child.storage_mode,
-        "availability": child.availability,
+        "availability": "ready" if getattr(child, "availability", None) in {"ready", "available", None} else child.availability,
         "attributes": dict(getattr(child, "attributes", {}) or existing.get("attributes") or {}),
     }
 
@@ -305,7 +305,7 @@ def item_summary(item: models.Item, *, content_types=None, content_tags=None, ma
         "vault_id": item.vault_id,
         "parent_id": item.parent_id,
         "storage_mode": item.storage_mode,
-        "availability": item.availability,
+        "availability": "ready" if getattr(item, "availability", None) in {"ready", "available", None} else item.availability,
         "attributes": item.attributes,
         "id": item.id,
         "created_at": item.created_at,

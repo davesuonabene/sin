@@ -137,8 +137,13 @@ export class SectionRendererFactory {
         row.style.filter = disabled ? 'grayscale(100%)' : '';
         row.setAttribute('aria-disabled', String(disabled));
         const inputs = row.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button');
+        const hasActiveGlobalToggle = Boolean(row.querySelector?.('.td-global-toggle.active'));
         inputs.forEach(input => {
-            input.disabled = disabled;
+            if (!disabled && hasActiveGlobalToggle && input instanceof HTMLInputElement && input.classList.contains('td-param-input')) {
+                input.disabled = true;
+            } else {
+                input.disabled = disabled;
+            }
         });
     }
 

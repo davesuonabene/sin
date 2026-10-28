@@ -179,10 +179,18 @@ export class GaplessAudioScheduler {
     }
 
     private pausedTime = 0;
+    private stagedSession: {
+        sessionId: number;
+        barBuffers: Map<number, AudioBuffer>;
+        totalBars: number;
+        bpm: number;
+        secondsPerBar: number;
+    } | null = null;
 
     reset(): void {
         this.stop();
         this.barBuffers.clear();
+        this.stagedSession = null;
         this.fullAudioBuffer = null;
         this.totalBars = 0;
         this.lastScheduledBar = -1;
@@ -386,6 +394,7 @@ export class GaplessAudioScheduler {
         }
 
         if (autoplay || !this.isPlaying) {
+            this.stagedSession = null;
             this.barBuffers.clear();
             this.barBuffers.set(0, chunk.audioBuffer);
             this.totalBars = chunk.totalBars || 1;
@@ -402,14 +411,15 @@ export class GaplessAudioScheduler {
                 this.isPlaying = false;
             }
         } else {
-            // Live hot-swap while playback is active:
-            // Update bar 0 without clearing other in-flight bars or rewinding to bar 0!
-            this.barBuffers.set(0, chunk.audioBuffer);
-            this.totalBars = chunk.totalBars || this.totalBars;
-            this.bpm = chunk.bpm || this.bpm;
-            this.secondsPerBar = chunk.durationSeconds || this.secondsPerBar;
-            this.updateFullBuffer();
-            this.hotSwapBarBuffer(0, chunk.audioBuffer);
+            // Live evaluation or parameter change while transport is playing:
+            // Stage incoming bars off-screen and swap atomically on commitSession()
+            this.stagedSession = {
+                sessionId: this.currentSessionId,
+                barBuffers: new Map([[0, chunk.audioBuffer]]),
+                totalBars: chunk.totalBars || this.totalBars,
+                bpm: chunk.bpm || this.bpm,
+                secondsPerBar: chunk.durationSeconds || this.secondsPerBar,
+            };
         }
     }
 
@@ -426,6 +436,14 @@ export class GaplessAudioScheduler {
         }
 
         this.ensureContext();
+        if (this.stagedSession && (sessionId === undefined || this.stagedSession.sessionId === sessionId)) {
+            this.stagedSession.barBuffers.set(chunk.barIndex, chunk.audioBuffer);
+            this.stagedSession.totalBars = Math.max(this.stagedSession.totalBars, chunk.totalBars);
+            this.stagedSession.bpm = chunk.bpm || this.stagedSession.bpm;
+            this.stagedSession.secondsPerBar = chunk.durationSeconds || this.stagedSession.secondsPerBar;
+            return;
+        }
+
         this.barBuffers.set(chunk.barIndex, chunk.audioBuffer);
         this.totalBars = Math.max(this.totalBars, chunk.totalBars);
         this.bpm = chunk.bpm || this.bpm;
@@ -434,6 +452,31 @@ export class GaplessAudioScheduler {
 
         if (this.isPlaying) {
             this.hotSwapBarBuffer(chunk.barIndex, chunk.audioBuffer);
+            this.scheduleNextAvailableBars();
+        }
+    }
+
+    /**
+     * Atomically swap a completed background session into live transport without interrupting playback.
+     */
+    commitSession(sessionId?: number): void {
+        if (!this.stagedSession) return;
+        if (sessionId !== undefined && this.stagedSession.sessionId !== sessionId) return;
+
+        const staged = this.stagedSession;
+        this.stagedSession = null;
+        if (staged.barBuffers.size === 0) return;
+
+        this.barBuffers = new Map(staged.barBuffers);
+        this.totalBars = staged.totalBars;
+        this.bpm = staged.bpm;
+        this.secondsPerBar = staged.secondsPerBar;
+        this.updateFullBuffer();
+
+        if (this.isPlaying) {
+            for (const [barIdx, buf] of this.barBuffers.entries()) {
+                this.hotSwapBarBuffer(barIdx, buf);
+            }
             this.scheduleNextAvailableBars();
         }
     }

@@ -1718,10 +1718,150 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertEqual(a_item.parent_id, root_col.id)
 
         b_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%b_loose.wav")).first()
-        self.assertIsNone(b_item.parent_id)
+        self.assertEqual(b_item.parent_id, root_col.id)
 
         deep_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%deep.wav")).first()
         self.assertEqual(deep_item.parent_id, deep_col.id)
+
+    def test_ignore_top_and_subfolders_under_sample_pack_keeps_assets_in_pack(self):
+        import json
+        source = self.temp_path / "sp-ignore-pack"
+        self.write_audio(source / "MyPack", "root_sample.wav")
+        self.write_audio(source / "MyPack" / "Drums", "kick.wav")
+        self.write_audio(source / "MyPack" / "Drums" / "Acoustic", "acoustic_kick.wav")
+        preview = self.preview_import(source / "MyPack")
+
+        job = self.start_import(
+            preview,
+            folder_assignments={
+                ".": "profile:sample_pack",
+                "Drums": "action:ignore",
+                "Drums/Acoustic": "action:ignore",
+            },
+        )
+        self.assertEqual(job["status"], "completed")
+        pack_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "MyPack").first()
+        self.assertIsNotNone(pack_col)
+        pack_meta = json.loads(pack_col.metadata_json or "{}")
+        self.assertEqual(pack_meta.get("profile_id"), "sample_pack")
+
+        drums_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "Drums").first()
+        self.assertIsNone(drums_col)
+
+        root_s = self.db.query(models.Item).filter(models.Item.absolute_path.like("%root_sample.wav")).first()
+        kick = self.db.query(models.Item).filter(models.Item.absolute_path.like("%kick.wav"), ~models.Item.absolute_path.like("%acoustic_kick.wav")).first()
+        acoustic_kick = self.db.query(models.Item).filter(models.Item.absolute_path.like("%acoustic_kick.wav")).first()
+        self.assertEqual(root_s.parent_id, pack_col.id)
+        self.assertEqual(kick.parent_id, pack_col.id)
+        self.assertEqual(acoustic_kick.parent_id, pack_col.id)
+
+        manifest = json.loads(pack_col.manifest_json)
+        rel_paths = {entry["relative_path"] for entry in manifest}
+        self.assertIn("root_sample.wav", rel_paths)
+        self.assertIn("Drums/kick.wav", rel_paths)
+        self.assertIn("Drums/Acoustic/acoustic_kick.wav", rel_paths)
+
+    def test_already_in_database_flag_and_subfolder_difference_scan(self):
+        source = self.temp_path / "diff-pack"
+        self.write_audio(source / "DiffPack" / "Drums", "kick.wav")
+        self.write_audio(source / "DiffPack" / "Drums", "snare.wav")
+        preview1 = self.preview_import(source / "DiffPack")
+
+        job1 = self.start_import(preview1, folder_assignments={".": "action:contain"})
+        self.assertEqual(job1["status"], "completed")
+
+        preview2 = self.preview_import(source / "DiffPack")
+        col_node = next(n for n in preview2["nodes"] if n["relative_path"] == ".")
+        self.assertTrue(col_node["already_in_db"])
+        self.assertIsNotNone(col_node["existing_item_id"])
+        kick_entry = next(e for e in preview2["entries"] if e["filename"] == "kick.wav")
+        self.assertTrue(kick_entry["already_in_db"])
+        self.assertIsNotNone(kick_entry["existing_item_id"])
+
+        self.write_audio(source / "DiffPack" / "Drums", "hihat.wav")
+        preview3 = self.preview_import(source / "DiffPack")
+        col_node3 = next(n for n in preview3["nodes"] if n["relative_path"] == ".")
+        self.assertFalse(col_node3["already_in_db"])
+        kick3 = next(e for e in preview3["entries"] if e["filename"] == "kick.wav")
+        self.assertTrue(kick3["already_in_db"])
+        hihat3 = next(e for e in preview3["entries"] if e["filename"] == "hihat.wav")
+        self.assertFalse(hihat3["already_in_db"])
+        self.assertIsNone(hihat3["existing_item_id"])
+
+        job3 = self.start_import(
+            preview3,
+            folder_assignments={".": "action:contain"},
+            conflict_action="skip",
+        )
+        self.assertEqual(job3["status"], "completed")
+        kicks = self.db.query(models.Item).filter(models.Item.absolute_path.like("%kick.wav")).all()
+        self.assertEqual(len(kicks), 1)
+        hihat = self.db.query(models.Item).filter(models.Item.absolute_path.like("%hihat.wav")).first()
+        self.assertIsNotNone(hihat)
+
+    def test_progressive_preview_loads_top_down_and_completes(self):
+        import time
+        source = self.temp_path / "prog-pack"
+        self.write_audio(source / "ProgPack" / "TopA", "a.wav")
+        self.write_audio(source / "ProgPack" / "TopB" / "Sub", "b.wav")
+
+        # Verify synchronous step of create_preview marks incomplete folders scan_complete=False
+        # and does not set hard types while folder scan is incomplete.
+        initial = import_jobs_module.create_preview(
+            str(source / "ProgPack"),
+            self.vault.id,
+            self.db,
+            progressive=True,
+        )
+        self.assertEqual(initial["scan_status"], "scanning")
+        root_initial = next(n for n in initial["nodes"] if n["relative_path"] == ".")
+        top_a_initial = next(n for n in initial["nodes"] if n["relative_path"] == "TopA")
+        self.assertFalse(root_initial["scan_complete"])
+        self.assertFalse(top_a_initial["scan_complete"])
+        self.assertIsNone(root_initial["suggested_assignment"])
+        self.assertIsNone(top_a_initial["suggested_assignment"])
+
+        preview = import_job_manager.create_preview(
+            str(source / "ProgPack"),
+            self.vault.id,
+            self.db,
+            progressive=True,
+        )
+        self.assertIn(preview["scan_status"], {"scanning", "completed"})
+        delta = None
+        for _ in range(50):
+            delta = import_job_manager.get_preview(preview["preview_id"], since_index=0)
+            if delta and delta["scan_status"] == "completed":
+                break
+            time.sleep(0.05)
+        self.assertIsNotNone(delta)
+        self.assertEqual(delta["scan_status"], "completed")
+        self.assertEqual(len(delta["new_entries"]), 2)
+        self.assertTrue(all(f["scan_complete"] for f in delta["folder_nodes"]))
+        completed_root = next(f for f in delta["folder_nodes"] if f["relative_path"] == ".")
+        self.assertEqual(completed_root["suggested_assignment"], "profile:sample_pack")
+
+    def test_subfolder_sample_pack_recognition_under_umbrella_folder(self):
+        umbrella = self.temp_path / "MyImports"
+        self.write_audio(umbrella / "Cymatics Trap Pack" / "Drums", "kick.wav", seconds=0.2)
+        self.write_audio(umbrella / "Cymatics Trap Pack" / "Loops", "melody_loop.wav", seconds=0.2)
+        self.write_audio(umbrella / "Band Session" / "Stems", "Drums.wav", seconds=0.4)
+        self.write_audio(umbrella / "Band Session" / "Stems", "Bass.wav", seconds=0.4)
+
+        preview = self.preview_import(umbrella)
+        folder_map = {n["relative_path"]: n for n in preview["nodes"] if n["kind"] == "folder"}
+
+        # Umbrella root is not a sample pack
+        self.assertIsNone(folder_map["."]["suggested_assignment"])
+        self.assertIsNone(folder_map["."]["detected_assignment"])
+
+        # Subfolder 'Cymatics Trap Pack' is recognized as a sample pack, while its child folders stay containers
+        self.assertEqual(folder_map["Cymatics Trap Pack"]["suggested_assignment"], "profile:sample_pack")
+        self.assertIsNone(folder_map["Cymatics Trap Pack/Drums"]["suggested_assignment"])
+        self.assertIsNone(folder_map["Cymatics Trap Pack/Loops"]["suggested_assignment"])
+
+        # Sibling multitrack subfolder is recognized as multitrack
+        self.assertEqual(folder_map["Band Session/Stems"]["detected_assignment"], "type:multitrack")
 
     def test_drop_file_endpoint_stages_file_and_folder_tree(self):
         class MockRequest:
@@ -1868,6 +2008,53 @@ class TestGaiaLibrary(GaiaTestCase):
 
         sample_loop_role = text_analyzer.key_role("Guitar_Melody_Loop_120.wav", is_loop=True, tags=["Guitar", "Loop"], duration_seconds=8.0)
         self.assertEqual(sample_loop_role, "harmonic")
+
+    def test_relocated_and_wrapped_packs_recognized_as_already_in_db(self):
+        """Relocated sample packs and packs with outer wrapper files (.notes.md) must be recognized as already_in_db."""
+        import shutil
+        from gaia import import_jobs
+
+        # 1. Create a pack in downloads/my-crate-pack/extracted/My Crate Pack/Claps/clap.wav
+        orig_root = self.temp_path / "downloads" / "my-crate-pack"
+        inner_pack = orig_root / "extracted" / "My Crate Pack"
+        self.write_audio(inner_pack / "Claps", "Clap_01.wav")
+        self.write_audio(inner_pack / "Kicks", "Kick_01.wav")
+
+        # Import inner_pack into the vault
+        preview1 = self.preview_import(inner_pack)
+        job1 = self.start_import(
+            preview1,
+            transfer_mode="copy",
+            folder_assignments={".": "profile:sample_pack"},
+        )
+        self.assertEqual(job1["status"], "completed")
+
+        # 2. Move the outer pack folder into downloads/sample_packs/my-crate-pack
+        #    and add an unimported wrapper file (.notes.md) at the outer level
+        relocated_umbrella = self.temp_path / "downloads" / "sample_packs"
+        relocated_pack = relocated_umbrella / "my-crate-pack"
+        relocated_umbrella.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(orig_root), str(relocated_pack))
+        (relocated_pack / ".notes.md").write_text("# Packfinder notes\n", encoding="utf-8")
+
+        # 3. Also create a second pack in sample_packs that has 1 existing file and 1 brand-new audio file
+        partial_pack = relocated_umbrella / "partial-pack"
+        self.write_audio(partial_pack / "Claps", "Clap_01.wav")
+        self.write_audio(partial_pack / "Leads", "BrandNewLead.wav", seconds=0.45)
+
+        # 4. Inspect relocated_umbrella and verify DB matching and progress fields
+        preview2 = import_jobs.create_preview(str(relocated_umbrella), self.vault.id, self.db, progressive=False)
+        self.assertEqual(preview2["scan_progress_pct"], 100)
+        folders_by_path = {n["relative_path"]: n for n in preview2["nodes"] if n["kind"] == "folder"}
+
+        # Top-level relocated pack must be flagged already_in_db despite relocation and .notes.md wrapper
+        self.assertTrue(folders_by_path["my-crate-pack"]["already_in_db"])
+        self.assertTrue(folders_by_path["my-crate-pack/extracted/My Crate Pack"]["already_in_db"])
+        crate_entries = [e for e in preview2["entries"] if e["relative_path"].startswith("my-crate-pack/")]
+        self.assertTrue(all(e["already_in_db"] for e in crate_entries))
+
+        # Partial pack has a new audio file so the folder itself must NOT be marked already_in_db
+        self.assertFalse(folders_by_path["partial-pack"]["already_in_db"])
 
 
 if __name__ == "__main__":

@@ -10,10 +10,18 @@ from pydantic import BaseModel, field_validator
 class FxModuleModel(BaseModel):
     id: str
     type: str
-    name: str
+    name: Optional[str] = None
     enabled: bool = True
     fixed: bool = False
     params: Dict[str, Any] = {}
+
+    @field_validator('name', mode='before')
+    @classmethod
+    def sanitize_name(cls, v, info):
+        if v:
+            return str(v)
+        data = info.data if hasattr(info, 'data') else {}
+        return data.get('id') or data.get('type') or 'Module'
 
 
 class AudioNodeModel(BaseModel):
@@ -37,6 +45,7 @@ class AudioNodeModel(BaseModel):
     step_parameters: Optional[List[Dict[str, Any]]] = None
     step_length: Optional[float] = None
     play_mode: Optional[str] = "gate"
+    release: float = 0.0
     fade_ms: float = 0.0
     selected_items: Optional[List[Dict[str, Any]]] = None
     playbackMode: Optional[str] = None

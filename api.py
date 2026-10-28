@@ -327,36 +327,25 @@ def preview_graph_ram(payload: AudioNodeModel):
             )
 
             manifest = getattr(sys, "manifest", {"nodes": {}})
-            # Encode and store intermediate node stems in RAM_PREVIEW_STORE
+            # Store intermediate node stems lazily in RAM_PREVIEW_STORE (WAV encoded on demand)
             node_stems = getattr(sys, "_node_stems", {})
             for stem_id, stem_audio in node_stems.items():
-                # Avoid duplicate encoding if this stem is already the primary preview target
                 if node_key == str(stem_id) or node_key == f"export_{stem_id}" or node_key.endswith(f"_{stem_id}"):
                     if stem_id in manifest["nodes"]:
                         manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{node_key}?v={payload_fingerprint}"
                     continue
 
-                try:
-                    s_buf = io.BytesIO()
-                    sf.write(
-                        s_buf,
-                        np.moveaxis(stem_audio, -1, 0) if stem_audio.ndim > 1 else stem_audio,
-                        sys.sample_rate,
-                        format='WAV'
-                    )
-                    s_bytes = s_buf.getvalue()
-                    stem_key = f"stem_{node_key}_{stem_id}"
-                    RAM_PREVIEW_STORE[stem_key] = {
-                        "wav_bytes": s_bytes,
-                        "filename": f"stem_{stem_id}.wav",
-                        "node_name": f"Node_{stem_id}",
-                        "sample_rate": sys.sample_rate,
-                        "payload_fingerprint": payload_fingerprint,
-                    }
-                    if stem_id in manifest["nodes"]:
-                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
-                except Exception as stem_err:
-                    logger.warning(f"Failed to encode intermediate stem {stem_id}: {stem_err}")
+                stem_key = f"stem_{node_key}_{stem_id}"
+                RAM_PREVIEW_STORE[stem_key] = {
+                    "wav_bytes": None,
+                    "stem_audio": stem_audio,
+                    "filename": f"stem_{stem_id}.wav",
+                    "node_name": f"Node_{stem_id}",
+                    "sample_rate": sys.sample_rate,
+                    "payload_fingerprint": payload_fingerprint,
+                }
+                if stem_id in manifest["nodes"]:
+                    manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
 
             RAM_PREVIEW_STORE[node_key] = {
                 "wav_bytes": bytes_data,
@@ -383,6 +372,26 @@ def preview_graph_ram(payload: AudioNodeModel):
         logger.error(f"[API /preview Error] {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+def _ensure_ram_preview_wav_bytes(data: Dict[str, Any]) -> bytes:
+    wav_bytes = data.get("wav_bytes")
+    if wav_bytes is not None:
+        return wav_bytes
+    stem_audio = data.get("stem_audio")
+    if stem_audio is None:
+        return b""
+    s_buf = io.BytesIO()
+    sf.write(
+        s_buf,
+        np.moveaxis(stem_audio, -1, 0) if stem_audio.ndim > 1 else stem_audio,
+        int(data.get("sample_rate", 44100)),
+        format="WAV",
+    )
+    wav_bytes = s_buf.getvalue()
+    data["wav_bytes"] = wav_bytes
+    data.pop("stem_audio", None)
+    return wav_bytes
+
+
 @api_router.get("/preview/stream/{node_id:path}", tags=["Preview"])
 def stream_ram_preview(node_id: str, request: Request):
     from fastapi import Response, HTTPException
@@ -390,7 +399,7 @@ def stream_ram_preview(node_id: str, request: Request):
     if not data:
         raise HTTPException(status_code=404, detail="RAM preview not found for specified node")
 
-    wav_bytes = data["wav_bytes"]
+    wav_bytes = _ensure_ram_preview_wav_bytes(data)
     total_size = len(wav_bytes)
     range_header = request.headers.get("range")
     etag = f'"{data.get("payload_fingerprint", node_id)}"'
@@ -556,34 +565,24 @@ def preview_graph_progressive(payload: AudioNodeModel, format: Optional[str] = N
                 bytes_data = wav_io.getvalue()
                 out_filename = f"{node_key}.wav"
 
-                # Encode and store intermediate node stems in RAM_PREVIEW_STORE
+                # Store intermediate node stems lazily in RAM_PREVIEW_STORE (WAV encoded on demand)
                 node_stems = getattr(sys, "_node_stems", {})
                 for stem_id, stem_audio in node_stems.items():
                     if node_key == str(stem_id) or node_key == f"export_{stem_id}" or node_key.endswith(f"_{stem_id}"):
                         if stem_id in manifest.get("nodes", {}):
                             manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{node_key}?v={payload_fingerprint}"
                         continue
-                    try:
-                        s_buf = io.BytesIO()
-                        sf.write(
-                            s_buf,
-                            np.moveaxis(stem_audio, -1, 0) if stem_audio.ndim > 1 else stem_audio,
-                            sys.sample_rate,
-                            format='WAV'
-                        )
-                        s_bytes = s_buf.getvalue()
-                        stem_key = f"stem_{node_key}_{stem_id}"
-                        RAM_PREVIEW_STORE[stem_key] = {
-                            "wav_bytes": s_bytes,
-                            "filename": f"stem_{stem_id}.wav",
-                            "node_name": f"Node_{stem_id}",
-                            "sample_rate": sys.sample_rate,
-                            "payload_fingerprint": payload_fingerprint,
-                        }
-                        if stem_id in manifest.get("nodes", {}):
-                            manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
-                    except Exception as stem_err:
-                        logger.warning(f"Failed to encode intermediate stem {stem_id}: {stem_err}")
+                    stem_key = f"stem_{node_key}_{stem_id}"
+                    RAM_PREVIEW_STORE[stem_key] = {
+                        "wav_bytes": None,
+                        "stem_audio": stem_audio,
+                        "filename": f"stem_{stem_id}.wav",
+                        "node_name": f"Node_{stem_id}",
+                        "sample_rate": sys.sample_rate,
+                        "payload_fingerprint": payload_fingerprint,
+                    }
+                    if stem_id in manifest.get("nodes", {}):
+                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
 
                 RAM_PREVIEW_STORE[node_key] = {
                     "wav_bytes": bytes_data,
@@ -628,7 +627,6 @@ def preview_graph_progressive(payload: AudioNodeModel, format: Optional[str] = N
                         "start_seconds": bar_idx * seconds_per_bar,
                         "duration_seconds": seconds_per_bar,
                         "peaks": bar_peaks,
-                        "manifest": manifest,
                     }
                     meta_bytes = json.dumps(chunk_obj).encode("utf-8")
                     header = struct.pack(">4sII", b"SINB", len(meta_bytes), len(slice_bytes))
@@ -644,7 +642,6 @@ def preview_graph_progressive(payload: AudioNodeModel, format: Optional[str] = N
                         "duration_seconds": seconds_per_bar,
                         "audio_base64": bar_b64,
                         "peaks": bar_peaks,
-                        "manifest": manifest,
                     }
                     yield json.dumps(chunk_obj) + "\n"
 
@@ -698,7 +695,7 @@ def export_ram_preview(node_id: str, payload: Optional[AudioNodeModel] = None):
         filename = ram_data["filename"]
         export_path = os.path.join(export_dir, filename)
         with open(export_path, "wb") as f:
-            f.write(ram_data["wav_bytes"])
+            f.write(_ensure_ram_preview_wav_bytes(ram_data))
         logger.info(f"[API /preview/export] Directly exported RAM preview '{filename}' to disk ({export_path})")
         return {"status": "success", "file_url": f"/export/{filename}", "filename": filename}
 
@@ -821,6 +818,18 @@ def delete_workspace_preset(name: str):
         raise HTTPException(status_code=404, detail="Workspace preset not found")
     save_path.unlink()
     return {"name": save_path.stem, "status": "deleted"}
+
+@api_router.post("/graph/convert", tags=["Graph"])
+def convert_canonical_graph(doc: Dict[str, Any]):
+    from ermes.py.compiler import graph_to_workspace
+    from fastapi import HTTPException
+    try:
+        raw_graph = doc.get("graph", doc)
+        return graph_to_workspace(raw_graph)
+    except Exception as e:
+        logger.exception("Failed to convert canonical graph")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @api_router.get("/renders/temp", tags=["System"])
 def get_temp_renders():

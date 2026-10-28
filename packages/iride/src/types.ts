@@ -36,6 +36,8 @@ export interface SequenceStep {
     velocity: number;         // 0.0 - 1.0
     subdivisions?: number;    // 1, 2, 3, 4
     probability?: number;     // 0.0 - 1.0
+    sampleStart?: number;     // 0.0 - 1.0
+    gateLength?: number;      // 0.0 - 1.0
 }
 
 export interface SequenceSignal {

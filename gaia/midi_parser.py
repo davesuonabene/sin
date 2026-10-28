@@ -19,6 +19,8 @@ DEFAULT_STEP_PARAMETER = {
     "probability": 100.0,
     "subdivision_enabled": False,
     "subdivisions": 1,
+    "sample_start": 0.0,
+    "gate_length": 1.0,
 }
 
 

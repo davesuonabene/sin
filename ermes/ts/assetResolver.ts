@@ -37,6 +37,7 @@ export type AssetRefreshMode = 'local' | 'parent' | 'ancestor' | 'global' | 'off
 export interface AssetResolutionRequest {
     kind: 'preview' | 'render';
     globalPreview?: boolean;
+    globalFreeze?: boolean;
     libraryFiles?: any[];
 }
 
@@ -291,15 +292,46 @@ export async function resolveAssignedAssetFilters(
         visited.add(nodeId);
         const node = graph.getNodeById(nodeId);
         const data = trackNodes?.get(nodeId);
-        const modifierId = node?.properties?.asset_modifier_id ?? data?.asset_modifier_id;
-        if (modifierId != null) {
-            const modifier = graph.getNodeById(modifierId);
-            if (modifier) {
+        let modifierId = node?.properties?.asset_modifier_id ?? data?.asset_modifier_id;
+        let modifier = modifierId != null ? graph.getNodeById(modifierId) : null;
+
+        // Defensive check: ensure modifier is actually an asset filter.
+        // If missing or pointing to another modifier kind (e.g. random), resolve via parentId attachment.
+        const isAssetFilter = (m: any) => m && (
+            m.type === 'Audio/AssetFilter' ||
+            m.properties?.node_type === 'asset_filter' ||
+            m.properties?.output_type === 'asset_path'
+        );
+
+        if (!isAssetFilter(modifier)) {
+            const allNodes = ((graph as any)._nodes || (graph as any).nodes || []) as any[];
+            const candidate = allNodes.find((c: any) =>
+                isAssetFilter(c) && (
+                    c.properties?.parentId === nodeId ||
+                    trackNodes?.get(c.id)?.parentId === nodeId
+                )
+            );
+            if (candidate) {
+                modifier = candidate;
+                modifierId = candidate.id;
+                if (node?.properties) node.properties.asset_modifier_id = candidate.id;
+                if (data) data.asset_modifier_id = candidate.id;
+            } else {
+                modifier = null;
+            }
+        }
+
+        if (modifier) {
                 const refreshMode = normalizeAssetRefreshMode(modifier.properties?.refresh_mode);
                 modifier.properties.refresh_mode = refreshMode;
                 const hasResolvedAsset = Boolean(modifier.properties?.output_value);
                 const lockedLocator = refreshMode === 'off' ? modifier.properties?.fixed_item : null;
-                const shouldRefresh = shouldRefreshAssetPool(
+                const isFrozen = Boolean(request.globalFreeze) && (
+                    node?.properties
+                        ? node.properties.freeze_refresh !== false
+                        : modifier?.properties?.freeze_refresh !== false
+                );
+                const shouldRefresh = !isFrozen && shouldRefreshAssetPool(
                     refreshMode,
                     nodeId,
                     rootNodeId,
@@ -317,36 +349,44 @@ export async function resolveAssignedAssetFilters(
                     );
                 } else if (node?.properties) {
                     const sampleNode = node as any;
-                    const assetPath = modifier.properties.output_value;
+                    const assetPath = modifier.properties.output_value || sampleNode.properties?.filepath;
+                    if (assetPath && !modifier.properties.output_value) {
+                        modifier.properties.output_value = assetPath;
+                    }
                     const selectedItem = (modifier.properties.selected_items || []).find((item: any) =>
                         (item.absolute_path || item.filepath) === assetPath
                     );
-                    const preferredId = modifier.properties.output_item_id ?? selectedItem?.id;
-                    sampleNode.updateProperty?.('filepath', assetPath);
-                    if (preferredId != null) sampleNode.updateProperty?.('library_item_id', preferredId);
-                    const sync = sampleNode.syncMetadataFromLibrary;
-                    const syncedItem = typeof sync === 'function'
-                        ? await sync.call(sampleNode, request.libraryFiles, preferredId)
-                        : null;
-                    if (syncedItem) {
+                    const preferredId = modifier.properties.output_item_id ?? sampleNode.properties?.library_item_id ?? selectedItem?.id;
+                    if (preferredId != null && modifier.properties.output_item_id == null) {
+                        modifier.properties.output_item_id = preferredId;
+                    }
+                    if (assetPath && sampleNode.properties.filepath !== assetPath) {
+                        sampleNode.updateProperty?.('filepath', assetPath);
+                    }
+                    if (preferredId != null && sampleNode.properties.library_item_id !== preferredId) {
+                        sampleNode.updateProperty?.('library_item_id', preferredId);
+                    }
+                    // When frozen, preserve the node's current BPM and key settings (never overwrite manual edits)
+                    if (sampleNode.properties.original_bpm == null && modifier.properties.output_bpm != null) {
+                        sampleNode.updateProperty?.('original_bpm', modifier.properties.output_bpm);
+                    } else if (sampleNode.properties.original_bpm != null) {
                         modifier.properties.output_bpm = sampleNode.properties.original_bpm;
-                        modifier.properties.output_key = sampleNode.properties.key || '';
-                        modifier.properties.output_item_id = sampleNode.properties.library_item_id ?? preferredId;
                         if (selectedItem) {
                             selectedItem.bpm = sampleNode.properties.original_bpm;
                             selectedItem.original_bpm = sampleNode.properties.original_bpm;
-                            selectedItem.key = sampleNode.properties.key || '';
                         }
-                    } else if (modifier.properties.output_bpm != null) {
-                        sampleNode.updateProperty?.('original_bpm', modifier.properties.output_bpm);
-                        sampleNode.updateProperty?.('key', modifier.properties.output_key || '');
+                    }
+                    if (!sampleNode.properties.key && modifier.properties.output_key) {
+                        sampleNode.updateProperty?.('key', modifier.properties.output_key);
+                    } else if (sampleNode.properties.key) {
+                        modifier.properties.output_key = sampleNode.properties.key;
+                        if (selectedItem) selectedItem.key = sampleNode.properties.key;
                     }
                     notifyResolvedProperties(modifier);
                     notifyResolvedProperties(node);
                     notifyArrangementSourceChanged(node);
                 }
             }
-        }
         const adjacentIds: number[] = [...(data?.children || [])];
         for (const input of node?.inputs || []) {
             const link = input.link != null ? (graph as any).links?.[input.link] : null;
@@ -354,5 +394,12 @@ export async function resolveAssignedAssetFilters(
         }
         await Promise.all(adjacentIds.map(childId => visit(childId)));
     };
-    await visit(rootNodeId);
+    if (rootNodeId != null) {
+        await visit(rootNodeId);
+    } else {
+        const allNodes = (((graph as any)._nodes || (graph as any).nodes || []) as any[]);
+        for (const n of allNodes) {
+            if (n && n.id != null) await visit(n.id);
+        }
+    }
 }

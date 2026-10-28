@@ -81,6 +81,7 @@ export class SequenceRenderer extends BaseSignalRenderer {
             const isGateOn = Boolean(stepData?.gate);
             const velocity = typeof stepData?.velocity === 'number' ? Math.max(0.1, Math.min(1, stepData.velocity)) : 0.85;
             const subdivisions = stepData?.subdivisions || 1;
+            const gateLength = typeof stepData?.gateLength === 'number' ? Math.max(0.0, Math.min(1.0, stepData.gateLength)) : 1.0;
 
             const isCurrent = i === currentStep;
             const isDownbeat = stepInBeat === 0;
@@ -108,6 +109,13 @@ export class SequenceRenderer extends BaseSignalRenderer {
                 const velEmptyH = stepHeight * (1 - velocity);
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
                 ctx.fillRect(stepX, stepY, stepWidth, velEmptyH);
+            }
+
+            // Gate length duty-cycle indicator bar (at bottom of active steps)
+            if (isGateOn && !isCurrent && gateLength < 0.98) {
+                const gateW = Math.max(2, (stepWidth - 2) * gateLength);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+                ctx.fillRect(stepX + 1, stepY + stepHeight - 2, gateW, 1);
             }
 
             // Pad Border

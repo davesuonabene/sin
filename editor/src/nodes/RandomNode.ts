@@ -1,9 +1,9 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode } from './BaseNode';
-import { CanvasButton } from '../ui/CanvasButton';
-import { type FieldSchema } from '../fields/FieldSchema';
-import { type NodePanelSchema } from '../fields/NodePanelSchema';
-import { type NodeShape } from './NodeVisuals';
+import { BaseNode } from './BaseNode.ts';
+import { CanvasButton } from '../ui/CanvasButton.ts';
+import { type FieldSchema } from '../fields/FieldSchema.ts';
+import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
+import { type NodeShape } from './NodeVisuals.ts';
 import { type RandomDestination } from '../../../ermes/ts/randomResolver.ts';
 
 export class RandomNode extends BaseNode {
@@ -31,7 +31,7 @@ export class RandomNode extends BaseNode {
         { key: 'node_name', label: 'Name', type: 'string', default: 'Random', tab: 'COMMON' }
     ];
 
-    static defaultColor = "#ec4899";
+    static defaultColor = "#7e22ce";
     static defaultIcon = "shuffle";
     static defaultShape: NodeShape = "diamond";
     static badgeLabel = "RND";
@@ -52,9 +52,9 @@ export class RandomNode extends BaseNode {
         this.size = this.computeSize();
         this.shape = LiteGraph.BOX_SHAPE || 1;
 
-        this.color = "#ec4899";
-        this.bgcolor = "#ec4899";
-        this.boxcolor = "#db2777";
+        this.color = "#7e22ce";
+        this.bgcolor = "#7e22ce";
+        this.boxcolor = "#6b21a8";
 
         if (!this.properties) {
             this.properties = {};
@@ -63,7 +63,7 @@ export class RandomNode extends BaseNode {
         this.properties.node_type = "random";
         this.properties.modifier_kind = "random";
         this.properties.node_name = this.properties.node_name || "Random";
-        this.properties.color = this.properties.color || "#ec4899";
+        this.properties.color = this.properties.color || "#7e22ce";
         this.properties.icon = this.properties.icon || "shuffle";
         this.properties.shape = this.properties.shape || "diamond";
         this.properties.refresh_mode = this.properties.refresh_mode || "global";

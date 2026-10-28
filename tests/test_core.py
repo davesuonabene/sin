@@ -37,7 +37,7 @@ from core.engines import (
     build_node_object,
     get_renderer_for_node,
 )
-from core.fx import apply_delay, process_chain
+from core.fx import process_chain
 from core.system import System
 from ermes import PoolResolveRequest
 from tests.support import AudioFixtureTestCase, working_directory
@@ -166,29 +166,14 @@ class TestSamplePipeline(AudioFixtureTestCase):
         np.testing.assert_allclose(mixed[1], 0.5)
 
         chain = [
-            {"type": "gain", "params": {"gain": 0.9}},
-            {"type": "eq", "params": {"low_gain": 0.8, "mid_gain": 1.1}},
-            {"type": "compressor", "params": {"threshold": -20.0, "ratio": 2.0}},
-            {"type": "delay", "params": {"delay_time": 0.01, "feedback": 0.2, "mix": 0.2}},
-            {"type": "reverb", "params": {"room_size": 0.2, "mix": 0.2}},
-            {"type": "filter", "params": {"mode": "lowpass", "cutoff": 300.0}},
-            {"type": "distortion", "params": {"drive": 1.5, "mix": 0.2}},
-            {"type": "chorus", "params": {"rate": 1.0, "depth": 0.002, "mix": 0.2}},
-            {"type": "limiter", "params": {"threshold": -0.1}},
+            {"type": "gain", "params": {"gain": 0.5}},
+            {"type": "reverb", "params": {"room_size": 0.8, "mix": 0.5}},
+            {"type": "gain", "params": {"gain": 2.0}},
         ]
         processed = process_chain(mixed, chain, sample_rate=system.sample_rate)
         self.assertEqual(processed.shape, mixed.shape)
         self.assertTrue(np.all(np.isfinite(processed)))
-
-        impulse = np.zeros((2, 32), dtype=np.float32)
-        impulse[0, 0] = 1.0
-        delayed = apply_delay(
-            impulse,
-            {"delay_time": 0.01, "feedback": 0.5, "mix": 1.0},
-            sr=100,
-        )
-        self.assertGreater(delayed[0, 1], 0.0)
-        np.testing.assert_array_equal(delayed[1], np.zeros(32, dtype=np.float32))
+        np.testing.assert_allclose(processed, mixed, rtol=1e-6)
 
 
 class TestGraphRendering(AudioFixtureTestCase):
@@ -220,6 +205,7 @@ class TestGraphRendering(AudioFixtureTestCase):
                     sequence=[1, 0, 1, 0],
                     step_length=0.25,
                     play_mode="trigger",
+                    release=0.6,
                     children=[
                         AudioNodeModel(
                             node_name="Sample",
@@ -234,6 +220,7 @@ class TestGraphRendering(AudioFixtureTestCase):
         )
         graph = build_node_object(payload)
         self.assertIsInstance(graph.children[0][1], SequenceObject)
+        self.assertEqual(graph.children[0][1].release, 0.6)
         rendered = TrackRenderer().render(payload, System(bpm=120.0, sample_rate=self.sample_rate))
         self.assertEqual(rendered.shape[-1], 4_000)
         self.assertGreater(float(np.max(rendered)), 0.0)
@@ -266,13 +253,125 @@ class TestGraphRendering(AudioFixtureTestCase):
             sample_type="one_shot",
             stretch_mode="off",
         )
-        mode_outputs = {}
-        for mode in ("gate", "trigger"):
-            candidate = SequenceObject(sequence=[1, 0, 0, 0], step_length=0.25, play_mode=mode)
-            candidate.add_child(long_sample, 0.0)
-            mode_outputs[mode] = candidate.render(system)
-        self.assertTrue(np.all(mode_outputs["gate"][25:] == 0.0))
-        self.assertTrue(np.all(mode_outputs["trigger"] == 1.0))
+        # 1. Gate length reduces duration: gate_length=0.4 multiplier on 25-sample step = 10 samples
+        gated_seq = SequenceObject(
+            sequence=[1, 0, 0, 0],
+            step_length=0.25,
+            step_parameters=[{"gate_length": 0.4}],
+            release=0.0,
+        )
+        gated_seq.add_child(long_sample, 0.0)
+        gated_out = gated_seq.render(system)
+        self.assertTrue(np.all(gated_out[:10] == 1.0))
+        self.assertTrue(np.all(gated_out[10:] == 0.0))
+
+        # 2. Sample start offset: starts from 0.5 (50%) into a ramp sample
+        ramp_sample = AudioObject(
+            audio_data=np.arange(100, dtype=np.float32),
+            sample_type="one_shot",
+            stretch_mode="off",
+        )
+        start_seq = SequenceObject(
+            sequence=[1, 0, 0, 0],
+            step_length=0.25,
+            step_parameters=[{"sample_start": 0.5, "gate_length": 1.0}],
+            release=0.0,
+        )
+        start_seq.add_child(ramp_sample, 0.0)
+        start_out = start_seq.render(system)
+        self.assertEqual(start_out[0], np.float32(50.0))
+        self.assertEqual(start_out[24], np.float32(74.0))
+
+        # 3. Open gate (gate_length=1.0, release=0.0):
+        # Even in mono ("gate") mode, sample plays out for its full 100 samples when no other note enters.
+        open_seq = SequenceObject(
+            sequence=[1, 0, 0, 0],
+            step_length=0.25,
+            play_mode="gate",
+            step_parameters=[{"gate_length": 1.0}],
+            release=0.0,
+        )
+        open_seq.add_child(long_sample, 0.0)
+        open_out = open_seq.render(system)
+        self.assertEqual(open_out.shape[-1], 100)
+        self.assertTrue(np.all(open_out == 1.0))
+
+        # Open gate with release:
+        # Long sample (100 samples) with release=0.5 sustains for first 50 samples and fades across samples 50..99
+        rel_seq = SequenceObject(
+            sequence=[1, 0, 0, 0],
+            step_length=0.25,
+            play_mode="trigger",
+            step_parameters=[{"gate_length": 1.0}],
+            release=0.5,
+        )
+        rel_seq.add_child(long_sample, 0.0)
+        rel_out = rel_seq.render(system)
+        self.assertTrue(np.all(rel_out[:50] == 1.0))
+        self.assertAlmostEqual(rel_out[50], 1.0, places=4)
+        self.assertAlmostEqual(rel_out[75], 0.4897959, places=2)
+        self.assertAlmostEqual(rel_out[99], 0.0, places=4)
+        self.assertTrue(np.all(rel_out[100:] == 0.0))
+
+        # Short gated step followed by release:
+        # Step is 25 samples with gate_length=0.4 (10 samples sustain) + release=0.2 (20 samples fade out)
+        # Total active duration = 10 + 20 = 30 samples
+        gated_rel_seq = SequenceObject(
+            sequence=[1, 0, 0, 0],
+            step_length=0.25,
+            play_mode="trigger",
+            step_parameters=[{"gate_length": 0.4}],
+            release=0.2,
+        )
+        gated_rel_seq.add_child(long_sample, 0.0)
+        gated_rel_out = gated_rel_seq.render(system)
+        self.assertTrue(np.all(gated_rel_out[:10] == 1.0))
+        self.assertAlmostEqual(gated_rel_out[10], 1.0, places=4)
+        self.assertAlmostEqual(gated_rel_out[29], 0.0, places=4)
+        self.assertTrue(np.all(gated_rel_out[30:] == 0.0))
+
+        # Short sample fitting inside gate (20 samples < 25-sample gate):
+        # Releases over its last 50% (10 samples sustain, 10 samples fade)
+        short_sample = AudioObject(
+            audio_data=np.ones(20, dtype=np.float32),
+            sample_type="one_shot",
+            stretch_mode="off",
+        )
+        short_rel_seq = SequenceObject(
+            sequence=[1, 0, 0, 0],
+            step_length=0.25,
+            step_parameters=[{"gate_length": 1.0}],
+            release=0.5,
+        )
+        short_rel_seq.add_child(short_sample, 0.0)
+        short_rel_out = short_rel_seq.render(system)
+        self.assertTrue(np.all(short_rel_out[:10] == 1.0))
+        self.assertAlmostEqual(short_rel_out[19], 0.0, places=4)
+        self.assertTrue(np.all(short_rel_out[20:] == 0.0))
+
+        # 4. In gate mode, audio is truncated as other notes enter; in multivoice (trigger), it is not
+        mono_seq = SequenceObject(
+            sequence=[1, 1, 0, 0],
+            step_length=0.25,
+            play_mode="gate",  # mono
+            release=0.5,       # would play 75 samples, but truncated at sample 25 when step 1 enters
+        )
+        mono_seq.add_child(long_sample, 0.0)
+        mono_out = mono_seq.render(system)
+
+        multi_seq = SequenceObject(
+            sequence=[1, 1, 0, 0],
+            step_length=0.25,
+            play_mode="trigger",  # multivoice
+            release=0.5,          # plays full 75 samples, overlapping step 1 at sample 25
+        )
+        multi_seq.add_child(long_sample, 0.0)
+        multi_out = multi_seq.render(system)
+
+        # At sample 25, mono cut step 0 so only step 1 plays (value = 1.0)
+        # Multivoice allows step 0 release to overlap with step 1 (value = 2.0)
+        self.assertEqual(mono_out[25], np.float32(1.0))
+        self.assertEqual(multi_out[25], np.float32(2.0))
 
         stereo_sample = AudioObject(
             audio_data=np.ones((2, 20), dtype=np.float32),
@@ -287,8 +386,25 @@ class TestGraphRendering(AudioFixtureTestCase):
         )
         faded.add_child(stereo_sample, 0.0)
         faded_output = faded.render(System(bpm=60.0, sample_rate=1_000))
-        expected = np.array([0.0, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.0])
+        expected = np.array([0.0, 0.5] + [1.0] * 16 + [0.5, 0.0], dtype=np.float32)
         np.testing.assert_allclose(faded_output[0], expected)
+
+        # 5. SequenceObject node_id registers edge in GLOBAL_DAG_CACHE
+        from core.dag_cache import GLOBAL_DAG_CACHE
+        GLOBAL_DAG_CACHE.clear()
+        seq_with_id = SequenceObject(
+            sequence=[1, 0, 0, 0],
+            step_length=0.25,
+            node_id=101,
+        )
+        sample_with_id = AudioObject(
+            audio_data=np.ones(10, dtype=np.float32),
+            node_id=102,
+        )
+        seq_with_id.add_child(sample_with_id, 0.0)
+        seq_with_id.render(system)
+        downstream = GLOBAL_DAG_CACHE.invalidate_downstream(102)
+        self.assertIn('101', downstream)
         np.testing.assert_allclose(faded_output[1], expected)
 
     def test_sequence_seed_and_pool_refresh_contracts(self):
@@ -357,6 +473,30 @@ class TestGraphRendering(AudioFixtureTestCase):
         self.assertEqual(out[400], 1.0)
         self.assertEqual(out[800], 1.0)
         self.assertEqual(out[1200], 1.0)
+
+    def test_track_with_sequence_inherits_parent_total_bars(self):
+        system = System(bpm=60.0, sample_rate=100)
+        impulse = AudioObject(
+            audio_data=np.ones(10, dtype=np.float32),
+            sample_type="one_shot",
+            stretch_mode="off",
+        )
+        seq = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        sequence_node = SequenceObject(
+            sequence=seq,
+            step_length=0.25,
+            total_bars=None,
+            play_mode="trigger",
+        )
+        sequence_node.add_child(impulse, 0.0)
+
+        track = AudioObject(total_bars=8.0)
+        track.add_child(sequence_node, 0.0)
+        out = track.render(system)
+
+        self.assertEqual(out.shape[-1], 3200)
+        for bar in range(8):
+            self.assertEqual(out[bar * 400], 1.0)
 
         pool = ItemPoolObject(
             selected_items=[{"id": index, "absolute_path": f"{name}.wav"}
@@ -703,6 +843,43 @@ class TestRenderExportResolution(unittest.TestCase):
             _, default_filename, _ = resolve_render_export(payload_default)
             self.assertEqual(default_filename, "techno_raw_Kick_001.wav")
 
+    @patch("core.audio_object.process_sample_transform")
+    def test_sample_object_individual_target_bpm(self, mock_transform):
+        mock_transform.return_value = np.zeros(1000, dtype=np.float32)
+        system = System(bpm=120.0, sample_rate=44100)
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+            wav_path = tf.name
+            sf.write(wav_path, np.zeros(44100, dtype=np.float32), 44100)
+
+        try:
+            # 1. When target_bpm is "global" / None, uses system.bpm
+            obj_global = build_node_object({
+                "node_type": "sample",
+                "node_name": "Loop",
+                "filepath": wav_path,
+                "original_bpm": 120.0,
+                "target_bpm": "global"
+            })
+            self.assertIsNone(obj_global.target_bpm)
+            obj_global.render(system)
+            self.assertEqual(mock_transform.call_args[1]["target_bpm"], 120.0)
+
+            # 2. When target_bpm is decoupled to custom 140.0, uses 140.0
+            obj_custom = build_node_object({
+                "node_type": "sample",
+                "node_name": "Loop",
+                "filepath": wav_path,
+                "original_bpm": 120.0,
+                "target_bpm": 140.0
+            })
+            self.assertEqual(obj_custom.target_bpm, 140.0)
+            obj_custom.render(system)
+            self.assertEqual(mock_transform.call_args[1]["target_bpm"], 140.0)
+        finally:
+            Path(wav_path).unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()
+

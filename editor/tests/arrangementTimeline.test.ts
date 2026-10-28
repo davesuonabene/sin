@@ -95,3 +95,47 @@ test('resolves sequence duration in bars correctly (16 steps * 0.25 beat = 1 bar
         (globalThis as any).window = previousWindow;
     }
 });
+
+test('ArrangementNode splits section at integer bar and preserves parameters', async () => {
+    const { ArrangementNode } = await import('../src/nodes/ArrangementNode.ts');
+    const arr = new ArrangementNode();
+    arr.properties.total_bars = 16.0;
+    arr.properties.section_points = [];
+    arr.properties.section_probability = [0.8];
+    arr.properties.section_quant = ['bar'];
+    arr.properties.section_quant_anchor = ['end'];
+
+    // Split at bar 8 (half and half: 8 + 8 bars)
+    const struct1 = arr.splitSectionAtBar(8);
+    assert.deepEqual(struct1.points, [8]);
+    assert.equal(struct1.probability.length, 2);
+    assert.equal(struct1.probability[0], 0.8);
+    assert.equal(struct1.probability[1], 0.8);
+    assert.equal(struct1.quant[0], 'bar');
+    assert.equal(struct1.quant[1], 'bar');
+    assert.equal(struct1.quantAnchor[0], 'end');
+    assert.equal(struct1.quantAnchor[1], 'end');
+
+    // Split second section at bar 12 (8 + 4 + 4 bars: 2:1:1 proportion)
+    const struct2 = arr.splitSectionAtBar(12);
+    assert.deepEqual(struct2.points, [8, 12]);
+    assert.equal(struct2.probability.length, 3);
+    assert.equal(struct2.quant.length, 3);
+
+    // Merge cut at 12 (remove cutIndex 1)
+    const struct3 = arr.removeSectionCut(1);
+    assert.deepEqual(struct3.points, [8]);
+    assert.equal(struct3.probability.length, 2);
+});
+
+test('ArrangementNode adapts section cuts proportionally when total_bars changes', async () => {
+    const { ArrangementNode } = await import('../src/nodes/ArrangementNode.ts');
+    const arr = new ArrangementNode();
+    arr.properties.total_bars = 4.0;
+    arr.properties.section_points = [2.0]; // 50% / 50%
+
+    // Changing total_bars from 4 to 16 should scale cut from 2 to 8
+    arr.updateProperty('total_bars', 16.0);
+    assert.equal(arr.properties.total_bars, 16.0);
+    assert.deepEqual(arr.properties.section_points, [8]);
+});

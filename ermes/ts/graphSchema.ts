@@ -117,6 +117,7 @@ export interface GraphValidationOptions {
 export interface LiteGraphWorkspacePreset {
     version: 2;
     savedAt: string;
+    frozen?: boolean;
     graph: {
         last_node_id: number;
         last_link_id: number;
@@ -126,6 +127,7 @@ export interface LiteGraphWorkspacePreset {
         config: { links_ontop: true };
         extra: {
             global_parameters: GraphSettings;
+            global_freeze?: boolean;
             main_preview: { node_id: number; mode: 'auto' };
         };
         version: 0.4;

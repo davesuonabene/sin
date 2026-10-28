@@ -23,7 +23,7 @@ export class ArrangementNode extends BaseNode {
                 label: 'Arrangement',
                 sections: [
                     { type: 'arrangement_timeline' },
-                    { type: 'fields', fields: ['total_bars', 'seed'] }
+                    { type: 'fields', fields: ['seed'] }
                 ]
             },
             {
@@ -46,7 +46,6 @@ export class ArrangementNode extends BaseNode {
 
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Arrangement', tab: 'COMMON' },
-        { key: 'total_bars', label: 'Total Length', type: 'float', default: 4.0, min: 0.25, max: 128, step: 0.25, unit: 'bars', tab: 'ARRANGEMENT' },
         { key: 'section_probability', label: 'Probability', type: 'float', default: 1.0, min: 0, max: 1, step: 0.05, tab: 'ARRANGEMENT', description: 'Playback probability for the selected section.' },
         { key: 'section_sample_start', label: 'Sample Start', type: 'slider', default: 0.0, min: 0, max: 1, step: 0.01, tab: 'ARRANGEMENT', description: 'Normalized source position for the selected section.' },
         { key: 'section_quant', label: 'Quantize', type: 'select', default: 'auto', options: [{ value: 'auto', label: 'Continuous' }, { value: 'bar', label: 'Bar' }, { value: '0.5', label: 'Half Bar' }, { value: 'beat', label: 'Beat' }, { value: 'none', label: 'Once' }], tab: 'ARRANGEMENT', description: 'Retrigger interval for the selected section.' },
@@ -141,7 +140,7 @@ export class ArrangementNode extends BaseNode {
         delete this.properties.quant_anchor;
         delete this.properties.section_enabled;
 
-        const cachedNode = (window as any).trackNodes?.get(this.id);
+        const cachedNode = typeof window !== 'undefined' ? (window as any).trackNodes?.get(this.id) : undefined;
         if (cachedNode) {
             delete cachedNode.probability;
             delete cachedNode.quant;
@@ -173,7 +172,7 @@ export class ArrangementNode extends BaseNode {
 
         // Audio preview serialization also maintains a graph-data cache. Keep it
         // aligned for consumers that have not yet moved to node properties.
-        const cachedNode = (window as any).trackNodes?.get(this.id);
+        const cachedNode = typeof window !== 'undefined' ? (window as any).trackNodes?.get(this.id) : undefined;
         if (cachedNode) {
             cachedNode.section_points = [...normalized.points];
             cachedNode.section_probability = [...normalized.probability];
@@ -211,6 +210,58 @@ export class ArrangementNode extends BaseNode {
         this.updateSectionStructure(structure);
     }
 
+    override updateProperty(key: string, value: any): void {
+        if (key === 'total_bars') {
+            const prevTotal = Math.max(0.25, Number(this.properties.total_bars) || 4);
+            const newTotal = Math.max(0.25, Number(value) || 4);
+            super.updateProperty(key, newTotal);
+            if (prevTotal !== newTotal && Array.isArray(this.properties.section_points) && this.properties.section_points.length > 0) {
+                // Adapt existing cut points proportionally to new total length
+                const scaledPoints = [...new Set(
+                    this.properties.section_points
+                        .map((p: number) => Math.round((p / prevTotal) * newTotal))
+                        .filter((p: number) => p > 0 && p < newTotal)
+                )].sort((a, b) => a - b);
+                const curStructure = this.getSectionStructure();
+                curStructure.points = scaledPoints;
+                this.updateSectionStructure(curStructure);
+            }
+            return;
+        }
+        super.updateProperty(key, value);
+    }
+
+    splitSectionAtBar(bar: number): ArrangementSectionStructure {
+        const structure = this.getSectionStructure();
+        const totalBars = Math.max(0.25, Number(this.properties.total_bars) || 4);
+        const intBar = Math.round(bar);
+        if (intBar <= 0 || intBar >= totalBars || structure.points.includes(intBar)) {
+            return structure;
+        }
+
+        const boundaries = [0, ...structure.points, totalBars];
+        let sectionIdx = -1;
+        for (let i = 0; i < boundaries.length - 1; i++) {
+            if (intBar > boundaries[i] && intBar < boundaries[i + 1]) {
+                sectionIdx = i;
+                break;
+            }
+        }
+        if (sectionIdx === -1) return structure;
+
+        structure.points.push(intBar);
+        structure.points.sort((a, b) => a - b);
+
+        const newSectionIdx = sectionIdx + 1;
+        structure.probability.splice(newSectionIdx, 0, structure.probability[sectionIdx] ?? 1.0);
+        structure.sampleStart.splice(newSectionIdx, 0, structure.sampleStart[sectionIdx] ?? 0.0);
+        structure.quant.splice(newSectionIdx, 0, structure.quant[sectionIdx] ?? 'auto');
+        structure.quantAnchor.splice(newSectionIdx, 0, structure.quantAnchor[sectionIdx] ?? 'start');
+
+        this.updateSectionStructure(structure);
+        return structure;
+    }
+
     removeSectionCut(cutIndex: number): ArrangementSectionStructure {
         const structure = this.getSectionStructure();
         if (cutIndex < 0 || cutIndex >= structure.points.length) return structure;
@@ -225,6 +276,39 @@ export class ArrangementNode extends BaseNode {
         structure.quant.splice(removedSectionIndex, 1);
         structure.quantAnchor.splice(removedSectionIndex, 1);
         this.updateSectionStructure(structure);
+        return structure;
+    }
+
+    updateSectionCut(cutIndex: number, newBar: number): ArrangementSectionStructure {
+        const structure = this.getSectionStructure();
+        if (cutIndex < 0 || cutIndex >= structure.points.length) return structure;
+        const totalBars = Math.max(0.25, Number(this.properties.total_bars) || 4);
+        const prevBoundary = cutIndex > 0 ? structure.points[cutIndex - 1] : 0;
+        const nextBoundary = cutIndex < structure.points.length - 1 ? structure.points[cutIndex + 1] : totalBars;
+        const minGap = totalBars >= 2 ? 1 : 0.25;
+        const clampedBar = Math.max(prevBoundary + minGap, Math.min(nextBoundary - minGap, Math.round(newBar)));
+        structure.points[cutIndex] = clampedBar;
+        this.updateSectionStructure(structure);
+        return structure;
+    }
+
+    updateSectionLength(sectionIndex: number, newLength: number): ArrangementSectionStructure {
+        const structure = this.getSectionStructure();
+        const totalBars = Math.max(0.25, Number(this.properties.total_bars) || 4);
+        const boundaries = [0, ...structure.points, totalBars]
+            .filter((p, i, a) => p >= 0 && p <= totalBars && a.indexOf(p) === i)
+            .sort((a, b) => a - b);
+        const sectionCount = boundaries.length - 1;
+        if (sectionIndex < 0 || sectionIndex >= sectionCount) return structure;
+
+        const start = boundaries[sectionIndex];
+        if (sectionIndex < structure.points.length) {
+            const nextBoundary = sectionIndex < structure.points.length - 1 ? structure.points[sectionIndex + 1] : totalBars;
+            const targetEnd = start + Math.max(1, Math.round(newLength));
+            const clampedEnd = Math.max(start + 1, Math.min(nextBoundary - 1, targetEnd));
+            structure.points[sectionIndex] = clampedEnd;
+            this.updateSectionStructure(structure);
+        }
         return structure;
     }
 

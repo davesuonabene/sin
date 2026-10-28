@@ -8,7 +8,7 @@ import shutil
 from unittest.mock import patch
 from fastapi import BackgroundTasks, HTTPException
 
-from gaia import crud, models, profiles, project_service, reference_service, schemas, vaults
+from gaia import crud, models, profiles, project_manifest, project_service, reference_service, schemas, vaults
 from gaia.routers import items as items_router, projects as projects_router
 from tests.support import GaiaTestCase
 
@@ -31,7 +31,7 @@ class TestGaiaProjects(GaiaTestCase):
 
     @staticmethod
     def project_manifest(project):
-        path = Path(project.absolute_path) / "files" / "edit" / "current.json"
+        path = project_manifest.manifest_path(project)
         return path, json.loads(path.read_text(encoding="utf-8"))
 
     def test_sources_stay_read_only_while_projects_own_relationships(self):
@@ -189,7 +189,7 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertEqual(result["adopted"], 2)
         adopted = [crud.get_item(self.db, item_id) for item_id in (first.id, second.id)]
         self.assertTrue(all(item.parent_id == project.id for item in adopted))
-        self.assertTrue(all(Path(item.absolute_path).parent == Path(project.absolute_path) for item in adopted))
+        self.assertTrue(all(Path(item.absolute_path).parent == project_service.project_files_dir(project) for item in adopted))
         self.assertEqual({Path(item.absolute_path).name for item in adopted}, {"Take.wav", "Take_2.wav"})
         self.assertFalse(first_path.parent.exists())
         self.assertFalse(second_path.parent.exists())
@@ -320,7 +320,7 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertFalse(original_path.exists())
         self.assertTrue(moved_path.is_file())
         self.assertEqual(moved.parent_id, project.id)
-        self.assertEqual(moved_path.parent, Path(project.absolute_path))
+        self.assertEqual(moved_path.parent, project_service.project_files_dir(project))
         self.assertEqual(
             [(row.from_item_id, row.to_item_id, row.relation_kind) for row in reference_service.list_references(self.db, project.id)],
             [(project.id, source.id, "use")],
@@ -350,7 +350,7 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertTrue(Path(copied.absolute_path).is_file())
         self.assertEqual(original.parent_id, source_project.id)
         self.assertEqual(copied.parent_id, target_project.id)
-        self.assertEqual(Path(copied.absolute_path).parent, Path(target_project.absolute_path))
+        self.assertEqual(Path(copied.absolute_path).parent, project_service.project_files_dir(target_project))
         self.assertEqual(copied.file_hash, original.file_hash)
 
     def test_project_creation_can_mix_linked_and_moved_files(self):
@@ -1020,8 +1020,7 @@ class TestGaiaProjects(GaiaTestCase):
         self.assertTrue(files_root.is_dir())
         self.assertTrue((files_root / "edit").is_dir())
         self.assertTrue((files_root / "source").is_dir())
-        self.assertTrue((files_root / "derived").is_dir())
-        manifest_file = files_root / "edit" / "current.json"
+        manifest_file = project_manifest.manifest_path(project)
         self.assertTrue(manifest_file.is_file())
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         self.assertEqual(manifest["schema"], "gaia-project-state")

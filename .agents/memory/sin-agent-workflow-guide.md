@@ -10,7 +10,7 @@
 SIN separates composition, compilation, and sound generation into three distinct layers:
 
 1. **Python Audio Engine (`core/`):**
-   Executes the canonical `AudioNodeModel` payload tree. Responsible for all DSP operations, Rubber Band time-stretching, step sequencer timing, FX modules (gain, compressor, saturation, eq), multi-bus audio summing, and final WAV generation.
+   Executes the canonical `AudioNodeModel` payload tree. Responsible for sample transforms, Rubber Band time-stretching, step sequencer timing, arrangement slicing, gain staging (`chain` supports `"gain"` only; DSP FX plugins are not implemented), multi-bus audio summing, and final WAV generation.
 2. **ERMES Translation Layer (`ermes/`):**
    The invariant serialization and compilation engine. Bridges compositional definitions (declarative `sin-graph` documents, LiteGraph workspace presets, asset pool locators, and random modulation seeds) into the normalized `AudioNodeModel` execution tree for the audio engine.
 3. **Decoupled Producers:**
@@ -118,11 +118,11 @@ sin
 
 ## 5. Composition Contracts for Hip-Hop Drums & Bass
 
-### 5.1 Dual-Bus Mixing Architecture
-Always route rhythm sections through dedicated submix buses before the master track:
-- **Punch Drum Bus (`Audio/Track`):** Sums kicks, snares/claps, hi-hats, percs/cowbells with drum bus compression and tape saturation.
-- **Sub / 808 Bass Bus (`Audio/Track`):** Sums bass and sub-bass lines with low-end EQ sculpting and warm saturation.
-- **Master Output Track (`role: "master"`):** Clean summing of Drum Bus + Bass Bus with master gain calibrated between `-2.0 dB` and `-3.5 dB` to guarantee peak levels stay below 0 dBFS.
+### 5.1 Dual-Bus Mixing Architecture & Gain-Staging Rule
+Always route rhythm sections through dedicated submix buses before the master track. **Important:** Node `chain` arrays are strictly for **gain staging (`type: "gain"`)**—never add placeholder FX modules (`compressor`, `reverb`, `delay`, `eq`, `distortion`, `chorus`, `limiter`, `filter`). Leave all sound shaping to node parameters:
+- **Punch Drum Bus (`Audio/Track`):** Sums kicks, snares/claps, hi-hats, and percs with clean gain staging.
+- **Sub / 808 Bass Bus (`Audio/Track`):** Sums bass and sub-bass lines with clean gain staging.
+- **Master Output Track (`role: "master"`):** Clean summing of submix buses with master gain calibrated between `-2.0 dB` and `-3.5 dB` to guarantee peak levels stay below 0 dBFS.
 
 ### 5.2 Canonical Schema Blueprint
 

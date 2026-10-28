@@ -317,6 +317,8 @@ test('isFieldMappableToRandom only allows numeric fields and step parameters', (
     assert.equal(isFieldMappableToRandom(mockNode, 'step_parameters.0.probability'), true);
     assert.equal(isFieldMappableToRandom(mockNode, 'step_parameters.5.velocity'), true);
     assert.equal(isFieldMappableToRandom(mockNode, 'step_parameters.15.offset'), true);
+    assert.equal(isFieldMappableToRandom(mockNode, 'step_parameters.3.sample_start'), true);
+    assert.equal(isFieldMappableToRandom(mockNode, 'step_parameters.3.gate_length'), true);
     assert.equal(isFieldMappableToRandom(mockNode, 'step_parameters.2.unknown_key'), false);
 });
 

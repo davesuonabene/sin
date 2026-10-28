@@ -696,9 +696,32 @@ def read_item_summaries(
 def preview_import(req: schemas.ImportPreviewRequest, db: Session = Depends(database.get_db)):
     """Inspect a source without copying it or creating any GAIA asset rows."""
     try:
-        return import_job_manager.create_preview(req.source_path, req.vault_id, db)
+        return import_job_manager.create_preview(
+            req.source_path,
+            req.vault_id,
+            db,
+            progressive=req.progressive,
+        )
     except (ImportPreviewError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/import/preview/{preview_id}")
+def read_import_preview(preview_id: str, since_index: int | None = None):
+    """Poll an active progressive source inspection."""
+    try:
+        return import_job_manager.get_preview(preview_id, since_index=since_index)
+    except ImportPreviewError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/import/preview/{preview_id}/skip-folder")
+def skip_import_preview_folder(preview_id: str, req: schemas.ImportPreviewSkipFolderRequest):
+    """Notify an active progressive inspection that the user deselected or re-selected a folder."""
+    try:
+        return import_job_manager.skip_preview_folder(preview_id, req.folder_path, req.skip)
+    except ImportPreviewError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/import/jobs")

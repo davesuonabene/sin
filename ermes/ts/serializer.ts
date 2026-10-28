@@ -29,7 +29,7 @@ export function serializeNodeSubtree(
         return Number.isFinite(numeric) ? numeric : fallback;
     };
 
-    function buildNodeModel(nodeId: number): any {
+    function buildNodeModel(nodeId: number, parentTotalBars?: number, parentTargetBpm?: number): any {
         const data = trackNodes.get(nodeId);
         const nodeObj = graph.getNodeById(nodeId);
         if (!data && !nodeObj) return null;
@@ -45,18 +45,22 @@ export function serializeNodeSubtree(
         const assignedModifierId = nodeObj?.properties?.asset_modifier_id ?? data?.asset_modifier_id;
         const assignedModifier = assignedModifierId != null ? graph.getNodeById(assignedModifierId) : null;
         const filepath = assignedModifier?.properties?.output_value || data?.filepath || nodeObj?.properties?.filepath || null;
-        const original_bpm = assignedModifier?.properties?.output_bpm || data?.original_bpm || nodeObj?.properties?.original_bpm || 120;
+        const original_bpm = nodeObj?.properties?.original_bpm ?? data?.original_bpm ?? assignedModifier?.properties?.output_bpm ?? 120;
+        const rawTargetBpm = nodeObj?.properties?.target_bpm ?? data?.target_bpm;
         const configuredBpm = nodeObj?.properties?.bpm ?? data?.bpm;
-        const target_bpm = resolveGlobalNumber(
-            String(configuredBpm).toLowerCase() === 'global'
-                ? configuredBpm
-                : (data?.target_bpm ?? nodeObj?.properties?.target_bpm ?? configuredBpm),
-            'bpm',
-            120
-        );
-        const key = assignedModifier?.properties?.output_key ?? nodeObj?.properties?.key ?? data?.key ?? "";
+        const isTargetGlobal = rawTargetBpm == null
+            || String(rawTargetBpm).toLowerCase() === 'global'
+            || String(configuredBpm).toLowerCase() === 'global';
+
+        const fallbackBpm = parentTargetBpm ?? resolveGlobalNumber(globalParameters.bpm, 'bpm', 120);
+        const resolvedBpm = isTargetGlobal
+            ? fallbackBpm
+            : resolveGlobalNumber(rawTargetBpm ?? configuredBpm, 'bpm', fallbackBpm);
+
+        const target_bpm = isTargetGlobal ? undefined : resolvedBpm;
+        const bpm = resolvedBpm;
+        const key = nodeObj?.properties?.key ?? data?.key ?? assignedModifier?.properties?.output_key ?? "";
         const start_beat = data?.start_beat || nodeObj?.properties?.start_beat || 0;
-        const bpm = target_bpm;
         const mix_mode = data?.mix_mode || nodeObj?.properties?.mix_mode || "sum";
 
         const nodeType = data?.type || nodeObj?.properties?.node_type || (nodeObj?.type === "Audio/Sample" ? "sample" : nodeObj?.type === "Audio/Sequence" ? "sequence" : "track");
@@ -69,9 +73,13 @@ export function serializeNodeSubtree(
         const stepLength = nodeObj?.properties?.step_length ?? data?.step_length ?? (nodeType === "sequence" ? 0.25 : undefined);
         const fadeMs = nodeObj?.properties?.fade_ms ?? data?.fade_ms ?? (nodeType === "sequence" ? 0 : undefined);
         const rawTotalBars = nodeObj?.properties?.total_bars ?? data?.total_bars;
-        const total_bars = rawTotalBars == null
-            ? (nodeType === "arrangement" ? 4.0 : (nodeType === "sequence" || (nodeType === "sample" && (nodeObj?.properties?.sample_type === "loop" || data?.sample_type === "loop")) ? resolveGlobalNumber(globalParameters.total_bars, 'total_bars', 4.0) : undefined))
-            : resolveGlobalNumber(rawTotalBars, 'total_bars', 4.0);
+        const isGlobalOrInherited = rawTotalBars == null
+            || String(rawTotalBars).toLowerCase() === 'global'
+            || Boolean(nodeObj?.properties?.length_inherited);
+        const fallbackBars = parentTotalBars ?? resolveGlobalNumber(globalParameters.total_bars, 'total_bars', 4.0);
+        const total_bars = isGlobalOrInherited
+            ? (nodeType === 'sample' && nodeObj?.properties?.sample_type !== 'loop' && data?.sample_type !== 'loop' ? undefined : fallbackBars)
+            : resolveGlobalNumber(rawTotalBars, 'total_bars', fallbackBars);
         const section_points = nodeObj?.properties?.section_points ?? data?.section_points ?? (nodeType === "arrangement" ? [] : undefined);
         const section_enabled = nodeObj?.properties?.section_enabled ?? data?.section_enabled ?? (nodeType === "arrangement" ? [] : undefined);
         const section_probability = nodeObj?.properties?.section_probability ?? data?.section_probability ?? (nodeType === "arrangement" ? [1.0] : undefined);
@@ -113,21 +121,30 @@ export function serializeNodeSubtree(
 
         const childModels: any[] = [];
         for (const cid of childrenIds) {
-            const childModel = buildNodeModel(cid);
+            const childModel = buildNodeModel(cid, total_bars, resolvedBpm);
             if (childModel) {
                 childModels.push(childModel);
             }
         }
 
-        const chain = nodeObj?.properties?.chain || data?.chain || [];
+        const rawChain = nodeObj?.properties?.chain || data?.chain || [];
+        const chain = rawChain.map((fx: any) => (typeof fx === 'object' && fx !== null ? {
+            name: fx.name || fx.id || fx.type || 'FX',
+            ...fx
+        } : fx));
 
         const modulatorModels: any[] = [];
         for (const [mid, mdata] of modulatorsByParent.get(nodeId) || []) {
             const mNodeObj = graph.getNodeById(mid);
+            const mRawChain = mNodeObj?.properties?.chain || mdata.chain || [];
+            const mChain = mRawChain.map((fx: any) => (typeof fx === 'object' && fx !== null ? {
+                name: fx.name || fx.id || fx.type || 'FX',
+                ...fx
+            } : fx));
             modulatorModels.push({
                 id: mid,
                 node_name: mdata.name || mNodeObj?.title || "Modulator",
-                chain: mNodeObj?.properties?.chain || mdata.chain || []
+                chain: mChain
             });
         }
 
@@ -176,6 +193,7 @@ export function serializeNodeSubtree(
             step_parameters: stepParameters,
             step_length: stepLength,
             play_mode: nodeObj?.properties?.play_mode ?? data?.play_mode ?? (nodeType === "sequence" ? "gate" : undefined),
+            release: nodeObj?.properties?.release ?? data?.release ?? (nodeType === "sequence" ? 0 : undefined),
             fade_ms: fadeMs,
             total_bars: total_bars,
             section_points: section_points,

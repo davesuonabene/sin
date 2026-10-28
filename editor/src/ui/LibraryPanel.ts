@@ -97,11 +97,13 @@ export class LibraryPanel {
         this.previewEnabled = Boolean((event as CustomEvent).detail?.enabled);
         if (!this.previewEnabled) this.stopCurrentPreview();
     };
+    private onClose?: () => void;
     private readonly handleRefreshRequest = () => {
         void this.refresh();
     };
 
-    constructor(parent: HTMLElement) {
+    constructor(parent: HTMLElement, onClose?: () => void) {
+        this.onClose = onClose;
         this.container = document.createElement('div');
         this.container.className = 'td-library-panel';
         
@@ -135,9 +137,24 @@ export class LibraryPanel {
             this.refreshView();
         };
 
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'td-library-close-btn';
+        closeBtn.title = 'Close Library';
+        closeBtn.setAttribute('aria-label', 'Close Library');
+        closeBtn.innerHTML = '✕';
+        closeBtn.onclick = () => {
+            if (this.onClose) {
+                this.onClose();
+            } else {
+                window.dispatchEvent(new CustomEvent('close-library-panel'));
+            }
+        };
+
         searchRow.appendChild(this.searchInput);
         searchRow.appendChild(this.refreshBtn);
         searchRow.appendChild(this.favFilterBtn);
+        searchRow.appendChild(closeBtn);
 
         // Filter Bar
         this.filterContainer = document.createElement('div');

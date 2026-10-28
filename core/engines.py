@@ -117,6 +117,14 @@ def build_node_object(node_data: Any) -> AudioObject:
     key_match_mode = _get_val(node_data, "key_match_mode", "off")
     key_match_algorithm = _get_val(node_data, "key_match_algorithm", "nearest")
 
+    target_bpm_raw = _get_val(node_data, "target_bpm", None)
+    target_bpm = None
+    if target_bpm_raw is not None and str(target_bpm_raw).lower() != "global":
+        try:
+            target_bpm = float(target_bpm_raw)
+        except (ValueError, TypeError):
+            target_bpm = None
+
     node_id = _get_val(node_data, "node_id", None)
     if node_type == "sequence":
         sequence = _get_val(node_data, "sequence", None) or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
@@ -130,6 +138,7 @@ def build_node_object(node_data: Any) -> AudioObject:
             step_parameters=_get_val(node_data, "step_parameters", None),
             step_length=step_length,
             play_mode=play_mode,
+            release=_get_val(node_data, "release", 0.0),
             fade_ms=_get_val(node_data, "fade_ms", 0.0),
             seed=seed,
             seed_mode=seed_mode,
@@ -144,7 +153,8 @@ def build_node_object(node_data: Any) -> AudioObject:
             stretch_algorithm=stretch_algorithm,
             total_bars=_get_val(node_data, "total_bars", None),
             key_match_mode=key_match_mode,
-            key_match_algorithm=key_match_algorithm
+            key_match_algorithm=key_match_algorithm,
+            node_id=node_id
         )
 
     elif node_type == "arrangement":
@@ -194,7 +204,8 @@ def build_node_object(node_data: Any) -> AudioObject:
                 stretch_algorithm=stretch_algorithm,
                 total_bars=_get_val(node_data, "total_bars", None),
                 key_match_mode=key_match_mode,
-                key_match_algorithm=key_match_algorithm
+                key_match_algorithm=key_match_algorithm,
+                target_bpm=target_bpm
             )
         else:
             obj = SampleObject(
@@ -212,7 +223,8 @@ def build_node_object(node_data: Any) -> AudioObject:
                 stretch_algorithm=stretch_algorithm,
                 total_bars=_get_val(node_data, "total_bars", None),
                 key_match_mode=key_match_mode,
-                key_match_algorithm=key_match_algorithm
+                key_match_algorithm=key_match_algorithm,
+                target_bpm=target_bpm
             )
     else:
         obj = AudioObject(
@@ -231,7 +243,8 @@ def build_node_object(node_data: Any) -> AudioObject:
             stretch_factor=stretch_factor,
             stretch_algorithm=stretch_algorithm,
             key_match_mode=key_match_mode,
-            key_match_algorithm=key_match_algorithm
+            key_match_algorithm=key_match_algorithm,
+            target_bpm=target_bpm
         )
 
     if node_id is not None:

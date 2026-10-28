@@ -1783,15 +1783,6 @@
               "params": {
                 "gain": 0.65
               }
-            },
-            {
-              "id": "master-limiter",
-              "type": "limiter",
-              "name": "Master Ceiling",
-              "enabled": true,
-              "params": {
-                "threshold": -0.2
-              }
             }
           ],
           "node_type": "track"
