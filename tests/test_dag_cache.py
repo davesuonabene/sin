@@ -138,6 +138,19 @@ class TestDagNodeCache(unittest.TestCase):
         self.cache.store("42", "same_fp", audio_offline, context=ctx_offline)
         np.testing.assert_array_equal(self.cache.get("42", "same_fp", context=ctx_offline), audio_offline)
 
+    def test_lru_eviction_respects_max_entries(self):
+        bounded = DagNodeCache(max_entries=16)
+        for i in range(16):
+            bounded.store(str(i), f"fp_{i}", np.ones(4, dtype=np.float32))
+        # Touch entry 0 so it becomes most recently used
+        self.assertIsNotNone(bounded.get("0", "fp_0"))
+        # Adding entry 16 should evict entry 1 (least recently used), keeping entry 0
+        bounded.store("16", "fp_16", np.ones(4, dtype=np.float32))
+        self.assertEqual(len(bounded), 16)
+        self.assertIsNotNone(bounded.get("0", "fp_0"))
+        self.assertIsNone(bounded.get("1", "fp_1"))
+        self.assertIsNotNone(bounded.get("16", "fp_16"))
+
 
 if __name__ == "__main__":
     unittest.main()

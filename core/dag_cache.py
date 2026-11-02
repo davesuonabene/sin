@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import OrderedDict
 import hashlib
 import json
 import threading
@@ -10,12 +11,13 @@ class DagNodeCache:
     """
     Volatile in-memory cache for rendered audio node buffers and DAG dependency tracking.
     Enables incremental re-rendering by preserving upstream cached buffers when downstream
-    nodes are modified, and supports downstream invalidation.
+    nodes are modified, and supports downstream invalidation with bounded LRU eviction.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_entries: int = 96) -> None:
         self._lock = threading.RLock()
-        self._cache: dict[str, dict[str, Any]] = {}
+        self._max_entries = max(16, int(max_entries))
+        self._cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._dependency_graph: dict[str, set[str]] = {}  # parent_id -> set of child_ids
         self._reverse_dependencies: dict[str, set[str]] = {}  # child_id -> set of downstream parent_ids
 
@@ -29,6 +31,11 @@ class DagNodeCache:
         except Exception:
             return hashlib.sha1(str(data).encode("utf-8")).hexdigest()[:16]
 
+    @staticmethod
+    def _slot_key(node_id: int | str, slot: int = 0) -> str:
+        s = int(slot or 0)
+        return str(node_id) if s == 0 else f"{node_id}:{s}"
+
     def store(
         self,
         node_id: int | str,
@@ -36,58 +43,70 @@ class DagNodeCache:
         audio: np.ndarray,
         extra: Optional[dict[str, Any]] = None,
         context: Optional[Any] = None,
+        slot: int = 0,
     ) -> None:
         """
-        Stores rendered audio array and metadata for a specific node and parameter fingerprint.
+        Stores rendered audio array and metadata for a specific node, slot, and parameter fingerprint.
         """
         if node_id is None or audio is None:
             return
+        key = self._slot_key(node_id, slot)
         with self._lock:
-            self._cache[str(node_id)] = {
+            self._cache[key] = {
                 "fingerprint": str(fingerprint),
                 "context": context,
                 "audio": audio,
                 "extra": extra or {},
             }
+            self._cache.move_to_end(key)
+            while len(self._cache) > self._max_entries:
+                self._cache.popitem(last=False)
+
+    def _lookup_entry(
+        self,
+        node_id: int | str,
+        fingerprint: str,
+        context: Optional[Any] = None,
+        slot: int = 0,
+    ) -> Optional[dict[str, Any]]:
+        if node_id is None:
+            return None
+        key = self._slot_key(node_id, slot)
+        with self._lock:
+            entry = self._cache.get(key)
+            if entry and entry.get("fingerprint") == str(fingerprint):
+                if context is not None and entry.get("context") is not None and entry.get("context") != context:
+                    return None
+                self._cache.move_to_end(key)
+                return entry
+            return None
 
     def get(
         self,
         node_id: int | str,
         fingerprint: str,
         context: Optional[Any] = None,
+        slot: int = 0,
     ) -> Optional[np.ndarray]:
         """
         Retrieves cached audio if fingerprint (and optional execution context) matches.
         Returns None if stale or missing.
         """
-        if node_id is None:
-            return None
-        with self._lock:
-            entry = self._cache.get(str(node_id))
-            if entry and entry.get("fingerprint") == str(fingerprint):
-                if context is not None and entry.get("context") is not None and entry.get("context") != context:
-                    return None
-                return entry.get("audio")
-            return None
+        entry = self._lookup_entry(node_id, fingerprint, context, slot)
+        return entry.get("audio") if entry else None
 
     def get_extra(
         self,
         node_id: int | str,
         fingerprint: str,
         context: Optional[Any] = None,
+        slot: int = 0,
     ) -> Optional[dict[str, Any]]:
         """
         Retrieves cached extra metadata (manifest entries, stems) if fingerprint matches.
         """
-        if node_id is None:
-            return None
-        with self._lock:
-            entry = self._cache.get(str(node_id))
-            if entry and entry.get("fingerprint") == str(fingerprint):
-                if context is not None and entry.get("context") is not None and entry.get("context") != context:
-                    return None
-                return entry.get("extra")
-            return None
+        entry = self._lookup_entry(node_id, fingerprint, context, slot)
+        return entry.get("extra") if entry else None
 
     def register_edge(self, parent_id: int | str, child_id: int | str) -> None:
         """
@@ -103,7 +122,7 @@ class DagNodeCache:
 
     def invalidate_downstream(self, node_id: int | str) -> set[str]:
         """
-        Recursively invalidates node_id and all downstream consumers.
+        Recursively invalidates node_id and all downstream consumers (including all slots).
         Returns the set of invalidated node IDs.
         """
         if node_id is None:
@@ -116,6 +135,9 @@ class DagNodeCache:
                 if curr not in invalidated:
                     invalidated.add(curr)
                     self._cache.pop(curr, None)
+                    prefix = f"{curr}:"
+                    for k in [k for k in self._cache if k.startswith(prefix)]:
+                        self._cache.pop(k, None)
                     downstream = list(self._reverse_dependencies.get(curr, set()))
                     to_visit.extend(downstream)
             return invalidated

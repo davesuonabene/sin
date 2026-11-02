@@ -4,6 +4,12 @@ import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { SequenceRenderer, type RenderBox, type SignalTelemetry, type SequenceStep } from '../../../packages/iride/src/index.ts';
 import { compositeSequenceBuffer, getNodeGainMultiplier } from '../audioCompositor.ts';
+import {
+    type NodeSlot,
+    resolveStepSlots,
+    resolveCycleSeeds
+} from '../../../ermes/ts/slotLanguage.ts';
+import { populateOwnerSlotsFromRandom } from '../../../ermes/ts/randomResolver.ts';
 
 export interface SequenceChannel {
     on: number[];
@@ -34,7 +40,7 @@ export class SequenceNode extends BaseNode {
                 label: 'Sequence',
                 sections: [
                     { type: 'sequence_grid' },
-                    { type: 'fields', fields: ['total_bars', 'step_length', 'play_mode', 'release', 'fade_ms', 'seed', 'seed_mode'] }
+                    { type: 'fields', fields: ['sample_slot', 'total_bars', 'step_length', 'play_mode', 'release', 'fade_ms', 'seed'] }
                 ]
             },
             {
@@ -57,6 +63,7 @@ export class SequenceNode extends BaseNode {
 
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Sequence', tab: 'COMMON' },
+        { key: 'sample_slot', label: 'Sample Slot', type: 'string', default: '0', tab: 'SEQUENCE', description: 'Upstream sample slot selector evaluated per step (e.g. "0", "0 1", "0 0 1 2", "rand").' },
         { key: 'total_bars', label: 'Total Bars', type: 'global_float', default: 'global', min: 0.25, max: 128, step: 0.25, unit: 'bars', tab: 'SEQUENCE', description: 'Pattern playback duration. "global" inherits from parent track or project setting.' },
         { key: 'sample_start', label: 'Sample Start', type: 'float', default: 0.0, min: 0.0, max: 1.0, step: 0.1, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' }, description: 'Normalized sample playback start position for this step (0.0 to 1.0).' },
         { key: 'gate_length', label: 'Gate Length', type: 'float', default: 1.0, min: 0.0, max: 1.0, step: 0.1, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' }, description: 'Multiplier for current step length (0.0 to 1.0), followed by release.' },
@@ -68,8 +75,7 @@ export class SequenceNode extends BaseNode {
         { key: 'play_mode', label: 'Voice Mode', type: 'radio', default: 'gate', options: [{ value: 'gate', label: 'Mono' }, { value: 'trigger', label: 'Multivoice' }], tab: 'SEQUENCE', description: 'Mono cuts previous playing sample when a note comes in; Multivoice allows overlapping voices.' },
         { key: 'release', label: 'Release', type: 'float', default: 0.0, min: 0.0, max: 1.0, step: 0.1, tab: 'SEQUENCE', description: 'Fade-out release mapped to sample percentage (0.0 to 1.0).' },
         { key: 'fade_ms', label: 'Step Fade', type: 'float', default: 0, min: 0, max: 5, step: 0.1, unit: 'ms', tab: 'SEQUENCE', description: 'Applies a short gain fade at the start and end of every triggered sample.' },
-        { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'SEQUENCE' },
-        { key: 'seed_mode', label: 'Seed Mode', type: 'radio', default: 'moving', options: [{ value: 'moving', label: 'Moving (per iteration)' }, { value: 'fixed', label: 'Fixed (looped by arranger)' }], tab: 'SEQUENCE' }
+        { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'SEQUENCE', description: 'Deterministic seed or seed sequence (e.g. "42", "42 108", "rand") for step probability and sample_slot="rand".' }
     ];
 
     static defaultColor = "#ec4899";
@@ -148,6 +154,140 @@ export class SequenceNode extends BaseNode {
         this.updateProperty('step_parameters', stepParameters);
     }
 
+    public activeSlotIndex = 0;
+
+    override get acceptedPoolAssetType(): 'audio' | 'sequence_source' {
+        return 'sequence_source';
+    }
+
+    override getGhostBoundFieldOverrides(): Record<string, string[]> {
+        return {
+            'probability': ['step_parameters'],
+            'sample start': ['step_parameters']
+        };
+    }
+
+    public getSlots(): NodeSlot[] {
+        if (!this.properties) this.properties = {};
+        if (!Array.isArray(this.properties.slots) || this.properties.slots.length === 0) {
+            const rawSeq = Array.isArray(this.properties.sequence)
+                ? [...this.properties.sequence]
+                : [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+            const rawParams = Array.isArray(this.properties.step_parameters)
+                ? this.properties.step_parameters.map((s: any) => ({ ...(s || {}) }))
+                : [];
+            this.properties.slots = [{
+                index: 0,
+                sequence: rawSeq,
+                step_parameters: rawParams,
+                sample_slot: String(this.properties.sample_slot ?? '0'),
+                step_length: Number(this.properties.step_length ?? 0.25),
+            }];
+        }
+        return this.properties.slots;
+    }
+
+    public syncActiveSlotFromProperties(): void {
+        const slots = this.getSlots();
+        const idx = Math.min(Math.max(0, this.activeSlotIndex), slots.length - 1);
+        this.activeSlotIndex = idx;
+        slots[idx] = {
+            ...(slots[idx] || {}),
+            index: idx,
+            sequence: Array.isArray(this.properties.sequence) ? [...this.properties.sequence] : [],
+            step_parameters: Array.isArray(this.properties.step_parameters)
+                ? this.properties.step_parameters.map((s: any) => ({ ...(s || {}) }))
+                : [],
+            sample_slot: String(this.properties.sample_slot ?? '0'),
+            step_length: Number(this.properties.step_length ?? 0.25),
+        };
+    }
+
+    public applySlotToProperties(slot: NodeSlot): void {
+        if (!slot || !this.properties) return;
+        if (Array.isArray(slot.sequence)) {
+            this.properties.sequence = [...slot.sequence];
+        }
+        if (Array.isArray(slot.step_parameters)) {
+            this.properties.step_parameters = slot.step_parameters.map((s: any) => ({ ...(s || {}) }));
+        }
+        if (slot.sample_slot !== undefined) {
+            this.properties.sample_slot = String(slot.sample_slot);
+        }
+        if (slot.step_length !== undefined) {
+            this.properties.step_length = Number(slot.step_length);
+        }
+        this._cachedCompositedBuffer = null;
+        this.setDirtyCanvas(true, true);
+    }
+
+    public selectSlot(index: number): void {
+        this.syncActiveSlotFromProperties();
+        const slots = this.getSlots();
+        const nextIdx = Math.min(Math.max(0, index), slots.length - 1);
+        this.activeSlotIndex = nextIdx;
+        this.properties.active_slot = nextIdx;
+        this.applySlotToProperties(slots[nextIdx]);
+    }
+
+    public addSlot(): number {
+        this.syncActiveSlotFromProperties();
+        const slots = this.getSlots();
+        const current = slots[this.activeSlotIndex] || slots[0];
+        const newIdx = slots.length;
+        slots.push({
+            ...(current || {}),
+            index: newIdx,
+            sequence: Array.isArray(current?.sequence) ? [...current.sequence] : [],
+            step_parameters: Array.isArray(current?.step_parameters)
+                ? current.step_parameters.map((s: any) => ({ ...(s || {}) }))
+                : []
+        });
+
+        // If any RandomNode modifier is attached to this sequence, immediately populate seed-dependent slot values
+        const graph = this.graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+        const allNodes = ((graph as any)?._nodes || (graph as any)?.nodes || []) as any[];
+        for (const candidate of allNodes) {
+            const isRandom = candidate?.type === 'Audio/Random'
+                || candidate?.properties?.node_type === 'random'
+                || (candidate?.isModifier && candidate?.modifierKind === 'random');
+            if (isRandom && candidate?.properties?.parentId === this.id) {
+                populateOwnerSlotsFromRandom(candidate, this);
+            }
+        }
+
+        this.activeSlotIndex = newIdx;
+        this.properties.active_slot = newIdx;
+        this.applySlotToProperties(slots[newIdx]);
+        return newIdx;
+    }
+
+    public removeSlot(index: number): void {
+        const slots = this.getSlots();
+        if (slots.length <= 1) return;
+        const removeIdx = Math.min(Math.max(0, index), slots.length - 1);
+        slots.splice(removeIdx, 1);
+        slots.forEach((s, idx) => { s.index = idx; });
+        this.activeSlotIndex = Math.min(this.activeSlotIndex, slots.length - 1);
+        this.properties.active_slot = this.activeSlotIndex;
+        this.applySlotToProperties(slots[this.activeSlotIndex]);
+    }
+
+    override updateProperty(key: string, value: any): void {
+        super.updateProperty(key, value);
+        if (['sequence', 'step_parameters', 'sample_slot', 'step_length', 'seed'].includes(key)) {
+            this.syncActiveSlotFromProperties();
+        }
+    }
+
+    override prepareSerializedModel(model: any): any {
+        this.syncActiveSlotFromProperties();
+        return {
+            ...model,
+            sample_slot: String(this.properties?.sample_slot ?? '0')
+        };
+    }
+
     constructor() {
         super();
         this.title = "Sequence";
@@ -162,6 +302,7 @@ export class SequenceNode extends BaseNode {
             ...this.properties,
             node_name: "Sequence",
             node_type: "sequence",
+            sample_slot: "0",
             total_bars: "global",
             length_inherited: true,
             sequence: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
@@ -179,8 +320,8 @@ export class SequenceNode extends BaseNode {
             release: 0,
             fade_ms: 0,
             selected_step: 0,
-            seed: Math.floor(Math.random() * 10000),
-            seed_mode: "moving",
+            seed: 42,
+            seed_refresh: true,
             color: "#ec4899",
             icon: "sequence",
             shape: "square"
@@ -188,6 +329,31 @@ export class SequenceNode extends BaseNode {
         
         this.addInput("Input", "audio");
         this.addOutput("Audio", "audio");
+    }
+
+    public getUpstreamSlotCount(): number {
+        const inputNodes = this.getInputNodes();
+        for (const inputNode of inputNodes) {
+            if (typeof (inputNode as any)?.getSlots === 'function') {
+                return Math.max(1, (inputNode as any).getSlots().length);
+            }
+            if (Array.isArray(inputNode?.properties?.slots) && inputNode.properties.slots.length > 0) {
+                return inputNode.properties.slots.length;
+            }
+        }
+        return 1;
+    }
+
+    public getResolvedStepSlots(stepCount = SequenceNode.stepCount): number[] {
+        const upstreamCount = this.getUpstreamSlotCount();
+        const seedSalt = Number(this.properties?.seed_salt || 0) * 9973;
+        const cycleSeeds = resolveCycleSeeds(this.properties?.seed ?? 42, 1, (this.id || 1) + seedSalt);
+        return resolveStepSlots(
+            String(this.properties?.sample_slot ?? '0'),
+            stepCount,
+            upstreamCount,
+            cycleSeeds[0] ?? 42
+        );
     }
 
     override drawVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
@@ -219,6 +385,7 @@ export class SequenceNode extends BaseNode {
 
         const rawParams = Array.isArray(this.properties?.step_parameters) ? this.properties.step_parameters : [];
         const stepCount = SequenceNode.stepCount;
+        const stepSlots = this.getResolvedStepSlots(stepCount);
         const steps: SequenceStep[] = [];
 
         for (let i = 0; i < stepCount; i++) {
@@ -247,23 +414,118 @@ export class SequenceNode extends BaseNode {
                 subdivisions,
                 probability,
                 sampleStart,
-                gateLength
+                gateLength,
+                slotIndex: stepSlots[i] ?? 0
             });
         }
 
+        const slots = this.getSlots();
+        this.sequenceRenderer.setOptions({
+            minified: this.isMinifiedStage
+        });
         this.sequenceRenderer.setSignal({
             stepCount,
             steps,
             stepLength: Number(this.properties?.step_length) || 0.25,
-            accentColor: this.nodeColor || '#ec4899'
+            accentColor: this.nodeColor || '#ec4899',
+            slotCount: slots.length,
+            activeSlot: this.activeSlotIndex
         });
 
         this.sequenceRenderer.render(ctx, bounds, telemetry);
     }
 
+    override getLiveActivityState(telemetry?: SignalTelemetry): { isTriggered: boolean; progress?: number } {
+        if (!telemetry?.isPlaying) return { isTriggered: false };
+        const stepCount = SequenceNode.stepCount;
+        const stepLength = Number(this.properties?.step_length) || 0.25;
+        const currentStep = (((Math.floor(telemetry.beat / stepLength) % stepCount) + stepCount) % stepCount);
+        const rawSeq = Array.isArray(this.properties?.sequence) ? this.properties.sequence : [];
+        const rawVal = rawSeq[currentStep];
+        const isGateOn = typeof rawVal === 'number'
+            ? rawVal > 0
+            : typeof rawVal === 'string'
+                ? (rawVal === '1' || rawVal === 'true')
+                : typeof rawVal === 'object' && rawVal !== null
+                    ? Boolean((rawVal as any).gate ?? (rawVal as any).on)
+                    : Boolean(rawVal);
+        return {
+            isTriggered: isGateOn,
+            progress: (currentStep + 1) / stepCount
+        };
+    }
+
     private _cachedCompositedBuffer: AudioBuffer | null = null;
     private _lastSampleBufferRef: AudioBuffer | null = null;
     private _lastSeqFingerprint: string = '';
+
+    public getSlotBuffersMap(visited?: Set<number>): Map<number, AudioBuffer> {
+        this.syncActiveSlotFromProperties();
+        const slots = this.getSlots();
+        const out = new Map<number, AudioBuffer>();
+        const cycleSet = visited ? new Set(visited) : new Set<number>();
+        if (cycleSet.has(this.id)) return out;
+        cycleSet.add(this.id);
+
+        const inputNodes = this.getInputNodes();
+        let sampleSlotsMap: Map<number, AudioBuffer> | AudioBuffer | null = null;
+        for (const inputNode of inputNodes) {
+            if (typeof (inputNode as any)?.getSlotBuffersMap === 'function') {
+                const map = (inputNode as any).getSlotBuffersMap(cycleSet);
+                if (map && map.size > 0) {
+                    sampleSlotsMap = map;
+                    break;
+                }
+            }
+            const buf = inputNode?.getAudioBuffer?.(cycleSet) || inputNode?.audioBuffer;
+            if (buf) {
+                sampleSlotsMap = buf;
+                break;
+            }
+        }
+        if (!sampleSlotsMap) return out;
+
+        const getGlobal = (typeof window !== 'undefined') ? (window as any).getGlobalParameter : null;
+        const globalBars = typeof getGlobal === 'function' ? Number(getGlobal('total_bars')) : 4;
+        const globalBpm = typeof getGlobal === 'function' ? Number(getGlobal('bpm')) : 120;
+        const totalBarsSetting = this.properties?.total_bars;
+        const totalBars = (totalBarsSetting === 'global' || !Number.isFinite(Number(totalBarsSetting)))
+            ? (Number.isFinite(globalBars) && globalBars > 0 ? globalBars : 4)
+            : Math.max(0.25, Number(totalBarsSetting));
+        const bpm = Number.isFinite(globalBpm) && globalBpm > 0 ? globalBpm : 120;
+        const nodeGain = getNodeGainMultiplier(this);
+        const upstreamCount = this.getUpstreamSlotCount();
+        const seedSalt = Number(this.properties?.seed_salt || 0) * 9973;
+        const cycleSeeds = resolveCycleSeeds(this.properties?.seed ?? 42, 8, (this.id || 1) + seedSalt);
+
+        for (let s = 0; s < slots.length; s++) {
+            const slotObj = slots[s];
+            const seq = Array.isArray(slotObj?.sequence) ? slotObj.sequence : (Array.isArray(this.properties?.sequence) ? this.properties.sequence : []);
+            const params = Array.isArray(slotObj?.step_parameters) ? slotObj.step_parameters : (Array.isArray(this.properties?.step_parameters) ? this.properties.step_parameters : []);
+            const stepLen = Number(slotObj?.step_length ?? this.properties?.step_length ?? 0.25);
+            const sampleSlotExpr = String(slotObj?.sample_slot ?? this.properties?.sample_slot ?? '0');
+            const stepSlots = resolveStepSlots(sampleSlotExpr, seq.length || 16, upstreamCount, cycleSeeds[0] ?? 42);
+
+            const buf = compositeSequenceBuffer(
+                sampleSlotsMap,
+                seq,
+                params,
+                stepLen,
+                totalBars,
+                bpm,
+                nodeGain,
+                {
+                    stepSlots,
+                    cycleSeeds,
+                    playMode: String(this.properties?.play_mode || 'gate'),
+                    release: Number(this.properties?.release ?? 0),
+                    fadeMs: Number(this.properties?.fade_ms ?? 0)
+                }
+            );
+            if (buf) out.set(s, buf);
+        }
+        return out;
+    }
 
     override getAudioBuffer(visited?: Set<number>): AudioBuffer | null {
         if ((this as any).manifestStemBuffer) return (this as any).manifestStemBuffer;
@@ -275,14 +537,21 @@ export class SequenceNode extends BaseNode {
 
         const inputNodes = this.getInputNodes();
         let inputSampleBuffer: AudioBuffer | null = null;
+        let sampleSlotsMap: Map<number, AudioBuffer> | null = null;
         for (const inputNode of inputNodes) {
+            if (typeof (inputNode as any)?.getSlotBuffersMap === 'function') {
+                const map = (inputNode as any).getSlotBuffersMap(cycleSet);
+                if (map && map.size > 0) {
+                    sampleSlotsMap = map;
+                }
+            }
             const buf = inputNode?.getAudioBuffer?.(cycleSet) || inputNode?.audioBuffer;
             if (buf) {
                 inputSampleBuffer = buf;
                 break;
             }
         }
-        if (!inputSampleBuffer) return null;
+        if (!inputSampleBuffer && (!sampleSlotsMap || sampleSlotsMap.size === 0)) return null;
 
         const getGlobal = (typeof window !== 'undefined') ? (window as any).getGlobalParameter : null;
         const globalBars = typeof getGlobal === 'function' ? Number(getGlobal('total_bars')) : 4;
@@ -297,21 +566,31 @@ export class SequenceNode extends BaseNode {
         const stepLength = Number(this.properties?.step_length) || 0.25;
         const seq = Array.isArray(this.properties?.sequence) ? this.properties.sequence : [];
         const params = Array.isArray(this.properties?.step_parameters) ? this.properties.step_parameters : [];
+        const stepSlots = this.getResolvedStepSlots(seq.length || 16);
+        const seedSalt = Number(this.properties?.seed_salt || 0) * 9973;
+        const cycleSeeds = resolveCycleSeeds(this.properties?.seed ?? 42, 8, (this.id || 1) + seedSalt);
 
         const nodeGain = getNodeGainMultiplier(this);
-        const fp = `${totalBars}_${bpm}_${stepLength}_${seq.join(',')}_${params.length}_${nodeGain}`;
+        const fp = `${totalBars}_${bpm}_${stepLength}_${seq.join(',')}_${JSON.stringify(params)}_${stepSlots.join(',')}_${cycleSeeds.join(',')}_${nodeGain}`;
         if (this._cachedCompositedBuffer && this._lastSampleBufferRef === inputSampleBuffer && this._lastSeqFingerprint === fp) {
             return this._cachedCompositedBuffer;
         }
 
         const composited = compositeSequenceBuffer(
-            inputSampleBuffer,
+            sampleSlotsMap && sampleSlotsMap.size > 0 ? sampleSlotsMap : (inputSampleBuffer as AudioBuffer),
             seq,
             params,
             stepLength,
             totalBars,
             bpm,
-            nodeGain
+            nodeGain,
+            {
+                stepSlots,
+                cycleSeeds,
+                playMode: String(this.properties?.play_mode || 'gate'),
+                release: Number(this.properties?.release ?? 0),
+                fadeMs: Number(this.properties?.fade_ms ?? 0)
+            }
         );
 
         this._cachedCompositedBuffer = composited;

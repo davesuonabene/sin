@@ -646,6 +646,52 @@ class TestGraphRendering(AudioFixtureTestCase):
         self.assertTrue(np.all(full_output[400:500] == 1.0))
         self.assertTrue(np.all(full_output[600:700] == 1.0))
 
+    def test_arrangement_start_offset_continuous_vs_quantized(self):
+        system = System(bpm=120.0, sample_rate=100)
+        # 1 bar = 200 samples at bpm 120, sr 100
+        loop = AudioObject(
+            audio_data=np.arange(200, dtype=np.float32),
+            sample_type="loop",
+            stretch_mode="off",
+            total_bars=1.0,
+        )
+
+        # 1. Continuous quantize: loop wraps onto itself starting from Start Offset
+        continuous_arr = ArrangementObject(
+            total_bars=1.0,
+            section_points=[],
+            section_probability=[1.0],
+            section_sample_start=[0.25],  # 25% offset = sample index 50
+            section_quant=["auto"],
+        )
+        continuous_arr.add_child(loop, 0.0)
+        cont_output = continuous_arr.render(system)
+        self.assertEqual(cont_output.shape[-1], 200)
+        # First 150 samples should be loop[50..200]
+        np.testing.assert_array_equal(cont_output[:150], np.arange(50, 200, dtype=np.float32))
+        # Next 50 samples should loop onto itself: loop[0..50]
+        np.testing.assert_array_equal(cont_output[150:], np.arange(0, 50, dtype=np.float32))
+
+        # 2. Non-continuous quantize: playback stops when reaching the end of the sample
+        # 0.5 bar = 100 samples per quant cell
+        quant_arr = ArrangementObject(
+            total_bars=1.0,
+            section_points=[],
+            section_probability=[1.0],
+            section_sample_start=[0.75],  # 75% offset = sample index 150 (50 samples left)
+            section_quant=["0.5"],
+            section_quant_anchor=["start"],
+        )
+        quant_arr.add_child(loop, 0.0)
+        quant_output = quant_arr.render(system)
+        self.assertEqual(quant_output.shape[-1], 200)
+        # Cell 1 (0..100): plays 50 samples [150..200], then stops (silence for samples 50..100)
+        np.testing.assert_array_equal(quant_output[:50], np.arange(150, 200, dtype=np.float32))
+        self.assertTrue(np.all(quant_output[50:100] == 0.0))
+        # Cell 2 (100..200): retriggers at 100, plays [150..200], then stops (silence for 150..200)
+        np.testing.assert_array_equal(quant_output[100:150], np.arange(150, 200, dtype=np.float32))
+        self.assertTrue(np.all(quant_output[150:200] == 0.0))
+
     def test_arrangement_replicates_child_manifest_events_across_repetitions(self):
         system = System(bpm=120.0, render_mode="preview")
         system.sample_rate = 200

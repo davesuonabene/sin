@@ -1,18 +1,18 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode } from './BaseNode.ts';
-import { CanvasButton } from '../ui/CanvasButton.ts';
+import { ModulatorNode } from './ModulatorNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { type NodeShape } from './NodeVisuals.ts';
-import { type RandomDestination } from '../../../ermes/ts/randomResolver.ts';
+import { type RandomDestination, applyRandomModulation } from '../../../ermes/ts/randomResolver.ts';
 
-export class RandomNode extends BaseNode {
+export class RandomNode extends ModulatorNode {
     static panelSchema: NodePanelSchema = {
         tabs: [
             {
                 id: 'RANDOM',
                 label: 'Random',
                 sections: [
+                    { type: 'fields', fields: ['seed'] },
                     { type: 'random_panel' }
                 ]
             },
@@ -28,7 +28,15 @@ export class RandomNode extends BaseNode {
     };
 
     static fields: FieldSchema[] = [
-        { key: 'node_name', label: 'Name', type: 'string', default: 'Random', tab: 'COMMON' }
+        { key: 'node_name', label: 'Name', type: 'string', default: 'Random', tab: 'COMMON' },
+        {
+            key: 'seed',
+            label: 'Seed',
+            type: 'seed',
+            default: 42,
+            tab: 'RANDOM',
+            description: 'Deterministic seed or seed sequence (e.g. "42", "42 108", "rand") for parameter modulation.'
+        }
     ];
 
     static defaultColor = "#7e22ce";
@@ -39,70 +47,29 @@ export class RandomNode extends BaseNode {
     static defaultTab = "RANDOM";
     static tabs = ["RANDOM", "COMMON"];
 
-    override get isModifier(): boolean {
-        return true;
-    }
-
     override get modifierKind(): string {
         return 'random';
     }
 
     constructor() {
         super();
-        this.size = this.computeSize();
-        this.shape = LiteGraph.BOX_SHAPE || 1;
-
-        this.color = "#7e22ce";
-        this.bgcolor = "#7e22ce";
-        this.boxcolor = "#6b21a8";
-
-        if (!this.properties) {
-            this.properties = {};
-        }
-
-        this.properties.node_type = "random";
-        this.properties.modifier_kind = "random";
-        this.properties.node_name = this.properties.node_name || "Random";
-        this.properties.color = this.properties.color || "#7e22ce";
-        this.properties.icon = this.properties.icon || "shuffle";
-        this.properties.shape = this.properties.shape || "diamond";
-        this.properties.refresh_mode = this.properties.refresh_mode || "global";
-        this.properties.seed = this.properties.seed ?? 0;
-        if (!Array.isArray(this.properties.destinations)) {
-            this.properties.destinations = [];
-        }
-
-        // Action buttons
-        this.buttons = [this.previewBtn];
-        this.previewBtn.onClick = () => {
-            const previewNodeId = this.properties?.parentId ?? this.id;
-            window.dispatchEvent(new CustomEvent('preview-node', { detail: { nodeId: previewNodeId } }));
+        this.title = "Random";
+        this.properties = {
+            node_type: "random",
+            modifier_kind: "random",
+            node_name: "Random",
+            color: "#7e22ce",
+            icon: "shuffle",
+            shape: "diamond",
+            refresh_mode: "global",
+            seed: 42,
+            seed_refresh: true,
+            destinations: []
         };
-
-        this.removeBtn = new CanvasButton(
-            48, 18, 16, 16, "×", "#5f1720", "#b91c1c",
-            () => {
-                if (this.graph) {
-                    this.graph.remove(this);
-                } else {
-                    window.dispatchEvent(new CustomEvent('node-removed', { detail: { nodeId: this.id } }));
-                }
-            },
-            "Delete Node"
-        );
-        this.addButton(this.removeBtn);
-    }
-
-    computeSize(): [number, number] {
-        return [BaseNode.visualSize, BaseNode.visualSize];
     }
 
     getTitle(): string {
         return this.properties?.node_name || this.title || "Random";
-    }
-
-    canBeMainPreview(): boolean {
-        return false;
     }
 
     getDestinations(): RandomDestination[] {
@@ -120,6 +87,18 @@ export class RandomNode extends BaseNode {
     removeDestination(paramKey: string): void {
         const list = this.getDestinations().filter(d => d.paramKey !== paramKey);
         this.updateProperty('destinations', list);
+    }
+
+    override updateProperty(key: string, value: any): void {
+        super.updateProperty(key, value);
+        if (key === 'seed' || key === 'destinations') {
+            const graph = this.graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+            const parentId = this.properties?.parentId;
+            const ownerNode = parentId != null && graph ? graph.getNodeById?.(parentId) : null;
+            if (ownerNode) {
+                applyRandomModulation(this, ownerNode);
+            }
+        }
     }
 }
 

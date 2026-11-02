@@ -23,15 +23,17 @@ test('renderable nodes default to opened visualizer and flagged freeze & render'
     }
 });
 
-test('node buttons include Play, Render toggle, Freeze toggle, Iride toggle, and Delete', () => {
+test('node buttons include Play, Render toggle, Freeze toggle, Iride toggle, Pool, Random, and Delete', () => {
     const node = new SampleNode();
 
     assert.ok(node.previewBtn, 'Has preview button');
     assert.ok(node.renderToggleBtn, 'Has render toggle button');
     assert.ok(node.freezeToggleBtn, 'Has freeze toggle button');
     assert.ok(node.eyeBtn, 'Has eye (iride) button');
+    assert.ok(node.poolBtn, 'Has pool button');
+    assert.ok(node.randomBtn, 'Has random button');
     assert.ok(node.removeBtn, 'Has remove button');
-    assert.equal(node.buttons.length, 5);
+    assert.equal(node.buttons.length, 7);
 
     // Initial button toggle states
     assert.equal(node.renderToggleBtn.isToggled?.(node), true);
@@ -437,4 +439,186 @@ test('resolveAssignedRandomModifiers resolves whole graph when rootNodeId is omi
     assert.equal(randomA.properties.seed, seedA, 'Random A seed should NOT advance when frozen');
     assert.equal(randomB.properties.seed, seedB, 'Random B seed should NOT advance when frozen');
 });
+
+test('Distance model, bidirectional node resizing, and top-right Pool / Random modifier badges', () => {
+    const sample = new SampleNode();
+    sample.id = 101;
+
+    // Stage 1: Close distance (scale = 1.0)
+    assert.equal(sample.currentDistanceStage, 1);
+    assert.equal(sample.isViewerCookEnabled, true);
+    assert.equal(sample.isVisualizationActive, true);
+    assert.equal(sample.isMinifiedStage, false);
+    assert.equal(sample.getVisibleCanvasButtons(true).length, 2, 'Pool and Random modifier badges are visible in top-right when selected in Stage 1');
+    assert.equal(sample.poolBtn.label, 'POOL');
+    assert.equal(sample.randomBtn.label, 'RND');
+    assert.equal(sample.poolBtn.x, -63);
+    assert.equal(sample.poolBtn.y, 4);
+    assert.equal(sample.randomBtn.x, -32);
+    assert.equal(sample.randomBtn.y, 4);
+
+    // Bidirectional resizing: expand and then shrink back down
+    sample.onResize([360, 140]);
+    assert.equal(sample.size[0], 360);
+    assert.equal(sample.size[1], 140);
+    assert.equal(sample.properties.visual_width, 360);
+    assert.equal(sample.properties.visual_height, 140);
+
+    sample.onResize([150, 60]);
+    assert.equal(sample.size[0], 150, 'Node shrinks horizontally when dragged inward');
+    assert.equal(sample.size[1], 60, 'Node shrinks vertically when dragged inward');
+    assert.equal(sample.properties.visual_width, 150);
+    assert.equal(sample.properties.visual_height, 60);
+
+    // Intermediate zoom (scale = 0.55) remains in Stage 1
+    sample.syncDistanceStage(0.55);
+    assert.equal(sample.currentDistanceStage, 1);
+    assert.equal(sample.isVisualizationActive, true, 'Viewer remains active above 0.40');
+    assert.equal(sample.isMinifiedStage, false);
+
+    // Stage 3: Far / Maximum distance (scale = 0.30) -> Viewer force-shut and not toggleable back
+    sample.syncDistanceStage(0.30);
+    assert.equal(sample.currentDistanceStage, 3);
+    assert.equal(sample.isVisualizationActive, false, 'Viewer is force-shut at Stage 3');
+    assert.equal(sample.size[0], 44);
+    assert.equal(sample.size[1], 44);
+    assert.equal(sample.getVisibleCanvasButtons().length, 0, 'No buttons (including Play) are shown at Stage 3');
+
+    // Attempting to toggle visualization at Stage 3 is locked out
+    sample.toggleVisualization();
+    assert.equal(sample.isVisualizationActive, false, 'Viewer cannot be toggled back on at Stage 3');
+    assert.equal(sample.properties.visualization_enabled, true, 'Underlying Viewer Cook preference is preserved');
+
+    // Returning above 0.44 restores the viewer and custom size automatically
+    sample.syncDistanceStage(0.55);
+    assert.equal(sample.currentDistanceStage, 1);
+    assert.equal(sample.isVisualizationActive, true);
+    assert.equal(sample.size[0], 150);
+
+    // Eye button acts as per-node "Viewer Cook" shutoff in Stage 1
+    sample.eyeBtn.onClick();
+    assert.equal(sample.isViewerCookEnabled, false, 'Eye button shuts off Viewer Cook for this node');
+    assert.equal(sample.isVisualizationActive, false);
+    assert.equal(sample.size[0], 44);
+    assert.equal(sample.poolBtn.label, 'P');
+    assert.equal(sample.randomBtn.label, 'R');
+    assert.equal(sample.poolBtn.x, -30);
+    assert.equal(sample.poolBtn.y, 2);
+    assert.equal(sample.randomBtn.x, -15);
+    assert.equal(sample.randomBtn.y, 2);
+});
+
+test('Audio nodes report live activity state for minimal perimeter border accents', async () => {
+    const { SequenceNode } = await import('../src/nodes/SequenceNode.ts');
+    const { ArrangementNode } = await import('../src/nodes/ArrangementNode.ts');
+
+    const seq = new SequenceNode();
+    seq.properties.sequence = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+    seq.properties.step_length = 0.25;
+
+    const activeTelemetry = {
+        time: 0.0,
+        duration: 8.0,
+        beat: 0.0, // Step 0 (gate = 1)
+        bar: 0.0,
+        step: 0,
+        isPlaying: true
+    };
+    const seqStateStep0 = seq.getLiveActivityState(activeTelemetry);
+    assert.equal(seqStateStep0.isTriggered, true);
+    assert.equal(seqStateStep0.progress, 1 / 16);
+
+    const seqStateStep1 = seq.getLiveActivityState({ ...activeTelemetry, beat: 0.25, step: 1 });
+    assert.equal(seqStateStep1.isTriggered, false);
+
+    const arr = new ArrangementNode();
+    arr.properties.total_bars = 4;
+    const arrState = arr.getLiveActivityState({ ...activeTelemetry, bar: 2.0 });
+    assert.equal(arrState.isTriggered, true);
+    assert.equal(arrState.progress, 0.5);
+});
+
+test('resolveAssignedAssetFilters hydrates staged save pool locators via resolveLibraryAssets fallback when libraryFiles is incomplete', async () => {
+    const prevWindow = (globalThis as any).window;
+    const prevFetch = globalThis.fetch;
+    try {
+        (globalThis as any).window = {
+            resolveLibraryAssets: async (refs: any[]) => {
+                assert.equal(refs.length, 1);
+                assert.equal(refs[0].id, 13756);
+                return [{
+                    id: 13756,
+                    name: 'Kick_13756.wav',
+                    type: 'audio',
+                    absolute_path: '/vault/Kick_13756.wav',
+                    bpm: 128,
+                    key: 'Cm'
+                }];
+            },
+            findLibraryFileForPoolLocator: (files: any[], item: any) =>
+                files.find((f: any) => String(f.id) === String(item.id)) || null,
+            findLibraryFile: (files: any[], path: string) =>
+                files.find((f: any) => f.absolute_path === path) || null,
+            findLibraryFileById: (files: any[], id: any) =>
+                files.find((f: any) => String(f.id) === String(id)) || null,
+            dispatchEvent: () => true
+        };
+        globalThis.fetch = (async () => ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                sample: '/vault/Kick_13756.wav',
+                item: { id: 13756 },
+                bpm: 128,
+                key: 'Cm'
+            })
+        })) as any;
+
+        const sample: any = {
+            id: 1,
+            type: 'Audio/Sample',
+            properties: {
+                node_name: 'Sample',
+                asset_modifier_id: 2
+            },
+            updateProperty(key: string, val: any) {
+                this.properties[key] = val;
+            }
+        };
+
+        const pool: any = {
+            id: 2,
+            type: 'Audio/AssetFilter',
+            properties: {
+                parentId: 1,
+                output_type: 'asset_path',
+                refresh_mode: 'global',
+                // Staged save stripped selected_items down to { id } and removed output_value
+                selected_items: [{ id: 13756 }],
+                seed: 42
+            }
+        };
+
+        const mockGraph = {
+            getNodeById: (id: number) => (id === 1 ? sample : id === 2 ? pool : null),
+            _nodes: [sample, pool]
+        };
+
+        await resolveAssignedAssetFilters(mockGraph, 1, {
+            kind: 'preview',
+            globalPreview: false,
+            globalFreeze: true,
+            libraryFiles: [] // Simulates incomplete libraryFiles array
+        });
+
+        assert.equal(pool.properties.output_value, '/vault/Kick_13756.wav');
+        assert.equal(sample.properties.filepath, '/vault/Kick_13756.wav');
+        assert.equal(sample.properties.library_item_id, 13756);
+    } finally {
+        (globalThis as any).window = prevWindow;
+        globalThis.fetch = prevFetch;
+    }
+});
+
+
 

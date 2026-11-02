@@ -1,10 +1,8 @@
 import { type BaseNode } from '../../nodes/BaseNode.ts';
 import {
     type RandomDestination,
-    type RandomRefreshMode,
-    normalizeRandomRefreshMode,
     applyRandomModulation,
-    advanceRandomSeed,
+    restoreBaseValues,
     getRangeColor
 } from '../../../../ermes/ts/randomResolver.ts';
 import { startBipolarDrag } from '../RandomParamOverlay.ts';
@@ -24,55 +22,7 @@ export class RandomDestinationsSection {
         const wrapper = document.createElement('div');
         wrapper.className = 'td-param-group random-panel-group';
 
-        // 1. Minimal Refresh Mode Bar
-        const currentMode: RandomRefreshMode = normalizeRandomRefreshMode(node.properties.refresh_mode || 'global');
-        const header = document.createElement('div');
-        header.className = 'random-header-bar';
-
-        header.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 4px;">
-                <span class="random-refresh-label">Refresh</span>
-                <div class="random-refresh-modes">
-                    ${['local', 'parent', 'global', 'off'].map(mode => `
-                        <button type="button" data-mode="${mode}" class="random-mode-btn ${mode === currentMode ? 'is-active active' : ''}">
-                            ${mode}
-                        </button>
-                    `).join('')}
-                </div>
-            </div>
-            <button type="button" class="random-roll-btn td-param-action-btn">
-                Roll
-            </button>
-        `;
-
-        const modeButtons = header.querySelectorAll<HTMLButtonElement>('.random-mode-btn');
-        modeButtons.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                const selectedMode = btn.getAttribute('data-mode') as RandomRefreshMode;
-                node.updateProperty('refresh_mode', selectedMode);
-                modeButtons.forEach(b => {
-                    const isCurrent = b.getAttribute('data-mode') === selectedMode;
-                    b.classList.toggle('is-active', isCurrent);
-                    b.classList.toggle('active', isCurrent);
-                });
-            });
-        });
-
-        const rollBtn = header.querySelector('.random-roll-btn') as HTMLButtonElement;
-        rollBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            advanceRandomSeed(node);
-            if (ownerNode) {
-                applyRandomModulation(node, ownerNode);
-                windowContext?.refreshAudioPreview?.();
-            }
-            renderDestinationsList();
-        });
-
-        wrapper.appendChild(header);
-
-        // 2. Map Parameters Action Button
+        // 1. Map Parameters Action Button
         const mapActionBtn = document.createElement('button');
         mapActionBtn.type = 'button';
         mapActionBtn.className = 'random-map-action-btn td-param-action-btn td-param-action-primary';
@@ -91,7 +41,7 @@ export class RandomDestinationsSection {
 
         wrapper.appendChild(mapActionBtn);
 
-        // 3. Destinations List (Each link occupies a single line)
+        // 2. Destinations List (Each link occupies a single line)
         const listWrapper = document.createElement('div');
         listWrapper.className = 'random-destinations-container';
         wrapper.appendChild(listWrapper);
@@ -146,9 +96,16 @@ export class RandomDestinationsSection {
                             rangePill.style.color = updatedColors.text;
                             rangePill.style.background = updatedColors.bg;
                             rangePill.style.borderColor = updatedColors.border;
+                            if (ownerNode) {
+                                applyRandomModulation(node, ownerNode);
+                            }
                         },
                         () => {
                             node.updateProperty('destinations', [...(node.properties.destinations || [])]);
+                            if (ownerNode) {
+                                applyRandomModulation(node, ownerNode);
+                                windowContext?.refreshAudioPreview?.();
+                            }
                         }
                     );
                 };
@@ -159,9 +116,16 @@ export class RandomDestinationsSection {
                 deleteBtn.onclick = (e) => {
                     e.preventDefault();
                     e.stopPropagation();
+                    if (ownerNode) {
+                        restoreBaseValues(node, ownerNode);
+                    }
                     const current = Array.isArray(node.properties.destinations) ? node.properties.destinations : [];
                     const updated = current.filter((d: RandomDestination) => d.paramKey !== dest.paramKey);
                     node.updateProperty('destinations', updated);
+                    if (ownerNode) {
+                        applyRandomModulation(node, ownerNode);
+                        windowContext?.refreshAudioPreview?.();
+                    }
                     renderDestinationsList();
                 };
 

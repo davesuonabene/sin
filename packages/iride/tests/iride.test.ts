@@ -84,6 +84,62 @@ test('SequenceRenderer renders without throwing and tracks active pads', async (
     assert.ok(calls.includes('beginPath'));
 });
 
+test('SequenceRenderer colors active pads and leaves inactive pads as borders only', async () => {
+    const { SequenceRenderer } = await import('../src/renderers/SequenceRenderer.ts');
+    const renderer = new SequenceRenderer();
+    renderer.setSignal({
+        stepCount: 4,
+        steps: [
+            { gate: true, velocity: 1 },
+            { gate: false, velocity: 0.5 },
+            { gate: true, velocity: 0.8 },
+            { gate: false, velocity: 0.2 }
+        ],
+        stepLength: 0.25,
+        accentColor: '#ec4899'
+    });
+
+    let fillCount = 0;
+    let strokeCount = 0;
+    const filledStyles: string[] = [];
+    const strokedStyles: string[] = [];
+
+    const mockCtx = {
+        save: () => {},
+        restore: () => {},
+        clip: () => {},
+        fillRect: () => {},
+        fill: function() {
+            fillCount++;
+            filledStyles.push(this.fillStyle);
+        },
+        stroke: function() {
+            strokeCount++;
+            strokedStyles.push(this.strokeStyle);
+        },
+        beginPath: () => {},
+        closePath: () => {},
+        moveTo: () => {},
+        lineTo: () => {},
+        quadraticCurveTo: () => {},
+        arc: () => {},
+        fillText: () => {},
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1
+    } as any;
+
+    renderer.render(mockCtx, { x: 0, y: 0, width: 200, height: 50 });
+
+    // Out of 4 steps, exactly 2 are active (gate: true).
+    // Pad background fill must occur ONLY for active steps.
+    assert.equal(fillCount, 2, 'Only active steps should be filled with color');
+    // All 4 steps must have borders stroked.
+    assert.equal(strokeCount, 4, 'All steps (including inactive) should have borders stroked');
+    // Active steps are colored with accent color.
+    assert.ok(filledStyles.includes('#ec4899'));
+});
+
 test('WaveformRenderer renders live scope sweep when isMasterScope is true and playing', async () => {
     const { WaveformRenderer } = await import('../src/renderers/WaveformRenderer.ts');
     const renderer = new WaveformRenderer({ isMasterScope: true, scopeWindow: 2.0, scopeGain: 2.0 });

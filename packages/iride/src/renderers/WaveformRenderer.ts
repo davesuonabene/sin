@@ -319,7 +319,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
             ctx.lineTo(x + width - 4, midY);
             ctx.stroke();
 
-            if (!isPlaying) {
+            if (!isPlaying && !this.options.minified) {
                 ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
                 ctx.font = '9px Inter, sans-serif';
                 ctx.textAlign = 'center';
@@ -346,6 +346,21 @@ export class WaveformRenderer extends BaseSignalRenderer {
                 const playheadX = x + progress * width;
                 drawPlayhead(ctx, playheadX, y, y + height, '#0284c7');
             }
+        }
+
+        if (!this.options.minified && (signal?.slotCount ?? 1) > 1) {
+            const label = `[${signal?.activeSlot ?? 0}/${signal?.slotCount}]`;
+            ctx.font = 'bold 8px Inter, monospace';
+            const textW = ctx.measureText(label).width;
+            const pillW = textW + 6;
+            const pillH = 11;
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+            drawRoundRect(ctx, x + 3, y + 3, pillW, pillH, 2.5);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, x + 6, y + 3 + pillH * 0.5);
         }
 
         ctx.restore();
@@ -499,18 +514,20 @@ export class WaveformRenderer extends BaseSignalRenderer {
             ctx.stroke();
         }
 
-        // Scope Mode Badge
-        ctx.fillStyle = '#059669';
-        ctx.beginPath();
-        ctx.arc(x + width - 10, y + 10, 2.5, 0, Math.PI * 2);
-        ctx.fill();
+        if (!this.options.minified) {
+            // Scope Mode Badge
+            ctx.fillStyle = '#059669';
+            ctx.beginPath();
+            ctx.arc(x + width - 10, y + 10, 2.5, 0, Math.PI * 2);
+            ctx.fill();
 
-        ctx.fillStyle = '#059669';
-        ctx.font = 'bold 8px Inter, monospace';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'middle';
-        const winLabel = configuredWindow > 0 ? `${windowDuration.toFixed(2)}s` : `AUTO (${windowDuration.toFixed(2)}s)`;
-        ctx.fillText(`SCOPE · ${winLabel}`, x + width - 16, y + 10);
+            ctx.fillStyle = '#059669';
+            ctx.font = 'bold 8px Inter, monospace';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            const winLabel = configuredWindow > 0 ? `${windowDuration.toFixed(2)}s` : `AUTO (${windowDuration.toFixed(2)}s)`;
+            ctx.fillText(`SCOPE · ${winLabel}`, x + width - 16, y + 10);
+        }
     }
 
     private renderScrolledScope(
@@ -604,18 +621,20 @@ export class WaveformRenderer extends BaseSignalRenderer {
         ctx.arc(needleX, midY, 2.5, 0, Math.PI * 2);
         ctx.fill();
 
-        // Scope Mode Badge
-        ctx.fillStyle = '#0284c7';
-        ctx.beginPath();
-        ctx.arc(x + width - 10, y + 10, 2.5, 0, Math.PI * 2);
-        ctx.fill();
+        if (!this.options.minified) {
+            // Scope Mode Badge
+            ctx.fillStyle = '#0284c7';
+            ctx.beginPath();
+            ctx.arc(x + width - 10, y + 10, 2.5, 0, Math.PI * 2);
+            ctx.fill();
 
-        ctx.fillStyle = '#0284c7';
-        ctx.font = 'bold 8px Inter, monospace';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'middle';
-        const winLabel = configuredWindow > 0 ? `${windowDuration.toFixed(2)}s` : `AUTO (${windowDuration.toFixed(2)}s)`;
-        ctx.fillText(`SCROLL · ${winLabel}`, x + width - 16, y + 10);
+            ctx.fillStyle = '#0284c7';
+            ctx.font = 'bold 8px Inter, monospace';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            const winLabel = configuredWindow > 0 ? `${windowDuration.toFixed(2)}s` : `AUTO (${windowDuration.toFixed(2)}s)`;
+            ctx.fillText(`SCROLL · ${winLabel}`, x + width - 16, y + 10);
+        }
     }
 }
 

@@ -5,6 +5,7 @@ import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema, type PanelTabConfig } from '../fields/NodePanelSchema.ts';
 import {
     drawNeonIcon,
+    drawPerimeterProgressAccent,
     normalizeNeonIcon,
     normalizeNodeShape,
     traceNodeShape,
@@ -78,6 +79,8 @@ export abstract class BaseNode extends LGraphNode {
     static readonly bodySize: number = BaseNode.visualSize;
     static readonly visualPanelWidth = 220;
     static readonly visualPanelHeight = 76;
+    static readonly minVisualWidth = 140;
+    static readonly minVisualHeight = 56;
     buttons: CanvasButton[] = [];
     previewBtn: CanvasButton;
     renderBtn: CanvasButton;
@@ -85,6 +88,8 @@ export abstract class BaseNode extends LGraphNode {
     freezeToggleBtn: CanvasButton;
     removeBtn: CanvasButton;
     eyeBtn: CanvasButton;
+    poolBtn: CanvasButton;
+    randomBtn: CanvasButton;
 
     static createNode<T extends BaseNode>(this: new () => T, properties?: Record<string, any>): T {
         const instance = new this();
@@ -229,17 +234,110 @@ export abstract class BaseNode extends LGraphNode {
         return !this.isModifier && this.type !== 'Audio/Disabled';
     }
 
-    get isVisualizationActive(): boolean {
+    get isPoolSupported(): boolean {
+        if (this.isModifier) return false;
+        const t = this.type || '';
+        const nt = this.nodeType || '';
+        return t === 'Audio/Sample' || t === 'Audio/Sequence' || nt === 'sample' || nt === 'sequence';
+    }
+
+    hasAttachedPool(): boolean {
+        if (!this.isPoolSupported) return false;
+        const graph = this.graph || ((typeof window !== 'undefined') ? (window as any).editorGraph : null);
+        if (this.properties?.asset_modifier_id != null) {
+            if (!graph) return true;
+            const mod = graph.getNodeById?.(this.properties.asset_modifier_id);
+            if (mod) return true;
+        }
+        const nodes: any[] = (graph as any)?._nodes || [];
+        return nodes.some(n =>
+            n &&
+            (n.type === 'Audio/AssetFilter' || n.properties?.node_type === 'asset_filter') &&
+            n.properties?.parentId === this.id
+        );
+    }
+
+    hasAttachedRandomMod(): boolean {
+        if (this.isModifier) return false;
+        const graph = this.graph || ((typeof window !== 'undefined') ? (window as any).editorGraph : null);
+        const nodes: any[] = (graph as any)?._nodes || [];
+        return nodes.some(n =>
+            n &&
+            (n.type === 'Audio/Random' || n.properties?.node_type === 'random' || n.properties?.modifier_kind === 'random') &&
+            n.properties?.parentId === this.id
+        );
+    }
+
+    private _distanceStage: 1 | 2 | 3 = 1;
+
+    get currentDistanceStage(): 1 | 2 | 3 {
+        return this._distanceStage;
+    }
+
+    isNodeSelected(canvas?: any): boolean {
+        const activeCanvas = canvas || ((typeof window !== 'undefined') ? (window as any).editorCanvas : null);
+        if (activeCanvas?.selected_nodes) {
+            return Boolean(activeCanvas.selected_nodes[this.id] || activeCanvas.selected_nodes[String(this.id)]);
+        }
+        return Boolean(this.is_selected);
+    }
+
+    /**
+     * Evaluates the distance tier from canvas zoom scale with hysteresis
+     * to prevent flickering near the boundary:
+     * - Stage 1 (Close): scale >= 0.42 (drops at < 0.40, rises at >= 0.44)
+     * - Stage 3 (Far / Max Distance): scale < 0.42 (viewer force-shut)
+     */
+    resolveDistanceStage(scale: number): 1 | 2 | 3 {
+        if (!Number.isFinite(scale) || scale <= 0) return 1;
+        const current = this._distanceStage;
+        if (current === 3) {
+            return scale >= 0.44 ? 1 : 3;
+        }
+        return scale < 0.40 ? 3 : 1;
+    }
+
+    syncDistanceStage(scale: number): boolean {
+        const nextStage = this.resolveDistanceStage(scale);
+        if (nextStage === this._distanceStage) return false;
+        const prevActive = this.isVisualizationActive;
+        this._distanceStage = nextStage;
+        const nextActive = this.isVisualizationActive;
+        if (prevActive !== nextActive) {
+            this.resizable = nextActive;
+            this.size = this.computeSize();
+            this.updateButtonLayout();
+        }
+        return true;
+    }
+
+    /**
+     * Per-node "Viewer Cook" state controlled by the Eye button.
+     */
+    get isViewerCookEnabled(): boolean {
         const val = this.properties?.visualization_enabled;
         const enabled = val !== undefined ? Boolean(val) : true;
         return enabled && this.isVisualizationSupported;
     }
 
+    /**
+     * True when the Iride viewer should render.
+     * At Stage 3 (maximum distance), the viewer is force-shut for all nodes and cannot be toggled back on.
+     */
+    get isVisualizationActive(): boolean {
+        return this.isViewerCookEnabled && this._distanceStage !== 3;
+    }
+
+    get isMinifiedStage(): boolean {
+        return false;
+    }
+
     toggleVisualization(): void {
-        if (!this.isVisualizationSupported) return;
-        const nextState = !this.isVisualizationActive;
+        // At Stage 3 (maximum distance), visualization is shut off and not toggleable back
+        if (!this.isVisualizationSupported || this._distanceStage === 3) return;
+        const nextState = !this.isViewerCookEnabled;
         this.updateProperty('visualization_enabled', nextState);
-        this.resizable = nextState;
+        this.resizable = this.isVisualizationActive;
         this.updateButtonLayout();
         this.size = this.computeSize();
         this.setDirtyCanvas(true, true);
@@ -251,9 +349,18 @@ export abstract class BaseNode extends LGraphNode {
         this.onVisualizationToggled?.(nextState);
     }
 
+    getLiveActivityState(_telemetry?: SignalTelemetry): { isTriggered: boolean; progress?: number } {
+        if (!_telemetry?.isPlaying) return { isTriggered: false };
+        const isActive = _telemetry.activeNodeIds ? _telemetry.activeNodeIds.has(this.id) : true;
+        const progress = _telemetry.duration > 0
+            ? Math.max(0, Math.min(1, _telemetry.time / _telemetry.duration))
+            : undefined;
+        return { isTriggered: isActive, progress };
+    }
+
     onVisualizationToggled?(_enabled: boolean): void;
 
-    // Backwards compatibility helpers
+    // Backwards compatibility & polymorphic node hooks
     getDefaultColor(): string { return (this.constructor as typeof BaseNode).defaultColor; }
     getDefaultIcon(): string { return (this.constructor as typeof BaseNode).defaultIcon; }
     getDefaultShape(): NodeShape { return (this.constructor as typeof BaseNode).defaultShape; }
@@ -264,6 +371,9 @@ export abstract class BaseNode extends LGraphNode {
     getNodeIcon(): string { return this.nodeIcon; }
     getPropertiesTabs(): string[] { return this.propertiesTabs; }
     getDefaultPropertiesTab(): string { return this.defaultPropertiesTab; }
+    get acceptedPoolAssetType(): 'audio' | 'sequence_source' { return 'audio'; }
+    shouldRefreshTabOnGraphChange(_tab: string): boolean { return false; }
+    getGhostBoundFieldOverrides(): Record<string, string[]> { return {}; }
 
     getInputNodes(): any[] {
         const graph = this.graph || ((typeof window !== 'undefined') ? (window as any).editorGraph : null);
@@ -381,8 +491,8 @@ export abstract class BaseNode extends LGraphNode {
         const previousValue = this.properties[key];
         const nextValue = clonePropertyValue(value);
         const hasSnapshot = this._committedPropertySnapshots.has(key);
-        const baselineValue = hasSnapshot ? this._committedPropertySnapshots.get(key) : previousValue;
         const isObjectOrArray = nextValue !== null && typeof nextValue === 'object';
+        const baselineValue = (isObjectOrArray && hasSnapshot) ? this._committedPropertySnapshots.get(key) : previousValue;
         // If no snapshot was recorded yet and the value is an object/array, a caller may have
         // mutated this.properties[key] in place before calling updateProperty, so do not skip.
         if ((hasSnapshot || !isObjectOrArray) && isPropertyValueEqual(baselineValue, nextValue)) {
@@ -445,7 +555,11 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     drawCanvas(ctx: CanvasRenderingContext2D, canvas: any): void {
-        if ((this.flags as any)?.hidden || (this as any).collapsedDotMode) return;
+        if ((this.flags as any)?.hidden || (this as any).collapsedDotMode || this.isModifier) return;
+
+        if (canvas?.ds?.scale != null) {
+            this.syncDistanceStage(Number(canvas.ds.scale));
+        }
 
         if (!this.size || this.size[0] === 0) {
             this.size = this.computeSize();
@@ -457,6 +571,7 @@ export abstract class BaseNode extends LGraphNode {
         const isHovered = canvas?.node_over === this;
         const isLibraryDropTarget = canvas?.library_drop_node === this;
         const isMainPreview = Boolean(this.properties?.is_main_preview);
+        const telemetry = defaultTransportClock.getTelemetry();
 
         ctx.save();
         if (this.isVisualizationActive) {
@@ -466,22 +581,26 @@ export abstract class BaseNode extends LGraphNode {
             }
             const viewport: RenderBox = {
                 x: 6,
-                y: 25,
+                y: 23,
                 width: this.size[0] - 12,
-                height: this.size[1] - 31
+                height: Math.max(16, this.size[1] - 29)
             };
-            const telemetry = defaultTransportClock.getTelemetry();
             this.drawVisualization(ctx, viewport, telemetry);
         } else {
             this.drawSelectionRing(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview);
             if (!this.isModifier) {
-                this.drawBody(ctx);
+                this.drawBody(ctx, telemetry);
+                this.drawMinimalBorderFeedback(ctx, telemetry, isSelected, isMainPreview);
             }
-            this.drawIcon(ctx);
+            if (this._distanceStage !== 3 || isSelected || isHovered) {
+                this.drawIcon(ctx);
+            }
             if (!this.isModifier) {
-                this.drawSlots(ctx);
+                if (this._distanceStage !== 3 || isSelected || isHovered) {
+                    this.drawSlots(ctx);
+                }
                 this.drawBadges(ctx, isMainPreview);
-                this.drawNameBadge(ctx, isSelected, isHovered);
+                this.drawNameBadge(ctx, isSelected, isHovered, canvas);
             }
         }
         ctx.restore();
@@ -495,20 +614,46 @@ export abstract class BaseNode extends LGraphNode {
         // Subclasses override to invoke their IRIDE renderer
     }
 
+    protected truncateTextToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+        if (!text || maxWidth <= 0) return '';
+        if (typeof ctx.measureText !== 'function') {
+            return text.length > 18 ? text.slice(0, 16) + '…' : text;
+        }
+        if (ctx.measureText(text).width <= maxWidth) return text;
+        let low = 0;
+        let high = text.length;
+        while (low < high) {
+            const mid = Math.ceil((low + high) / 2);
+            const candidate = text.slice(0, mid) + '…';
+            if (ctx.measureText(candidate).width <= maxWidth) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        return low > 0 ? text.slice(0, low) + '…' : '…';
+    }
+
     protected drawPanelFrame(
         ctx: CanvasRenderingContext2D,
         isSelected: boolean,
-        _isHovered: boolean,
+        isHovered: boolean,
         isLibraryDropTarget: boolean,
         isMainPreview: boolean
     ): void {
         const [width, height] = this.size;
 
-        // Selection ring
-        if (isMainPreview || isSelected || isLibraryDropTarget) {
+        // Selection / hover / main-preview outer ring
+        if (isMainPreview || isSelected || isLibraryDropTarget || isHovered) {
             ctx.save();
             ctx.lineWidth = isSelected ? 2 : 1.5;
-            ctx.strokeStyle = isMainPreview ? "#f59e0b" : isSelected ? "#38bdf8" : "#22c55e";
+            ctx.strokeStyle = isMainPreview
+                ? "#f59e0b"
+                : isSelected
+                    ? "#38bdf8"
+                    : isLibraryDropTarget
+                        ? "#22c55e"
+                        : "rgba(148, 163, 184, 0.55)";
             drawRoundRect(ctx, -2, -2, width + 4, height + 4, 3);
             ctx.stroke();
             ctx.restore();
@@ -516,33 +661,28 @@ export abstract class BaseNode extends LGraphNode {
 
         // Solid light panel background
         ctx.fillStyle = "#ffffff";
-        drawRoundRect(ctx, 0, 0, width, height, 2);
+        drawRoundRect(ctx, 0, 0, width, height, 3);
         ctx.fill();
 
-        // Single peripherical border around everything
+        // Single peripheral border around everything
         ctx.strokeStyle = this.boxcolor || this.nodeColor;
         ctx.lineWidth = isSelected ? 1.5 : 1;
-        drawRoundRect(ctx, 0, 0, width, height, 2);
+        drawRoundRect(ctx, 0, 0, width, height, 3);
         ctx.stroke();
 
-        // Mini Neon Icon in header
-        const headerHeight = 20;
-        const iconColor = (this.nodeColor === '#0f172a' && this.boxcolor) ? this.boxcolor : this.nodeColor;
-        drawNeonIcon(ctx, this.nodeIcon, 12, headerHeight / 2 + 1, 12, iconColor);
-
-        // Node Title (clean dark slate text on light canvas)
+        // Node Title (clean dark slate text with no header background or icon, dynamically truncated before buttons)
+        const headerHeight = 22;
         const nodeName = this.properties?.node_name || this.title || "Node";
         ctx.font = "600 11px Inter, system-ui, sans-serif";
-        ctx.fillStyle = "#1e293b";
+        ctx.fillStyle = "#0f172a";
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
-        const maxTitleWidth = width - 40;
-        const measured = ctx.measureText(nodeName);
-        let displayTitle = nodeName;
-        if (measured.width > maxTitleWidth) {
-            displayTitle = nodeName.slice(0, 16) + '...';
-        }
-        ctx.fillText(displayTitle, 22, headerHeight / 2 + 1.5);
+        const visibleBtns = this.getVisibleCanvasButtons(isSelected, isHovered);
+        const leftmostBtnX = visibleBtns.reduce((minX, btn) => (btn.x < 0 ? Math.min(minX, btn.x) : minX), 0);
+        const reservedRight = leftmostBtnX < 0 ? Math.abs(leftmostBtnX) + 4 : 8;
+        const maxTitleWidth = Math.max(24, width - 8 - reservedRight);
+        const displayTitle = this.truncateTextToWidth(ctx, nodeName, maxTitleWidth);
+        ctx.fillText(displayTitle, 8, headerHeight / 2 + 0.5);
 
         // Subtle resize grip at bottom-right corner when selected
         if (isSelected && this.isVisualizationActive) {
@@ -567,31 +707,36 @@ export abstract class BaseNode extends LGraphNode {
         const size = this.nodeBodySize;
         const offset = (BaseNode.visualSize - size) / 2;
         if (isMainPreview) {
-            traceNodeShape(ctx, this.nodeShape, offset - 5, offset - 5, size + 10);
-            ctx.fillStyle = "rgba(245, 158, 11, 0.16)";
-            ctx.fill();
+            traceNodeShape(ctx, this.nodeShape, offset - 4, offset - 4, size + 8);
             ctx.lineWidth = 2;
             ctx.strokeStyle = "#f59e0b";
             ctx.stroke();
         }
         if (isSelected) {
-            traceNodeShape(ctx, this.nodeShape, offset - 4, offset - 4, size + 8);
-            ctx.fillStyle = "rgba(56, 189, 248, 0.16)";
+            traceNodeShape(ctx, this.nodeShape, offset - 3, offset - 3, size + 6);
+            ctx.fillStyle = "rgba(56, 189, 248, 0.14)";
             ctx.fill();
             ctx.lineWidth = 2;
             ctx.strokeStyle = "#38bdf8";
             ctx.stroke();
         } else if (isHovered || isLibraryDropTarget) {
-            traceNodeShape(ctx, this.nodeShape, offset - 3, offset - 3, size + 6);
-            ctx.lineWidth = isLibraryDropTarget ? 2.5 : 1.5;
-            ctx.strokeStyle = isLibraryDropTarget ? "#22c55e" : (this.isModifier ? "rgba(126, 34, 206, 0.45)" : "rgba(255, 255, 255, 0.72)");
+            traceNodeShape(ctx, this.nodeShape, offset - 2.5, offset - 2.5, size + 5);
+            ctx.lineWidth = isLibraryDropTarget ? 2.25 : 1.5;
+            ctx.strokeStyle = isLibraryDropTarget ? "#22c55e" : (this.isModifier ? "rgba(126, 34, 206, 0.45)" : "rgba(148, 163, 184, 0.65)");
             ctx.stroke();
         }
     }
 
-    protected drawBody(ctx: CanvasRenderingContext2D): void {
+    protected drawBody(ctx: CanvasRenderingContext2D, telemetry?: SignalTelemetry): void {
         const size = this.nodeBodySize;
         const offset = (BaseNode.visualSize - size) / 2;
+        const activity = this.getLiveActivityState(telemetry);
+        const shouldDim = Boolean(telemetry?.isPlaying && !activity.isTriggered);
+
+        ctx.save();
+        if (shouldDim) {
+            ctx.globalAlpha = 0.72;
+        }
         traceNodeShape(ctx, this.nodeShape, offset, offset, size);
         ctx.fillStyle = this.nodeColor;
         ctx.fill();
@@ -599,6 +744,67 @@ export abstract class BaseNode extends LGraphNode {
             ctx.lineWidth = 1.5;
             ctx.strokeStyle = this.boxcolor;
             ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    /**
+     * Minimal perimeter border accents for closed/far-distance icon nodes.
+     * Communicates live playback triggers, playhead progress, buffer fill, and cache invalidation
+     * purely along the geometric shape border instead of interior visualizations.
+     */
+    protected drawMinimalBorderFeedback(
+        ctx: CanvasRenderingContext2D,
+        telemetry: SignalTelemetry | undefined,
+        _isSelected: boolean,
+        _isMainPreview: boolean
+    ): void {
+        const size = this.nodeBodySize;
+        const offset = (BaseNode.visualSize - size) / 2;
+
+        // 1. Invalidated cache: minimal dashed amber perimeter
+        if ((this as any).isInvalidated) {
+            ctx.save();
+            ctx.setLineDash?.([3, 3]);
+            traceNodeShape(ctx, this.nodeShape, offset - 1.5, offset - 1.5, size + 3);
+            ctx.strokeStyle = "#f59e0b";
+            ctx.lineWidth = 1.75;
+            ctx.stroke();
+            ctx.setLineDash?.([]);
+            ctx.restore();
+        }
+
+        // 2. Progressive RAM buffer fill: perimeter cyan progress arc
+        const bufProg = (this as any).bufferedProgress;
+        if (typeof bufProg === 'number' && bufProg > 0 && bufProg < 0.999) {
+            drawPerimeterProgressAccent(
+                ctx,
+                this.nodeShape,
+                offset - 2,
+                offset - 2,
+                size + 4,
+                bufProg,
+                "#38bdf8",
+                2
+            );
+        }
+
+        // 3. Live playback trigger & playhead progress: vivid perimeter border accent
+        if (telemetry?.isPlaying) {
+            const activity = this.getLiveActivityState(telemetry);
+            if (activity.isTriggered) {
+                const progress = typeof activity.progress === 'number' ? Math.max(0.08, activity.progress) : 1.0;
+                drawPerimeterProgressAccent(
+                    ctx,
+                    this.nodeShape,
+                    offset - 2,
+                    offset - 2,
+                    size + 4,
+                    progress,
+                    "#38bdf8",
+                    2.5
+                );
+            }
         }
     }
 
@@ -640,38 +846,23 @@ export abstract class BaseNode extends LGraphNode {
         };
         if (isMainPreview) drawBadge("#f59e0b", "▶");
         if (this.properties?.disabled || this.type === "Audio/Disabled") drawBadge("#dc2626", "×");
-
-        if ((this as any).isInvalidated) {
-            ctx.beginPath();
-            ctx.arc(6, BaseNode.visualSize - 6, 3.5, 0, Math.PI * 2);
-            ctx.fillStyle = "#f59e0b";
-            ctx.fill();
-            ctx.strokeStyle = "#ffffff";
-            ctx.lineWidth = 1;
-            ctx.stroke();
-        }
-
-        const prog = (this as any).bufferedProgress;
-        if (typeof prog === 'number' && prog > 0 && prog < 1.0) {
-            const barW = BaseNode.visualSize - 8;
-            ctx.fillStyle = "rgba(15, 23, 42, 0.6)";
-            ctx.fillRect(4, BaseNode.visualSize - 5, barW, 2.5);
-            ctx.fillStyle = "#38bdf8";
-            ctx.fillRect(4, BaseNode.visualSize - 5, barW * Math.min(1, Math.max(0, prog)), 2.5);
-        }
     }
 
-    protected drawNameBadge(ctx: CanvasRenderingContext2D, isSelected: boolean, isHovered: boolean): void {
+    protected drawNameBadge(ctx: CanvasRenderingContext2D, isSelected: boolean, isHovered: boolean, canvas?: any): void {
         if (!isSelected && !isHovered) return;
         const width = BaseNode.visualSize;
         const nodeName = this.properties?.node_name || this.title || "Node";
-        ctx.font = "600 11px Inter, system-ui, sans-serif";
-        const badgeWidth = ctx.measureText(nodeName).width + 14;
-        const badgeHeight = 20;
+        const scale = Number(canvas?.ds?.scale) || 1;
+        const fontSize = scale < 0.75
+            ? Math.min(18, Math.max(11, Math.round(11 / Math.sqrt(Math.max(0.25, scale)))))
+            : 11;
+        ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`;
+        const badgeWidth = (typeof ctx.measureText === 'function' ? ctx.measureText(nodeName).width : nodeName.length * 7) + 14;
+        const badgeHeight = Math.max(20, fontSize + 9);
         const badgeX = width / 2 - badgeWidth / 2;
-        const badgeY = -25;
+        const badgeY = -(badgeHeight + 5);
         ctx.beginPath();
-        if ((ctx as any).roundRect) (ctx as any).roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 2);
+        if ((ctx as any).roundRect) (ctx as any).roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 3);
         else ctx.rect(badgeX, badgeY, badgeWidth, badgeHeight);
         ctx.fillStyle = "rgba(7, 17, 31, 0.94)";
         ctx.fill();
@@ -688,7 +879,7 @@ export abstract class BaseNode extends LGraphNode {
         super();
         this.size = [BaseNode.visualSize, BaseNode.visualSize];
         this.shape = LiteGraph.BOX_SHAPE || 1;
-        
+
         if (!this.properties) {
             this.properties = {};
         }
@@ -765,7 +956,31 @@ export abstract class BaseNode extends LGraphNode {
             () => {
                 this.toggleVisualization();
             },
-            "Toggle Visual Feedback"
+            "Viewer Cook: Toggle Iride Visualization"
+        );
+
+        this.poolBtn = new CanvasButton(
+            -63, 4, 28, 13, "POOL",
+            "rgba(15, 23, 42, 0.72)", "#7e22ce",
+            () => {
+                window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', { detail: { nodeId: this.id } }));
+            },
+            "Open Asset Pool",
+            (node: any) => Boolean(node.hasAttachedPool?.()),
+            "#7e22ce", "#9333ea",
+            "Asset Pool: Active (Click to open)"
+        );
+
+        this.randomBtn = new CanvasButton(
+            -32, 4, 26, 13, "RND",
+            "rgba(15, 23, 42, 0.72)", "#7e22ce",
+            () => {
+                window.dispatchEvent(new CustomEvent('add-random-node', { detail: { parentId: this.id } }));
+            },
+            "Open Random Mod",
+            (node: any) => Boolean(node.hasAttachedRandomMod?.()),
+            "#7e22ce", "#9333ea",
+            "Random Mod: Active (Click to open)"
         );
 
         this.removeBtn = new CanvasButton(
@@ -784,6 +999,8 @@ export abstract class BaseNode extends LGraphNode {
         this.addButton(this.renderToggleBtn);
         this.addButton(this.freezeToggleBtn);
         this.addButton(this.eyeBtn);
+        this.addButton(this.poolBtn);
+        this.addButton(this.randomBtn);
         this.addButton(this.removeBtn);
         this.size = this.computeSize();
         this.resizable = this.isVisualizationActive;
@@ -806,21 +1023,63 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     updateButtonLayout(): void {
+        const supportsPool = this.isPoolSupported;
         if (this.isVisualizationActive) {
-            this.previewBtn.x = -100; this.previewBtn.y = 3; this.previewBtn.width = 16; this.previewBtn.height = 16;
+            this.previewBtn.x = -38; this.previewBtn.y = 3; this.previewBtn.width = 16; this.previewBtn.height = 16;
+            this.eyeBtn.x = -20; this.eyeBtn.y = 3; this.eyeBtn.width = 16; this.eyeBtn.height = 16;
+            this.eyeBtn.color = "#0284c7"; this.eyeBtn.hoverColor = "#38bdf8";
+            this.poolBtn.label = "POOL";
+            this.poolBtn.x = -63; this.poolBtn.y = 4; this.poolBtn.width = 28; this.poolBtn.height = 13;
+            this.randomBtn.label = "RND";
+            this.randomBtn.x = -32; this.randomBtn.y = 4; this.randomBtn.width = 26; this.randomBtn.height = 13;
             this.renderToggleBtn.x = -80; this.renderToggleBtn.y = 3; this.renderToggleBtn.width = 16; this.renderToggleBtn.height = 16;
             this.freezeToggleBtn.x = -60; this.freezeToggleBtn.y = 3; this.freezeToggleBtn.width = 16; this.freezeToggleBtn.height = 16;
-            this.eyeBtn.x = -40; this.eyeBtn.y = 3; this.eyeBtn.width = 16; this.eyeBtn.height = 16;
-            this.eyeBtn.color = "#0284c7"; this.eyeBtn.hoverColor = "#38bdf8";
             this.removeBtn.x = -20; this.removeBtn.y = 3; this.removeBtn.width = 16; this.removeBtn.height = 16;
         } else {
             this.eyeBtn.x = 2; this.eyeBtn.y = 2; this.eyeBtn.width = 13; this.eyeBtn.height = 13;
             this.eyeBtn.color = "rgba(15, 23, 42, 0.75)"; this.eyeBtn.hoverColor = "#0284c7";
+            this.poolBtn.label = "P";
+            this.poolBtn.x = supportsPool ? -30 : -15; this.poolBtn.y = 2; this.poolBtn.width = 13; this.poolBtn.height = 13;
+            this.randomBtn.label = "R";
+            this.randomBtn.x = -15; this.randomBtn.y = 2; this.randomBtn.width = 13; this.randomBtn.height = 13;
             this.previewBtn.x = 48; this.previewBtn.y = 0; this.previewBtn.width = 16; this.previewBtn.height = 16;
             this.renderToggleBtn.x = 48; this.renderToggleBtn.y = 18; this.renderToggleBtn.width = 16; this.renderToggleBtn.height = 16;
             this.freezeToggleBtn.x = 48; this.freezeToggleBtn.y = 36; this.freezeToggleBtn.width = 16; this.freezeToggleBtn.height = 16;
             this.removeBtn.x = 48; this.removeBtn.y = 54; this.removeBtn.width = 16; this.removeBtn.height = 16;
         }
+    }
+
+    /**
+     * Returns only the modifier badges rendered in the top-right corner of the node canvas (Pool / Random Mod).
+     * At Stage 3 (maximum distance) or when visualization is unsupported, no canvas buttons are shown.
+     */
+    getVisibleCanvasButtons(isSelected: boolean = true, isHovered: boolean = false): CanvasButton[] {
+        if (!this.isVisualizationSupported || this._distanceStage === 3) {
+            return [];
+        }
+        const showAll = this.isVisualizationActive ? isSelected : (isSelected || isHovered);
+        let btns: CanvasButton[];
+        if (!showAll) {
+            btns = [];
+            if (this.isPoolSupported && this.hasAttachedPool()) btns.push(this.poolBtn);
+            if (this.hasAttachedRandomMod()) btns.push(this.randomBtn);
+        } else {
+            btns = [];
+            if (this.isPoolSupported) btns.push(this.poolBtn);
+            btns.push(this.randomBtn);
+        }
+
+        const rightMargin = this.isVisualizationActive ? 6 : 2;
+        const gap = this.isVisualizationActive ? 3 : 2;
+        const topY = this.isVisualizationActive ? 4 : 2;
+        let offsetRight = rightMargin;
+        for (let i = btns.length - 1; i >= 0; i--) {
+            const btn = btns[i];
+            btn.y = topY;
+            btn.x = -(offsetRight + btn.width);
+            offsetRight += btn.width + gap;
+        }
+        return btns;
     }
 
     addButton(btn: CanvasButton) {
@@ -830,10 +1089,15 @@ export abstract class BaseNode extends LGraphNode {
     computeSize(): [number, number] {
         if (this.isVisualizationActive) {
             this.resizable = true;
+            const activeCanvas = (LiteGraph as any)?.LGraphCanvas?.active_canvas
+                || ((typeof window !== 'undefined') ? (window as any).editorCanvas : null);
+            if (activeCanvas?.resizing_node === this) {
+                return [BaseNode.minVisualWidth, BaseNode.minVisualHeight];
+            }
             const customW = Number(this.properties?.visual_width);
             const customH = Number(this.properties?.visual_height);
-            const w = Math.max(160, customW || this.visualPanelWidth);
-            const h = Math.max(50, customH || this.visualPanelHeight);
+            const w = Math.max(BaseNode.minVisualWidth, customW > 0 ? customW : this.visualPanelWidth);
+            const h = Math.max(BaseNode.minVisualHeight, customH > 0 ? customH : this.visualPanelHeight);
             return [w, h];
         }
         this.resizable = false;
@@ -842,9 +1106,14 @@ export abstract class BaseNode extends LGraphNode {
 
     onResize(size: [number, number]): void {
         if (this.isVisualizationActive && size) {
-            const w = Math.max(160, Math.round(size[0]));
-            const h = Math.max(50, Math.round(size[1]));
-            this.size = [w, h];
+            const w = Math.max(BaseNode.minVisualWidth, Math.round(size[0]));
+            const h = Math.max(BaseNode.minVisualHeight, Math.round(size[1]));
+            if (Array.isArray(this.size)) {
+                this.size[0] = w;
+                this.size[1] = h;
+            } else {
+                this.size = [w, h];
+            }
             if (this.properties) {
                 this.properties.visual_width = w;
                 this.properties.visual_height = h;
@@ -865,9 +1134,9 @@ export abstract class BaseNode extends LGraphNode {
     isPointInside(x: number, y: number, margin: number = 0): boolean {
         const [width, height] = this.size;
         const isHoveredOrSelected = Boolean(this.is_selected || ((window as any).editorCanvas?.node_over === this));
-        const extraRight = this.isVisualizationActive ? 8 : 28;
+        const extraRight = 8;
         const extraTop = isHoveredOrSelected && !this.isVisualizationActive ? 32 : 0;
-        const extraBottom = this.isVisualizationActive ? 16 : 32;
+        const extraBottom = 8;
 
         return (
             x >= this.pos[0] - margin - 8 &&
@@ -879,35 +1148,32 @@ export abstract class BaseNode extends LGraphNode {
 
     onDrawForeground(ctx: CanvasRenderingContext2D, canvas: any) {
         if (this.flags.collapsed || (this.flags as any).hidden || this.isModifier) return;
-        const isHovered = canvas && canvas.node_over === this;
+        const isHovered = Boolean(canvas && canvas.node_over === this);
         const isSelected = canvas?.selected_nodes
             ? Boolean(canvas.selected_nodes[this.id] || canvas.selected_nodes[String(this.id)])
             : Boolean(this.is_selected);
-        
-        // When visualization is active: icons are visible ONLY when node is selected!
-        const showButtons = this.isVisualizationActive ? isSelected : (isHovered || isSelected);
-        if (showButtons) {
-            for (const btn of this.buttons) {
-                btn.draw(ctx, this);
-            }
+
+        const visibleBtns = this.getVisibleCanvasButtons(isSelected, isHovered);
+        for (const btn of visibleBtns) {
+            btn.draw(ctx, this);
         }
     }
 
     onMouseMove(_e: MouseEvent, local_pos: any, canvas: any) {
         if (this.flags.collapsed || (this.flags as any).hidden || this.isModifier) return;
-        const isHovered = canvas && canvas.node_over === this;
+        const isHovered = Boolean(canvas && canvas.node_over === this);
         const isSelected = canvas?.selected_nodes
             ? Boolean(canvas.selected_nodes[this.id] || canvas.selected_nodes[String(this.id)])
             : Boolean(this.is_selected);
-        const showButtons = this.isVisualizationActive ? isSelected : (isHovered || isSelected);
-        if (!showButtons) return;
+        const visibleBtns = this.getVisibleCanvasButtons(isSelected, isHovered);
+        if (visibleBtns.length === 0) return;
 
         if (!local_pos || local_pos.length < 2) return;
         const x = local_pos[0];
         const y = local_pos[1];
         let dirty = false;
         let hoveredTooltip: string | null = null;
-        for (const btn of this.buttons) {
+        for (const btn of visibleBtns) {
             const hit = btn.checkHit(x, y, this);
             if (btn.isHovered !== hit) {
                 btn.isHovered = hit;
@@ -942,16 +1208,17 @@ export abstract class BaseNode extends LGraphNode {
 
     onMouseDown(_e: MouseEvent, local_pos: any, _canvas: any): boolean {
         if (this.flags.collapsed || (this.flags as any).hidden || this.isModifier) return false;
+        const isHovered = Boolean(_canvas && _canvas.node_over === this);
         const isSelected = _canvas?.selected_nodes
             ? Boolean(_canvas.selected_nodes[this.id] || _canvas.selected_nodes[String(this.id)])
             : Boolean(this.is_selected);
-        const showButtons = this.isVisualizationActive ? isSelected : true;
-        if (!showButtons) return false;
+        const visibleBtns = this.getVisibleCanvasButtons(isSelected, isHovered);
+        if (visibleBtns.length === 0) return false;
 
         if (local_pos && local_pos.length >= 2) {
             const x = local_pos[0];
             const y = local_pos[1];
-            for (const btn of this.buttons) {
+            for (const btn of visibleBtns) {
                 if (btn.checkHit(x, y, this)) {
                     btn.onClick(_e);
                     return true;

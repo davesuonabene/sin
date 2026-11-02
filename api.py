@@ -94,9 +94,69 @@ from ermes import FxModuleModel, AudioNodeModel, PoolResolveRequest
 
 
 
+from collections import OrderedDict
 from core.engines import get_renderer_for_node, build_node_object
 
-RAM_PREVIEW_STORE: Dict[str, Dict[str, Any]] = {}
+MAX_RAM_PREVIEW_ENTRIES = 64
+RAM_PREVIEW_STORE: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+
+
+def _put_ram_preview(key: str, entry: Dict[str, Any]) -> None:
+    RAM_PREVIEW_STORE[key] = entry
+    RAM_PREVIEW_STORE.move_to_end(key)
+    while len(RAM_PREVIEW_STORE) > MAX_RAM_PREVIEW_ENTRIES:
+        RAM_PREVIEW_STORE.popitem(last=False)
+
+
+def _encode_wav_bytes(audio_out: np.ndarray, sample_rate: int) -> bytes:
+    buf = io.BytesIO()
+    sf.write(
+        buf,
+        np.moveaxis(audio_out, -1, 0) if audio_out.ndim > 1 else audio_out,
+        int(sample_rate),
+        format="WAV",
+    )
+    return buf.getvalue()
+
+
+def _store_preview_and_stems(
+    node_key: str,
+    bytes_data: bytes,
+    out_filename: str,
+    node_name: str,
+    sample_rate: int,
+    payload_snapshot: Dict[str, Any],
+    payload_fingerprint: str,
+    manifest: Dict[str, Any],
+    node_stems: Dict[Any, np.ndarray],
+) -> None:
+    nodes_manifest = manifest.get("nodes", {})
+    for stem_id, stem_audio in node_stems.items():
+        if node_key == str(stem_id) or node_key == f"export_{stem_id}" or node_key.endswith(f"_{stem_id}"):
+            if stem_id in nodes_manifest:
+                nodes_manifest[stem_id]["audio_url"] = f"/api/preview/stream/{node_key}?v={payload_fingerprint}"
+            continue
+        stem_key = f"stem_{node_key}_{stem_id}"
+        _put_ram_preview(stem_key, {
+            "wav_bytes": None,
+            "stem_audio": stem_audio,
+            "filename": f"stem_{stem_id}.wav",
+            "node_name": f"Node_{stem_id}",
+            "sample_rate": sample_rate,
+            "payload_fingerprint": payload_fingerprint,
+        })
+        if stem_id in nodes_manifest:
+            nodes_manifest[stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
+
+    _put_ram_preview(node_key, {
+        "wav_bytes": bytes_data,
+        "filename": out_filename,
+        "node_name": node_name,
+        "sample_rate": sample_rate,
+        "payload": payload_snapshot,
+        "payload_fingerprint": payload_fingerprint,
+        "manifest": manifest,
+    })
 
 def resolve_render_export(payload: AudioNodeModel) -> tuple[str, str, str]:
     """
@@ -285,6 +345,7 @@ def preview_graph_ram(payload: AudioNodeModel):
             out_filename = f"{base_name}_{payload.node_name}.wav"
             cached_preview = RAM_PREVIEW_STORE.get(node_key)
             if cached_preview and cached_preview.get("payload_fingerprint") == payload_fingerprint:
+                RAM_PREVIEW_STORE.move_to_end(node_key)
                 trace_runtime(
                     f"Preview cache hit: {node_key} ({len(cached_preview['wav_bytes'])} bytes)",
                     "common",
@@ -314,49 +375,24 @@ def preview_graph_ram(payload: AudioNodeModel):
                 trace_runtime("Empty graph output replaced with a 100 ms silent preview", "warning")
 
             encode_started_at = perf_counter()
-            buf = io.BytesIO()
-            sf.write(
-                buf,
-                np.moveaxis(audio_out, -1, 0) if audio_out.ndim > 1 else audio_out,
-                sys.sample_rate,
-                format='WAV',
-            )
-            bytes_data = buf.getvalue()
+            bytes_data = _encode_wav_bytes(audio_out, sys.sample_rate)
             trace_runtime(
                 f"Preview WAV encoded: {len(bytes_data)} bytes "
                 f"({(perf_counter() - encode_started_at) * 1000.0:.1f} ms)"
             )
 
             manifest = getattr(sys, "manifest", {"nodes": {}})
-            # Store intermediate node stems lazily in RAM_PREVIEW_STORE (WAV encoded on demand)
-            node_stems = getattr(sys, "_node_stems", {})
-            for stem_id, stem_audio in node_stems.items():
-                if node_key == str(stem_id) or node_key == f"export_{stem_id}" or node_key.endswith(f"_{stem_id}"):
-                    if stem_id in manifest["nodes"]:
-                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{node_key}?v={payload_fingerprint}"
-                    continue
-
-                stem_key = f"stem_{node_key}_{stem_id}"
-                RAM_PREVIEW_STORE[stem_key] = {
-                    "wav_bytes": None,
-                    "stem_audio": stem_audio,
-                    "filename": f"stem_{stem_id}.wav",
-                    "node_name": f"Node_{stem_id}",
-                    "sample_rate": sys.sample_rate,
-                    "payload_fingerprint": payload_fingerprint,
-                }
-                if stem_id in manifest["nodes"]:
-                    manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
-
-            RAM_PREVIEW_STORE[node_key] = {
-                "wav_bytes": bytes_data,
-                "filename": out_filename,
-                "node_name": payload.node_name,
-                "sample_rate": sys.sample_rate,
-                "payload": payload_snapshot,
-                "payload_fingerprint": payload_fingerprint,
-                "manifest": manifest,
-            }
+            _store_preview_and_stems(
+                node_key=node_key,
+                bytes_data=bytes_data,
+                out_filename=out_filename,
+                node_name=payload.node_name,
+                sample_rate=sys.sample_rate,
+                payload_snapshot=payload_snapshot,
+                payload_fingerprint=payload_fingerprint,
+                manifest=manifest,
+                node_stems=getattr(sys, "_node_stems", {}),
+            )
             trace_runtime(f"RAM preview stored: {node_key}", "common")
 
             logger.info(f"[API /preview] Stored RAM preview for key '{node_key}' ({len(bytes_data)} bytes)")
@@ -380,14 +416,7 @@ def _ensure_ram_preview_wav_bytes(data: Dict[str, Any]) -> bytes:
     stem_audio = data.get("stem_audio")
     if stem_audio is None:
         return b""
-    s_buf = io.BytesIO()
-    sf.write(
-        s_buf,
-        np.moveaxis(stem_audio, -1, 0) if stem_audio.ndim > 1 else stem_audio,
-        int(data.get("sample_rate", 44100)),
-        format="WAV",
-    )
-    wav_bytes = s_buf.getvalue()
+    wav_bytes = _encode_wav_bytes(stem_audio, int(data.get("sample_rate", 44100)))
     data["wav_bytes"] = wav_bytes
     data.pop("stem_audio", None)
     return wav_bytes
@@ -399,6 +428,7 @@ def stream_ram_preview(node_id: str, request: Request):
     data = RAM_PREVIEW_STORE.get(node_id)
     if not data:
         raise HTTPException(status_code=404, detail="RAM preview not found for specified node")
+    RAM_PREVIEW_STORE.move_to_end(node_id)
 
     wav_bytes = _ensure_ram_preview_wav_bytes(data)
     total_size = len(wav_bytes)
@@ -556,44 +586,19 @@ def preview_graph_progressive(payload: AudioNodeModel, format: Optional[str] = N
                 manifest["sample_rate"] = sys.sample_rate
 
                 # Store full rendered WAV in RAM_PREVIEW_STORE for instant loops & zero-latency replays
-                wav_io = io.BytesIO()
-                sf.write(
-                    wav_io,
-                    np.moveaxis(full_audio, -1, 0) if full_audio.ndim > 1 else full_audio,
-                    sys.sample_rate,
-                    format='WAV'
-                )
-                bytes_data = wav_io.getvalue()
+                bytes_data = _encode_wav_bytes(full_audio, sys.sample_rate)
                 out_filename = f"{node_key}.wav"
-
-                # Store intermediate node stems lazily in RAM_PREVIEW_STORE (WAV encoded on demand)
-                node_stems = getattr(sys, "_node_stems", {})
-                for stem_id, stem_audio in node_stems.items():
-                    if node_key == str(stem_id) or node_key == f"export_{stem_id}" or node_key.endswith(f"_{stem_id}"):
-                        if stem_id in manifest.get("nodes", {}):
-                            manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{node_key}?v={payload_fingerprint}"
-                        continue
-                    stem_key = f"stem_{node_key}_{stem_id}"
-                    RAM_PREVIEW_STORE[stem_key] = {
-                        "wav_bytes": None,
-                        "stem_audio": stem_audio,
-                        "filename": f"stem_{stem_id}.wav",
-                        "node_name": f"Node_{stem_id}",
-                        "sample_rate": sys.sample_rate,
-                        "payload_fingerprint": payload_fingerprint,
-                    }
-                    if stem_id in manifest.get("nodes", {}):
-                        manifest["nodes"][stem_id]["audio_url"] = f"/api/preview/stream/{stem_key}?v={payload_fingerprint}"
-
-                RAM_PREVIEW_STORE[node_key] = {
-                    "wav_bytes": bytes_data,
-                    "filename": out_filename,
-                    "node_name": payload.node_name,
-                    "sample_rate": sys.sample_rate,
-                    "payload": payload_snapshot,
-                    "payload_fingerprint": payload_fingerprint,
-                    "manifest": manifest,
-                }
+                _store_preview_and_stems(
+                    node_key=node_key,
+                    bytes_data=bytes_data,
+                    out_filename=out_filename,
+                    node_name=payload.node_name,
+                    sample_rate=sys.sample_rate,
+                    payload_snapshot=payload_snapshot,
+                    payload_fingerprint=payload_fingerprint,
+                    manifest=manifest,
+                    node_stems=getattr(sys, "_node_stems", {}),
+                )
 
             # Stream progressive bar chunks
             for bar_idx in range(total_bars):
@@ -609,14 +614,7 @@ def preview_graph_progressive(payload: AudioNodeModel, format: Optional[str] = N
                     channels = full_audio.shape[:-1] if full_audio.ndim > 1 else ()
                     bar_audio = np.zeros((*channels, samples_per_bar), dtype=np.float32)
 
-                slice_buf = io.BytesIO()
-                sf.write(
-                    slice_buf,
-                    np.moveaxis(bar_audio, -1, 0) if bar_audio.ndim > 1 else bar_audio,
-                    sys.sample_rate,
-                    format='WAV'
-                )
-                slice_bytes = slice_buf.getvalue()
+                slice_bytes = _encode_wav_bytes(bar_audio, sys.sample_rate)
                 bar_peaks = compute_waveform_peaks(bar_audio, columns=64)
 
                 if is_binary:
@@ -923,55 +921,70 @@ def list_directories(path: Optional[str] = None):
         "roots": common_roots,
     }
 
-def _get_gaia_metadata(filepath: str) -> Dict[str, Any]:
-    metadata: Dict[str, Any] = {"bpm": None, "key": None}
-    if not filepath:
-        return metadata
+def _get_gaia_metadata_batch(filepaths: List[str]) -> Dict[str, Dict[str, Any]]:
+    results: Dict[str, Dict[str, Any]] = {fp: {"bpm": None, "key": None} for fp in filepaths if fp}
+    if not results:
+        return results
     db_path = _gaia_db_path()
     if not db_path:
-        return metadata
+        return results
     try:
         import sqlite3
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        target_abs = os.path.abspath(filepath)
-        cursor.execute("""
-            SELECT s.bpm, s.key
-            FROM items i
-            LEFT JOIN sample_items s ON i.id = s.id
-            WHERE i.absolute_path = ? OR i.absolute_path = ?
-        """, (filepath, target_abs))
-        row = cursor.fetchone()
-        if row:
-            metadata["bpm"] = float(row["bpm"]) if row["bpm"] is not None else None
-            metadata["key"] = row["key"]
-            conn.close()
-            return metadata
+        abs_to_orig: Dict[str, List[str]] = {}
+        query_paths: List[str] = []
+        for fp in results:
+            abs_fp = os.path.abspath(fp)
+            abs_to_orig.setdefault(abs_fp, []).append(fp)
+            abs_to_orig.setdefault(fp, []).append(fp)
+            query_paths.extend([fp, abs_fp])
+        unique_paths = list(dict.fromkeys(query_paths))
+        placeholders = ",".join("?" for _ in unique_paths)
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(f"""
+                SELECT i.absolute_path, s.bpm, s.key
+                FROM items i
+                LEFT JOIN sample_items s ON i.id = s.id
+                WHERE i.absolute_path IN ({placeholders})
+            """, unique_paths).fetchall()
+            unresolved = set(results.keys())
+            for row in rows:
+                row_path = row["absolute_path"]
+                meta = {
+                    "bpm": float(row["bpm"]) if row["bpm"] is not None else None,
+                    "key": row["key"],
+                }
+                for orig in abs_to_orig.get(row_path, []):
+                    results[orig] = meta
+                    unresolved.discard(orig)
 
-        # Check collection manifest entries
-        cursor.execute("SELECT absolute_path, manifest_json FROM collection_items")
-        colls = cursor.fetchall()
-        for c in colls:
-            root = c["absolute_path"] or ""
-            if not c["manifest_json"]:
-                continue
-            try:
-                manifest = json.loads(c["manifest_json"])
-                for entry in manifest:
-                    rel = entry.get("relative_path") or ""
-                    cand = os.path.abspath(os.path.join(root, rel))
-                    if cand == target_abs or entry.get("filename") == os.path.basename(filepath):
-                        metadata["bpm"] = entry.get("bpm")
-                        metadata["key"] = entry.get("key")
-                        conn.close()
-                        return metadata
-            except Exception:
-                pass
-        conn.close()
+            if unresolved:
+                colls = conn.execute("SELECT absolute_path, manifest_json FROM collection_items").fetchall()
+                for c in colls:
+                    root = c["absolute_path"] or ""
+                    if not c["manifest_json"]:
+                        continue
+                    try:
+                        manifest = json.loads(c["manifest_json"])
+                        for entry in manifest:
+                            rel = entry.get("relative_path") or ""
+                            cand = os.path.abspath(os.path.join(root, rel))
+                            fname = entry.get("filename")
+                            for orig in list(unresolved):
+                                if cand == os.path.abspath(orig) or fname == os.path.basename(orig):
+                                    results[orig] = {"bpm": entry.get("bpm"), "key": entry.get("key")}
+                                    unresolved.discard(orig)
+                    except Exception:
+                        pass
     except Exception:
         pass
-    return metadata
+    return results
+
+
+def _get_gaia_metadata(filepath: str) -> Dict[str, Any]:
+    if not filepath:
+        return {"bpm": None, "key": None}
+    return _get_gaia_metadata_batch([filepath]).get(filepath, {"bpm": None, "key": None})
 
 
 def _get_gaia_bpm(filepath: str) -> Optional[float]:
@@ -1588,17 +1601,28 @@ def get_library(vault_id: Optional[int] = None):
                     query += " WHERE i.vault_id IN (SELECT id FROM vaults WHERE preview = 'quick')"
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            cursor.execute("""
-                SELECT it.item_id, t.id, t.name
-                FROM item_tags it
-                JOIN tags t ON t.id = it.tag_id
-            """)
+            row_ids = [row["id"] for row in rows]
             tags_by_item: dict[int, list[dict[str, Any]]] = {}
-            for tag_row in cursor.fetchall():
-                tags_by_item.setdefault(tag_row["item_id"], []).append({
-                    "id": tag_row["id"],
-                    "name": tag_row["name"],
-                })
+            if row_ids:
+                if vault_id is not None and len(row_ids) <= 900:
+                    tag_placeholders = ",".join("?" for _ in row_ids)
+                    cursor.execute(f"""
+                        SELECT it.item_id, t.id, t.name
+                        FROM item_tags it
+                        JOIN tags t ON t.id = it.tag_id
+                        WHERE it.item_id IN ({tag_placeholders})
+                    """, row_ids)
+                else:
+                    cursor.execute("""
+                        SELECT it.item_id, t.id, t.name
+                        FROM item_tags it
+                        JOIN tags t ON t.id = it.tag_id
+                    """)
+                for tag_row in cursor.fetchall():
+                    tags_by_item.setdefault(tag_row["item_id"], []).append({
+                        "id": tag_row["id"],
+                        "name": tag_row["name"],
+                    })
 
             # For project items, query item_references
             project_ids = [row["id"] for row in rows if row["type"] == "project"]
@@ -2107,34 +2131,29 @@ def stream_library_file(file_id: str):
         
     return FileResponse(path=abs_path)
 
-@api_router.get("/audio/file", tags=["Audio"])
-def get_audio_file(filepath: str):
-    from fastapi.responses import FileResponse
+def _resolve_audio_filepath(filepath: str) -> str:
     from fastapi import HTTPException
     if not filepath:
         raise HTTPException(status_code=400, detail="Missing filepath parameter")
-    actual_path = filepath
-    if not os.path.exists(actual_path):
-        alt_path = os.path.join("assets", filepath)
-        if os.path.exists(alt_path):
-            actual_path = alt_path
-        else:
-            raise HTTPException(status_code=404, detail=f"Audio file not found: {filepath}")
-    return FileResponse(path=actual_path)
+    if os.path.exists(filepath):
+        return filepath
+    alt_path = os.path.join("assets", filepath)
+    if os.path.exists(alt_path):
+        return alt_path
+    raise HTTPException(status_code=404, detail=f"Audio file not found: {filepath}")
+
+
+@api_router.get("/audio/file", tags=["Audio"])
+def get_audio_file(filepath: str):
+    from fastapi.responses import FileResponse
+    return FileResponse(path=_resolve_audio_filepath(filepath))
+
 
 @api_router.get("/audio/metadata", tags=["Audio"])
 def get_audio_metadata(filepath: str):
     """Return read-only timing metadata used by arrangement visualizations."""
     from fastapi import HTTPException
-    if not filepath:
-        raise HTTPException(status_code=400, detail="Missing filepath parameter")
-    actual_path = filepath
-    if not os.path.exists(actual_path):
-        alt_path = os.path.join("assets", filepath)
-        if os.path.exists(alt_path):
-            actual_path = alt_path
-        else:
-            raise HTTPException(status_code=404, detail=f"Audio file not found: {filepath}")
+    actual_path = _resolve_audio_filepath(filepath)
     try:
         info = sf.info(actual_path)
     except Exception as exc:

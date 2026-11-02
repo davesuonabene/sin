@@ -1,3 +1,5 @@
+import { getSharedAudioContext } from './audioBufferCache.ts';
+
 /**
  * Gapless Web Audio scheduler for progressive bar-by-bar streaming previews.
  * Provides dynamic lead latency, sample-accurate chunk stitching, and seamless hot-swap transitions.
@@ -13,80 +15,14 @@ export interface BarChunk {
     peaks?: number[];
 }
 
-const WORKLET_PROCESSOR_CODE = `
-class RingBufferProcessor extends AudioWorkletProcessor {
-    constructor() {
-        super();
-        this.queues = [[], []];
-        this.offsets = [0, 0];
-        this.isPlaying = false;
-        this.port.onmessage = (e) => {
-            const data = e.data;
-            if (!data) return;
-            if (data.type === 'push_pcm') {
-                const chans = data.channels;
-                for (let c = 0; c < chans.length; c++) {
-                    if (!this.queues[c]) this.queues[c] = [];
-                    this.queues[c].push(chans[c]);
-                }
-            } else if (data.type === 'clear') {
-                this.queues = [[], []];
-                this.offsets = [0, 0];
-            } else if (data.type === 'set_playing') {
-                this.isPlaying = Boolean(data.isPlaying);
-            }
-        };
-    }
-
-    process(inputs, outputs) {
-        const output = outputs[0];
-        if (!this.isPlaying || !output || output.length === 0) return true;
-        const q0 = this.queues[0];
-        if (!q0 || q0.length === 0) return true;
-        const frames = output[0].length;
-        const numChans = output.length;
-
-        for (let c = 0; c < numChans; c++) {
-            const outChan = output[c];
-            const q = this.queues[c] || this.queues[0];
-            let written = 0;
-
-            while (q && q.length > 0 && written < frames) {
-                const block = q[0];
-                const off = this.offsets[c] || 0;
-                const avail = block.length - off;
-                const toCopy = Math.min(frames - written, avail);
-                outChan.set(block.subarray(off, off + toCopy), written);
-                written += toCopy;
-                const nextOff = off + toCopy;
-                if (nextOff >= block.length) {
-                    q.shift();
-                    this.offsets[c] = 0;
-                } else {
-                    this.offsets[c] = nextOff;
-                }
-            }
-
-            if (written < frames) {
-                outChan.fill(0, written);
-            }
-        }
-        return true;
-    }
-}
-registerProcessor('ring-buffer-processor', RingBufferProcessor);
-`;
-
 export class GaplessAudioScheduler {
     private audioCtx: AudioContext | null = null;
     private masterGain: GainNode | null = null;
     private analyser: AnalyserNode | null = null;
-    private workletNode: AudioWorkletNode | null = null;
-    private workletEnabled = false;
-    private workletInitAttempted = false;
     private activeSources: { source: AudioBufferSourceNode; gain: GainNode; startTime: number; endTime: number; barIndex: number }[] = [];
     private barBuffers = new Map<number, AudioBuffer>();
     private fullAudioBuffer: AudioBuffer | null = null;
+    private fullBufferDirty = false;
     private totalBars = 0;
     private bpm = 120;
     private secondsPerBar = 2.0;
@@ -106,42 +42,21 @@ export class GaplessAudioScheduler {
         // AudioContext initialized lazily on user gesture
     }
 
-    private async initAudioWorklet(ctx: AudioContext): Promise<boolean> {
-        if (this.workletInitAttempted) return this.workletEnabled;
-        this.workletInitAttempted = true;
-        try {
-            if (!ctx.audioWorklet || typeof ctx.audioWorklet.addModule !== 'function') {
-                return false;
-            }
-            const blob = new Blob([WORKLET_PROCESSOR_CODE], { type: 'application/javascript' });
-            const url = URL.createObjectURL(blob);
-            await ctx.audioWorklet.addModule(url);
-            URL.revokeObjectURL(url);
-
-            this.workletNode = new AudioWorkletNode(ctx, 'ring-buffer-processor');
-            if (this.masterGain) {
-                this.workletNode.connect(this.masterGain);
-            }
-            this.workletEnabled = true;
-            return true;
-        } catch (e) {
-            console.warn('[GaplessAudioScheduler] AudioWorklet fallback to AudioBufferSourceNode:', e);
-            this.workletEnabled = false;
-            return false;
-        }
-    }
-
     private ensureContext(): AudioContext {
         if (!this.audioCtx) {
-            const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-            this.audioCtx = new AudioCtx();
+            const shared = getSharedAudioContext();
+            if (shared) {
+                this.audioCtx = shared;
+            } else {
+                const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+                this.audioCtx = new AudioCtx();
+            }
             this.masterGain = this.audioCtx.createGain();
             this.analyser = this.audioCtx.createAnalyser();
             this.analyser.fftSize = 256;
             this.analyser.smoothingTimeConstant = 0.5;
             this.masterGain.connect(this.analyser);
             this.analyser.connect(this.audioCtx.destination);
-            void this.initAudioWorklet(this.audioCtx);
         }
         if (this.audioCtx.state === 'suspended') {
             this.audioCtx.resume();
@@ -153,6 +68,18 @@ export class GaplessAudioScheduler {
         return this.ensureContext();
     }
 
+    async ensureContextReady(): Promise<AudioContext> {
+        const ctx = this.ensureContext();
+        if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+            try {
+                await ctx.resume();
+            } catch {
+                // Ignore resume failures in headless or restricted environments
+            }
+        }
+        return ctx;
+    }
+
     getFloatTimeDomainData(array: Float32Array): void {
         if (this.analyser) {
             (this.analyser as any).getFloatTimeDomainData(array);
@@ -162,6 +89,9 @@ export class GaplessAudioScheduler {
     }
 
     getFullAudioBuffer(): AudioBuffer | null {
+        if (this.fullBufferDirty) {
+            this.updateFullBuffer();
+        }
         return this.fullAudioBuffer;
     }
 
@@ -192,6 +122,7 @@ export class GaplessAudioScheduler {
         this.barBuffers.clear();
         this.stagedSession = null;
         this.fullAudioBuffer = null;
+        this.fullBufferDirty = false;
         this.totalBars = 0;
         this.lastScheduledBar = -1;
         this.pausedTime = 0;
@@ -213,10 +144,6 @@ export class GaplessAudioScheduler {
         this.pausedTime = 0;
         this.stopSources();
         this.isPlaying = false;
-        if (this.workletNode) {
-            this.workletNode.port.postMessage({ type: 'clear' });
-            this.workletNode.port.postMessage({ type: 'set_playing', isPlaying: false });
-        }
     }
 
     pause(): void {
@@ -224,9 +151,6 @@ export class GaplessAudioScheduler {
         this.pausedTime = this.getCurrentTime();
         this.stopSources();
         this.isPlaying = false;
-        if (this.workletNode) {
-            this.workletNode.port.postMessage({ type: 'set_playing', isPlaying: false });
-        }
     }
 
     play(): void {
@@ -237,10 +161,21 @@ export class GaplessAudioScheduler {
         const resumeTime = this.pausedTime || 0;
         const startTime = (totalDuration > 0 && resumeTime >= totalDuration && !this.loop) ? 0 : resumeTime;
         this.isPlaying = true;
-        if (this.workletNode) {
-            this.workletNode.port.postMessage({ type: 'set_playing', isPlaying: true });
-        }
         this.seek(startTime);
+    }
+
+    async playAsync(): Promise<void> {
+        if (this.isPlaying) return;
+        if (this.barBuffers.size === 0) return;
+        await this.ensureContextReady();
+        this.play();
+    }
+
+    async playFromStart(): Promise<void> {
+        if (this.barBuffers.size === 0) return;
+        await this.ensureContextReady();
+        this.pausedTime = 0;
+        this.startPlaybackFromBarZero();
     }
 
     getBufferedProgress(): number {
@@ -309,6 +244,45 @@ export class GaplessAudioScheduler {
         }
     }
 
+    private spawnBarSource(
+        barIndex: number,
+        buffer: AudioBuffer,
+        startTime: number,
+        offsetInBar: number = 0,
+        fadeIn: boolean = false,
+        logicalStartTime: number = startTime
+    ) {
+        if (!this.audioCtx || !this.masterGain) return null;
+        const source = this.audioCtx.createBufferSource();
+        source.buffer = buffer;
+        const gain = this.audioCtx.createGain();
+        if (fadeIn) {
+            gain.gain.setValueAtTime(0.0001, startTime);
+            gain.gain.linearRampToValueAtTime(1.0, startTime + 0.015);
+        } else {
+            gain.gain.setValueAtTime(1.0, startTime);
+        }
+        source.connect(gain);
+        gain.connect(this.masterGain);
+        if (offsetInBar > 0) {
+            source.start(startTime, offsetInBar);
+        } else {
+            source.start(startTime);
+        }
+        const duration = offsetInBar > 0
+            ? (buffer.duration - offsetInBar)
+            : Math.max(buffer.duration, this.secondsPerBar);
+        const entry = { source, gain, startTime: logicalStartTime, endTime: startTime + duration, barIndex };
+        source.onended = () => {
+            const idx = this.activeSources.findIndex(s => s.source === source);
+            if (idx >= 0) this.activeSources.splice(idx, 1);
+            if (!this.loop && this.activeSources.length === 0 && this.lastScheduledBar >= this.totalBars - 1) {
+                this.stop();
+            }
+        };
+        return entry;
+    }
+
     seek(targetTime: number): void {
         const totalDuration = this.totalBars * this.secondsPerBar;
         if (totalDuration <= 0 || !this.audioCtx) {
@@ -333,30 +307,19 @@ export class GaplessAudioScheduler {
         this.nextScheduleTime = now;
 
         const buffer = this.barBuffers.get(barIndex);
-        if (buffer && this.masterGain) {
-            const source = this.audioCtx.createBufferSource();
-            source.buffer = buffer;
-            const gain = this.audioCtx.createGain();
-            source.connect(gain);
-            gain.connect(this.masterGain);
-            source.start(now, offsetInBar);
-            const remainingDuration = buffer.duration - offsetInBar;
-            const endTime = now + remainingDuration;
-            this.activeSources.push({ source, gain, startTime: now, endTime, barIndex });
-            this.lastScheduledBar = barIndex;
-            this.nextScheduleTime = endTime;
-            source.onended = () => {
-                const idx = this.activeSources.findIndex(s => s.source === source);
-                if (idx >= 0) this.activeSources.splice(idx, 1);
-                if (!this.loop && this.activeSources.length === 0 && this.lastScheduledBar >= this.totalBars - 1) {
-                    this.stop();
-                }
-            };
+        if (buffer) {
+            const entry = this.spawnBarSource(barIndex, buffer, now, offsetInBar);
+            if (entry) {
+                this.activeSources.push(entry);
+                this.lastScheduledBar = barIndex;
+                this.nextScheduleTime = entry.endTime;
+            }
         }
         this.scheduleNextAvailableBars();
     }
 
     private updateFullBuffer(): void {
+        this.fullBufferDirty = false;
         if (this.barBuffers.size === 0 || !this.audioCtx) return;
         const sortedIndices = Array.from(this.barBuffers.keys()).sort((a, b) => a - b);
         let totalLen = 0;
@@ -401,7 +364,7 @@ export class GaplessAudioScheduler {
             this.totalBars = chunk.totalBars || 1;
             this.bpm = chunk.bpm || 120;
             this.secondsPerBar = chunk.durationSeconds || 2.0;
-            this.updateFullBuffer();
+            this.fullBufferDirty = true;
 
             if (autoplay) {
                 this.pausedTime = 0;
@@ -449,12 +412,39 @@ export class GaplessAudioScheduler {
         this.totalBars = Math.max(this.totalBars, chunk.totalBars);
         this.bpm = chunk.bpm || this.bpm;
         this.secondsPerBar = chunk.durationSeconds || this.secondsPerBar;
-        this.updateFullBuffer();
+        this.fullBufferDirty = true;
 
         if (this.isPlaying) {
             this.hotSwapBarBuffer(chunk.barIndex, chunk.audioBuffer);
             this.scheduleNextAvailableBars();
         }
+    }
+
+    /**
+     * Stage incoming progressive bar chunks off-screen without mutating active playback buffers
+     * or triggering partial-buffer visual refreshes until commitSession() is called.
+     */
+    stageBarChunk(chunk: BarChunk, sessionId: number): number {
+        this.ensureContext();
+        if (chunk.barIndex === 0 || !this.stagedSession || this.stagedSession.sessionId !== sessionId) {
+            this.currentSessionId = sessionId;
+            this.stagedSession = {
+                sessionId,
+                barBuffers: new Map([[chunk.barIndex, chunk.audioBuffer]]),
+                totalBars: Math.max(1, chunk.totalBars || 1),
+                bpm: chunk.bpm || this.bpm || 120,
+                secondsPerBar: chunk.durationSeconds || this.secondsPerBar || 2.0,
+            };
+        } else {
+            if (sessionId !== this.currentSessionId) {
+                return 0;
+            }
+            this.stagedSession.barBuffers.set(chunk.barIndex, chunk.audioBuffer);
+            this.stagedSession.totalBars = Math.max(this.stagedSession.totalBars, chunk.totalBars || 1);
+            this.stagedSession.bpm = chunk.bpm || this.stagedSession.bpm;
+            this.stagedSession.secondsPerBar = chunk.durationSeconds || this.stagedSession.secondsPerBar;
+        }
+        return Math.min(1.0, this.stagedSession.barBuffers.size / Math.max(1, this.stagedSession.totalBars));
     }
 
     /**
@@ -479,6 +469,11 @@ export class GaplessAudioScheduler {
                 this.hotSwapBarBuffer(barIdx, buf);
             }
             this.scheduleNextAvailableBars();
+        } else {
+            const totalDuration = this.getTotalDuration();
+            if (totalDuration > 0 && this.pausedTime >= totalDuration) {
+                this.pausedTime = 0;
+            }
         }
     }
 
@@ -551,37 +546,15 @@ export class GaplessAudioScheduler {
     }
 
     private scheduleBar(barIndex: number, scheduleTime: number): void {
-        const ctx = this.ensureContext();
+        this.ensureContext();
         const buffer = this.barBuffers.get(barIndex);
-        if (!buffer || !this.masterGain) return;
-
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-
-        const gain = ctx.createGain();
-        gain.gain.setValueAtTime(1.0, scheduleTime);
-
-        source.connect(gain);
-        gain.connect(this.masterGain);
-
-        source.start(scheduleTime);
-        const stepDuration = Math.max(buffer.duration, this.secondsPerBar);
-        const endTime = scheduleTime + stepDuration;
-        this.activeSources.push({ source, gain, startTime: scheduleTime, endTime, barIndex });
-
-        this.lastScheduledBar = barIndex;
-        this.nextScheduleTime = endTime;
-
-        // Cleanup expired source records
-        source.onended = () => {
-            const idx = this.activeSources.findIndex(s => s.source === source);
-            if (idx >= 0) {
-                this.activeSources.splice(idx, 1);
-            }
-            if (!this.loop && this.activeSources.length === 0 && this.lastScheduledBar >= this.totalBars - 1) {
-                this.stop();
-            }
-        };
+        if (!buffer) return;
+        const entry = this.spawnBarSource(barIndex, buffer, scheduleTime);
+        if (entry) {
+            this.activeSources.push(entry);
+            this.lastScheduledBar = barIndex;
+            this.nextScheduleTime = entry.endTime;
+        }
     }
 
     /**
@@ -589,87 +562,33 @@ export class GaplessAudioScheduler {
      */
     hotSwapBarBuffer(barIndex: number, newBuffer: AudioBuffer): void {
         this.barBuffers.set(barIndex, newBuffer);
+        this.fullBufferDirty = true;
         if (!this.isPlaying || !this.audioCtx || !this.masterGain) return;
 
         const now = this.audioCtx.currentTime;
         for (let i = 0; i < this.activeSources.length; i++) {
             const item = this.activeSources[i];
-            if (item.barIndex !== barIndex) {
-                continue; // Only hot-swap sources that belong to this bar
-            }
+            if (item.barIndex !== barIndex) continue;
             if (now >= item.startTime && now < item.endTime) {
-                // Currently playing: micro-crossfade into updated buffer
                 const offset = Math.max(0, now - item.startTime);
                 if (offset < newBuffer.duration) {
                     try {
                         item.gain.gain.setValueAtTime(item.gain.gain.value, now);
                         item.gain.gain.linearRampToValueAtTime(0.0001, now + 0.015);
                         item.source.stop(now + 0.02);
-
-                        const newSource = this.audioCtx.createBufferSource();
-                        newSource.buffer = newBuffer;
-                        const newGain = this.audioCtx.createGain();
-                        newGain.gain.setValueAtTime(0.0001, now);
-                        newGain.gain.linearRampToValueAtTime(1.0, now + 0.015);
-
-                        newSource.connect(newGain);
-                        newGain.connect(this.masterGain);
-
-                        newSource.start(now, offset);
-                        const remaining = newBuffer.duration - offset;
-                        const newEndTime = now + remaining;
-
-                        this.activeSources[i] = {
-                            source: newSource,
-                            gain: newGain,
-                            startTime: item.startTime,
-                            endTime: newEndTime,
-                            barIndex: item.barIndex
-                        };
-
-                        newSource.onended = () => {
-                            const idx = this.activeSources.findIndex(s => s.source === newSource);
-                            if (idx >= 0) {
-                                this.activeSources.splice(idx, 1);
-                            }
-                        };
+                        const entry = this.spawnBarSource(barIndex, newBuffer, now, offset, true, item.startTime);
+                        if (entry) this.activeSources[i] = entry;
                     } catch (e) {
                         console.warn('[GaplessAudioScheduler] Hot-swap crossfade error:', e);
                     }
                 }
             } else if (item.startTime > now) {
-                // Pre-scheduled future bar: replace pending source seamlessly
                 try {
                     item.source.stop();
                     item.source.disconnect();
                     item.gain.disconnect();
-
-                    const newSource = this.audioCtx.createBufferSource();
-                    newSource.buffer = newBuffer;
-                    const newGain = this.audioCtx.createGain();
-                    newGain.gain.setValueAtTime(1.0, item.startTime);
-
-                    newSource.connect(newGain);
-                    newGain.connect(this.masterGain);
-
-                    newSource.start(item.startTime);
-                    const stepDuration = Math.max(newBuffer.duration, this.secondsPerBar);
-                    const newEndTime = item.startTime + stepDuration;
-
-                    this.activeSources[i] = {
-                        source: newSource,
-                        gain: newGain,
-                        startTime: item.startTime,
-                        endTime: newEndTime,
-                        barIndex: item.barIndex
-                    };
-
-                    newSource.onended = () => {
-                        const idx = this.activeSources.findIndex(s => s.source === newSource);
-                        if (idx >= 0) {
-                            this.activeSources.splice(idx, 1);
-                        }
-                    };
+                    const entry = this.spawnBarSource(barIndex, newBuffer, item.startTime);
+                    if (entry) this.activeSources[i] = entry;
                 } catch (e) {
                     console.warn('[GaplessAudioScheduler] Future source hot-swap error:', e);
                 }

@@ -3,6 +3,14 @@
  * Manages asset filter pool resolution, seed advancement, and library metadata syncing.
  */
 
+import {
+    type NodeSlot,
+    hashSeed,
+    mulberry32,
+    resolveModifierSlotSeeds,
+    rollSeedExpression
+} from './slotLanguage.ts';
+
 export function parseBpmFromFilename(filename: string): number | null {
     const match = filename.match(/(\d{2,3}(?:\.\d+)?)\s*bpm/i) || filename.match(/(\d{2,3}(?:\.\d+)?)[_\s-]+bpm/i);
     if (match) return parseFloat(match[1]);
@@ -17,7 +25,13 @@ export function parseBpmFromFilename(filename: string): number | null {
 }
 
 export function advanceAssetPoolSeed(modifierNode: any, trackNodesMap?: Map<number, any>) {
+    if (modifierNode?.properties?.seed_refresh === false) {
+        return;
+    }
     const trackNodes = trackNodesMap || (typeof window !== 'undefined' ? (window as any).trackNodes : undefined);
+    if (modifierNode?.properties) {
+        modifierNode.properties.seed_salt = (Number(modifierNode.properties.seed_salt) || 0) + 1;
+    }
     if (modifierNode?.properties?.playbackMode === 'Sequential') {
         const length = Math.max(1, modifierNode.properties.selected_items?.length || 0);
         const storedIndex = Number(modifierNode.properties.sequence_index);
@@ -25,11 +39,126 @@ export function advanceAssetPoolSeed(modifierNode: any, trackNodesMap?: Map<numb
         const nextIndex = (currentIndex + 1) % length;
         modifierNode.properties.sequence_index = nextIndex;
         modifierNode.properties.seed = nextIndex;
-    } else {
-        modifierNode.properties.seed = Math.random();
+    } else if (modifierNode?.properties) {
+        modifierNode.properties.seed = rollSeedExpression(modifierNode.properties.seed ?? 42);
     }
     const modifierData = trackNodes?.get(modifierNode.id);
-    if (modifierData) modifierData.seed = modifierNode.properties.seed;
+    if (modifierData) {
+        modifierData.seed = modifierNode.properties.seed;
+        modifierData.seed_salt = modifierNode.properties.seed_salt;
+    }
+}
+
+/**
+ * Deterministically populates `ownerNode.properties.slots[0..S-1]` from an attached AssetFilterNode (Pool).
+ */
+export function populateOwnerSlotsFromPool(
+    modifierNode: any,
+    ownerNode: any,
+    resolvedSelectedItems?: any[]
+): void {
+    if (!modifierNode?.properties || !ownerNode?.properties) return;
+    const isSeq = ownerNode.type === 'Audio/Sequence'
+        || ownerNode.type === 'sequence'
+        || ownerNode.type === 'Sequence'
+        || ownerNode.properties?.node_type === 'sequence';
+    if (isSeq) return;
+
+    const rawItems = resolvedSelectedItems || modifierNode.properties.selected_items || [];
+    const items = rawItems.filter((item: any) => Boolean(item?.absolute_path || item?.filepath));
+    if (items.length === 0) return;
+
+    if (!Array.isArray(ownerNode.properties.slots) || ownerNode.properties.slots.length === 0) {
+        const cropStart = Number(ownerNode.properties.crop_start ?? ownerNode.properties.sample_start ?? 0);
+        const cropEnd = Number(ownerNode.properties.crop_end ?? ownerNode.properties.sample_end ?? 1);
+        ownerNode.properties.slots = [{
+            slot: 0,
+            index: 0,
+            filepath: ownerNode.properties.filepath || '',
+            library_item_id: ownerNode.properties.library_item_id,
+            original_bpm: ownerNode.properties.original_bpm,
+            key: ownerNode.properties.key || 'C',
+            crop_start: cropStart,
+            crop_end: cropEnd,
+            sample_start: cropStart,
+            sample_end: cropEnd,
+            pitch_shift: Number(ownerNode.properties.pitch_shift ?? ownerNode.properties.transpose ?? 0),
+            time_stretch: Number(ownerNode.properties.time_stretch ?? ownerNode.properties.stretch_factor ?? 1),
+        }];
+    }
+
+    const slots: NodeSlot[] = ownerNode.properties.slots;
+    const seedSalt = Number(modifierNode.properties.seed_salt || ownerNode.properties.seed_salt || 0) * 9973;
+    const slotSeeds = resolveModifierSlotSeeds(
+        modifierNode.properties.seed ?? 42,
+        slots.length,
+        Number(ownerNode.id || modifierNode.id || 1) + seedSalt
+    );
+    const isSequential = modifierNode.properties.playbackMode === 'Sequential';
+
+    for (let s = 0; s < slots.length; s++) {
+        let idx = 0;
+        if (isSequential) {
+            idx = ((slotSeeds[0] + s) % items.length + items.length) % items.length;
+        } else {
+            const prng = mulberry32(hashSeed(slotSeeds[s], s, 0xA55E));
+            idx = Math.floor(prng() * items.length);
+        }
+        const chosen = items[idx];
+        if (!chosen) continue;
+        const filepath = String(chosen.absolute_path || chosen.filepath || '');
+        const bpm = chosen.bpm ?? chosen.original_bpm ?? parseBpmFromFilename(filepath);
+        const key = chosen.key != null ? String(chosen.key).trim() : undefined;
+
+        slots[s] = {
+            ...(slots[s] || {}),
+            slot: s,
+            index: s,
+            filepath,
+            library_item_id: chosen.id,
+            original_bpm: bpm ?? slots[s]?.original_bpm,
+            key: key || slots[s]?.key || 'C',
+            ...(Number.isFinite(Number(chosen.duration_seconds)) && Number(chosen.duration_seconds) > 0
+                ? { duration_seconds: Number(chosen.duration_seconds) }
+                : {}),
+        };
+    }
+
+    const activeIdx = Math.min(
+        Math.max(0, Number(ownerNode.activeSlotIndex ?? ownerNode.properties.active_slot ?? 0)),
+        slots.length - 1
+    );
+    const activeSlot = slots[activeIdx] || slots[0];
+    if (activeSlot?.filepath) {
+        if (typeof ownerNode.updateProperty === 'function') {
+            if (ownerNode.properties.filepath !== activeSlot.filepath) {
+                ownerNode.updateProperty('filepath', activeSlot.filepath);
+            }
+            if (activeSlot.library_item_id != null && ownerNode.properties.library_item_id !== activeSlot.library_item_id) {
+                ownerNode.updateProperty('library_item_id', activeSlot.library_item_id);
+            }
+            if (activeSlot.original_bpm != null && !ownerNode.properties.original_bpm_is_local_override && ownerNode.properties.original_bpm !== activeSlot.original_bpm) {
+                ownerNode.updateProperty('original_bpm', activeSlot.original_bpm);
+            }
+            if (activeSlot.key != null && !ownerNode.properties.key_is_local_override && ownerNode.properties.key !== activeSlot.key) {
+                ownerNode.updateProperty('key', activeSlot.key);
+            }
+        } else {
+            ownerNode.properties.filepath = activeSlot.filepath;
+            if (activeSlot.library_item_id != null) ownerNode.properties.library_item_id = activeSlot.library_item_id;
+            if (activeSlot.original_bpm != null) ownerNode.properties.original_bpm = activeSlot.original_bpm;
+            if (activeSlot.key != null) ownerNode.properties.key = activeSlot.key;
+        }
+        modifierNode.properties.output_value = activeSlot.filepath;
+        if (activeSlot.library_item_id != null) modifierNode.properties.output_item_id = activeSlot.library_item_id;
+        if (activeSlot.original_bpm != null) modifierNode.properties.output_bpm = activeSlot.original_bpm;
+        if (activeSlot.key != null) modifierNode.properties.output_key = activeSlot.key;
+    }
+    if (typeof ownerNode.preloadAllSlotBuffers === 'function') {
+        void ownerNode.preloadAllSlotBuffers();
+    } else if (typeof ownerNode.ensureAudioLoaded === 'function') {
+        void ownerNode.ensureAudioLoaded();
+    }
 }
 
 export type AssetRefreshMode = 'local' | 'parent' | 'ancestor' | 'global' | 'off';
@@ -131,7 +260,7 @@ export async function resolveAssetFilterNode(
     const findLibraryFile = typeof window !== 'undefined' ? (window as any).findLibraryFile : undefined;
     const findLibraryFileForPoolLocator = typeof window !== 'undefined' ? (window as any).findLibraryFileForPoolLocator : undefined;
     const resolveLibraryAssets = typeof window !== 'undefined' ? (window as any).resolveLibraryAssets : undefined;
-    const libraryFiles = resolvedLibraryFiles || (
+    let libraryFiles = resolvedLibraryFiles || (
         typeof resolveLibraryAssets === 'function'
             ? await resolveLibraryAssets(modifierNode.properties.selected_items || [])
             : typeof fetchLibrary === 'function' ? await fetchLibrary(false, true) : []
@@ -141,12 +270,22 @@ export async function resolveAssetFilterNode(
             throw new Error('Asset Pool item is missing its GAIA id');
         }
         const path = item.absolute_path || item.filepath || '';
-        const latest = (typeof findLibraryFileForPoolLocator === 'function'
+        let latest = (typeof findLibraryFileForPoolLocator === 'function'
             ? findLibraryFileForPoolLocator(libraryFiles, item)
             : null)
             || (item.id == null && typeof findLibraryFile === 'function' && path
                 ? findLibraryFile(libraryFiles, path)
                 : null);
+        if (!latest && resolvedLibraryFiles && typeof resolveLibraryAssets === 'function') {
+            libraryFiles = await resolveLibraryAssets(modifierNode.properties.selected_items || []);
+            resolvedLibraryFiles = undefined;
+            latest = (typeof findLibraryFileForPoolLocator === 'function'
+                ? findLibraryFileForPoolLocator(libraryFiles, item)
+                : null)
+                || (item.id == null && typeof findLibraryFile === 'function' && path
+                    ? findLibraryFile(libraryFiles, path)
+                    : null);
+        }
         if (!latest) {
             throw new Error(`Asset Pool asset is unavailable: ${item?.id ?? item?.name ?? 'unknown asset'}`);
         }
@@ -259,16 +398,31 @@ export async function resolveAssetFilterNode(
                 });
             }
         } else {
-            if (typeof ownerNode.updateProperty === 'function') {
-                ownerNode.updateProperty('filepath', assetPath);
-                if (libraryItemId != null) ownerNode.updateProperty('library_item_id', libraryItemId);
-                if (resolvedBpm != null) ownerNode.updateProperty('original_bpm', resolvedBpm);
-                ownerNode.updateProperty('key', resolvedKey);
-            } else {
-                ownerNode.properties.filepath = assetPath;
-                if (libraryItemId != null) ownerNode.properties.library_item_id = libraryItemId;
-                if (resolvedBpm != null) ownerNode.properties.original_bpm = resolvedBpm;
-                ownerNode.properties.key = resolvedKey;
+            if (requestItems.length > 0) {
+                populateOwnerSlotsFromPool(modifierNode, ownerNode, requestItems);
+            } else if (assetPath) {
+                if (typeof ownerNode.updateProperty === 'function') {
+                    ownerNode.updateProperty('filepath', assetPath);
+                    if (libraryItemId != null) ownerNode.updateProperty('library_item_id', libraryItemId);
+                    if (resolvedBpm != null) ownerNode.updateProperty('original_bpm', resolvedBpm);
+                    ownerNode.updateProperty('key', resolvedKey);
+                } else {
+                    ownerNode.properties.filepath = assetPath;
+                    if (libraryItemId != null) ownerNode.properties.library_item_id = libraryItemId;
+                    if (resolvedBpm != null) ownerNode.properties.original_bpm = resolvedBpm;
+                    ownerNode.properties.key = resolvedKey;
+                }
+                if (Array.isArray(ownerNode.properties.slots) && ownerNode.properties.slots.length === 1) {
+                    ownerNode.properties.slots[0] = {
+                        ...(ownerNode.properties.slots[0] || {}),
+                        slot: 0,
+                        index: 0,
+                        filepath: assetPath,
+                        library_item_id: libraryItemId ?? ownerNode.properties.slots[0]?.library_item_id,
+                        original_bpm: resolvedBpm ?? ownerNode.properties.slots[0]?.original_bpm,
+                        key: resolvedKey || ownerNode.properties.slots[0]?.key || 'C',
+                    };
+                }
             }
         }
     }
@@ -276,7 +430,7 @@ export async function resolveAssetFilterNode(
     notifyResolvedProperties(ownerNode);
     notifyArrangementSourceChanged(ownerNode);
     log?.(`Resolved ${poolName} (${Date.now() - resolutionStartedAt} ms)`, 'common');
-    return assetPath;
+    return modifierNode.properties.output_value || assetPath;
 }
 
 export async function resolveAssignedAssetFilters(
@@ -331,13 +485,15 @@ export async function resolveAssignedAssetFilters(
                         ? node.properties.freeze_refresh !== false
                         : modifier?.properties?.freeze_refresh !== false
                 );
-                const shouldRefresh = !isFrozen && shouldRefreshAssetPool(
-                    refreshMode,
-                    nodeId,
-                    rootNodeId,
-                    trackNodes,
-                    request
-                );
+                const shouldRefresh = !isFrozen
+                    && (modifier.properties?.seed_refresh !== false)
+                    && shouldRefreshAssetPool(
+                        refreshMode,
+                        nodeId,
+                        rootNodeId,
+                        trackNodes,
+                        request
+                    );
                 if (shouldRefresh) advanceAssetPoolSeed(modifier, trackNodes);
                 if (shouldRefresh || !hasResolvedAsset) {
                     await resolveAssetFilterNode(
@@ -349,9 +505,20 @@ export async function resolveAssignedAssetFilters(
                     );
                 } else if (node?.properties) {
                     const sampleNode = node as any;
+                    let ownerChanged = false;
+                    let modifierChanged = false;
+
+                    const isSeq = sampleNode.type === 'Audio/Sequence'
+                        || sampleNode.type === 'sequence'
+                        || sampleNode.type === 'Sequence'
+                        || sampleNode.properties?.node_type === 'sequence';
+                    const rawSlots = Array.isArray(sampleNode.properties.slots) ? sampleNode.properties.slots : [];
+                    const hasUnpopulatedSlots = !isSeq && rawSlots.length > 0 && rawSlots.some((s: any) => !s?.filepath);
+
                     const assetPath = modifier.properties.output_value || sampleNode.properties?.filepath;
                     if (assetPath && !modifier.properties.output_value) {
                         modifier.properties.output_value = assetPath;
+                        modifierChanged = true;
                     }
                     const selectedItem = (modifier.properties.selected_items || []).find((item: any) =>
                         (item.absolute_path || item.filepath) === assetPath
@@ -359,18 +526,44 @@ export async function resolveAssignedAssetFilters(
                     const preferredId = modifier.properties.output_item_id ?? sampleNode.properties?.library_item_id ?? selectedItem?.id;
                     if (preferredId != null && modifier.properties.output_item_id == null) {
                         modifier.properties.output_item_id = preferredId;
+                        modifierChanged = true;
                     }
-                    if (assetPath && sampleNode.properties.filepath !== assetPath) {
-                        sampleNode.updateProperty?.('filepath', assetPath);
-                    }
-                    if (preferredId != null && sampleNode.properties.library_item_id !== preferredId) {
-                        sampleNode.updateProperty?.('library_item_id', preferredId);
+                    if (!isSeq && hasUnpopulatedSlots) {
+                        const prevFp = sampleNode.properties.filepath;
+                        const prevId = sampleNode.properties.library_item_id;
+                        populateOwnerSlotsFromPool(modifier, sampleNode);
+                        if (sampleNode.properties.filepath !== prevFp || sampleNode.properties.library_item_id !== prevId) {
+                            ownerChanged = true;
+                            modifierChanged = true;
+                        }
+                    } else if (rawSlots.length <= 1) {
+                        if (assetPath && sampleNode.properties.filepath !== assetPath) {
+                            sampleNode.updateProperty?.('filepath', assetPath);
+                            if (rawSlots.length === 1) {
+                                rawSlots[0] = {
+                                    ...(rawSlots[0] || {}),
+                                    slot: 0,
+                                    index: 0,
+                                    filepath: assetPath,
+                                    library_item_id: preferredId ?? rawSlots[0]?.library_item_id,
+                                };
+                            }
+                            ownerChanged = true;
+                        }
+                        if (preferredId != null && sampleNode.properties.library_item_id !== preferredId) {
+                            sampleNode.updateProperty?.('library_item_id', preferredId);
+                            ownerChanged = true;
+                        }
                     }
                     // When frozen, preserve the node's current BPM and key settings (never overwrite manual edits)
                     if (sampleNode.properties.original_bpm == null && modifier.properties.output_bpm != null) {
                         sampleNode.updateProperty?.('original_bpm', modifier.properties.output_bpm);
+                        ownerChanged = true;
                     } else if (sampleNode.properties.original_bpm != null) {
-                        modifier.properties.output_bpm = sampleNode.properties.original_bpm;
+                        if (modifier.properties.output_bpm !== sampleNode.properties.original_bpm) {
+                            modifier.properties.output_bpm = sampleNode.properties.original_bpm;
+                            modifierChanged = true;
+                        }
                         if (selectedItem) {
                             selectedItem.bpm = sampleNode.properties.original_bpm;
                             selectedItem.original_bpm = sampleNode.properties.original_bpm;
@@ -378,13 +571,19 @@ export async function resolveAssignedAssetFilters(
                     }
                     if (!sampleNode.properties.key && modifier.properties.output_key) {
                         sampleNode.updateProperty?.('key', modifier.properties.output_key);
+                        ownerChanged = true;
                     } else if (sampleNode.properties.key) {
-                        modifier.properties.output_key = sampleNode.properties.key;
+                        if (modifier.properties.output_key !== sampleNode.properties.key) {
+                            modifier.properties.output_key = sampleNode.properties.key;
+                            modifierChanged = true;
+                        }
                         if (selectedItem) selectedItem.key = sampleNode.properties.key;
                     }
-                    notifyResolvedProperties(modifier);
-                    notifyResolvedProperties(node);
-                    notifyArrangementSourceChanged(node);
+                    if (modifierChanged) notifyResolvedProperties(modifier);
+                    if (ownerChanged) {
+                        notifyResolvedProperties(node);
+                        notifyArrangementSourceChanged(node);
+                    }
                 }
             }
         const adjacentIds: number[] = [...(data?.children || [])];

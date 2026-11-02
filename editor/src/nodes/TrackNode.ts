@@ -199,11 +199,12 @@ export class TrackNode extends BaseNode {
 
         const autoTrackWindow = totalBars * 4 * (60 / resolvedBpm);
 
-        const schedulerBuf = isPreviewTarget ? globalAudioScheduler.getFullAudioBuffer() : undefined;
-        const masterBuf = (isPreviewTarget || (activePreviewId == null && isMainPreview))
+        const isInvalidated = Boolean((this as any).isInvalidated);
+        const schedulerBuf = (isPreviewTarget && !isInvalidated) ? globalAudioScheduler.getFullAudioBuffer() : undefined;
+        const masterBuf = (!isInvalidated && (isPreviewTarget || (activePreviewId == null && isMainPreview)))
             ? ((window as any).activeRamPreviewBuffer as AudioBuffer | undefined)
             : undefined;
-        if (isPreviewTarget && (schedulerBuf || masterBuf)) {
+        if (isPreviewTarget && !isInvalidated && (schedulerBuf || masterBuf)) {
             (this as any)._lastRenderedBuffer = schedulerBuf || masterBuf;
         }
 
@@ -214,14 +215,13 @@ export class TrackNode extends BaseNode {
         // Signal flow is the source of truth: active preview buffer -> stem buffer -> last rendered master buffer -> incoming input signal
         const displayBuffer = isPreviewTarget
             ? (schedulerBuf || masterBuf || manifestStem || lastRenderedBuf || this.audioBuffer || inputBuf)
-            : (manifestStem || lastRenderedBuf || (isMainPreview && activePreviewId == null ? masterBuf : undefined) || this.audioBuffer || inputBuf);
+            : (manifestStem || lastRenderedBuf || (isMainPreview && activePreviewId == null && !isInvalidated ? masterBuf : undefined) || this.audioBuffer || inputBuf);
 
         const explicitProgress = (this as any).bufferedProgress;
         const schedulerProgress = isPreviewTarget ? globalAudioScheduler.getBufferedProgress() : 0;
         const bufferedProgress = explicitProgress != null
             ? explicitProgress
             : (schedulerProgress > 0 ? schedulerProgress : 1.0);
-        const isInvalidated = Boolean((this as any).isInvalidated);
 
         const bufferDuration = (this as any).manifestStemDuration || displayBuffer?.duration || 0;
         const expectedDuration = bufferDuration > autoTrackWindow
@@ -247,7 +247,8 @@ export class TrackNode extends BaseNode {
             scopeMode,
             scopeWindow,
             scopeGain,
-            accentColor: accent
+            accentColor: accent,
+            minified: this.isMinifiedStage
         });
         this.waveformRenderer.setSignal({
             buffer: displayBuffer,
@@ -259,6 +260,13 @@ export class TrackNode extends BaseNode {
         });
 
         this.waveformRenderer.render(ctx, bounds, telemetry);
+    }
+
+    override getLiveActivityState(telemetry?: SignalTelemetry): { isTriggered: boolean; progress?: number } {
+        if (!telemetry?.isPlaying) return { isTriggered: false };
+        const dur = telemetry.duration > 0 ? telemetry.duration : 1.0;
+        const progress = Math.max(0, Math.min(1, ((telemetry.time % dur) + dur) % dur / dur));
+        return { isTriggered: true, progress };
     }
 
     override onVisualizationToggled(_enabled: boolean): void {

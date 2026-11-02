@@ -11,6 +11,7 @@ export interface ArrangementSectionStructure {
     sampleStart: number[];
     quant: string[];
     quantAnchor: ArrangementSectionAnchor[];
+    slots?: number[];
 }
 
 export type ArrangementSectionAnchor = 'start' | 'end';
@@ -47,8 +48,9 @@ export class ArrangementNode extends BaseNode {
 
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Arrangement', tab: 'COMMON' },
+        { key: 'section_slots', label: 'Slot', type: 'int', default: 0, min: 0, max: 64, step: 1, tab: 'ARRANGEMENT', description: 'Upstream slot index for the selected section.' },
         { key: 'section_probability', label: 'Probability', type: 'float', default: 1.0, min: 0, max: 1, step: 0.1, tab: 'ARRANGEMENT', description: 'Playback probability for the selected section.' },
-        { key: 'section_sample_start', label: 'Sample Start', type: 'slider', default: 0.0, min: 0, max: 1, step: 0.1, tab: 'ARRANGEMENT', description: 'Normalized source position for the selected section.' },
+        { key: 'section_sample_start', label: 'Start Offset', type: 'slider', default: 0.0, min: 0, max: 1, step: 0.1, tab: 'ARRANGEMENT', description: 'Normalized cue playback start offset for the incoming audio (0.0 to 1.0).' },
         { key: 'section_quant', label: 'Quantize', type: 'select', default: 'auto', options: [{ value: 'auto', label: 'Continuous' }, { value: 'bar', label: 'Bar' }, { value: '0.5', label: 'Half Bar' }, { value: 'beat', label: 'Beat' }, { value: 'none', label: 'Once' }], tab: 'ARRANGEMENT', description: 'Retrigger interval for the selected section.' },
         { key: 'section_quant_anchor', label: 'Anchor', type: 'select', default: 'start', options: [{ value: 'start', label: 'Start' }, { value: 'end', label: 'End' }], tab: 'ARRANGEMENT', description: 'Align each section trigger to the start or end of its quant cell.' },
         { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'ARRANGEMENT' }
@@ -83,7 +85,9 @@ export class ArrangementNode extends BaseNode {
             section_sample_start: [0.0],
             section_quant: ["auto"],
             section_quant_anchor: ["start"],
-            seed: Math.random(),
+            section_slots: [0],
+            seed: 42,
+            seed_refresh: true,
             start_beat: 0,
             color: "#f59e0b",
             icon: "arrangement",
@@ -119,7 +123,9 @@ export class ArrangementNode extends BaseNode {
             quant: this.normalizeSectionValues<string>('section_quant', sectionCount, legacyQuant)
                 .map(quant => this.normalizeQuant(quant, legacyQuant)),
             quantAnchor: this.normalizeSectionValues<ArrangementSectionAnchor>('section_quant_anchor', sectionCount, legacyAnchor)
-                .map(anchor => anchor === 'end' ? 'end' : anchor === 'start' ? 'start' : legacyAnchor)
+                .map(anchor => anchor === 'end' ? 'end' : anchor === 'start' ? 'start' : legacyAnchor),
+            slots: this.normalizeSectionValues<number>('section_slots', sectionCount, 0)
+                .map(slot => Math.max(0, Math.floor(Number(slot) || 0)))
         };
     }
 
@@ -153,6 +159,9 @@ export class ArrangementNode extends BaseNode {
 
     updateSectionStructure(structure: ArrangementSectionStructure): void {
         const sectionCount = structure.points.length + 1;
+        const currentSlots = Array.isArray(structure.slots)
+            ? structure.slots
+            : (Array.isArray(this.properties.section_slots) ? this.properties.section_slots : []);
         const normalized: ArrangementSectionStructure = {
             points: [...structure.points],
             probability: this.resizeSectionValues(structure.probability, sectionCount, 1.0)
@@ -162,7 +171,9 @@ export class ArrangementNode extends BaseNode {
             quant: this.resizeSectionValues(structure.quant, sectionCount, 'auto')
                 .map(quant => this.normalizeQuant(quant, 'auto')),
             quantAnchor: this.resizeSectionValues(structure.quantAnchor, sectionCount, 'start')
-                .map(anchor => anchor === 'end' ? 'end' : 'start')
+                .map(anchor => anchor === 'end' ? 'end' : 'start'),
+            slots: this.resizeSectionValues(currentSlots, sectionCount, 0)
+                .map(slot => Math.max(0, Math.floor(Number(slot) || 0)))
         };
 
         this.updateProperty('section_points', normalized.points);
@@ -170,6 +181,7 @@ export class ArrangementNode extends BaseNode {
         this.updateProperty('section_sample_start', normalized.sampleStart);
         this.updateProperty('section_quant', normalized.quant);
         this.updateProperty('section_quant_anchor', normalized.quantAnchor);
+        this.updateProperty('section_slots', normalized.slots);
 
         // Audio preview serialization also maintains a graph-data cache. Keep it
         // aligned for consumers that have not yet moved to node properties.
@@ -180,7 +192,17 @@ export class ArrangementNode extends BaseNode {
             cachedNode.section_sample_start = [...normalized.sampleStart];
             cachedNode.section_quant = [...normalized.quant];
             cachedNode.section_quant_anchor = [...normalized.quantAnchor];
+            cachedNode.section_slots = [...(normalized.slots || [])];
         }
+    }
+
+    updateSectionSlot(sectionIndex: number, value: number): void {
+        const structure = this.getSectionStructure();
+        const slots = structure.slots || [];
+        if (sectionIndex < 0 || sectionIndex >= slots.length) return;
+        slots[sectionIndex] = Math.max(0, Math.floor(Number(value) || 0));
+        structure.slots = slots;
+        this.updateSectionStructure(structure);
     }
 
     updateSectionSampleStart(sectionIndex: number, value: number): void {
@@ -258,6 +280,9 @@ export class ArrangementNode extends BaseNode {
         structure.sampleStart.splice(newSectionIdx, 0, structure.sampleStart[sectionIdx] ?? 0.0);
         structure.quant.splice(newSectionIdx, 0, structure.quant[sectionIdx] ?? 'auto');
         structure.quantAnchor.splice(newSectionIdx, 0, structure.quantAnchor[sectionIdx] ?? 'start');
+        if (structure.slots) {
+            structure.slots.splice(newSectionIdx, 0, structure.slots[sectionIdx] ?? 0);
+        }
 
         this.updateSectionStructure(structure);
         return structure;
@@ -276,6 +301,9 @@ export class ArrangementNode extends BaseNode {
         structure.sampleStart.splice(removedSectionIndex, 1);
         structure.quant.splice(removedSectionIndex, 1);
         structure.quantAnchor.splice(removedSectionIndex, 1);
+        if (structure.slots) {
+            structure.slots.splice(removedSectionIndex, 1);
+        }
         this.updateSectionStructure(structure);
         return structure;
     }
@@ -358,13 +386,17 @@ export class ArrangementNode extends BaseNode {
     override prepareSerializedModel(model: any): any {
         const structure = this.getSectionStructure();
         const { probability: _probability, quant: _quant, quant_anchor: _quantAnchor, ...sectionOnlyModel } = model;
+        const resolvedSlots = Array.isArray(model.section_slots) && model.section_slots.length === (structure.slots || []).length
+            ? model.section_slots
+            : (structure.slots || [0]);
         return {
             ...sectionOnlyModel,
             section_points: structure.points,
             section_probability: structure.probability,
             section_sample_start: structure.sampleStart,
             section_quant: structure.quant,
-            section_quant_anchor: structure.quantAnchor
+            section_quant_anchor: structure.quantAnchor,
+            section_slots: resolvedSlots
         };
     }
 
@@ -390,6 +422,7 @@ export class ArrangementNode extends BaseNode {
                 const prob = typeof structure.probability[i] === 'number' ? structure.probability[i] : 1.0;
                 const sampleStart = typeof structure.sampleStart[i] === 'number' ? structure.sampleStart[i] : 0.0;
                 const quant = structure.quant[i] || 'auto';
+                const slotIndex = typeof structure.slots?.[i] === 'number' ? structure.slots[i] : 0;
 
                 sections.push({
                     index: i,
@@ -397,12 +430,16 @@ export class ArrangementNode extends BaseNode {
                     lengthBars,
                     probability: prob,
                     sampleStart,
-                    quant
+                    quant,
+                    slotIndex
                 });
             }
             this._cachedVisualSections = sections;
         }
 
+        this.arrangementRenderer.setOptions({
+            minified: this.isMinifiedStage
+        });
         this.arrangementRenderer.setSignal({
             totalBars,
             sections: sections || [],
@@ -412,9 +449,40 @@ export class ArrangementNode extends BaseNode {
         this.arrangementRenderer.render(ctx, bounds, telemetry);
     }
 
+    override getLiveActivityState(telemetry?: SignalTelemetry): { isTriggered: boolean; progress?: number } {
+        if (!telemetry?.isPlaying) return { isTriggered: false };
+        const totalBars = Math.max(0.25, Number(this.properties?.total_bars) || 4.0);
+        const currentBar = ((telemetry.bar % totalBars) + totalBars) % totalBars;
+        const structure = this.getSectionStructure();
+        const cutPoints = Array.isArray(structure.points) ? [...structure.points].sort((a, b) => a - b) : [];
+        const boundaries = [0, ...cutPoints.filter(p => p > 0 && p < totalBars), totalBars];
+        let activeProb = 1.0;
+        for (let i = 0; i < boundaries.length - 1; i++) {
+            if (currentBar >= boundaries[i] && currentBar < boundaries[i + 1]) {
+                activeProb = typeof structure.probability[i] === 'number' ? structure.probability[i] : 1.0;
+                break;
+            }
+        }
+        return {
+            isTriggered: activeProb > 0,
+            progress: Math.max(0, Math.min(1, currentBar / totalBars))
+        };
+    }
+
     private _cachedCompositedBuffer: AudioBuffer | null = null;
     private _lastInputBufferRef: AudioBuffer | null = null;
     private _lastArrangementFingerprint: string = '';
+
+    override shouldRefreshTabOnGraphChange(tab: string): boolean {
+        return tab === 'ARRANGEMENT';
+    }
+
+    override getGhostBoundFieldOverrides(): Record<string, string[]> {
+        return {
+            'probability': ['section_probability'],
+            'sample start': ['section_sample_start']
+        };
+    }
 
     override getAudioBuffer(visited?: Set<number>): AudioBuffer | null {
         if ((this as any).manifestStemBuffer) return (this as any).manifestStemBuffer;
@@ -426,14 +494,21 @@ export class ArrangementNode extends BaseNode {
 
         const inputNodes = this.getInputNodes();
         let inputBuffer: AudioBuffer | null = null;
+        let inputSlotsMap: Map<number, AudioBuffer> | null = null;
         for (const inputNode of inputNodes) {
+            if (typeof (inputNode as any)?.getSlotBuffersMap === 'function') {
+                const map = (inputNode as any).getSlotBuffersMap(cycleSet);
+                if (map && map.size > 0) {
+                    inputSlotsMap = map;
+                }
+            }
             const buf = inputNode?.getAudioBuffer?.(cycleSet) || inputNode?.audioBuffer;
             if (buf) {
                 inputBuffer = buf;
                 break;
             }
         }
-        if (!inputBuffer) return null;
+        if (!inputBuffer && (!inputSlotsMap || inputSlotsMap.size === 0)) return null;
 
         const getGlobal = (typeof window !== 'undefined') ? (window as any).getGlobalParameter : null;
         const globalBars = typeof getGlobal === 'function' ? Number(getGlobal('total_bars')) : 4;
@@ -441,21 +516,32 @@ export class ArrangementNode extends BaseNode {
 
         const totalBars = Number(this.properties?.total_bars) || globalBars || 4;
         const bpm = Number.isFinite(globalBpm) && globalBpm > 0 ? globalBpm : 120;
-        const sectionPoints = Array.isArray(this.properties?.section_points) ? this.properties.section_points : [];
+        const structure = this.getSectionStructure();
+        const sectionPoints = structure.points;
         const sectionEnabled = Array.isArray(this.properties?.section_enabled) ? this.properties.section_enabled : undefined;
+        const seed = Number.isFinite(Number(this.properties?.seed)) ? Number(this.properties?.seed) : 42;
+        const enabledKey = sectionEnabled ? sectionEnabled.map(Boolean).join(',') : 'all';
 
         const nodeGain = getNodeGainMultiplier(this);
-        const fp = `${totalBars}_${bpm}_${sectionPoints.join(',')}_${nodeGain}`;
+        const fp = `${totalBars}_${bpm}_${sectionPoints.join(',')}_${enabledKey}_${(structure.slots || []).join(',')}_${structure.probability.join(',')}_${structure.sampleStart.join(',')}_${structure.quant.join(',')}_${structure.quantAnchor.join(',')}_${seed}_${nodeGain}`;
         if (this._cachedCompositedBuffer && this._lastInputBufferRef === inputBuffer && this._lastArrangementFingerprint === fp) {
             return this._cachedCompositedBuffer;
         }
 
         const composited = compositeArrangementBuffer(
-            inputBuffer,
+            inputSlotsMap && inputSlotsMap.size > 0 ? inputSlotsMap : (inputBuffer as AudioBuffer),
             sectionPoints,
             sectionEnabled,
             totalBars,
-            bpm
+            bpm,
+            {
+                sectionSlots: structure.slots,
+                sectionProbability: structure.probability,
+                sectionSampleStart: structure.sampleStart,
+                sectionQuant: structure.quant,
+                sectionQuantAnchor: structure.quantAnchor,
+                seed
+            }
         );
 
         if (!composited) return null;

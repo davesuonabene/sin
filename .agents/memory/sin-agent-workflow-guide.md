@@ -10,11 +10,11 @@
 SIN separates composition, compilation, and sound generation into three distinct layers:
 
 1. **Python Audio Engine (`core/`):**
-   Executes the canonical `AudioNodeModel` payload tree. Responsible for sample transforms, Rubber Band time-stretching, step sequencer timing, arrangement slicing, gain staging (`chain` supports `"gain"` only; DSP FX plugins are not implemented), multi-bus audio summing, and final WAV generation.
+   Executes the canonical `AudioNodeModel` payload tree. Responsible for sample transforms, Rubber Band time-stretching, multi-slot sample/sequence generation (`generate_slot(slot_idx)` cached per `(node_id, slot_idx)` in `GLOBAL_DAG_CACHE`), vectorized step sequencer timing with per-step slot dispatch (`step_slots`) and per-cycle PRNG seeds (`cycle_seeds`), arrangement slicing with per-section slot addressing (`section_slots`), gain staging (`chain` supports `"gain"` only; DSP FX plugins are not implemented), multi-bus audio summing, and final WAV generation.
 2. **ERMES Translation Layer (`ermes/`):**
-   The invariant serialization and compilation engine. Bridges compositional definitions (declarative `sin-graph` documents, LiteGraph workspace presets, asset pool locators, and random modulation seeds) into the normalized `AudioNodeModel` execution tree for the audio engine.
+   The invariant serialization and compilation engine. Bridges compositional definitions (declarative `sin-graph` documents, LiteGraph workspace presets, asset pool locators, multi-slot banks, `sample_slot` pattern expressions, and armed `seed` / `seed_refresh` controllers) into the normalized `AudioNodeModel` execution tree for the audio engine using the shared deterministic `mulberry32` + FNV-1a PRNG (`ermes/ts/slotLanguage.ts` & `ermes/py/slot_language.py`).
 3. **Decoupled Producers:**
-   - **Browser SIN App (`editor/`):** Canvas-based visual interface for human wire connecting and live auditioning.
+   - **Browser SIN App (`editor/`):** Canvas-based visual interface for human wire connecting, multi-slot editing, and lockstep audio/visual auditioning.
    - **SIN Terminal CLI (`cli.py`):** Headless, scriptable producer designed for agents and non-interactive batch runs.
 
 ```mermaid
@@ -153,12 +153,15 @@ Always route rhythm sections through dedicated submix buses before the master tr
       "type": "sequence",
       "properties": {
         "node_name": "Kick Rhythm",
+        "sample_slot": "0",
+        "seed": 42,
+        "seed_refresh": true,
         "sequence": [1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
         "step_parameters": [
-          { "probability": 100, "offset": 0.0, "velocity": 1.0, "subdivisions": 1, "subdivision_enabled": false }
+          { "probability": 1.0, "offset": 0.0, "velocity": 1.0, "subdivisions": 1, "subdivision_enabled": false, "sample_start": 0.0, "gate_length": 1.0 }
         ],
         "step_length": 0.25,
-        "play_mode": "trigger"
+        "play_mode": "gate"
       }
     },
     { "id": "drum-bus", "type": "track", "properties": { "node_name": "Drum Bus", "mix_mode": "sum" } },

@@ -26,8 +26,18 @@ The initial rules are intentionally small:
 
 - Node IDs are unique strings.
 - Supported node types are `sample`, `sequence`, `arrangement`, `track`,
-  `asset_filter`, `modulator`, and `disabled`.
-- Sample nodes must declare `sample_type` as `loop` or `one_shot`.
+  `asset_filter`, `random`, `modulator`, and `disabled`.
+- Sample nodes must declare `sample_type` as `loop` or `one_shot` and may hold
+  multiple variations in `slots: NodeSlot[]`.
+- Sequence nodes may hold multiple pattern/parameter variations in
+  `slots: NodeSlot[]` and dispatch upstream sample slots per step via
+  `sample_slot` (e.g. `"0"`, `"0 1"`, `"rand"`, modulo-wrapped against the
+  upstream sample slot count).
+- Arrangement nodes address connected upstream sequence or sample slots per
+  section via `section_slots: number[]` (modulo-wrapped).
+- Seed-bearing nodes (`sequence`, `arrangement`, `asset_filter`, `random`) use
+  `seed` (integer, whitespace-separated sequence, or `"rand"`) and
+  `seed_refresh: boolean` to control whether global Refresh (`↻`) rolls the seed.
 - Connections are directed `audio` edges between known nodes and may not cycle.
 - A complete graph has one master track, referenced by `output`.
 - BPM, length, and key are required graph settings.

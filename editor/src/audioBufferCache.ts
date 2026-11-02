@@ -3,11 +3,24 @@ let sharedAudioContext: AudioContext | null = null;
 
 export function getSharedAudioContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
-    if (!sharedAudioContext) {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioCtx) sharedAudioContext = new AudioCtx();
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!sharedAudioContext || (sharedAudioContext as any).state === 'closed') {
+        sharedAudioContext = new AudioCtx();
     }
     return sharedAudioContext;
+}
+
+export async function ensureSharedAudioContextReady(): Promise<AudioContext | null> {
+    const ctx = getSharedAudioContext();
+    if (ctx && ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+        try {
+            await ctx.resume();
+        } catch {
+            // Ignore resume failures in headless or restricted environments
+        }
+    }
+    return ctx;
 }
 
 export async function fetchAudioBuffer(filepath: string): Promise<AudioBuffer | null> {

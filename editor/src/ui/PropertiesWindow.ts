@@ -4,7 +4,6 @@ import { ArrangementVisualizer } from './ArrangementVisualizer';
 import { getGhostSource, isGhostFieldLinked, isGhostNode, relinkGhostField, syncGhostTrackData, unlinkGhostField } from '../ghosts';
 import { SectionRendererFactory } from './SectionRendererFactory';
 import { RandomParamOverlay } from './RandomParamOverlay';
-import { advanceRandomSeed, applyRandomModulation } from '../../../ermes/ts/randomResolver.ts';
 
 export class PropertiesWindow {
     container: HTMLElement;
@@ -16,6 +15,9 @@ export class PropertiesWindow {
     currentPoolPreviewAudio: HTMLAudioElement | null = null;
     currentPoolPreviewButton: HTMLButtonElement | null = null;
     renderToken: number = 0;
+    private tabRenderQueue: Promise<void> = Promise.resolve();
+    private isRenderingTab: boolean = false;
+    private pendingTabRender: boolean = false;
     private modifierAssignmentHandler: (event: Event) => void;
     private nodePropertiesRefreshHandler: (event: Event) => void;
     private arrangementGraphHandler: () => void;
@@ -33,7 +35,7 @@ export class PropertiesWindow {
             if ((event as CustomEvent).detail?.nodeId === this.node.id) void this.renderTabContent();
         };
         this.arrangementGraphHandler = () => {
-            if (this.node.type === 'Audio/Arrangement' && this.activeTab === 'ARRANGEMENT') {
+            if ((this.node as any).shouldRefreshTabOnGraphChange?.(this.activeTab)) {
                 void this.renderTabContent();
             }
         };
@@ -87,51 +89,28 @@ export class PropertiesWindow {
         window.removeEventListener('start-random-mapping', this.startRandomMappingHandler);
     }
 
-    private isAssetFilterNode(): boolean {
-        return this.node.type === "Audio/AssetFilter"
-            || this.node.properties?.node_type === "asset_filter"
-            || this.node.properties?.output_type === "asset_path";
-    }
-
     private getDefaultTab(): string {
-        if (typeof (this.node as any).getDefaultPropertiesTab === 'function') {
-            return (this.node as any).getDefaultPropertiesTab();
+        const nodeAny = this.node as any;
+        if (typeof nodeAny.getDefaultPropertiesTab === 'function') {
+            return nodeAny.getDefaultPropertiesTab();
         }
-        if (this.node.type === "Audio/Track") return "TRACK";
-        if (this.node.type === "Audio/Sequence") return "SEQUENCE";
-        if (this.node.type === "Audio/Arrangement") return "ARRANGEMENT";
-        if (this.isAssetFilterNode()) return "FILTER";
-        if (this.node.type === "Audio/Modulator") return "MODULATOR";
-        if (this.node.type === "Audio/Random") return "RANDOM";
-        return "PARAMS";
+        return nodeAny.defaultPropertiesTab || "PARAMS";
     }
 
     private getTabList(): string[] {
-        if (typeof (this.node as any).getPropertiesTabs === 'function') {
-            return (this.node as any).getPropertiesTabs();
+        const nodeAny = this.node as any;
+        if (typeof nodeAny.getPropertiesTabs === 'function') {
+            return nodeAny.getPropertiesTabs();
         }
-        let tabs: string[];
-        if (this.node.type === "Audio/Sample") tabs = ["SAMPLE", "CROP", "AUDIO", "CHAIN", "COMMON"];
-        else if (this.node.type === "Audio/Sequence") tabs = ["SEQUENCE", "TIMING", "CHAIN", "COMMON"];
-        else if (this.node.type === "Audio/Arrangement") tabs = ["ARRANGEMENT", "CHAIN", "COMMON"];
-        else if (this.isAssetFilterNode()) tabs = ["FILTER", "COMMON"];
-        else if (this.node.type === "Audio/Modulator") tabs = ["MODULATOR", "COMMON"];
-        else if (this.node.type === "Audio/Random") tabs = ["RANDOM", "COMMON"];
-        else tabs = ["TRACK", "CHAIN", "COMMON"];
-        return tabs;
+        return nodeAny.propertiesTabs || ["PARAMS", "COMMON"];
     }
 
     private getNodeBadge(): string {
-        if (typeof (this.node as any).getNodeBadgeLabel === 'function') {
-            return (this.node as any).getNodeBadgeLabel();
+        const nodeAny = this.node as any;
+        if (typeof nodeAny.getNodeBadgeLabel === 'function') {
+            return nodeAny.getNodeBadgeLabel();
         }
-        if (this.node.type === "Audio/Sample") return "SMPL";
-        if (this.node.type === "Audio/Sequence") return "SEQ";
-        if (this.node.type === "Audio/Arrangement") return "ARR";
-        if (this.isAssetFilterNode()) return "PATH";
-        if (this.node.type === "Audio/Modulator") return "MOD";
-        if (this.node.type === "Audio/Random") return "RND";
-        return "NODE";
+        return nodeAny.badgeLabel || "NODE";
     }
 
     private applyGhostBindingControls(container: HTMLElement) {
@@ -177,8 +156,9 @@ export class PropertiesWindow {
             'refresh mode': ['refresh_mode'],
             'offset': ['step_parameters'],
             'velocity': ['step_parameters'],
-            'probability': [this.node.type === 'Audio/Arrangement' ? 'section_probability' : 'step_parameters'],
-            'sample start': [this.node.type === 'Audio/Sequence' ? 'step_parameters' : 'section_sample_start'],
+            'probability': ['step_parameters'],
+            'sample start': ['section_sample_start'],
+            'start offset': ['section_sample_start'],
             'quantize': ['section_quant'],
             'anchor': ['section_quant_anchor'],
             'roll': ['step_parameters'],
@@ -187,7 +167,8 @@ export class PropertiesWindow {
             'color presets': ['color'],
             'node icon': ['icon'],
             'pool items': ['selected_items'],
-            'matches': ['selected_items']
+            'matches': ['selected_items'],
+            ...((this.node as any).getGhostBoundFieldOverrides?.() || {})
         };
 
         const setBoundState = (host: HTMLElement, linked: boolean) => {
@@ -248,7 +229,7 @@ export class PropertiesWindow {
             toolbarFields.push(
                 { label: 'Section cuts', fields: ['section_points'], selector: '.arrangement-visualizer' },
                 { label: 'Section probability', fields: ['section_probability'], selector: '#sec-prob-input' },
-                { label: 'Section sample start', fields: ['section_sample_start'], selector: '#sec-sample-start-input' },
+                { label: 'Section start offset', fields: ['section_sample_start'], selector: '#sec-sample-start-input' },
                 { label: 'Section quantize', fields: ['section_quant'], selector: '#prop-sec-quant' },
                 { label: 'Section anchor', fields: ['section_quant_anchor'], selector: '#prop-sec-quant-anchor' }
             );
@@ -279,15 +260,31 @@ export class PropertiesWindow {
     }
 
     async render() {
+        (this.node as any).ensurePoolSlotsPopulated?.();
         const syncMetadata = (this.node as any).syncMetadataFromLibrary;
         if (typeof syncMetadata === 'function') {
             // Metadata lookup can involve loading the full GAIA library.  Do
             // not hold the inspector hostage to that request: build the shell
-            // and controls immediately, then refresh them once it completes.
+            // and controls immediately, then refresh them once it completes
+            // only if a displayed metadata field actually changed.
+            const snapshotBefore = {
+                filepath: this.node.properties?.filepath,
+                sample_type: this.node.properties?.sample_type,
+                original_bpm: this.node.properties?.original_bpm,
+                key: this.node.properties?.key,
+            };
             void Promise.resolve()
                 .then(() => syncMetadata.call(this.node))
                 .then(metadata => {
-                    if (metadata && !this.disposed) void this.renderTabContent();
+                    if (!metadata || this.disposed) return;
+                    const changed =
+                        this.node.properties?.filepath !== snapshotBefore.filepath ||
+                        this.node.properties?.sample_type !== snapshotBefore.sample_type ||
+                        this.node.properties?.original_bpm !== snapshotBefore.original_bpm ||
+                        this.node.properties?.key !== snapshotBefore.key;
+                    if (changed) {
+                        void this.renderTabContent();
+                    }
                 })
                 .catch(error => console.error('Could not refresh asset metadata from GAIA', error));
         }
@@ -305,8 +302,9 @@ export class PropertiesWindow {
         };
         const dockTitle = isFloating() ? 'Dock to Right Side' : 'Float Window';
         const dockIcon = isFloating() ? '📌' : '↗';
-        const hasAttachedRandomModifier = !(this.node as any).isModifier
-            && Boolean(RandomParamOverlay.getAttachedRandomModifier(this.node as any));
+        const isRenderEnabled = this.node.properties?.render_enabled !== false;
+        const isFreezeProtected = this.node.properties?.freeze_refresh !== false;
+        const isViewerCookEnabled = this.node.properties?.visualization_enabled !== false;
 
         this.container.innerHTML = `
             <div class="td-param-container">
@@ -318,16 +316,17 @@ export class PropertiesWindow {
                     </div>
                     <div style="display: flex; align-items: center; gap: 4px;">
                         ${!(this.node as any).isModifier ? `
+                            <button type="button" class="close-btn" id="td-viewer-cook-btn" title="Viewer Cook: ${isViewerCookEnabled ? 'ON (Click to shut Iride)' : 'OFF (Click to enable Iride)'}" style="opacity: ${isViewerCookEnabled ? '1' : '0.45'}; color: ${isViewerCookEnabled ? '#38bdf8' : 'inherit'};">👁</button>
+                            <button type="button" class="close-btn" id="td-render-toggle-btn" title="Include in Global Render: ${isRenderEnabled ? 'ON' : 'OFF'}" style="opacity: ${isRenderEnabled ? '1' : '0.45'}; color: ${isRenderEnabled ? '#10b981' : 'inherit'}; font-weight: 700;">R</button>
+                            <button type="button" class="close-btn" id="td-freeze-toggle-btn" title="Freeze Protection: ${isFreezeProtected ? 'ON' : 'OFF'}" style="opacity: ${isFreezeProtected ? '1' : '0.45'}; color: ${isFreezeProtected ? '#38bdf8' : 'inherit'};">❄</button>
                             <button type="button" class="random-mode-toggle-btn ${this.isRandomMappingMode ? 'active' : ''}" id="td-random-mode-btn" title="Toggle Live Random Mapping Mode (Locks normal editing, click parameter to map, scroll to edit range)">
                                 <span class="random-mode-dot"></span>
                                 <span class="random-mode-btn-text">${this.isRandomMappingMode ? 'Mapping Active' : 'Map Mode'}</span>
                             </button>
-                            ${hasAttachedRandomModifier ? `
-                                <button type="button" class="td-param-btn td-random-roll-header-btn" id="td-random-roll-btn" title="Roll random parameters">
-                                    Roll 🎲
-                                </button>
-                            ` : ''}
-                        ` : ''}
+                        ` : `
+                            <button type="button" class="td-param-btn" id="td-parent-node-btn" title="Return to Parent Node" style="padding: 2px 7px; font-size: 10px;">← Node</button>
+                            <button type="button" class="close-btn" id="td-delete-mod-btn" title="Remove this Modifier" style="color: #ef4444;">🗑</button>
+                        `}
                         <button class="close-btn" id="td-dock-btn" title="${dockTitle}">${dockIcon}</button>
                         <button class="close-btn" id="td-close-btn" title="Close Panel">✕</button>
                     </div>
@@ -352,6 +351,23 @@ export class PropertiesWindow {
         const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
         this.setupInlineTitleEditor(titleDisplay, titleText);
 
+        this.container.querySelector('#td-viewer-cook-btn')?.addEventListener('click', () => {
+            if (typeof (this.node as any).toggleVisualization === 'function') {
+                (this.node as any).toggleVisualization();
+                void this.render();
+            }
+        });
+        this.container.querySelector('#td-render-toggle-btn')?.addEventListener('click', () => {
+            const current = this.node.properties?.render_enabled !== false;
+            (this.node as any).updateProperty?.('render_enabled', !current);
+            void this.render();
+        });
+        this.container.querySelector('#td-freeze-toggle-btn')?.addEventListener('click', () => {
+            const current = this.node.properties?.freeze_refresh !== false;
+            (this.node as any).updateProperty?.('freeze_refresh', !current);
+            void this.render();
+        });
+
         const randomModeBtn = this.container.querySelector('#td-random-mode-btn');
         randomModeBtn?.addEventListener('click', () => {
             this.isRandomMappingMode = !this.isRandomMappingMode;
@@ -361,13 +377,20 @@ export class PropertiesWindow {
             void this.render();
         });
 
-        this.container.querySelector('#td-random-roll-btn')?.addEventListener('click', (e) => {
-            e.preventDefault();
-            const modifier = RandomParamOverlay.getOrCreateRandomModifier(this.node as any);
-            if (!modifier) return;
-            advanceRandomSeed(modifier);
-            applyRandomModulation(modifier, this.node);
-            this.applyOverlays();
+        this.container.querySelector('#td-parent-node-btn')?.addEventListener('click', () => {
+            const parentId = this.node.properties?.parentId;
+            if (parentId != null) {
+                window.dispatchEvent(new CustomEvent('open-node-properties', { detail: { nodeId: parentId } }));
+            }
+        });
+        this.container.querySelector('#td-delete-mod-btn')?.addEventListener('click', () => {
+            const parentId = this.node.properties?.parentId;
+            window.dispatchEvent(new CustomEvent('delete-node', { detail: { nodeId: this.node.id } }));
+            if (parentId != null) {
+                window.dispatchEvent(new CustomEvent('open-node-properties', { detail: { nodeId: parentId } }));
+            } else {
+                this.onClose();
+            }
         });
 
         this.container.querySelector('#td-dock-btn')?.addEventListener('click', () => {
@@ -400,7 +423,28 @@ export class PropertiesWindow {
         }
     }
 
-    private async renderTabContent() {
+    async renderTabContent(): Promise<void> {
+        if (this.disposed) return;
+        if (this.isRenderingTab) {
+            this.pendingTabRender = true;
+            return this.tabRenderQueue;
+        }
+        this.isRenderingTab = true;
+        this.tabRenderQueue = (async () => {
+            try {
+                do {
+                    this.pendingTabRender = false;
+                    if (this.disposed) break;
+                    await this.executeRenderTabContent();
+                } while (this.pendingTabRender && !this.disposed);
+            } finally {
+                this.isRenderingTab = false;
+            }
+        })();
+        return this.tabRenderQueue;
+    }
+
+    private async executeRenderTabContent() {
         const token = ++this.renderToken;
 
         this.stopPoolItemPreview();
@@ -459,6 +503,7 @@ export class PropertiesWindow {
             const tabConfig = schema.tabs?.find((t: any) => t.id === this.activeTab);
             if (tabConfig && tabConfig.sections) {
                 contentContainer.innerHTML = '';
+                const pendingSectionPromises: Promise<void>[] = [];
                 for (const section of tabConfig.sections) {
                     // Waveform decoding is the expensive panel path.  Keep the
                     // field controls available and show a compact placeholder
@@ -468,7 +513,7 @@ export class PropertiesWindow {
                         placeholder.className = 'td-section-container td-section-loading';
                         placeholder.textContent = 'Loading waveform…';
                         contentContainer.appendChild(placeholder);
-                        void SectionRendererFactory.renderSection(section, this.node as any, this)
+                        const wfPromise = SectionRendererFactory.renderSection(section, this.node as any, this)
                             .then(el => {
                                 if (token !== this.renderToken || this.disposed) return;
                                 placeholder.replaceWith(el);
@@ -479,6 +524,7 @@ export class PropertiesWindow {
                                 placeholder.textContent = 'Could not load waveform.';
                                 console.error('Could not render waveform panel', error);
                             });
+                        pendingSectionPromises.push(wfPromise);
                         continue;
                     }
                     const el = await SectionRendererFactory.renderSection(section, this.node as any, this);
@@ -487,6 +533,9 @@ export class PropertiesWindow {
                 }
                 SectionRendererFactory.updateNodeFieldStates(contentContainer, this.node as any);
                 finish();
+                if (pendingSectionPromises.length > 0) {
+                    await Promise.all(pendingSectionPromises);
+                }
                 return;
             }
         }

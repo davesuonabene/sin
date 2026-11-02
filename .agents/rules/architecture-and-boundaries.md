@@ -56,3 +56,19 @@ All node-specific rendering, styling, badge identifiers, default property initia
 - Declare node parameters as `FieldSchema[]` on their node class.
 - Inspector panels render controls through `WidgetFactory.createRow(field, node, onChange)` and declare layouts through `static panelSchema: NodePanelSchema`.
 - Change node state only via `node.updateProperty(key, value)` or `node.properties` so the UI and serialized payload remain aligned.
+
+---
+
+## 5. Multi-Slot Node Addressing (`node[n]`), Deterministic Seeds & Preview Pipeline
+
+- **Dynamic Multi-Slot Architecture (`slots: NodeSlot[]`)**:
+  - `SampleNode` and `SequenceNode` manage dynamic slot banks (`properties.slots[0..S-1]`) controlled via the Inspector slot strip (`+` button placed directly next to the active slot pill) and represented in IRIDE canvas overlays (`[0] [1] ...`).
+  - Upstream slots are addressed along connected paths with modulo wrapping (`idx % S`): `SequenceNode` evaluates a single global `sample_slot` expression field across steps (supporting integer literals, whitespace-separated looping patterns such as `"0 1"`, and `"rand"`), while `ArrangementNode` evaluates independent per-section `section_slots`.
+- **Shared Deterministic PRNG & Armed Seed Refresh**:
+  - `ermes/ts/slotLanguage.ts` and `ermes/py/slot_language.py` implement bit-identical `mulberry32` + `hashSeed` (FNV-1a) evaluation for step slots, `cycle_seeds`, and modifier slot seeds.
+  - Seed-bearing nodes (`SequenceNode`, `ArrangementNode`, `AssetFilterNode`, `RandomNode`) expose a `seed` field (`type: 'seed'`) paired with a right-hand Refresh Toggle (`seed_refresh`, default `true`).
+  - Pressing the global Refresh (`↻`) button runs `refreshArmedSeeds`, rolling only seeds with `seed_refresh !== false` (when Global Freeze is inactive) and immediately populating all `slots[0..S-1]` via `populateOwnerSlotsFromPool` and `populateOwnerSlotsFromRandom`.
+  - Pressing Play (`Space` / Global Play) or Node Preview (`▶`) is strictly non-mutating (`refreshModifiers = false`): it hydrates pool locators if needed (`syncGraphSampleMetadataFromLibrary(graph, true)`), but never advances seeds or mutates the visual preview.
+- **Lockstep Audio/Visual Preview & Session Staging**:
+  - Progressive binary `SINB` bar chunks are decoded and staged in the background via `GaplessAudioScheduler.stageBarChunk(chunk, sessionId)` without starting silent playback on `bar_index === 0` or overwriting `fullAudioBuffer` with partial 1-bar buffers.
+  - Upon stream `complete`, `commitSession(sessionId)` publishes the complete session buffer, `distributeWorkspaceManifest` awaits all intermediate stem and sample buffers, and `playFromStart()` / `playAsync()` awaits `AudioContext.resume()` (`ensureContextReady()`) before starting transport and `startPlaybackTelemetry()` together.

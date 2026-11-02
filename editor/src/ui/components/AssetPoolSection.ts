@@ -75,17 +75,17 @@ export class AssetPoolSection {
         if (!listEl) return;
 
         const commitItems = async (nextItems: any[], removedItem?: any) => {
-            node.updateProperty('selected_items', nextItems);
-            node.updateProperty('sequence_index', -1);
-
             const removedPath = poolItemKey(removedItem);
             const outputPath = poolItemKey({ filepath: node.properties.output_value });
-            if (removedPath && removedPath === outputPath) {
+            if ((removedPath && removedPath === outputPath) || nextItems.length === 0) {
                 node.updateProperty('output_value', '');
                 node.updateProperty('output_item_id', null);
                 node.updateProperty('output_bpm', null);
                 node.updateProperty('output_key', '');
             }
+
+            node.updateProperty('selected_items', nextItems);
+            node.updateProperty('sequence_index', -1);
 
             window.dispatchEvent(new CustomEvent('item-pool-preview-refresh', {
                 detail: { nodeId: node.id }
@@ -250,7 +250,9 @@ export class AssetPoolSection {
             }
 
             node.updateProperty('selected_items', [...merged.values()]);
-            node.updateProperty('seed', Math.random());
+            if (node.properties.seed == null) {
+                node.updateProperty('seed', 42);
+            }
             node.updateProperty('sequence_index', -1);
             window.dispatchEvent(new CustomEvent('item-pool-preview-refresh', {
                 detail: { nodeId: node.id }

@@ -175,14 +175,20 @@ export class ArrangementRenderer extends BaseSignalRenderer {
                     ctx.stroke();
                 }
 
-                // Section index label
-                ctx.fillStyle = isActiveSection ? '#ffffff' : '#1e293b';
-                ctx.font = 'bold 9px Inter, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                const label = sec.label || String(i + 1);
-                if (secW > 12) {
-                    ctx.fillText(label, secX + secW / 2, y + height / 2);
+                // Section index label (omitted in chromeless minified middle stage)
+                if (!this.options.minified) {
+                    ctx.fillStyle = isActiveSection ? '#ffffff' : '#1e293b';
+                    ctx.font = 'bold 9px Inter, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    const baseLabel = sec.label || String(i + 1);
+                    const hasCustomSlot = sec.slotIndex != null && sec.slotIndex > 0;
+                    const label = (hasCustomSlot && secW > 26)
+                        ? `${baseLabel}[${sec.slotIndex}]`
+                        : (hasCustomSlot ? `[${sec.slotIndex}]` : baseLabel);
+                    if (secW > 12) {
+                        ctx.fillText(label, secX + secW / 2, y + height / 2);
+                    }
                 }
             }
         }

@@ -139,3 +139,107 @@ test('ArrangementNode adapts section cuts proportionally when total_bars changes
     assert.equal(arr.properties.total_bars, 16.0);
     assert.deepEqual(arr.properties.section_points, [8]);
 });
+
+test('ArrangementNode registers section_sample_start as Start Offset', async () => {
+    const { ArrangementNode } = await import('../src/nodes/ArrangementNode.ts');
+    const field = ArrangementNode.fields.find(f => f.key === 'section_sample_start');
+    assert.ok(field, 'section_sample_start field schema must be registered');
+    assert.equal(field?.label, 'Start Offset');
+    assert.equal(field?.type, 'slider');
+    assert.equal(field?.min, 0);
+    assert.equal(field?.max, 1);
+});
+
+test('compositeArrangementBuffer loops onto itself when continuous and stops at end of sample when quantized', async () => {
+    const { compositeArrangementBuffer } = await import('../src/audioCompositor.ts');
+
+    const previousWindow = (globalThis as any).window;
+    try {
+        (globalThis as any).window = (globalThis as any).window || {};
+        (globalThis as any).window.AudioContext = class {
+            createBuffer(numChannels: number, length: number, sampleRate: number) {
+                const channels: Float32Array[] = [];
+                for (let i = 0; i < numChannels; i++) {
+                    channels.push(new Float32Array(length));
+                }
+                return {
+                    length,
+                    sampleRate,
+                    duration: length / sampleRate,
+                    numberOfChannels: numChannels,
+                    getChannelData: (ch: number) => channels[ch]
+                };
+            }
+        };
+
+        const sr = 100;
+        const len = 200; // 1 bar at 120 bpm (2.0s = 200 samples)
+        const channelData = new Float32Array(len);
+        for (let i = 0; i < len; i++) channelData[i] = i;
+
+        const mockBuffer: any = {
+            sampleRate: sr,
+            numberOfChannels: 1,
+            length: len,
+            duration: len / sr,
+            getChannelData: () => channelData
+        };
+
+        // 1. Continuous quantize: loop wraps onto itself starting from Start Offset
+        const contOut = compositeArrangementBuffer(
+            mockBuffer,
+            [],
+            [true],
+            1.0,
+            120,
+            {
+                sectionSampleStart: [0.25], // sample index 50
+                sectionQuant: ['auto']
+            }
+        );
+        assert.ok(contOut);
+        const contData = contOut.getChannelData(0);
+        assert.equal(contData.length, 200);
+        // First 150 samples: 50..199
+        for (let i = 0; i < 150; i++) {
+            assert.equal(contData[i], 50 + i);
+        }
+        // Next 50 samples: 0..49 (looped onto itself)
+        for (let i = 0; i < 50; i++) {
+            assert.equal(contData[150 + i], i);
+        }
+
+        // 2. Non-continuous quantize: playback stops when reaching the end of the sample
+        const quantOut = compositeArrangementBuffer(
+            mockBuffer,
+            [],
+            [true],
+            1.0,
+            120,
+            {
+                sectionSampleStart: [0.75], // sample index 150 (50 samples remain)
+                sectionQuant: ['0.5'],      // half bar = 100 samples
+                sectionQuantAnchor: ['start']
+            }
+        );
+        assert.ok(quantOut);
+        const quantData = quantOut.getChannelData(0);
+        assert.equal(quantData.length, 200);
+        // Cell 1: 0..50 plays 150..199, 50..100 is silent (0)
+        for (let i = 0; i < 50; i++) {
+            assert.equal(quantData[i], 150 + i);
+        }
+        for (let i = 50; i < 100; i++) {
+            assert.equal(quantData[i], 0);
+        }
+        // Cell 2: 100..150 plays 150..199, 150..200 is silent (0)
+        for (let i = 0; i < 50; i++) {
+            assert.equal(quantData[100 + i], 150 + i);
+        }
+        for (let i = 150; i < 200; i++) {
+            assert.equal(quantData[i], 0);
+        }
+    } finally {
+        (globalThis as any).window = previousWindow;
+    }
+});

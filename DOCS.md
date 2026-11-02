@@ -55,13 +55,15 @@ sin/
 │   └── routers/              # GAIA & DSP API endpoints
 │
 ├── ermes/                    # [ERMES Serialization Engine]
-│   ├── ts/                   # TypeScript serialization & traversal engine
-│   │   ├── traversal.ts      # Subtree recursive traversal & link validation
-│   │   ├── assetResolver.ts  # Dynamic asset pool seed & filter resolver
-│   │   └── serializer.ts     # Main ErmesSerializer class
-│   └── py/                   # Python serialization models & validation
-│       ├── schemas.py        # Ermes AudioNodeModel & FxModuleModel Pydantic schemas
-│       └── validator.py      # Backend payload validator & graph constructor
+│   ├── ts/                   # TypeScript serialization, slot micro-language & resolvers
+│   │   ├── slotLanguage.ts   # Shared Mulberry32 PRNG, step_slots, cycle_seeds & modulo wrapping
+│   │   ├── assetResolver.ts  # Dynamic asset pool multi-slot population & GAIA hydration
+│   │   ├── randomResolver.ts # Random modifier multi-slot modulation & armed seed rolling
+│   │   └── serializer.ts     # Subtree compiler into canonical AudioNodeModel payload
+│   └── py/                   # Python serialization models, slot micro-language & validation
+│       ├── slot_language.py  # Bit-identical Python PRNG, slot pattern & seed evaluation
+│       ├── schemas.py        # Ermes AudioNodeModel, NodeSlotModel & FxModuleModel schemas
+│       └── compiler.py       # Headless graph compiler & auto-layout engine
 │
 └── editor/                   # [SIN Node Editor Frontend]
     ├── src/
@@ -87,11 +89,12 @@ Before graph data is transmitted to the backend for preview or DSP rendering, **
   * Encapsulates square canvas node rendering (`drawCanvas()`) with sub-methods (`drawSelectionRing()`, `drawBody()`, `drawIcon()`, `drawSlots()`, `drawBadges()`, `drawNameBadge()`).
   * Integrates canvas action buttons ([`CanvasButton`](file:///c:/web-projects/sin/editor/src/ui/CanvasButton.ts)).
 * **Concrete Node Implementations**:
-  * **[`SampleNode`](file:///c:/web-projects/sin/editor/src/nodes/SampleNode.ts)** (`Audio/Sample`): Audio sample playback unit.
-  * **[`SequenceNode`](file:///c:/web-projects/sin/editor/src/nodes/SequenceNode.ts)** (`Audio/Sequence`): Step sequencer pattern generator.
+  * **[`SampleNode`](file:///c:/web-projects/sin/editor/src/nodes/SampleNode.ts)** (`Audio/Sample`): Multi-slot audio sample playback unit (`slots[0..S-1]`). Supports attached Asset Pools that deterministically populate all sample slots per seed.
+  * **[`SequenceNode`](file:///c:/web-projects/sin/editor/src/nodes/SequenceNode.ts)** (`Audio/Sequence`): Multi-slot step sequencer pattern generator (`slots[0..S-1]`). Evaluates a global `sample_slot` pattern field (e.g., `"0"`, `"0 1"`, `"rand"`) across steps with modulo wrapping (`idx % S`) against the connected upstream `SampleNode`, plus armed `seed` / `seed_refresh` control.
   * **[`TrackNode`](file:///c:/web-projects/sin/editor/src/nodes/TrackNode.ts)** (`Audio/Track`): Track mixing & output routing node.
-  * **[`ArrangementNode`](file:///c:/web-projects/sin/editor/src/nodes/ArrangementNode.ts)** (`Audio/Arrangement`): Timeline arrangement & section quantizer.
-  * **[`AssetFilterNode`](file:///c:/web-projects/sin/editor/src/nodes/AssetFilterNode.ts)** (`Audio/AssetFilter`): Asset Pool filter modifier.
+  * **[`ArrangementNode`](file:///c:/web-projects/sin/editor/src/nodes/ArrangementNode.ts)** (`Audio/Arrangement`): Timeline arrangement & section quantizer with independent per-section `section_slots` addressing upstream `SequenceNode` or `SampleNode` slots (`idx % S`).
+  * **[`AssetFilterNode`](file:///c:/web-projects/sin/editor/src/nodes/AssetFilterNode.ts)** (`Audio/AssetFilter`): Asset Pool modifier with armed `seed` / `seed_refresh` control.
+  * **[`RandomNode`](file:///c:/web-projects/sin/editor/src/nodes/RandomNode.ts)** (`Audio/Random`): Relative parameter & step modulator with armed `seed` / `seed_refresh` control.
   * **[`DisabledNode`](file:///c:/web-projects/sin/editor/src/nodes/DisabledNode.ts)** (`Audio/Disabled`): Bypass state indicator node.
 
 #### **UI Controls, Panel Schemas & Component Renderers (`editor/src/fields/` & `editor/src/ui/`)**

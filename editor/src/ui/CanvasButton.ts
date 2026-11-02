@@ -76,9 +76,10 @@ export class CanvasButton {
         ctx.fillStyle = "white";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.font = "bold 11px sans-serif";
+        const isCompactText = this.label.length > 1 && this.height <= 14;
+        ctx.font = isCompactText ? "700 8.5px Inter, system-ui, sans-serif" : "bold 11px sans-serif";
         
-        ctx.fillText(this.label, finalX + this.width / 2, finalY + this.height / 2 + 1);
+        ctx.fillText(this.label, finalX + this.width / 2, finalY + this.height / 2 + (isCompactText ? 0.5 : 1));
     }
 
     resolveTooltip(node: LGraphNode): string | undefined {

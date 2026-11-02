@@ -3,6 +3,7 @@ import { ModulatorNode } from './ModulatorNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from '../api.ts';
+import { populateOwnerSlotsFromPool } from '../../../ermes/ts/assetResolver.ts';
 
 /**
  * A typed modifier that selects one item from an explicit ordered asset pool.
@@ -16,7 +17,7 @@ export class AssetFilterNode extends ModulatorNode {
                 id: 'FILTER',
                 label: 'Asset Pool',
                 sections: [
-                    { type: 'fields', fields: ['playbackMode', 'refresh_mode'] },
+                    { type: 'fields', fields: ['playbackMode', 'seed'] },
                     { type: 'pool_editor' }
                 ]
             },
@@ -35,19 +36,12 @@ export class AssetFilterNode extends ModulatorNode {
         { key: 'node_name', label: 'Name', type: 'string', default: 'Asset Pool', tab: 'COMMON' },
         { key: 'playbackMode', label: 'Playback', type: 'select', default: 'Random', options: [{ value: 'Random', label: 'Random' }, { value: 'Sequential', label: 'Sequential' }], tab: 'FILTER' },
         {
-            key: 'refresh_mode',
-            label: 'Refresh Mode',
-            type: 'radio',
-            default: 'global',
-            options: [
-                { value: 'local', label: 'Local' },
-                { value: 'parent', label: 'Parent' },
-                { value: 'ancestor', label: 'Ancestor' },
-                { value: 'global', label: 'Global' },
-                { value: 'off', label: 'Off' }
-            ],
+            key: 'seed',
+            label: 'Seed',
+            type: 'seed',
+            default: 42,
             tab: 'FILTER',
-            description: 'Global advances on global recalculate. Local advances on every output request. Parent advances when its direct parent renders. Off keeps the current item.'
+            description: 'Deterministic seed or seed sequence (e.g. "42", "42 108", "rand") used to populate sample slots.'
         }
     ];
 
@@ -76,12 +70,39 @@ export class AssetFilterNode extends ModulatorNode {
             playbackMode: "Random",
             refresh_mode: "global",
             sequence_index: -1,
-            seed: 0,
+            seed: 42,
+            seed_refresh: true,
             color: "#7e22ce",
             icon: "search",
             shape: "diamond"
         };
 
+    }
+
+    override updateProperty(key: string, value: any): void {
+        super.updateProperty(key, value);
+        if (key === 'seed' || key === 'playbackMode' || key === 'selected_items') {
+            if (key === 'selected_items' && (!Array.isArray(value) || value.length === 0)) {
+                this.properties.output_value = '';
+                this.properties.output_item_id = null;
+                this.properties.output_bpm = null;
+                this.properties.output_key = '';
+                return;
+            }
+            const graph = this.graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+            const parentId = this.properties?.parentId;
+            let ownerNode = parentId != null && graph ? graph.getNodeById?.(parentId) : null;
+            if (!ownerNode && graph && this.id != null) {
+                const allNodes = ((graph as any)._nodes || (graph as any).nodes || []) as any[];
+                ownerNode = allNodes.find((n: any) => n?.properties?.asset_modifier_id === this.id) || null;
+            }
+            if (ownerNode) {
+                populateOwnerSlotsFromPool(this, ownerNode);
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: ownerNode.id } }));
+                }
+            }
+        }
     }
 
     getTitle(): string {

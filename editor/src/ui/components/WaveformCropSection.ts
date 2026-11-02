@@ -1,5 +1,6 @@
 import { type BaseNode } from '../../nodes/BaseNode.ts';
 import { WaveformVisualizer } from '../WaveformVisualizer.ts';
+import { SlotStrip } from './SlotStrip.ts';
 
 interface DroppedLibraryItem {
     id?: number | string;
@@ -98,6 +99,38 @@ export class WaveformCropSection {
 
         assetActions.append(poolButton);
         assetRow.append(assetLabel, assetActions);
+
+        const sampleNode = node as BaseNode & {
+            activeSlotIndex?: number;
+            getSlots?: () => any[];
+            selectSlot?: (index: number) => void;
+            addSlot?: () => number;
+            removeSlot?: (index: number) => void;
+        };
+        if (typeof sampleNode.getSlots === 'function') {
+            const slots = sampleNode.getSlots();
+            const stripEl = SlotStrip.render({
+                slotCount: slots.length,
+                activeSlot: sampleNode.activeSlotIndex ?? 0,
+                accentColor: (node as any).nodeColor || (node as any).color || '#10b981',
+                onSelect: async (idx) => {
+                    sampleNode.selectSlot?.(idx);
+                    windowContext?.refreshAudioPreview?.();
+                    await windowContext?.renderTabContent?.();
+                },
+                onAdd: async () => {
+                    sampleNode.addSlot?.();
+                    windowContext?.refreshAudioPreview?.();
+                    await windowContext?.renderTabContent?.();
+                },
+                onRemove: async (idx) => {
+                    sampleNode.removeSlot?.(idx);
+                    windowContext?.refreshAudioPreview?.();
+                    await windowContext?.renderTabContent?.();
+                }
+            });
+            assetRow.before(stripEl);
+        }
 
         dropTarget.addEventListener('dragover', event => {
             if (!event.dataTransfer || !getDroppedAudioItem(event.dataTransfer)) return;
@@ -215,8 +248,12 @@ export class WaveformCropSection {
         const filepath = node.properties.filepath;
         if (filepath) {
             await visualizer.loadAudio(filepath);
+            if (windowContext?.currentWaveformVisualizer !== visualizer || windowContext?.disposed) {
+                return;
+            }
             const audioDur = visualizer.getDuration();
-            if (audioDur > 0) {
+            const curDur = Number(node.properties.duration_seconds);
+            if (audioDur > 0 && (!Number.isFinite(curDur) || curDur <= 0 || Math.abs(curDur - audioDur) > 0.05)) {
                 node.updateProperty('duration_seconds', audioDur);
             }
             const crop = visualizer.getCrop();

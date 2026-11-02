@@ -94,6 +94,60 @@ export function traceNodeShape(
     ctx.closePath();
 }
 
+export function getNodeShapePerimeter(shape: NodeShape, size: number): number {
+    const inset = shape === 'diamond' ? size * 0.04 : 0;
+    const radius = size / 2 - inset;
+    if (shape === 'circle') {
+        return 2 * Math.PI * radius;
+    }
+    if (shape === 'square') {
+        return 4 * size;
+    }
+    const sides = shape === 'triangle' ? 3 : shape === 'pentagon' ? 5 : 4;
+    const sideLen = 2 * radius * Math.sin(Math.PI / sides);
+    return sides * sideLen;
+}
+
+export function drawPerimeterProgressAccent(
+    ctx: CanvasRenderingContext2D,
+    shape: NodeShape,
+    x: number,
+    y: number,
+    size: number,
+    progress: number,
+    color: string,
+    lineWidth = 2.25
+): void {
+    const clamped = Math.max(0, Math.min(1, progress));
+    if (clamped <= 0.001) return;
+
+    const cx = x + size / 2;
+    const cy = y + size / 2;
+    const inset = shape === 'diamond' ? size * 0.04 : 0;
+    const radius = size / 2 - inset;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (shape === 'circle') {
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamped);
+        ctx.stroke();
+        ctx.restore();
+        return;
+    }
+
+    const perimeter = getNodeShapePerimeter(shape, size);
+    ctx.setLineDash?.([perimeter * clamped, perimeter]);
+    traceNodeShape(ctx, shape, x, y, size);
+    ctx.stroke();
+    ctx.setLineDash?.([]);
+    ctx.restore();
+}
+
 export function drawNeonIcon(
     ctx: CanvasRenderingContext2D,
     iconValue: unknown,

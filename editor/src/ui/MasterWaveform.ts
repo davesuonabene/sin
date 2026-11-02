@@ -1,9 +1,9 @@
 import { loggedTask } from '../runtimeLog';
+import { getSharedAudioContext } from '../audioBufferCache.ts';
 
 export class MasterWaveform {
     private readonly canvas: HTMLCanvasElement;
     private readonly ctx: CanvasRenderingContext2D;
-    private audioContext: AudioContext | null = null;
     private audioBuffer: AudioBuffer | null = null;
     private progress = 0;
     private currentTime = 0;
@@ -85,15 +85,13 @@ export class MasterWaveform {
         this.message = 'Loading waveform...';
         this.draw();
         try {
-            if (!this.audioContext) {
-                const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
-                this.audioContext = new AudioContextCtor();
-            }
+            const audioContext = getSharedAudioContext();
+            if (!audioContext) throw new Error('AudioContext unavailable');
             const decoded = await loggedTask('Load preview waveform', async () => {
                 const response = await fetch(source);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.arrayBuffer();
-                return this.audioContext!.decodeAudioData(data);
+                return audioContext.decodeAudioData(data);
             });
             if (token !== this.loadToken) return null;
             this.audioBuffer = decoded;
@@ -113,7 +111,7 @@ export class MasterWaveform {
     }
 
     get playbackContext(): AudioContext | null {
-        return this.audioContext;
+        return getSharedAudioContext();
     }
 
     get duration() {

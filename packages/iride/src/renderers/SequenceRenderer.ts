@@ -39,12 +39,13 @@ export class SequenceRenderer extends BaseSignalRenderer {
         const stepCount = signal?.stepCount || 16;
         const steps = signal?.steps || [];
         const accent = signal?.accentColor || this.options.accentColor || '#f43f5e';
+        const isMinified = Boolean(this.options.minified);
 
         // 3. Spacing & Beat Grouping (4 beats of 4 steps)
         const paddingLeft = 4;
         const paddingRight = 4;
         const paddingTop = 3;
-        const paddingBottom = 11; // Space for beat labels 1, 2, 3, 4
+        const paddingBottom = 3;  // Full-height step pads without bottom micro-number clutter
         const innerGap = 2;       // Gap between steps inside a beat
         const beatGap = 6;        // Gap between 4-step groups
 
@@ -64,7 +65,6 @@ export class SequenceRenderer extends BaseSignalRenderer {
         let currentX = x + paddingLeft;
 
         for (let i = 0; i < stepCount; i++) {
-            const beatIndex = Math.floor(i / 4);
             const stepInBeat = i % 4;
 
             // Extra gap on beat boundary (except first)
@@ -86,23 +86,16 @@ export class SequenceRenderer extends BaseSignalRenderer {
             const isCurrent = i === currentStep;
             const isDownbeat = stepInBeat === 0;
 
-            // Pad Background
+            // Pad Background: colored ONLY if active, inactive steps are just borders
             if (isGateOn) {
                 if (isCurrent) {
                     ctx.fillStyle = '#ffffff'; // White flash on trigger hit
                 } else {
                     ctx.fillStyle = accent;    // Bright vivid neon active step
                 }
-            } else {
-                if (isCurrent) {
-                    ctx.fillStyle = '#38bdf8'; // Bright vivid cyan light runner
-                } else {
-                    ctx.fillStyle = isDownbeat ? '#cbd5e1' : '#e2e8f0'; // Subtle light slate pad
-                }
+                drawRoundRect(ctx, stepX, stepY, stepWidth, stepHeight, 2.5);
+                ctx.fill();
             }
-
-            drawRoundRect(ctx, stepX, stepY, stepWidth, stepHeight, 2.5);
-            ctx.fill();
 
             // Velocity indicator bar (inside active steps)
             if (isGateOn && !isCurrent && velocity < 0.95) {
@@ -120,7 +113,7 @@ export class SequenceRenderer extends BaseSignalRenderer {
 
             // Pad Border
             if (isCurrent) {
-                ctx.strokeStyle = '#ffffff';
+                ctx.strokeStyle = isGateOn ? '#ffffff' : '#38bdf8';
                 ctx.lineWidth = 1.75;
             } else if (isGateOn) {
                 ctx.strokeStyle = '#fbcfe8';
@@ -129,18 +122,26 @@ export class SequenceRenderer extends BaseSignalRenderer {
                 ctx.strokeStyle = isDownbeat ? '#94a3b8' : '#cbd5e1';
                 ctx.lineWidth = 0.75;
             }
-
             drawRoundRect(ctx, stepX, stepY, stepWidth, stepHeight, 2.5);
             ctx.stroke();
 
-            // Downbeat top accent notch
-            if (isDownbeat && !isCurrent) {
-                ctx.fillStyle = isGateOn ? '#ffffff' : '#64748b';
+            // Downbeat top accent notch (on active steps only)
+            if (isDownbeat && !isCurrent && isGateOn) {
+                ctx.fillStyle = '#ffffff';
                 ctx.fillRect(stepX + 1, stepY + 1, stepWidth - 2, 1.5);
             }
 
+            // Per-step sample slot index indicator when non-zero (omitted in minified stage)
+            if (!isMinified && isGateOn && stepData?.slotIndex != null && stepData.slotIndex > 0 && stepWidth >= 5) {
+                ctx.fillStyle = isCurrent ? '#0f172a' : '#ffffff';
+                ctx.font = 'bold 6.5px Inter, monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillText(String(stepData.slotIndex), stepX + stepWidth * 0.5, stepY + 2);
+            }
+
             // Subdivision dots
-            if (subdivisions > 1 && isGateOn) {
+            if (!isMinified && subdivisions > 1 && isGateOn) {
                 ctx.fillStyle = isCurrent ? '#000000' : '#ffffff';
                 const dotY = stepY + stepHeight - 2.5;
                 const dotCount = Math.min(4, subdivisions);
@@ -152,19 +153,22 @@ export class SequenceRenderer extends BaseSignalRenderer {
                 }
             }
 
-            // Beat Label (centered under each 4-step beat)
-            if (stepInBeat === 1 && height >= 34) {
-                const beatCenterX = stepX + (stepWidth * 2 + innerGap) / 2;
-                ctx.fillStyle = (telemetry?.isPlaying && Math.floor(currentStep / 4) === beatIndex)
-                    ? '#0284c7'
-                    : '#64748b';
-                ctx.font = 'bold 8px Inter, monospace';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'top';
-                ctx.fillText(String(beatIndex + 1), beatCenterX, stepY + stepHeight + 2);
-            }
-
             currentX += stepWidth;
+        }
+
+        if (!isMinified && (signal?.slotCount ?? 1) > 1) {
+            const label = `[${signal?.activeSlot ?? 0}/${signal?.slotCount}]`;
+            ctx.font = 'bold 7.5px Inter, monospace';
+            const textW = ctx.measureText(label).width;
+            const pillW = textW + 5;
+            const pillH = 10;
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+            drawRoundRect(ctx, x + width - pillW - 2, y + height - pillH - 1, pillW, pillH, 2);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, x + width - pillW + 0.5, y + height - pillH * 0.5 - 1);
         }
 
         ctx.restore();

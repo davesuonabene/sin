@@ -28,6 +28,7 @@ SUITES = {
         "test_shared_dsp.py",
         "test_dag_cache.py",
         "test_ermes_snapshot.py",
+        "test_slot_language.py",
     ],
     "cli": ["test_cli.py", "test_gaia_metadata_cli.py"],
     "gaia": [

@@ -54,5 +54,7 @@ Use this skill when you need to construct, edit, inspect, validate, or render au
 
 ## Key Rules
 - Presets are coordinate-agnostic: agents write pure topology; ERMES computes 2D coordinates on conversion.
+- Multi-slot addressing (`node[n]`): `sample` and `sequence` nodes support `slots` arrays; `sequence` nodes select connected sample slots per step via `sample_slot` (`"0"`, `"0 1"`, `"rand"`), and `arrangement` nodes select connected upstream slots per section via `section_slots`. All slot indices wrap via modulo (`idx % S`).
+- Deterministic seeds: seed-bearing nodes use `seed` + `seed_refresh` (`true` by default) evaluated by the shared `mulberry32` + FNV-1a PRNG (`ermes/ts/slotLanguage.ts` & `ermes/py/slot_language.py`).
 - SIN is strictly read-only towards GAIA assets.
 - For in-depth architectural details, see [`.agents/memory/sin-agent-workflow-guide.md`](file:///c:/web-projects/sin/.agents/memory/sin-agent-workflow-guide.md).

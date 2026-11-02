@@ -134,3 +134,40 @@ test('GaplessAudioScheduler hotSwapBarBuffer isolates updates to matching barInd
     scheduler.hotSwapBarBuffer(1, bufB);
     assert.equal(scheduler.getBufferedProgress(), 1.0);
 });
+
+test('GaplessAudioScheduler stageBarChunk stages bars without premature playback or partial fullAudioBuffer until commitSession', async () => {
+    const scheduler = new GaplessAudioScheduler();
+    const buf = { numberOfChannels: 2, length: 88200, sampleRate: 44100, duration: 2.0, getChannelData: () => new Float32Array(88200) } as any;
+
+    const p0 = scheduler.stageBarChunk({
+        barIndex: 0,
+        totalBars: 2,
+        bpm: 120,
+        startSeconds: 0,
+        durationSeconds: 2.0,
+        audioBuffer: buf
+    }, 10);
+    assert.equal(p0, 0.5);
+    assert.equal(scheduler.getIsPlaying(), false);
+    assert.equal(scheduler.getFullAudioBuffer(), null);
+
+    const p1 = scheduler.stageBarChunk({
+        barIndex: 1,
+        totalBars: 2,
+        bpm: 120,
+        startSeconds: 2.0,
+        durationSeconds: 2.0,
+        audioBuffer: buf
+    }, 10);
+    assert.equal(p1, 1.0);
+    assert.equal(scheduler.getFullAudioBuffer(), null);
+
+    scheduler.commitSession(10);
+    assert.ok(scheduler.getFullAudioBuffer());
+    assert.equal(scheduler.getTotalDuration(), 4.0);
+    assert.equal(scheduler.getBufferedProgress(), 1.0);
+
+    await scheduler.playFromStart();
+    assert.equal(scheduler.getIsPlaying(), true);
+    scheduler.stop();
+});

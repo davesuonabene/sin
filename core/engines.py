@@ -1,67 +1,34 @@
-from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, Type
+from abc import ABC
+from typing import Dict, Any, Type
 import numpy as np
 
 from core.system import System
-from core.audio_object import AudioObject, SampleObject, SequenceObject, ItemPoolObject
-from core.dsp import load_sample, stretch_audio
+from core.audio_object import AudioObject, SampleObject, SequenceObject, ItemPoolObject, ArrangementObject
 
 
 class NodeRenderer(ABC):
     """
-    Abstract Base Class for node-specific rendering engines.
+    Base Class for node-specific rendering engines.
     """
 
-    @abstractmethod
     def render(self, node_data: Any, system: System) -> np.ndarray:
-        """
-        Renders audio buffer for the specific node type.
-        """
-        pass
+        return build_node_object(node_data).render(system=system)
 
 
 class TrackRenderer(NodeRenderer):
-    """
-    Rendering engine specific to Track nodes (container/mixer nodes).
-    Sums or chains child audio outputs across timeline tracks.
-    """
-
-    def render(self, node_data: Any, system: System) -> np.ndarray:
-        audio_obj = build_node_object(node_data)
-        return audio_obj.render(system=system)
+    """Rendering engine specific to Track nodes (container/mixer nodes)."""
 
 
 class SampleRenderer(NodeRenderer):
-    """
-    Rendering engine specific to Sample nodes (leaf audio sample nodes).
-    Loads audio sample file and applies pitch transposition and time-stretching.
-    """
-
-    def render(self, node_data: Any, system: System) -> np.ndarray:
-        sample_obj = build_node_object(node_data)
-        return sample_obj.render(system=system)
+    """Rendering engine specific to Sample nodes (leaf audio sample nodes)."""
 
 
 class SequenceRenderer(NodeRenderer):
-    """
-    Rendering engine specific to Sequence nodes (rhythmic pattern step sequencer).
-    Repeats child sample object over active step sequence patterns.
-    """
-
-    def render(self, node_data: Any, system: System) -> np.ndarray:
-        seq_obj = build_node_object(node_data)
-        return seq_obj.render(system=system)
+    """Rendering engine specific to Sequence nodes (rhythmic pattern step sequencer)."""
 
 
 class ArrangementRenderer(NodeRenderer):
-    """
-    Rendering engine specific to Arrangement nodes.
-    Places child audio inside section-specific timing and probability rules.
-    """
-
-    def render(self, node_data: Any, system: System) -> np.ndarray:
-        arr_obj = build_node_object(node_data)
-        return arr_obj.render(system=system)
+    """Rendering engine specific to Arrangement nodes."""
 
 
 RENDERER_REGISTRY: Dict[str, Type[NodeRenderer]] = {
@@ -81,10 +48,7 @@ def get_renderer_for_node(node_type: str) -> NodeRenderer:
 
 
 def _get_val(data: Any, key: str, default: Any = None) -> Any:
-    if isinstance(data, dict):
-        val = data.get(key)
-    else:
-        val = getattr(data, key, None)
+    val = data.get(key) if isinstance(data, dict) else getattr(data, key, None)
     return val if val is not None else default
 
 
@@ -122,16 +86,6 @@ def build_node_object(node_data: Any) -> AudioObject:
         except (TypeError, ValueError):
             pass
 
-    crop_start = _get_val(node_data, "crop_start", 0.0)
-    crop_end = _get_val(node_data, "crop_end", 1.0)
-    transpose = _get_val(node_data, "transpose", 0.0)
-    cents = _get_val(node_data, "cents", 0.0)
-    stretch_mode = _get_val(node_data, "stretch_mode", "time_stretch")
-    stretch_factor = _get_val(node_data, "stretch_factor", 1.0)
-    stretch_algorithm = _get_val(node_data, "stretch_algorithm", "rubberband")
-    key_match_mode = _get_val(node_data, "key_match_mode", "off")
-    key_match_algorithm = _get_val(node_data, "key_match_algorithm", "nearest")
-
     target_bpm_raw = _get_val(node_data, "target_bpm", None)
     target_bpm = None
     if target_bpm_raw is not None and str(target_bpm_raw).lower() != "global":
@@ -141,47 +95,50 @@ def build_node_object(node_data: Any) -> AudioObject:
             target_bpm = None
 
     node_id = _get_val(node_data, "node_id", None)
+    common_dsp_kwargs = dict(
+        name=node_name,
+        original_bpm=original_bpm,
+        chain=chain_list,
+        sample_type=sample_type,
+        transpose=_get_val(node_data, "transpose", 0.0),
+        cents=_get_val(node_data, "cents", 0.0),
+        stretch_mode=_get_val(node_data, "stretch_mode", "time_stretch"),
+        stretch_factor=_get_val(node_data, "stretch_factor", 1.0),
+        stretch_algorithm=_get_val(node_data, "stretch_algorithm", "rubberband"),
+        total_bars=_get_val(node_data, "total_bars", None),
+        key_match_mode=_get_val(node_data, "key_match_mode", "off"),
+        key_match_algorithm=_get_val(node_data, "key_match_algorithm", "nearest"),
+        node_id=node_id,
+    )
+    crop_kwargs = dict(
+        crop_start=_get_val(node_data, "crop_start", 0.0),
+        crop_end=_get_val(node_data, "crop_end", 1.0),
+        target_bpm=target_bpm,
+    )
+
     if node_type == "sequence":
-        sequence = _get_val(node_data, "sequence", None) or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
-        step_length = _get_val(node_data, "step_length", 0.25)
-        play_mode = _get_val(node_data, "play_mode", None) or _get_val(node_data, "playMode", None) or "gate"
-        seed = _get_val(node_data, "seed", None)
-        seed_mode = _get_val(node_data, "seed_mode", "moving")
         obj = SequenceObject(
-            name=node_name,
-            sequence=sequence,
+            **common_dsp_kwargs,
+            sequence=_get_val(node_data, "sequence", None) or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
             step_parameters=_get_val(node_data, "step_parameters", None),
-            step_length=step_length,
-            play_mode=play_mode,
+            step_length=_get_val(node_data, "step_length", 0.25),
+            play_mode=_get_val(node_data, "play_mode", None) or _get_val(node_data, "playMode", None) or "gate",
             release=_get_val(node_data, "release", 0.0),
             fade_ms=_get_val(node_data, "fade_ms", 0.0),
-            seed=seed,
-            seed_mode=seed_mode,
-            original_bpm=original_bpm,
+            seed=_get_val(node_data, "seed", None),
+            seed_mode=_get_val(node_data, "seed_mode", "moving"),
             filepath=actual_path,
-            chain=chain_list,
-            sample_type=sample_type,
-            transpose=transpose,
-            cents=cents,
-            stretch_mode=stretch_mode,
-            stretch_factor=stretch_factor,
-            stretch_algorithm=stretch_algorithm,
-            total_bars=_get_val(node_data, "total_bars", None),
-            key_match_mode=key_match_mode,
-            key_match_algorithm=key_match_algorithm,
-            node_id=node_id
+            slots=_get_val(node_data, "slots", None),
+            sample_slot=_get_val(node_data, "sample_slot", "0"),
+            step_slots=_get_val(node_data, "step_slots", None),
+            cycle_seeds=_get_val(node_data, "cycle_seeds", None),
         )
-
     elif node_type == "arrangement":
-        from core.audio_object import ArrangementObject
-        t_bars = _get_val(node_data, "total_bars", 4.0)
-        prob = _get_val(node_data, "probability", 1.0)
-        seed = _get_val(node_data, "seed", None)
         obj = ArrangementObject(
             name=node_name,
-            total_bars=t_bars,
-            probability=prob,
-            seed=seed,
+            total_bars=_get_val(node_data, "total_bars", 4.0),
+            probability=_get_val(node_data, "probability", 1.0),
+            seed=_get_val(node_data, "seed", None),
             original_bpm=original_bpm,
             chain=chain_list,
             section_points=_get_val(node_data, "section_points", None),
@@ -190,6 +147,8 @@ def build_node_object(node_data: Any) -> AudioObject:
             section_sample_start=_get_val(node_data, "section_sample_start", None),
             section_quant=_get_val(node_data, "section_quant", None),
             section_quant_anchor=_get_val(node_data, "section_quant_anchor", None),
+            section_slots=_get_val(node_data, "section_slots", None),
+            cycle_seeds=_get_val(node_data, "cycle_seeds", None),
             quant=_get_val(node_data, "quant", "auto"),
             quant_anchor=_get_val(node_data, "quant_anchor", "start"),
             node_id=node_id,
@@ -198,76 +157,48 @@ def build_node_object(node_data: Any) -> AudioObject:
     elif node_type == "sample":
         refresh_mode = str(_get_val(node_data, "refresh_mode", "off") or "off").strip().casefold()
         selected_items = _get_val(node_data, "selected_items", []) or []
-        if selected_items and refresh_mode in {
+        raw_slots = _get_val(node_data, "slots", []) or []
+        has_multi_slots = len(raw_slots) > 1 or any(
+            (s.get("filepath") if isinstance(s, dict) else getattr(s, "filepath", None))
+            for s in raw_slots[1:]
+        )
+        has_populated_slots = any(
+            (s.get("filepath") if isinstance(s, dict) else getattr(s, "filepath", None))
+            for s in raw_slots
+        )
+        is_dynamic_pool_mode = refresh_mode in {
             "local", "local_refresh", "self_render",
             "parent", "parent_refresh", "parent_render",
-            "global", "global_refresh"
-        }:
+        }
+        is_global_pool_mode = refresh_mode in {"global", "global_refresh"}
+        if not has_multi_slots and selected_items and (
+            is_dynamic_pool_mode
+            or (is_global_pool_mode and not (actual_path or has_populated_slots))
+        ):
             obj = ItemPoolObject(
-                name=node_name,
+                **common_dsp_kwargs,
+                **crop_kwargs,
                 selected_items=selected_items,
                 playback_mode=_get_val(node_data, "playbackMode", "Random"),
                 seed=_get_val(node_data, "seed", None),
                 refresh_mode=refresh_mode,
-                original_bpm=original_bpm,
-                chain=chain_list,
-                crop_start=crop_start,
-                crop_end=crop_end,
-                sample_type=sample_type,
-                transpose=transpose,
-                cents=cents,
-                stretch_mode=stretch_mode,
-                stretch_factor=stretch_factor,
-                stretch_algorithm=stretch_algorithm,
-                total_bars=_get_val(node_data, "total_bars", None),
-                key_match_mode=key_match_mode,
-                key_match_algorithm=key_match_algorithm,
-                target_bpm=target_bpm,
-                node_id=node_id,
-                node_type="asset_filter"
+                node_type="asset_filter",
             )
         else:
             obj = SampleObject(
-                name=node_name,
+                **common_dsp_kwargs,
+                **crop_kwargs,
                 filepath=actual_path,
-                original_bpm=original_bpm,
-                chain=chain_list,
-                crop_start=crop_start,
-                crop_end=crop_end,
-                sample_type=sample_type,
-                transpose=transpose,
-                cents=cents,
-                stretch_mode=stretch_mode,
-                stretch_factor=stretch_factor,
-                stretch_algorithm=stretch_algorithm,
-                total_bars=_get_val(node_data, "total_bars", None),
-                key_match_mode=key_match_mode,
-                key_match_algorithm=key_match_algorithm,
-                target_bpm=target_bpm,
-                node_id=node_id,
-                node_type="sample"
+                node_type="sample",
+                slots=raw_slots,
             )
     else:
         obj = AudioObject(
-            name=node_name,
+            **common_dsp_kwargs,
+            **crop_kwargs,
             mix_mode=_get_val(node_data, "mix_mode", "sum"),
-            original_bpm=original_bpm,
             filepath=actual_path,
-            chain=chain_list,
-            crop_start=crop_start,
-            crop_end=crop_end,
-            sample_type=sample_type,
-            total_bars=_get_val(node_data, "total_bars", None),
-            transpose=transpose,
-            cents=cents,
-            stretch_mode=stretch_mode,
-            stretch_factor=stretch_factor,
-            stretch_algorithm=stretch_algorithm,
-            key_match_mode=key_match_mode,
-            key_match_algorithm=key_match_algorithm,
-            target_bpm=target_bpm,
-            node_id=node_id,
-            node_type=node_type
+            node_type=node_type,
         )
 
     if node_id is not None:

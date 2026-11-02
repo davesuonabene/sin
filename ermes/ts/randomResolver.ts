@@ -5,6 +5,16 @@
  */
 
 import { type FieldSchema } from '../../editor/src/fields/FieldSchema.ts';
+import {
+    hashSeed,
+    mulberry32,
+    resolveModifierSlotSeeds,
+    rollSeedExpression
+} from './slotLanguage.ts';
+import {
+    advanceAssetPoolSeed,
+    populateOwnerSlotsFromPool
+} from './assetResolver.ts';
 
 export type RandomRefreshMode = 'local' | 'parent' | 'ancestor' | 'global' | 'off';
 
@@ -142,14 +152,25 @@ export function evaluateRelativeRandomValue(
     return modulated;
 }
 
-export function advanceRandomSeed(modifierNode: any, trackNodesMap?: Map<number, any>): number {
+export function advanceRandomSeed(modifierNode: any, trackNodesMap?: Map<number, any>): string | number {
+    if (modifierNode?.properties?.seed_refresh === false) {
+        return modifierNode.properties.seed ?? 42;
+    }
     const trackNodes = trackNodesMap || (typeof window !== 'undefined' ? (window as any).trackNodes : undefined);
-    const nextSeed = Math.floor(Math.random() * 1000000);
+    const rolled = rollSeedExpression(modifierNode?.properties?.seed ?? 42);
+    const numericCandidate = Number(rolled);
+    const nextSeed: string | number = (!rolled.includes(' ') && Number.isFinite(numericCandidate))
+        ? numericCandidate
+        : rolled;
     if (modifierNode?.properties) {
         modifierNode.properties.seed = nextSeed;
+        modifierNode.properties.seed_salt = (Number(modifierNode.properties.seed_salt) || 0) + 1;
     }
     const modifierData = trackNodes?.get(modifierNode?.id);
-    if (modifierData) modifierData.seed = nextSeed;
+    if (modifierData) {
+        modifierData.seed = nextSeed;
+        modifierData.seed_salt = modifierNode?.properties?.seed_salt;
+    }
     return nextSeed;
 }
 
@@ -194,6 +215,135 @@ export function isFieldMappableToRandom(node: any, paramKey: string): boolean {
     return false;
 }
 
+const STEP_PARAM_KEYS = ['velocity', 'offset', 'probability', 'subdivisions', 'sample_start', 'gate_length'];
+
+function createDefaultStepParameters(stepCount: number) {
+    return Array.from({ length: stepCount }, () => ({
+        probability: 1.0,
+        offset: 0,
+        velocity: 1,
+        subdivisions: 1,
+        subdivision_enabled: false,
+        sample_start: 0,
+        gate_length: 1,
+    }));
+}
+
+function evalDestValue(dest: RandomDestination, base: number, field: FieldSchema | undefined, randomFactor: number): number {
+    return evaluateRelativeRandomValue(base, dest.minPercent, dest.maxPercent, {
+        schemaMin: field?.min !== undefined ? Number(field.min) : undefined,
+        schemaMax: field?.max !== undefined ? Number(field.max) : undefined,
+        step: dest.step !== undefined ? dest.step : (field?.step !== undefined ? Number(field.step) : undefined),
+        randomFactor,
+    });
+}
+
+/**
+ * Deterministically populates `ownerNode.properties.slots[0..S-1]` with seed-modulated parameters
+ * from an attached Random modifier node.
+ */
+export function populateOwnerSlotsFromRandom(modifierNode: any, ownerNode: any): void {
+    if (!modifierNode?.properties || !ownerNode?.properties) return;
+    if (!Array.isArray(ownerNode.properties.slots) || ownerNode.properties.slots.length === 0) return;
+
+    const destinations: RandomDestination[] = Array.isArray(modifierNode.properties.destinations)
+        ? modifierNode.properties.destinations
+        : [];
+    const slots = ownerNode.properties.slots;
+    const seedSalt = Number(modifierNode.properties.seed_salt || ownerNode.properties.seed_salt || 0) * 9973;
+    const slotSeeds = resolveModifierSlotSeeds(
+        modifierNode.properties.seed ?? 42,
+        slots.length,
+        Number(ownerNode.id || modifierNode.id || 1) + seedSalt
+    );
+
+    const stepCount = Array.isArray(ownerNode.properties.sequence) && ownerNode.properties.sequence.length > 0
+        ? ownerNode.properties.sequence.length
+        : 16;
+
+    for (let s = 0; s < slots.length; s++) {
+        const slotObj = { ...(slots[s] || {}), slot: s, index: s };
+        const baseStepSource = Array.isArray(slotObj.step_parameters) && slotObj.step_parameters.length > 0
+            ? slotObj.step_parameters
+            : (Array.isArray(ownerNode.properties.step_parameters) && ownerNode.properties.step_parameters.length > 0
+                ? ownerNode.properties.step_parameters
+                : createDefaultStepParameters(stepCount));
+        const nextSteps = baseStepSource.map((st: any) => ({ ...(st || {}) }));
+
+        for (let destIdx = 0; destIdx < destinations.length; destIdx++) {
+            const dest = destinations[destIdx];
+            if (!dest.enabled) continue;
+            const field = findFieldSchema(ownerNode, dest.paramKey);
+            const prng = mulberry32(hashSeed(slotSeeds[s], destIdx, 0x4A1D));
+
+            const stepMatch = dest.paramKey.match(/^(?:step_parameters\.|step:)(\d+)[.:](.+)$/);
+            if (stepMatch) {
+                const stepIdx = parseInt(stepMatch[1], 10);
+                const fieldKey = stepMatch[2];
+                const stepObj = nextSteps[stepIdx];
+                if (stepObj && stepObj[fieldKey] !== undefined) {
+                    if (dest.baseValue === undefined || !Number.isFinite(dest.baseValue)) {
+                        dest.baseValue = Number(stepObj[fieldKey]);
+                    }
+                    const newVal = evalDestValue(dest, dest.baseValue, field, prng());
+                    stepObj[fieldKey] = newVal;
+                    if (fieldKey === 'subdivisions') stepObj.subdivision_enabled = newVal > 1;
+                }
+                continue;
+            }
+
+            if (STEP_PARAM_KEYS.includes(dest.paramKey)) {
+                const fieldKey = dest.paramKey;
+                if (!dest.baseValueArray || !Array.isArray(dest.baseValueArray) || dest.baseValueArray.length !== nextSteps.length) {
+                    dest.baseValueArray = nextSteps.map((st: any) =>
+                        Number(st?.[fieldKey] ?? (['velocity', 'gate_length', 'subdivisions', 'probability'].includes(fieldKey) ? 1 : 0))
+                    );
+                }
+                const baseValues: number[] = dest.baseValueArray || [];
+                for (let i = 0; i < nextSteps.length; i++) {
+                    const stepObj = nextSteps[i];
+                    if (stepObj && stepObj[fieldKey] !== undefined) {
+                        const newVal = evalDestValue(dest, baseValues[i] ?? Number(stepObj[fieldKey]), field, prng());
+                        stepObj[fieldKey] = newVal;
+                        if (fieldKey === 'subdivisions') stepObj.subdivision_enabled = newVal > 1;
+                    }
+                }
+                continue;
+            }
+
+            const currentProp = slotObj[dest.paramKey] ?? ownerNode.properties?.[dest.paramKey];
+            if (!Array.isArray(currentProp)) {
+                if (dest.baseValue === undefined || !Number.isFinite(dest.baseValue)) {
+                    const parsed = Number(currentProp);
+                    dest.baseValue = Number.isFinite(parsed) ? parsed : (field?.default ? Number(field.default) : 0);
+                }
+                slotObj[dest.paramKey] = evalDestValue(dest, dest.baseValue, field, prng());
+            }
+        }
+
+        slotObj.step_parameters = nextSteps;
+        slots[s] = slotObj;
+    }
+
+    const activeIdx = Math.min(
+        Math.max(0, Number(ownerNode.activeSlotIndex ?? ownerNode.properties.active_slot ?? 0)),
+        slots.length - 1
+    );
+    const activeSlot = slots[activeIdx] || slots[0];
+    if (activeSlot && Array.isArray(activeSlot.step_parameters)) {
+        const clonedActiveSteps = activeSlot.step_parameters.map((st: any) => ({ ...(st || {}) }));
+        if (typeof ownerNode.updateProperty === 'function') {
+            ownerNode.updateProperty('step_parameters', clonedActiveSteps);
+        } else {
+            ownerNode.properties.step_parameters = clonedActiveSteps;
+        }
+        const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
+        if (cachedNode) {
+            cachedNode.step_parameters = clonedActiveSteps.map((st: any) => ({ ...st }));
+        }
+    }
+}
+
 export function applyRandomModulation(
     modifierNode: any,
     ownerNode: any,
@@ -208,7 +358,7 @@ export function applyRandomModulation(
                 const paramKey = rawField.startsWith('step_parameters.') && rawField.split('.').length === 2
                     ? rawField.split('.')[1]
                     : rawField;
-                const defaultBase = paramKey === 'velocity' || paramKey === 'probability' || paramKey === 'gate_length' ? 1 : 0;
+                const defaultBase = ['velocity', 'probability', 'gate_length'].includes(paramKey) ? 1 : 0;
                 return {
                     id: String(t.id || `dest_${idx}`),
                     paramKey,
@@ -224,6 +374,13 @@ export function applyRandomModulation(
         ? modifierNode.properties.destinations
         : [];
 
+    const seedSalt = Number(modifierNode.properties.seed_salt || ownerNode.properties?.seed_salt || 0) * 9973;
+    const slot0Seed = resolveModifierSlotSeeds(
+        modifierNode.properties.seed ?? 42,
+        1,
+        Number(ownerNode.id || modifierNode.id || 1) + seedSalt
+    )[0];
+
     let updatedAny = false;
 
     const ensureOwnerStepParameters = () => {
@@ -232,24 +389,17 @@ export function applyRandomModulation(
             const stepCount = Array.isArray(ownerNode.properties.sequence) && ownerNode.properties.sequence.length > 0
                 ? ownerNode.properties.sequence.length
                 : 16;
-            ownerNode.properties.step_parameters = Array.from({ length: stepCount }, () => ({
-                probability: 1.0,
-                offset: 0,
-                velocity: 1,
-                subdivisions: 1,
-                subdivision_enabled: false,
-                sample_start: 0,
-                gate_length: 1,
-            }));
+            ownerNode.properties.step_parameters = createDefaultStepParameters(stepCount);
         }
     };
 
-    for (const dest of destinations) {
+    for (let destIdx = 0; destIdx < destinations.length; destIdx++) {
+        const dest = destinations[destIdx];
         if (!dest.enabled) continue;
 
+        const destPrng = options.randomFactorGenerator || mulberry32(hashSeed(slot0Seed, destIdx, 0x4A1D));
         const field = findFieldSchema(ownerNode, dest.paramKey);
 
-        // Check if destination targets a specific step in step_parameters (e.g. step_parameters.2.probability)
         const stepMatch = dest.paramKey.match(/^step_parameters\.(\d+)\.(.+)$/);
         if (stepMatch) {
             ensureOwnerStepParameters();
@@ -263,67 +413,36 @@ export function applyRandomModulation(
                 if (dest.baseValue === undefined || !Number.isFinite(dest.baseValue)) {
                     dest.baseValue = Number(stepObj[fieldKey]);
                 }
-                const factor = options.randomFactorGenerator ? options.randomFactorGenerator() : Math.random();
-                const newVal = evaluateRelativeRandomValue(
-                    dest.baseValue,
-                    dest.minPercent,
-                    dest.maxPercent,
-                    {
-                        schemaMin: field?.min !== undefined ? Number(field.min) : undefined,
-                        schemaMax: field?.max !== undefined ? Number(field.max) : undefined,
-                        step: dest.step !== undefined ? dest.step : (field?.step !== undefined ? Number(field.step) : undefined),
-                        randomFactor: factor
-                    }
-                );
+                const newVal = evalDestValue(dest, dest.baseValue, field, destPrng());
                 dest.currentValue = newVal;
                 stepObj[fieldKey] = newVal;
-                if (fieldKey === 'subdivisions') {
-                    stepObj.subdivision_enabled = newVal > 1;
-                }
+                if (fieldKey === 'subdivisions') stepObj.subdivision_enabled = newVal > 1;
                 if (typeof ownerNode.updateProperty === 'function') {
                     ownerNode.updateProperty('step_parameters', nextSteps);
                 } else {
                     ownerNode.properties.step_parameters = nextSteps;
                 }
                 const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
-                if (cachedNode) {
-                    cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
-                }
+                if (cachedNode) cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
                 updatedAny = true;
             }
             continue;
         }
 
-        // Check if destination targets all steps in step_parameters (e.g. paramKey is 'velocity', 'offset', 'probability', 'subdivisions')
-        if (['velocity', 'offset', 'probability', 'subdivisions', 'sample_start', 'gate_length'].includes(dest.paramKey) && (ownerNode.type === 'Audio/Sequence' || ownerNode.properties?.node_type === 'sequence' || Array.isArray(ownerNode.properties?.step_parameters))) {
+        if (STEP_PARAM_KEYS.includes(dest.paramKey) && (ownerNode.type === 'Audio/Sequence' || ownerNode.properties?.node_type === 'sequence' || Array.isArray(ownerNode.properties?.step_parameters))) {
             ensureOwnerStepParameters();
             const fieldKey = dest.paramKey;
-            const factorGen = options.randomFactorGenerator || Math.random;
             if (!dest.baseValueArray || !Array.isArray(dest.baseValueArray) || dest.baseValueArray.length !== ownerNode.properties.step_parameters.length) {
-                dest.baseValueArray = ownerNode.properties.step_parameters.map((s: any) => Number(s?.[fieldKey] ?? (fieldKey === 'velocity' || fieldKey === 'gate_length' || fieldKey === 'subdivisions' || fieldKey === 'probability' ? 1 : 0)));
+                dest.baseValueArray = ownerNode.properties.step_parameters.map((s: any) => Number(s?.[fieldKey] ?? (['velocity', 'gate_length', 'subdivisions', 'probability'].includes(fieldKey) ? 1 : 0)));
             }
             const baseValues: number[] = dest.baseValueArray || [];
             const nextSteps = ownerNode.properties.step_parameters.map((s: any) => ({ ...(s || {}) }));
             for (let i = 0; i < nextSteps.length; i++) {
                 const stepObj = nextSteps[i];
                 if (stepObj && stepObj[fieldKey] !== undefined) {
-                    const stepBase = baseValues[i] ?? Number(stepObj[fieldKey]);
-                    const factor = factorGen();
-                    const newVal = evaluateRelativeRandomValue(
-                        stepBase,
-                        dest.minPercent,
-                        dest.maxPercent,
-                        {
-                            schemaMin: field?.min !== undefined ? Number(field.min) : undefined,
-                            schemaMax: field?.max !== undefined ? Number(field.max) : undefined,
-                            step: dest.step !== undefined ? dest.step : (field?.step !== undefined ? Number(field.step) : undefined),
-                            randomFactor: factor
-                        }
-                    );
+                    const newVal = evalDestValue(dest, baseValues[i] ?? Number(stepObj[fieldKey]), field, destPrng());
                     stepObj[fieldKey] = newVal;
-                    if (fieldKey === 'subdivisions') {
-                        stepObj.subdivision_enabled = newVal > 1;
-                    }
+                    if (fieldKey === 'subdivisions') stepObj.subdivision_enabled = newVal > 1;
                 }
             }
             if (typeof ownerNode.updateProperty === 'function') {
@@ -332,36 +451,19 @@ export function applyRandomModulation(
                 ownerNode.properties.step_parameters = nextSteps;
             }
             const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
-            if (cachedNode) {
-                cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
-            }
+            if (cachedNode) cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
             updatedAny = true;
             continue;
         }
 
         const currentProp = ownerNode.properties?.[dest.paramKey];
-
         const isArrayProp = Array.isArray(currentProp);
-
-        // Anchor base value if missing or invalid
         if (dest.baseValue === undefined || !Number.isFinite(dest.baseValue)) {
             const parsed = isArrayProp ? Number(currentProp[0]) : Number(currentProp);
             dest.baseValue = Number.isFinite(parsed) ? parsed : (field?.default ? Number(field.default) : 0);
         }
 
-        const factor = options.randomFactorGenerator ? options.randomFactorGenerator() : Math.random();
-        const newVal = evaluateRelativeRandomValue(
-            dest.baseValue,
-            dest.minPercent,
-            dest.maxPercent,
-            {
-                schemaMin: field?.min !== undefined ? Number(field.min) : undefined,
-                schemaMax: field?.max !== undefined ? Number(field.max) : undefined,
-                step: dest.step !== undefined ? dest.step : (field?.step !== undefined ? Number(field.step) : undefined),
-                randomFactor: factor
-            }
-        );
-
+        const newVal = evalDestValue(dest, dest.baseValue, field, destPrng());
         dest.currentValue = newVal;
 
         if (isArrayProp) {
@@ -370,17 +472,7 @@ export function applyRandomModulation(
             }
             const modulatedArray = dest.baseValueArray.map(itemBase => {
                 const base = Number.isFinite(itemBase) ? itemBase : dest.baseValue;
-                return evaluateRelativeRandomValue(
-                    base,
-                    dest.minPercent,
-                    dest.maxPercent,
-                    {
-                        schemaMin: field?.min !== undefined ? Number(field.min) : undefined,
-                        schemaMax: field?.max !== undefined ? Number(field.max) : undefined,
-                        step: dest.step !== undefined ? dest.step : (field?.step !== undefined ? Number(field.step) : undefined),
-                        randomFactor: options.randomFactorGenerator ? options.randomFactorGenerator() : Math.random()
-                    }
-                );
+                return evalDestValue(dest, base, field, destPrng());
             });
             if (typeof ownerNode.updateProperty === 'function') {
                 ownerNode.updateProperty(dest.paramKey, modulatedArray);
@@ -388,9 +480,7 @@ export function applyRandomModulation(
                 ownerNode.properties[dest.paramKey] = modulatedArray;
             }
             const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
-            if (cachedNode) {
-                cachedNode[dest.paramKey] = [...modulatedArray];
-            }
+            if (cachedNode) cachedNode[dest.paramKey] = [...modulatedArray];
         } else {
             if (typeof ownerNode.updateProperty === 'function') {
                 ownerNode.updateProperty(dest.paramKey, newVal);
@@ -398,6 +488,11 @@ export function applyRandomModulation(
                 ownerNode.properties[dest.paramKey] = newVal;
             }
         }
+        updatedAny = true;
+    }
+
+    if (Array.isArray(ownerNode.properties?.slots) && ownerNode.properties.slots.length > 0) {
+        populateOwnerSlotsFromRandom(modifierNode, ownerNode);
         updatedAny = true;
     }
 
@@ -533,13 +628,15 @@ export async function resolveAssignedRandomModifiers(
                     : modNode?.properties?.freeze_refresh !== false
             );
 
-            const shouldRefresh = !isFrozen && shouldRefreshRandom(
-                refreshMode,
-                nodeId,
-                rootNodeId,
-                trackNodes,
-                request
-            );
+            const shouldRefresh = !isFrozen
+                && (modNode.properties?.seed_refresh !== false)
+                && shouldRefreshRandom(
+                    refreshMode,
+                    nodeId,
+                    rootNodeId,
+                    trackNodes,
+                    request
+                );
 
             if (shouldRefresh) {
                 advanceRandomSeed(modNode, trackNodes);
@@ -572,4 +669,84 @@ export async function resolveAssignedRandomModifiers(
             if (n && n.id != null) await visit(n.id);
         }
     }
+}
+
+/**
+ * Rolls all seed fields across the graph whose right-hand Refresh Toggle (`seed_refresh`) is ON,
+ * provided Global Freeze (`isGlobalFrozen`) is OFF. Immediately re-evaluates attached Pools and Random modifiers.
+ */
+export function refreshArmedSeeds(
+    graph: any,
+    isGlobalFrozen: boolean = false,
+    trackNodesMap?: Map<number, any>
+): boolean {
+    if (isGlobalFrozen || !graph) return false;
+    const trackNodes = trackNodesMap || (typeof window !== 'undefined' ? (window as any).trackNodes : undefined);
+    const allNodes = ((graph as any)._nodes || (graph as any).nodes || []) as any[];
+    let rolledAny = false;
+
+    for (const node of allNodes) {
+        if (!node?.properties) continue;
+        if (node.properties.seed === undefined) continue;
+        if (node.properties.seed_refresh === false) continue;
+
+        const isAssetFilter = node.type === 'Audio/AssetFilter'
+            || node.properties.node_type === 'asset_filter'
+            || node.properties.output_type === 'asset_path';
+        const isRandom = node.type === 'Audio/Random'
+            || node.properties.node_type === 'random'
+            || (node.isModifier && node.modifierKind === 'random');
+
+        if (isAssetFilter) {
+            advanceAssetPoolSeed(node, trackNodes);
+            const parentId = node.properties.parentId ?? trackNodes?.get(node.id)?.parentId;
+            const ownerNode = parentId != null ? (graph.getNodeById?.(parentId) || allNodes.find((n: any) => n?.id === parentId)) : null;
+            if (ownerNode) {
+                const isSeqOwner = ownerNode.type === 'Audio/Sequence' || ownerNode.properties?.node_type === 'sequence';
+                if (isSeqOwner) {
+                    node.properties.output_value = '';
+                } else {
+                    populateOwnerSlotsFromPool(node, ownerNode);
+                }
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: ownerNode.id } }));
+                }
+            }
+        } else if (isRandom) {
+            advanceRandomSeed(node, trackNodes);
+            const parentId = node.properties.parentId ?? trackNodes?.get(node.id)?.parentId;
+            const ownerNode = parentId != null ? (graph.getNodeById?.(parentId) || allNodes.find((n: any) => n?.id === parentId)) : null;
+            if (ownerNode) {
+                applyRandomModulation(node, ownerNode);
+            }
+        } else {
+            const rolled = rollSeedExpression(node.properties.seed ?? 42);
+            const numericCandidate = Number(rolled);
+            const nextSeed: string | number = (!rolled.includes(' ') && Number.isFinite(numericCandidate))
+                ? numericCandidate
+                : rolled;
+            node.properties.seed_salt = (Number(node.properties.seed_salt) || 0) + 1;
+            if (typeof node.updateProperty === 'function') {
+                node.updateProperty('seed', nextSeed);
+            } else {
+                node.properties.seed = nextSeed;
+            }
+            if ('_cachedCompositedBuffer' in node) {
+                node._cachedCompositedBuffer = null;
+            }
+            node.setDirtyCanvas?.(true, true);
+            const nodeData = trackNodes?.get(node.id);
+            if (nodeData) {
+                nodeData.seed = nextSeed;
+                nodeData.seed_salt = node.properties.seed_salt;
+            }
+        }
+
+        if (typeof window !== 'undefined' && node.id != null) {
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
+        }
+        rolledAny = true;
+    }
+
+    return rolledAny;
 }

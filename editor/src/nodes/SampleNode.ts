@@ -6,6 +6,8 @@ import { findLibraryFileForSnapshot, resolveLibraryAssets, submitLibraryMetadata
 import { WaveformRenderer, type RenderBox, type SignalTelemetry } from '../../../packages/iride/src/index.ts';
 import { fetchAudioBuffer } from '../audioBufferCache.ts';
 import { globalAudioScheduler } from '../audioScheduler.ts';
+import { type NodeSlot } from '../../../ermes/ts/slotLanguage.ts';
+import { populateOwnerSlotsFromPool } from '../../../ermes/ts/assetResolver.ts';
 
 type MusicalMode = 'major' | 'minor' | null;
 type KeyMatchAlgorithm = 'nearest' | 'higher' | 'lower';
@@ -18,10 +20,185 @@ interface ParsedKey {
 export class SampleNode extends BaseNode {
     private waveformRenderer = new WaveformRenderer({ accentColor: '#38bdf8' });
     public audioBuffer: AudioBuffer | null = null;
+    public slotBuffers: Map<number, AudioBuffer> = new Map();
+    private slotLoadedPaths: Map<number, string> = new Map();
+    public activeSlotIndex = 0;
     public loadedFilepath = '';
     public isLoadingAudio = false;
     private loadingAudioPromise: Promise<AudioBuffer | null> | null = null;
     private failedAudioFilepath: string | null = null;
+
+    public getSlots(): NodeSlot[] {
+        if (!this.properties) this.properties = {};
+        if (!Array.isArray(this.properties.slots) || this.properties.slots.length === 0) {
+            const cropStart = Number(this.properties.crop_start ?? 0);
+            const cropEnd = Number(this.properties.crop_end ?? 1);
+            this.properties.slots = [{
+                slot: 0,
+                index: 0,
+                filepath: String(this.properties.filepath || ''),
+                library_item_id: this.properties.library_item_id,
+                original_bpm: this.properties.original_bpm,
+                key: String(this.properties.key || ''),
+                crop_start: cropStart,
+                crop_end: cropEnd,
+                sample_start: cropStart,
+                sample_end: cropEnd,
+                pitch_shift: Number(this.properties.transpose ?? 0),
+                time_stretch: Number(this.properties.stretch_factor ?? 1),
+            }];
+        } else if (
+            this.properties.slots.length === 1 &&
+            !this.properties.slots[0]?.filepath &&
+            this.properties.filepath
+        ) {
+            this.properties.slots[0] = {
+                ...(this.properties.slots[0] || {}),
+                slot: 0,
+                index: 0,
+                filepath: String(this.properties.filepath),
+                library_item_id: this.properties.library_item_id ?? this.properties.slots[0]?.library_item_id,
+                original_bpm: this.properties.original_bpm ?? this.properties.slots[0]?.original_bpm,
+                key: String(this.properties.key || this.properties.slots[0]?.key || ''),
+            };
+        }
+        return this.properties.slots;
+    }
+
+    public syncActiveSlotFromProperties(): void {
+        const slots = this.getSlots();
+        const idx = Math.min(Math.max(0, this.activeSlotIndex), slots.length - 1);
+        this.activeSlotIndex = idx;
+        const cropStart = Number(this.properties.crop_start ?? 0);
+        const cropEnd = Number(this.properties.crop_end ?? 1);
+        slots[idx] = {
+            ...(slots[idx] || {}),
+            slot: idx,
+            index: idx,
+            filepath: String(this.properties.filepath || ''),
+            library_item_id: this.properties.library_item_id,
+            original_bpm: this.properties.original_bpm,
+            key: String(this.properties.key || ''),
+            crop_start: cropStart,
+            crop_end: cropEnd,
+            sample_start: cropStart,
+            sample_end: cropEnd,
+            pitch_shift: Number(this.properties.transpose ?? 0),
+            time_stretch: Number(this.properties.stretch_factor ?? 1),
+        };
+    }
+
+    public applySlotToProperties(slot: NodeSlot): void {
+        if (!slot || !this.properties) return;
+        this.properties.filepath = String(slot.filepath || '');
+        if (slot.library_item_id !== undefined) this.properties.library_item_id = slot.library_item_id;
+        if (slot.original_bpm !== undefined) this.properties.original_bpm = slot.original_bpm;
+        if (slot.key !== undefined) this.properties.key = slot.key;
+        const cropStart = slot.crop_start ?? slot.sample_start;
+        const cropEnd = slot.crop_end ?? slot.sample_end;
+        if (cropStart !== undefined) this.properties.crop_start = Number(cropStart);
+        if (cropEnd !== undefined) this.properties.crop_end = Number(cropEnd);
+        if (slot.pitch_shift !== undefined) this.properties.transpose = Number(slot.pitch_shift);
+        if (slot.time_stretch !== undefined) this.properties.stretch_factor = Number(slot.time_stretch);
+
+        const cachedBuf = this.slotBuffers.get(this.activeSlotIndex);
+        const cachedPath = this.slotLoadedPaths.get(this.activeSlotIndex);
+        if (cachedBuf && this.properties.filepath && cachedPath === this.properties.filepath) {
+            this.audioBuffer = cachedBuf;
+            this.loadedFilepath = this.properties.filepath;
+        } else {
+            void this.ensureAudioLoaded();
+        }
+        this.setDirtyCanvas(true, true);
+    }
+
+    public selectSlot(index: number): void {
+        this.syncActiveSlotFromProperties();
+        const slots = this.getSlots();
+        const nextIdx = Math.min(Math.max(0, index), slots.length - 1);
+        this.activeSlotIndex = nextIdx;
+        this.properties.active_slot = nextIdx;
+        this.applySlotToProperties(slots[nextIdx]);
+    }
+
+    public addSlot(): number {
+        this.syncActiveSlotFromProperties();
+        const slots = this.getSlots();
+        const current = slots[this.activeSlotIndex] || slots[0];
+        const newIdx = slots.length;
+        slots.push({
+            ...(current || {}),
+            slot: newIdx,
+            index: newIdx
+        });
+
+        const graph = this.graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+        const modId = this.properties?.asset_modifier_id;
+        const modNode = modId != null && graph ? graph.getNodeById?.(modId) : null;
+        if (modNode) {
+            populateOwnerSlotsFromPool(modNode, this);
+        }
+
+        this.activeSlotIndex = newIdx;
+        this.properties.active_slot = newIdx;
+        this.applySlotToProperties(slots[newIdx]);
+        void this.preloadAllSlotBuffers();
+        return newIdx;
+    }
+
+    public removeSlot(index: number): void {
+        const slots = this.getSlots();
+        if (slots.length <= 1) return;
+        const removeIdx = Math.min(Math.max(0, index), slots.length - 1);
+        slots.splice(removeIdx, 1);
+        slots.forEach((s, idx) => {
+            s.slot = idx;
+            s.index = idx;
+        });
+        this.slotBuffers.clear();
+        this.slotLoadedPaths.clear();
+        this.activeSlotIndex = Math.min(this.activeSlotIndex, slots.length - 1);
+        this.properties.active_slot = this.activeSlotIndex;
+        this.applySlotToProperties(slots[this.activeSlotIndex]);
+        void this.preloadAllSlotBuffers();
+    }
+
+    public async preloadAllSlotBuffers(): Promise<void> {
+        const slots = this.getSlots();
+        await Promise.all(slots.map(async (s, idx) => {
+            const fp = String(s?.filepath || '');
+            if (!fp) {
+                this.slotBuffers.delete(idx);
+                this.slotLoadedPaths.delete(idx);
+                return;
+            }
+            if (this.slotBuffers.has(idx) && this.slotLoadedPaths.get(idx) === fp) {
+                return;
+            }
+            try {
+                const buf = await fetchAudioBuffer(fp);
+                if (buf) {
+                    this.slotBuffers.set(idx, buf);
+                    this.slotLoadedPaths.set(idx, fp);
+                    if (idx === this.activeSlotIndex) {
+                        this.audioBuffer = buf;
+                        this.loadedFilepath = fp;
+                    }
+                }
+            } catch {
+                // Ignore individual slot load error
+            }
+        }));
+        this.setDirtyCanvas(true, true);
+    }
+
+    public getSlotBuffersMap(): Map<number, AudioBuffer> {
+        if (this.audioBuffer && this.loadedFilepath) {
+            this.slotBuffers.set(this.activeSlotIndex, this.audioBuffer);
+            this.slotLoadedPaths.set(this.activeSlotIndex, this.loadedFilepath);
+        }
+        return this.slotBuffers;
+    }
 
     public async ensureAudioLoaded(): Promise<AudioBuffer | null> {
         const filepath = String(this.properties?.filepath || '');
@@ -32,6 +209,9 @@ export class SampleNode extends BaseNode {
             return null;
         }
         if (this.audioBuffer && this.loadedFilepath === filepath) {
+            if (this.getSlots().length > 1) {
+                void this.preloadAllSlotBuffers();
+            }
             return this.audioBuffer;
         }
         if (this.loadingAudioPromise && this.loadedFilepath === filepath) {
@@ -43,8 +223,15 @@ export class SampleNode extends BaseNode {
             try {
                 const buffer = await fetchAudioBuffer(filepath);
                 this.audioBuffer = buffer;
-                if (buffer?.duration) {
-                    this.properties.duration_seconds = buffer.duration;
+                if (buffer) {
+                    this.slotBuffers.set(this.activeSlotIndex, buffer);
+                    this.slotLoadedPaths.set(this.activeSlotIndex, filepath);
+                    if (buffer.duration) {
+                        this.properties.duration_seconds = buffer.duration;
+                    }
+                }
+                if (this.getSlots().length > 1) {
+                    void this.preloadAllSlotBuffers();
                 }
                 this.failedAudioFilepath = null;
                 this.setDirtyCanvas(true, true);
@@ -228,6 +415,9 @@ export class SampleNode extends BaseNode {
 
     override updateProperty(key: string, value: any): void {
         super.updateProperty(key, value);
+        if (['filepath', 'crop_start', 'crop_end', 'transpose', 'stretch_factor', 'original_bpm', 'key', 'library_item_id'].includes(key)) {
+            this.syncActiveSlotFromProperties();
+        }
         if (key === 'filepath') {
             const pathStr = String(value || '');
             if (pathStr !== this.loadedFilepath || !this.audioBuffer) {
@@ -274,7 +464,21 @@ export class SampleNode extends BaseNode {
         return accepted;
     }
 
+    public ensurePoolSlotsPopulated(): void {
+        const modId = this.properties?.asset_modifier_id;
+        if (modId == null) return;
+        const slots = this.getSlots();
+        const needsFill = !this.properties?.filepath || slots.some((s: any) => !s?.filepath);
+        if (!needsFill) return;
+        const graph = this.graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+        const modNode = graph?.getNodeById?.(modId);
+        if (modNode && Array.isArray(modNode.properties?.selected_items) && modNode.properties.selected_items.length > 0) {
+            populateOwnerSlotsFromPool(modNode, this);
+        }
+    }
+
     async syncMetadataFromLibrary(files?: LibraryFile[], preferredId?: number | string | null): Promise<LibraryFile | null> {
+        this.ensurePoolSlotsPopulated();
         const filepath = String(this.properties?.filepath || '');
         if (!filepath) return null;
         const libraryFiles = files || await resolveLibraryAssets([{
@@ -299,13 +503,19 @@ export class SampleNode extends BaseNode {
             || (Array.isArray(libraryFile.tags) && libraryFile.tags.includes('Loop'));
 
         if (isExplicitOneShot) {
-            this.updateProperty('sample_type', 'one_shot');
+            if (this.properties.sample_type !== 'one_shot') {
+                this.updateProperty('sample_type', 'one_shot');
+            }
         } else if (isExplicitLoop) {
-            this.updateProperty('sample_type', 'loop');
+            if (this.properties.sample_type !== 'loop') {
+                this.updateProperty('sample_type', 'loop');
+            }
         }
 
         const bpm = Number(libraryFile?.bpm);
-        if (libraryFile?.id != null) this.updateProperty('library_item_id', libraryFile.id);
+        if (libraryFile?.id != null && this.properties.library_item_id !== libraryFile.id) {
+            this.updateProperty('library_item_id', libraryFile.id);
+        }
         if (libraryFile.absolute_path && libraryFile.absolute_path !== filepath) {
             this.updateProperty('filepath', libraryFile.absolute_path);
         }
@@ -316,17 +526,24 @@ export class SampleNode extends BaseNode {
                 }
             } else if (isExplicitOneShot) {
                 // One shots do not have any bpm signature unless user specified from the library
-                this.updateProperty('original_bpm', null);
+                if (this.properties.original_bpm !== null) {
+                    this.updateProperty('original_bpm', null);
+                }
             }
         }
 
         const duration = Number(libraryFile.duration_seconds);
-        if (Number.isFinite(duration) && duration >= 0 && this.properties.duration_seconds !== duration) {
+        const currentDuration = Number(this.properties.duration_seconds);
+        if (
+            Number.isFinite(duration) &&
+            duration > 0 &&
+            (!Number.isFinite(currentDuration) || currentDuration <= 0 || Math.abs(currentDuration - duration) > 0.05)
+        ) {
             this.updateProperty('duration_seconds', duration);
         }
 
         const libraryKey = String(libraryFile.key || '').trim();
-        if (!this.properties?.key_is_local_override && this.properties.key !== libraryKey) {
+        if (!this.properties?.key_is_local_override && String(this.properties.key || '') !== libraryKey) {
             this.updateProperty('key', libraryKey);
         }
         SampleNode.propagateKeyMatch(this.graph);
@@ -398,6 +615,7 @@ export class SampleNode extends BaseNode {
 
     override prepareSerializedModel(model: any): any {
         SampleNode.propagateKeyMatch(this.graph);
+        this.syncActiveSlotFromProperties();
         const matchTranspose = this.properties?.key_match_mode === 'follow'
             ? Number(this.properties?.key_match_transpose) || 0
             : 0;
@@ -405,6 +623,14 @@ export class SampleNode extends BaseNode {
         const isOneShot = (this.properties?.sample_type || model.sample_type) === 'one_shot';
         return {
             ...model,
+            slots: Array.isArray(model.slots) && model.slots.length > 0
+                ? model.slots
+                : this.getSlots().map((s, idx) => ({
+                    ...s,
+                    slot: idx,
+                    crop_start: s.crop_start ?? s.sample_start ?? 0,
+                    crop_end: s.crop_end ?? s.sample_end ?? 1,
+                })),
             sample_type: isOneShot ? 'one_shot' : (model.sample_type || 'loop'),
             original_bpm: isOneShot && !this.properties?.original_bpm_is_local_override && !model.original_bpm_is_local_override && (model.original_bpm === 120 || !model.original_bpm)
                 ? null
@@ -606,7 +832,15 @@ export class SampleNode extends BaseNode {
                     let activeEvent = manifestEvents.find(e => curTime >= e.time && curTime < (e.time + Math.max(0.02, e.duration)));
                     let triggerTime = curTime;
                     if (!activeEvent && totalTrackDur > 0) {
-                        const lastEventEnd = Math.max(...manifestEvents.map(e => e.time + Math.max(0.02, e.duration)));
+                        let lastEventEnd = (manifestEvents as any).__maxEnd as number | undefined;
+                        if (lastEventEnd === undefined) {
+                            lastEventEnd = 0;
+                            for (let i = 0; i < manifestEvents.length; i++) {
+                                const end = manifestEvents[i].time + Math.max(0.02, manifestEvents[i].duration);
+                                if (end > lastEventEnd) lastEventEnd = end;
+                            }
+                            (manifestEvents as any).__maxEnd = lastEventEnd;
+                        }
                         if (lastEventEnd > 0 && lastEventEnd < totalTrackDur * 0.85) {
                             const bpm = Number(this.properties?.target_bpm || (window as any).activeWorkspaceManifest?.bpm || (window as any).getGlobalParameter?.('bpm') || 120);
                             const barSec = 4 * (60 / bpm);
@@ -625,9 +859,13 @@ export class SampleNode extends BaseNode {
                         const elapsedInEvent = triggerTime - activeEvent.time;
                         const sampleTime = elapsedInEvent * effectivePitchRate;
                         const sampleProgress = sampleActiveDuration > 0 ? (sampleTime / sampleActiveDuration) : 0;
-                        const progressInCrop = this.properties?.sample_type === 'loop'
-                            ? (sampleProgress % 1.0)
-                            : Math.max(0, Math.min(1, sampleProgress));
+                        const eventStartNorm = typeof (activeEvent as any).sample_start === 'number' ? (activeEvent as any).sample_start : 0;
+                        const isEventLoop = (activeEvent as any).loop !== undefined
+                            ? Boolean((activeEvent as any).loop)
+                            : (this.properties?.sample_type === 'loop');
+                        const progressInCrop = isEventLoop
+                            ? ((eventStartNorm + sampleProgress) % 1.0)
+                            : Math.max(0, Math.min(1, eventStartNorm + sampleProgress));
                         playbackProgress = cropStart + progressInCrop * activeSpan;
                         isTriggered = true;
                     } else {
@@ -727,8 +965,10 @@ export class SampleNode extends BaseNode {
             }
         }
 
+        const slots = this.getSlots();
         this.waveformRenderer.setOptions({
-            scopeMode: 'full'
+            scopeMode: 'full',
+            minified: this.isMinifiedStage
         });
         this.waveformRenderer.setSignal({
             buffer: displayBuffer,
@@ -739,10 +979,42 @@ export class SampleNode extends BaseNode {
             playbackProgress,
             isTriggered,
             bufferedProgress: 1.0,
-            isInvalidated: false
+            isInvalidated: false,
+            slotCount: slots.length,
+            activeSlot: this.activeSlotIndex
         });
 
         this.waveformRenderer.render(ctx, bounds, telemetry);
+    }
+
+    override getLiveActivityState(telemetry?: SignalTelemetry): { isTriggered: boolean; progress?: number } {
+        if (!telemetry?.isPlaying) return { isTriggered: false };
+        const isPreviewTarget = typeof window !== 'undefined' && this.id === (window as any).activeRamPreviewNodeId;
+        const sampleDur = this.audioBuffer?.duration || Number(this.properties?.duration_seconds) || 2.0;
+        const cropStart = Number(this.properties?.crop_start ?? 0);
+        const cropEnd = Number(this.properties?.crop_end ?? 1);
+        const activeSpan = Math.max(0.01, cropEnd - cropStart);
+        const sampleActiveDuration = sampleDur > 0 ? sampleDur * activeSpan : 2.0;
+        const dur = telemetry.duration > 0 ? telemetry.duration : sampleActiveDuration;
+        const curTime = dur > 0 ? ((telemetry.time % dur) + dur) % dur : 0;
+
+        if (isPreviewTarget) {
+            return {
+                isTriggered: true,
+                progress: sampleActiveDuration > 0 ? Math.max(0, Math.min(1, (curTime % sampleActiveDuration) / sampleActiveDuration)) : 0
+            };
+        }
+
+        const isLoop = this.properties?.sample_type === 'loop';
+        if (isLoop && sampleActiveDuration > 0) {
+            return {
+                isTriggered: true,
+                progress: Math.max(0, Math.min(1, (curTime % sampleActiveDuration) / sampleActiveDuration))
+            };
+        }
+
+        const progress = dur > 0 ? Math.max(0, Math.min(1, curTime / dur)) : 0;
+        return { isTriggered: true, progress };
     }
 
     override onVisualizationToggled(enabled: boolean): void {

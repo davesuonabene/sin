@@ -29,6 +29,8 @@ export interface WaveformSignal {
     playbackProgress?: number;// Explicit normalized playhead position (0.0 - 1.0)
     bufferedProgress?: number;// Normalized RAM buffer fill front (0.0 - 1.0)
     isInvalidated?: boolean;  // True when buffer was dirtied and is refilling
+    slotCount?: number;       // Number of slots on this node
+    activeSlot?: number;      // Currently active/inspected slot index
 }
 
 export interface SequenceStep {
@@ -38,6 +40,7 @@ export interface SequenceStep {
     probability?: number;     // 0.0 - 1.0
     sampleStart?: number;     // 0.0 - 1.0
     gateLength?: number;      // 0.0 - 1.0
+    slotIndex?: number;       // Resolved upstream sample slot index for this step
 }
 
 export interface SequenceSignal {
@@ -45,6 +48,8 @@ export interface SequenceSignal {
     steps: SequenceStep[];
     stepLength?: number;      // e.g. 0.25 (16th note)
     accentColor?: string;
+    slotCount?: number;       // Number of sequence slots on this node
+    activeSlot?: number;      // Currently active/inspected sequence slot index
 }
 
 export interface ArrangementSection {
@@ -56,6 +61,7 @@ export interface ArrangementSection {
     sampleStart: number;      // 0.0 - 1.0
     quant?: string;
     label?: string;
+    slotIndex?: number;       // Resolved upstream slot index for this section
 }
 
 export interface ArrangementSignal {
@@ -71,6 +77,7 @@ export interface RendererOptions {
     accentColor?: string;
     backgroundColor?: string;
     borderColor?: string;
+    minified?: boolean;       // Chromeless middle-distance mode: strips internal labels, numbers, and secondary chrome
     isMasterScope?: boolean;  // Toggles real-time audio oscilloscope mode during playback (legacy alias for scopeMode='drawn')
     scopeMode?: ScopeMode;    // 'full' (full stem), 'drawn' (sweep left-to-right), or 'scrolled' (continuous window scroll)
     scopeWindow?: number;     // Window size (seconds) for real-time scope (0 = auto-inherit)

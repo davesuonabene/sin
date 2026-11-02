@@ -11,7 +11,14 @@ from __future__ import annotations
 import copy
 import re
 from typing import Any, Dict, List, Optional, Tuple, Set
-from ermes.py.schemas import AudioNodeModel, FxModuleModel
+from ermes.py.schemas import AudioNodeModel, FxModuleModel, NodeSlotModel
+from ermes.py.slot_language import (
+    mulberry32,
+    resolve_cycle_seeds,
+    resolve_modifier_slot_seeds,
+    resolve_step_slots,
+    wrap_slot_index,
+)
 
 
 def parse_musical_key(value: str) -> Optional[Tuple[int, Optional[str]]]:
@@ -256,7 +263,15 @@ def validate_graph(doc: Dict[str, Any]) -> Tuple[bool, List[str]]:
 AUDIO_NODE_TYPES = frozenset({"sample", "sequence", "arrangement", "track"})
 
 # Properties the compiler reads that are not AudioNodeModel fields themselves.
-COMPILER_CONSUMED_PROPERTIES = frozenset({"node_name", "key_match_transpose", "gain"})
+COMPILER_CONSUMED_PROPERTIES = frozenset({
+    "node_name",
+    "key_match_transpose",
+    "gain",
+    "seed_refresh",
+    "active_slot",
+    "library_item_id",
+    "asset_modifier_id",
+})
 
 
 def _normalize_gain_into_chain(props: Dict[str, Any], remove_top_gain: bool = False) -> List[Dict[str, Any]]:
@@ -316,15 +331,13 @@ def _normalize_random_destinations(mod_props: Dict[str, Any]) -> List[Dict[str, 
     return normalized
 
 
-def _apply_seeded_random_to_props(props: Dict[str, Any], destinations: List[Dict[str, Any]], seed: Any) -> None:
-    """Applies deterministic seeded random modulation to sequence step_parameters or scalar properties."""
-    if not destinations:
-        return
-    import hashlib
-    import random as _py_random
-
-    seed_str = str(seed if seed is not None else 42)
-    rng = _py_random.Random(int(hashlib.md5(seed_str.encode()).hexdigest(), 16))
+def _apply_seeded_random_to_single_dict(
+    target_dict: Dict[str, Any],
+    destinations: List[Dict[str, Any]],
+    numeric_seed: int,
+    fallback_seq: Optional[List[int]] = None,
+) -> None:
+    rng = mulberry32(numeric_seed)
     field_spans = {
         "velocity": (0.0, 1.0, 1.0),
         "offset": (-0.5, 0.5, 1.0),
@@ -343,7 +356,7 @@ def _apply_seeded_random_to_props(props: Dict[str, Any], destinations: List[Dict
         min_off = (min_pct / 100.0) * span
         max_off = (max_pct / 100.0) * span
         lo, hi = min(min_off, max_off), max(min_off, max_off)
-        val = base_val + (lo + rng.random() * (hi - lo))
+        val = base_val + (lo + rng() * (hi - lo))
         if lo_bound is not None:
             val = max(lo_bound, val)
         if hi_bound is not None:
@@ -357,15 +370,15 @@ def _apply_seeded_random_to_props(props: Dict[str, Any], destinations: List[Dict
         min_pct = float(dest.get("minPercent", 0.0))
         max_pct = float(dest.get("maxPercent", 0.0))
         if pkey in ("velocity", "offset", "probability", "subdivisions", "sample_start", "gate_length"):
-            seq = props.get("sequence")
+            seq = target_dict.get("sequence") or fallback_seq
             step_count = len(seq) if isinstance(seq, list) and len(seq) > 0 else 16
-            step_params = props.get("step_parameters")
+            step_params = target_dict.get("step_parameters")
             if not isinstance(step_params, list) or len(step_params) == 0:
                 step_params = [
                     {"velocity": 1.0, "offset": 0.0, "probability": 100.0, "subdivisions": 1, "subdivision_enabled": False}
                     for _ in range(step_count)
                 ]
-                props["step_parameters"] = step_params
+                target_dict["step_parameters"] = step_params
             for sp in step_params:
                 if not isinstance(sp, dict):
                     continue
@@ -378,12 +391,141 @@ def _apply_seeded_random_to_props(props: Dict[str, Any], destinations: List[Dict
                     sp["subdivision_enabled"] = new_int > 1
                 else:
                     sp[pkey] = new_v
-        elif pkey in props or dest.get("baseValue") is not None:
+        elif pkey in target_dict or dest.get("baseValue") is not None:
             try:
-                base_v = float(props.get(pkey, dest.get("baseValue", 0.0)))
-                props[pkey] = _eval_rel(base_v, min_pct, max_pct, pkey)
+                base_v = float(target_dict.get(pkey, dest.get("baseValue", 0.0)))
+                target_dict[pkey] = _eval_rel(base_v, min_pct, max_pct, pkey)
             except (TypeError, ValueError):
                 pass
+
+
+def _apply_seeded_random_to_props(props: Dict[str, Any], destinations: List[Dict[str, Any]], seed: Any) -> None:
+    """Applies deterministic seeded random modulation to sequence step_parameters, slots, or scalar properties."""
+    if not destinations:
+        return
+    raw_slots = props.get("slots")
+    slot_count = len(raw_slots) if isinstance(raw_slots, list) and len(raw_slots) > 0 else 1
+    slot_seeds = resolve_modifier_slot_seeds(seed if seed is not None else 42, slot_count)
+    _apply_seeded_random_to_single_dict(props, destinations, slot_seeds[0])
+
+    if isinstance(raw_slots, list) and len(raw_slots) > 0:
+        fallback_seq = props.get("sequence")
+        for s_idx, slot_dict in enumerate(raw_slots):
+            if isinstance(slot_dict, dict):
+                _apply_seeded_random_to_single_dict(
+                    slot_dict,
+                    destinations,
+                    slot_seeds[s_idx % len(slot_seeds)],
+                    fallback_seq=fallback_seq,
+                )
+
+
+def _resolve_node_slots_and_selectors(
+    ntype: str,
+    props: Dict[str, Any],
+    total_bars: Optional[float],
+    children: List[AudioNodeModel],
+    node_id_salt: int = 1,
+) -> Tuple[List[NodeSlotModel], str, List[int], List[int], List[int]]:
+    """Normalizes node `slots` and resolves connected-path slot selectors (`sample_slot`, `step_slots`, `cycle_seeds`, `section_slots`)."""
+    upstream_slot_count = max(1, len(children[0].slots) if children and children[0].slots else 1)
+    raw_slots = props.get("slots") if isinstance(props.get("slots"), list) else []
+    slots: List[NodeSlotModel] = []
+
+    if ntype == "sample":
+        filepath = props.get("filepath")
+        original_bpm = props.get("original_bpm")
+        key = props.get("key")
+        crop_start = float(props.get("crop_start", 0.0))
+        crop_end = float(props.get("crop_end", 1.0))
+        if raw_slots:
+            for idx, s in enumerate(raw_slots):
+                if not isinstance(s, dict):
+                    continue
+                slots.append(NodeSlotModel(
+                    slot=idx,
+                    label=s.get("label"),
+                    filepath=s.get("filepath") if s.get("filepath") is not None else (filepath if idx == 0 else None),
+                    library_item_id=s.get("library_item_id") if s.get("library_item_id") is not None else (props.get("library_item_id") if idx == 0 else None),
+                    original_bpm=s.get("original_bpm") if s.get("original_bpm") is not None else (original_bpm if idx == 0 else None),
+                    key=s.get("key") if s.get("key") is not None else (key if idx == 0 else None),
+                    duration_seconds=s.get("duration_seconds"),
+                    crop_start=float(s.get("crop_start", crop_start)),
+                    crop_end=float(s.get("crop_end", crop_end)),
+                ))
+        if not slots:
+            slots.append(NodeSlotModel(
+                slot=0,
+                filepath=filepath,
+                library_item_id=props.get("library_item_id"),
+                original_bpm=original_bpm,
+                key=key,
+                crop_start=crop_start,
+                crop_end=crop_end,
+            ))
+    elif ntype == "sequence":
+        sequence = props.get("sequence") or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
+        step_parameters = props.get("step_parameters")
+        step_length = float(props.get("step_length") or 0.25)
+        sample_slot_expr = str(props.get("sample_slot") if props.get("sample_slot") is not None else "0")
+        seed_val = props.get("seed") if props.get("seed") is not None else 42
+        seq_len = len(sequence) if isinstance(sequence, list) and len(sequence) > 0 else 16
+        pattern_beats = max(0.25, seq_len * step_length)
+        total_beats = float(total_bars or 4.0) * 4.0
+        num_cycles = max(1, int(round((total_beats + pattern_beats - 1e-9) // pattern_beats)))
+
+        if raw_slots:
+            for idx, s in enumerate(raw_slots):
+                if not isinstance(s, dict):
+                    continue
+                slot_seq = list(s.get("sequence") if isinstance(s.get("sequence"), list) else sequence)
+                slot_step_params = copy.deepcopy(s.get("step_parameters") if isinstance(s.get("step_parameters"), list) else step_parameters)
+                slot_sample_slot = str(s.get("sample_slot") if s.get("sample_slot") is not None else sample_slot_expr)
+                slot_seed = s.get("seed") if s.get("seed") is not None else seed_val
+                slot_cycle_seeds = resolve_cycle_seeds(slot_seed, num_cycles, node_id_salt + idx)
+                slot_step_slots = resolve_step_slots(slot_sample_slot, len(slot_seq) or 16, upstream_slot_count, slot_cycle_seeds[0])
+                slots.append(NodeSlotModel(
+                    slot=idx,
+                    label=s.get("label"),
+                    sequence=slot_seq,
+                    step_parameters=slot_step_params,
+                    sample_slot=slot_sample_slot,
+                    step_slots=slot_step_slots,
+                    seed=slot_seed,
+                    cycle_seeds=slot_cycle_seeds,
+                ))
+        if not slots:
+            cycle_seeds_0 = resolve_cycle_seeds(seed_val, num_cycles, node_id_salt)
+            step_slots_0 = resolve_step_slots(sample_slot_expr, seq_len, upstream_slot_count, cycle_seeds_0[0])
+            slots.append(NodeSlotModel(
+                slot=0,
+                sequence=list(sequence),
+                step_parameters=copy.deepcopy(step_parameters) if isinstance(step_parameters, list) else None,
+                sample_slot=sample_slot_expr,
+                step_slots=step_slots_0,
+                seed=seed_val,
+                cycle_seeds=cycle_seeds_0,
+            ))
+
+    sample_slot_out = str(props.get("sample_slot") if props.get("sample_slot") is not None else "0")
+    step_slots_out = list(slots[0].step_slots or []) if ntype == "sequence" and slots else []
+    section_points = props.get("section_points") if isinstance(props.get("section_points"), list) else []
+    num_sections = len(section_points) + 1
+
+    if ntype == "sequence" and slots:
+        cycle_seeds_out = list(slots[0].cycle_seeds or [])
+    elif ntype == "arrangement":
+        cycle_seeds_out = resolve_cycle_seeds(props.get("seed") if props.get("seed") is not None else 42, num_sections, node_id_salt)
+    else:
+        cycle_seeds_out = []
+
+    raw_section_slots = props.get("section_slots") if isinstance(props.get("section_slots"), list) else []
+    section_slots_out = (
+        [wrap_slot_index(raw_section_slots[i] if i < len(raw_section_slots) else 0, upstream_slot_count) for i in range(num_sections)]
+        if ntype == "arrangement"
+        else []
+    )
+    return slots, sample_slot_out, step_slots_out, cycle_seeds_out, section_slots_out
 
 # Must stay in sync with core.fx.FX_PROCESSORS (gain staging only).
 KNOWN_FX_TYPES = frozenset({
@@ -669,6 +811,9 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
                 base_transpose += calculate_key_match_transpose(src_key, lead_key, algo)
 
         node_id_val = int(nid) if str(nid).isdigit() else None
+        slots, sample_slot_val, step_slots_val, cycle_seeds_val, section_slots_val = (
+            _resolve_node_slots_and_selectors(ntype, props, total_bars, children, node_id_val or 1)
+        )
         return AudioNodeModel(
             node_id=node_id_val,
             node_name=name,
@@ -692,6 +837,11 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             seed=props.get("seed"),
             seed_mode=props.get("seed_mode", "moving"),
             refresh_mode=props.get("refresh_mode", "off"),
+            slots=slots,
+            sample_slot=sample_slot_val,
+            step_slots=step_slots_val,
+            cycle_seeds=cycle_seeds_val,
+            section_slots=section_slots_val,
             total_bars=float(total_bars) if total_bars is not None else None,
             probability=props.get("probability", 1.0),
             section_points=props.get("section_points", []),
@@ -845,6 +995,9 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
                 algo = str(props.get("key_match_algorithm", "nearest")).strip()
                 base_transpose += calculate_key_match_transpose(src_key, lead_key, algo)
 
+        slots, sample_slot_val, step_slots_val, cycle_seeds_val, section_slots_val = (
+            _resolve_node_slots_and_selectors(ntype, props, total_bars, children, int(num_id))
+        )
         return AudioNodeModel(
             node_id=int(num_id),
             node_name=name,
@@ -868,6 +1021,11 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             seed=props.get("seed"),
             seed_mode=props.get("seed_mode", "moving"),
             refresh_mode=props.get("refresh_mode", "off"),
+            slots=slots,
+            sample_slot=sample_slot_val,
+            step_slots=step_slots_val,
+            cycle_seeds=cycle_seeds_val,
+            section_slots=section_slots_val,
             total_bars=float(total_bars) if total_bars is not None else None,
             probability=props.get("probability", 1.0),
             section_points=props.get("section_points", []),

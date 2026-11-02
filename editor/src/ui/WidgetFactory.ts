@@ -846,56 +846,106 @@ export class WidgetFactory {
         onChange: (key: string, val: any, previousValue: any) => void
     ): HTMLElement {
         const wrapper = document.createElement('div');
+        wrapper.className = 'td-seed-controller';
         wrapper.style.display = 'flex';
         wrapper.style.gap = '4px';
         wrapper.style.alignItems = 'center';
+        wrapper.style.width = '100%';
 
         const input = document.createElement('input');
-        input.type = 'number';
-        input.className = 'td-param-input';
+        input.type = 'text';
+        input.className = 'td-param-input td-seed-input';
         input.style.flex = '1';
-        input.value = String(this.getFieldValue(node, field) ?? 42);
+        input.placeholder = '42, 42 108, or rand';
+        input.title = 'Seed expression: single integer ("42"), sequence ("42 108"), or "rand"';
+        input.value = String(this.getFieldValue(node, field) ?? '42');
 
-        const diceBtn = document.createElement('button');
-        diceBtn.type = 'button';
-        diceBtn.className = 'asset-filter-add-button';
-        diceBtn.title = 'Randomize seed';
-        diceBtn.textContent = 'Rnd';
-        diceBtn.style.padding = '2px 6px';
-        diceBtn.style.fontSize = '10px';
-        diceBtn.style.fontWeight = '600';
-        diceBtn.style.height = '26px';
+        const refreshKey = `${field.key}_refresh`;
+        const isArmed = (): boolean => node.properties?.[refreshKey] !== false;
 
-        const commitValue = (val: number) => {
+        const refreshToggle = document.createElement('button');
+        refreshToggle.type = 'button';
+        refreshToggle.className = 'td-seed-refresh-toggle td-param-action-btn';
+        refreshToggle.style.padding = '2px 7px';
+        refreshToggle.style.height = '26px';
+        refreshToggle.style.fontSize = '12px';
+        refreshToggle.style.fontWeight = '700';
+        refreshToggle.style.lineHeight = '1';
+        refreshToggle.textContent = '↻';
+
+        const syncToggleUI = () => {
+            const armed = isArmed();
+            refreshToggle.classList.toggle('is-active', armed);
+            refreshToggle.classList.toggle('active', armed);
+            refreshToggle.setAttribute('aria-pressed', String(armed));
+            refreshToggle.title = armed
+                ? 'Armed for Refresh: global Refresh will roll this seed (click to lock)'
+                : 'Locked from Refresh: global Refresh will keep this seed (click to arm)';
+            refreshToggle.style.borderColor = armed ? '#0284c7' : '#cbd5e1';
+            refreshToggle.style.background = armed ? '#e0f2fe' : '#f8fafc';
+            refreshToggle.style.color = armed ? '#0369a1' : '#94a3b8';
+        };
+        syncToggleUI();
+
+        const commitValue = (rawVal: string | number) => {
+            const trimmed = String(rawVal ?? '').trim() || '42';
+            const asNum = Number(trimmed);
+            const normalized: string | number = (!trimmed.includes(' ') && Number.isFinite(asNum))
+                ? Math.round(asNum)
+                : trimmed;
             const previousValue = this.getFieldValue(node, field);
-            if (Object.is(previousValue, val)) return;
-            const updated = this.setFieldValue(node, field, val);
+            if (Object.is(previousValue, normalized)) return;
+            const updated = this.setFieldValue(node, field, normalized);
             input.value = String(updated);
             onChange(field.key, updated, previousValue);
         };
 
         input.addEventListener('change', () => {
-            commitValue(Number(input.value) || 0);
+            commitValue(input.value);
         });
-        registerParameterWheelControl(input, {
-            isInteger: true,
-            getValue: () => Number(this.getFieldValue(node, field) ?? 42),
-            setValue: (val) => commitValue(Math.round(val)),
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                commitValue(input.value);
+                input.blur();
+            }
         });
         input.addEventListener('wheel', event => {
+            const currentNumeric = Number(input.value);
+            if (!Number.isFinite(currentNumeric) || input.value.includes(' ')) return;
             event.preventDefault();
             if (event.altKey || input.disabled) return;
             const direction = event.deltaY < 0 ? 1 : -1;
-            commitValue(Number(input.value) + direction * getParameterWheelStep(true));
+            commitValue(Math.max(0, Math.round(currentNumeric + direction * getParameterWheelStep(true))));
         }, { passive: false });
 
-        diceBtn.addEventListener('click', () => {
-            const newSeed = Math.floor(Math.random() * 10000);
-            commitValue(newSeed);
+        refreshToggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const prevArmed = isArmed();
+            const nextArmed = !prevArmed;
+            node.updateProperty(refreshKey, nextArmed);
+            syncToggleUI();
         });
 
+        const onPropertiesRefreshed = (evt: Event) => {
+            if (!wrapper.isConnected) {
+                window.removeEventListener('node-properties-refreshed', onPropertiesRefreshed);
+                return;
+            }
+            const detail = (evt as CustomEvent)?.detail;
+            if (!detail || detail.nodeId === node.id) {
+                const latest = this.getFieldValue(node, field);
+                if (latest !== undefined && document.activeElement !== input) {
+                    input.value = String(latest);
+                }
+                syncToggleUI();
+            }
+        };
+        window.addEventListener('node-properties-refreshed', onPropertiesRefreshed);
+
         wrapper.appendChild(input);
-        wrapper.appendChild(diceBtn);
+        wrapper.appendChild(refreshToggle);
         return wrapper;
     }
 }

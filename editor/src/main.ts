@@ -10,7 +10,7 @@ import './nodes/ModulatorNode';
 import './nodes/AssetFilterNode';
 import './nodes/RandomNode';
 import './nodes/DisabledNode';
-import { isModifierNode, BaseNode } from './nodes/BaseNode';
+import { isModifierNode } from './nodes/BaseNode';
 import { PropertiesWindow } from './ui/PropertiesWindow';
 import { TrackPropertiesWindow } from './ui/TrackPropertiesWindow';
 import { NodePopupMenu } from './ui/NodePopupMenu';
@@ -19,18 +19,42 @@ import { isLibraryPreviewEnabled, LibraryPanel, setLibraryPreviewEnabled } from 
 import { MasterWaveform } from './ui/MasterWaveform';
 import { RuntimeLogPanel } from './ui/RuntimeLogPanel';
 import { EngineSyncManager } from './ui/EngineSyncManager';
+import {
+    createAppShell,
+    HEADER_PAUSE_ICON_SVG,
+    HEADER_PLAY_ICON_SVG,
+    HEADER_REFRESH_ICON_SVG,
+    mutedIcon,
+    pauseIcon,
+    playIcon,
+    volumeIcon
+} from './ui/AppShell';
+import {
+    frameCanvasSelectionOrGraph,
+    getDistanceToCubicBezier,
+    getLinkControlPoints,
+    getLinkEndpoints,
+    LEFT_PORT_BRANCH_INPUT,
+    markLeftPortBranch,
+    syncAllModifierPositions,
+    syncNodesDistanceStage,
+    updateModifiersForParent
+} from './canvas/canvasGeometry';
+import { readProgressivePreviewStream } from './network/previewStreamReader';
 import { appendServerRuntimeLog, installFetchLogging, loggedTask, runtimeLog, updateEngineTelemetry } from './runtimeLog';
 import { attachGhostProperties, createGhostNode, detachGhostDependents, getGhostSource, isGhostNode, syncGhostTrackData } from './ghosts';
 import { installSeparatedNodeClipboard } from './nodeClipboard';
 import { clearLibraryCache, fetchLibrary, findLibraryFile, findLibraryFileById, findLibraryFileForPoolLocator, refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from './api';
 import { serializeNodeSubtree } from '../../ermes/ts/serializer';
-import { advanceAssetPoolSeed, normalizeAssetRefreshMode, resolveAssetFilterNode, resolveAssignedAssetFilters } from '../../ermes/ts/assetResolver';
-import { resolveAssignedRandomModifiers } from '../../ermes/ts/randomResolver';
+import { advanceAssetPoolSeed, normalizeAssetRefreshMode, populateOwnerSlotsFromPool, resolveAssetFilterNode, resolveAssignedAssetFilters } from '../../ermes/ts/assetResolver';
+import { resolveAssignedRandomModifiers, refreshArmedSeeds } from '../../ermes/ts/randomResolver';
 import { defaultTransportClock } from '../../packages/iride/src/index.ts';
-import { clearAudioBufferCache, fetchAudioBuffer } from './audioBufferCache';
+import { clearAudioBufferCache, fetchAudioBuffer, getSharedAudioContext } from './audioBufferCache';
 import { globalAudioScheduler } from './audioScheduler';
 import { getNodeGainMultiplier } from './audioCompositor';
 import { applySignalFlowColors } from './graphColorEngine';
+
+export { syncAllModifierPositions, syncNodesDistanceStage, updateModifiersForParent };
 
 const appElement = document.getElementById('app');
 if (!appElement) throw new Error('Could not find #app element');
@@ -42,190 +66,40 @@ installFetchLogging();
 const popupMenu = new NodePopupMenu();
 const nodeContextMenu = new NodeContextMenu();
 
-// --- Top Header Toolbar UI ---
-const HEADER_PLAY_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>';
-const HEADER_PAUSE_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>';
-const HEADER_REFRESH_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>';
-const HEADER_FREEZE_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="12" y1="2" x2="12" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><path d="m20 16-4-4 4-4"></path><path d="m4 8 4 4-4 4"></path><path d="m16 4-4 4-4-4"></path><path d="m8 20 4-4 4 4"></path></svg>';
-const HEADER_SIDEBAR_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect><line x1="9" y1="4" x2="9" y2="20"></line></svg>';
-const HEADER_INSPECTOR_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6"/><circle cx="14" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>';
-
-const topHeader = document.createElement('header');
-topHeader.className = 'top-header';
-topHeader.innerHTML = `
-    <div class="header-menu-row">
-        <div class="top-header-left">
-            <div class="header-menus">
-                <details class="header-menu" id="file-menu">
-                    <summary>File</summary>
-                    <div class="header-menu-popover sin-menu-surface">
-                        <button id="new-stage-btn" class="header-menu-action sin-menu-item">New</button>
-                        <div class="header-menu-separator sin-menu-divider"></div>
-                        <label class="header-menu-label" for="workspace-preset-select">Workspace</label>
-                        <select id="workspace-preset-select" class="header-select workspace-preset-select sin-select" aria-label="Workspace save">
-                            <option value="">No saved workspaces</option>
-                        </select>
-                        <div class="header-menu-row">
-                            <button id="save-workspace-as-btn" class="header-btn secondary-tool-btn sin-menu-item">Save workspace as</button>
-                            <button id="save-workspace-btn" class="header-btn secondary-tool-btn sin-menu-item" disabled>Save workspace</button>
-                        </div>
-                        <div class="header-menu-row">
-                            <button id="load-workspace-btn" class="header-btn secondary-tool-btn sin-menu-item" disabled>Load workspace</button>
-                            <button id="delete-workspace-btn" class="header-btn secondary-tool-btn sin-menu-item" disabled>Delete workspace</button>
-                        </div>
-                        <div class="header-menu-separator sin-menu-divider"></div>
-                        <button id="export-btn" class="header-menu-action sin-menu-item">Download selected audio</button>
-                    </div>
-                </details>
-                <details class="header-menu" id="library-menu">
-                    <summary>Library</summary>
-                    <div class="header-menu-popover sin-menu-surface">
-                        <button id="toggle-library-btn" class="header-menu-action sin-menu-item">Open Library</button>
-                        <button id="refresh-library-btn" class="header-menu-action sin-menu-item">Refresh Library</button>
-                        <button id="toggle-library-preview-btn" class="header-menu-action sin-menu-item" aria-pressed="true">Auto-preview: On</button>
-                        <div class="header-menu-hint">Library management stays in GAIA.</div>
-                    </div>
-                </details>
-                <details class="header-menu" id="render-menu">
-                    <summary>Render</summary>
-                    <div class="header-menu-popover sin-menu-surface">
-                        <button id="render-flagged-btn" class="header-menu-action sin-menu-item">Render Flagged Nodes</button>
-                        <button id="render-selected-btn" class="header-menu-action sin-menu-item">Render Selected Nodes</button>
-                        <button id="render-most-parent-btn" class="header-menu-action sin-menu-item">Render Most Parent Nodes</button>
-                        <div class="header-menu-separator sin-menu-divider"></div>
-                        <button id="render-all-btn" class="header-menu-action sin-menu-item">Render All Nodes</button>
-                    </div>
-                </details>
-            </div>
-        </div>
-    </div>
-    <div class="header-toolbar-row">
-        <div class="header-toolbar-left">
-            <button id="floating-toggle-library" class="header-btn icon-header-btn squared-btn" type="button" title="Toggle Library Panel (Shortcut: L)" aria-label="Toggle Library Panel" aria-expanded="false">
-                ${HEADER_SIDEBAR_ICON_SVG}
-            </button>
-        </div>
-        <div class="top-header-center"></div>
-        <div class="top-header-right">
-            <button id="global-preview-btn" class="header-btn global-preview-btn icon-header-btn squared-btn" type="button" title="Play transport (Space)" aria-label="Play transport (Space)" disabled>
-                ${HEADER_PLAY_ICON_SVG}
-            </button>
-            <button id="preview-recalculate-btn" class="header-btn preview-recalculate-btn icon-header-btn squared-btn" type="button" title="Refresh pools, samples, and modifiers" aria-label="Refresh pools, samples, and modifiers" disabled>
-                ${HEADER_REFRESH_ICON_SVG}
-            </button>
-            <button id="global-freeze-btn" class="header-btn global-freeze-btn icon-header-btn squared-btn" type="button" title="Global Freeze: OFF (Flagged nodes refresh on recalculate)" aria-label="Toggle Global Freeze" aria-pressed="false">
-                ${HEADER_FREEZE_ICON_SVG}
-            </button>
-            <div class="header-btn-separator" aria-hidden="true"></div>
-            <button id="header-toggle-properties" class="header-btn secondary-tool-btn icon-header-btn squared-btn" type="button" title="Toggle Properties / Inspector (Shortcut: P)" aria-label="Toggle Properties / Inspector" aria-expanded="false">
-                ${HEADER_INSPECTOR_ICON_SVG}
-            </button>
-        </div>
-    </div>
-`;
-
-const playbackFooter = document.createElement('footer');
-playbackFooter.className = 'playback-footer';
-playbackFooter.setAttribute('aria-label', 'Playback transport');
-playbackFooter.innerHTML = `
-    <div class="playback-toolbar">
-        <div class="render-select-wrapper">
-            <select id="temp-files-select" class="playback-track-select sin-select" aria-label="Playback track">
-                <option value="" disabled selected>No renders available</option>
-            </select>
-        </div>
-        <div class="master-player-wrapper">
-            <audio id="master-player" preload="metadata"></audio>
-            <button id="master-play-btn" class="master-control-btn" type="button" aria-label="Play" title="Play" disabled>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>
-            </button>
-            <button id="master-loop-btn" class="master-control-btn master-loop-btn" type="button" aria-label="Loop off" title="Loop off" aria-pressed="false" disabled>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h9.5a3.5 3.5 0 0 1 0 7H15m2-3 3 3-3 3M17 17H7.5a3.5 3.5 0 0 1 0-7H9m-2 3-3-3 3-3"/></svg>
-            </button>
-        </div>
-        <div id="master-waveform" class="master-waveform" title="Click or drag to seek"></div>
-        <div class="master-volume-control">
-            <button id="master-mute-btn" class="master-control-btn master-volume-btn" type="button" aria-label="Mute" title="Mute">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5-.5v7a4 4 0 0 0 0-7z"/></svg>
-            </button>
-            <input id="master-volume" class="master-volume-slider" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume">
-        </div>
-    </div>
-`;
-
-const dockviewContainer = document.createElement('div');
-dockviewContainer.className = 'dockview-container';
-
-const floatingToggleLibrary = topHeader.querySelector('#floating-toggle-library') as HTMLButtonElement;
-
-appElement.appendChild(topHeader);
-appElement.appendChild(dockviewContainer);
-appElement.appendChild(playbackFooter);
-
-// Strictly prevent floating panels from being dragged or positioned higher than y = 0 (under or past the header)
-const clampFloatingPanels = () => {
-    const elements = dockviewContainer.querySelectorAll<HTMLElement>('.dv-floating-group, .dv-resize-container');
-    elements.forEach(el => {
-        const topVal = parseFloat(el.style.top);
-        if (!isNaN(topVal) && topVal < 0) {
-            el.style.top = '0px';
-        }
-    });
-};
-
-let floatingClampFrame: number | null = null;
-const scheduleFloatingPanelClamp = () => {
-    if (floatingClampFrame !== null) return;
-    floatingClampFrame = requestAnimationFrame(() => {
-        floatingClampFrame = null;
-        clampFloatingPanels();
-    });
-};
-
-const floatingObserver = new MutationObserver(() => {
-    scheduleFloatingPanelClamp();
-});
-
-floatingObserver.observe(dockviewContainer, {
-    childList: true,
-    subtree: true
-});
-
-window.addEventListener('pointermove', (e: PointerEvent) => {
-    if (e.buttons > 0) {
-        scheduleFloatingPanelClamp();
-    }
-}, { passive: true });
-
-const tempFilesSelect = playbackFooter.querySelector('#temp-files-select') as HTMLSelectElement;
-const masterPlayer = playbackFooter.querySelector('#master-player') as HTMLAudioElement;
-const masterPlayBtn = playbackFooter.querySelector('#master-play-btn') as HTMLButtonElement;
-const masterLoopBtn = playbackFooter.querySelector('#master-loop-btn') as HTMLButtonElement;
-const masterMuteBtn = playbackFooter.querySelector('#master-mute-btn') as HTMLButtonElement;
-const masterVolume = playbackFooter.querySelector('#master-volume') as HTMLInputElement;
-const exportBtn = topHeader.querySelector('#export-btn') as HTMLButtonElement;
-const globalPreviewBtn = topHeader.querySelector('#global-preview-btn') as HTMLButtonElement;
-const previewRecalculateBtn = topHeader.querySelector('#preview-recalculate-btn') as HTMLButtonElement;
-const globalFreezeBtn = topHeader.querySelector('#global-freeze-btn') as HTMLButtonElement;
-const toggleLibraryBtn = topHeader.querySelector('#toggle-library-btn') as HTMLButtonElement;
-const refreshLibraryBtn = topHeader.querySelector('#refresh-library-btn') as HTMLButtonElement | null;
-const toggleLibraryPreviewBtn = topHeader.querySelector('#toggle-library-preview-btn') as HTMLButtonElement;
-const headerToggleLibrary = floatingToggleLibrary;
-const headerToggleProperties = topHeader.querySelector('#header-toggle-properties') as HTMLButtonElement;
-const fileMenu = topHeader.querySelector('#file-menu') as HTMLDetailsElement;
-const libraryMenu = topHeader.querySelector('#library-menu') as HTMLDetailsElement;
-const renderMenu = topHeader.querySelector('#render-menu') as HTMLDetailsElement;
-const renderFlaggedBtn = topHeader.querySelector('#render-flagged-btn') as HTMLButtonElement;
-const renderSelectedBtn = topHeader.querySelector('#render-selected-btn') as HTMLButtonElement;
-const renderMostParentBtn = topHeader.querySelector('#render-most-parent-btn') as HTMLButtonElement;
-const renderAllBtn = topHeader.querySelector('#render-all-btn') as HTMLButtonElement;
-const newStageBtn = topHeader.querySelector('#new-stage-btn') as HTMLButtonElement;
-const masterWaveformElement = playbackFooter.querySelector('#master-waveform') as HTMLDivElement;
-const workspacePresetSelect = topHeader.querySelector('#workspace-preset-select') as HTMLSelectElement;
-const saveWorkspaceAsBtn = topHeader.querySelector('#save-workspace-as-btn') as HTMLButtonElement;
-const saveWorkspaceBtn = topHeader.querySelector('#save-workspace-btn') as HTMLButtonElement;
-const loadWorkspaceBtn = topHeader.querySelector('#load-workspace-btn') as HTMLButtonElement;
-const deleteWorkspaceBtn = topHeader.querySelector('#delete-workspace-btn') as HTMLButtonElement;
+const {
+    topHeader,
+    dockviewContainer,
+    playbackFooter,
+    tempFilesSelect,
+    masterPlayer,
+    masterPlayBtn,
+    masterLoopBtn,
+    masterMuteBtn,
+    masterVolume,
+    exportBtn,
+    globalPreviewBtn,
+    previewRecalculateBtn,
+    globalFreezeBtn,
+    toggleLibraryBtn,
+    refreshLibraryBtn,
+    toggleLibraryPreviewBtn,
+    headerToggleLibrary,
+    headerToggleProperties,
+    fileMenu,
+    libraryMenu,
+    renderMenu,
+    renderFlaggedBtn,
+    renderSelectedBtn,
+    renderMostParentBtn,
+    renderAllBtn,
+    newStageBtn,
+    masterWaveformElement,
+    workspacePresetSelect,
+    saveWorkspaceAsBtn,
+    saveWorkspaceBtn,
+    loadWorkspaceBtn,
+    deleteWorkspaceBtn,
+} = createAppShell(appElement);
 
 const WORKSPACE_PRESET_VERSION = 2;
 type GlobalParameters = { bpm: number; total_bars: number; key: string };
@@ -329,11 +203,6 @@ function loadGlobalFreezeFromGraph(graphOrPreset: any, targetGraph?: LGraph) {
 (window as any).getGlobalFreeze = () => isGlobalFreezeActive;
 (window as any).setGlobalFreeze = (val: boolean, graph?: LGraph) => setGlobalFreeze(val, graph);
 (window as any).loadGlobalFreezeFromGraph = (data: any, graph?: LGraph) => loadGlobalFreezeFromGraph(data, graph);
-
-const playIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>';
-const pauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>';
-const volumeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5-.5v7a4 4 0 0 0 0-7z"/></svg>';
-const mutedIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5 1 2 2 2-2 1.5 1.5-2 2 2 2-1.5 1.5-2-2-2 2-1.5-1.5 2-2-2-2z"/></svg>';
 
 function updatePlaybackControls() {
     const isPlaying = globalAudioScheduler.getIsPlaying() || (loopEnabled ? loopSource !== null || !masterPlayer.paused && !masterPlayer.ended : !masterPlayer.paused && !masterPlayer.ended);
@@ -593,13 +462,7 @@ function getOrCreateMasterAnalyser(ctx?: AudioContext | null): AnalyserNode | nu
 
 function attachMasterMediaElementSource(): void {
     if (mediaElementSourceAttached) return;
-    let ctx = masterWaveform.playbackContext || loopContext;
-    if (!ctx) {
-        const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioContextCtor) {
-            ctx = new AudioContextCtor();
-        }
-    }
+    const ctx = masterWaveform.playbackContext || loopContext || getSharedAudioContext();
     if (!ctx) return;
     if (ctx.state === 'suspended') {
         ctx.resume().catch(() => { });
@@ -755,28 +618,71 @@ async function toggleTransportPlayback(): Promise<void> {
         return;
     }
 
+    // If a preview is currently buffering to auto-play and user toggles transport again, cancel auto-play
+    if (previewWorker && activePreviewAutoplay) {
+        activePreviewAutoplay = false;
+        if (pendingPreviewRequest) {
+            pendingPreviewRequest.autoplay = false;
+        }
+        updatePlaybackControls();
+        return;
+    }
+
     // Currently stopped / paused:
     const graph = (window as any).editorGraph as LGraph;
     const target = resolveMainPreviewNode(graph);
 
-    // 1. Play is a pure transport mechanism: if a buffer is already loaded for the target node,
-    // start/resume playback immediately. If parameters were edited while paused, refresh them in the background.
-    if (target && activeRamPreviewNodeId === target.id && globalAudioScheduler.getTotalDuration() > 0) {
-        globalAudioScheduler.play();
-        updatePlaybackControls();
-        startPlaybackTelemetry();
-        if (isGraphPreviewInvalidated(graph, target.id)) {
-            EngineSyncManager.getInstance().setState('hot_swapping');
-            void previewNode(target.id, false, false, false);
-        }
-        return;
-    }
-
-    // 2. Only when nothing is loaded for the target node does Play trigger an initial Evaluation Call.
     if (target) {
+        const hasPendingInvalidation = pendingGlobalParamInvalidation
+            || pendingInvalidatedNodes.size > 0
+            || Boolean(dspInvalidateTimer);
+        const isInvalidated = isGraphPreviewInvalidated(graph, target.id);
+        const isPreviewInFlight = previewWorker != null || pendingPreviewRequest != null;
+
+        // 1. If the complete buffer for the target node is already rendered, valid, and synced,
+        // start/resume playback immediately in lockstep with visuals.
+        if (
+            activeRamPreviewNodeId === target.id &&
+            globalAudioScheduler.getTotalDuration() > 0 &&
+            !isInvalidated &&
+            !hasPendingInvalidation &&
+            !isPreviewInFlight
+        ) {
+            await globalAudioScheduler.playAsync();
+            updatePlaybackControls();
+            startPlaybackTelemetry();
+            return;
+        }
+
+        // 2. If a background preview is already in-flight for this target node with no newer pending edits,
+        // promote it to autoplay so we don't abort in-flight work, and wait for it to finish before starting transport.
+        if (
+            isPreviewInFlight &&
+            !hasPendingInvalidation &&
+            (activePreviewNodeIdInFlight === target.id || pendingPreviewRequest?.nodeId === target.id)
+        ) {
+            activePreviewAutoplay = true;
+            if (pendingPreviewRequest && pendingPreviewRequest.nodeId === target.id) {
+                pendingPreviewRequest.autoplay = true;
+            }
+            setPreviewCalculatingState(false);
+            try {
+                globalPreviewBtn.disabled = true;
+                await previewWorker;
+            } catch (e) {
+                console.error('Playback generation error:', e);
+            } finally {
+                globalPreviewBtn.disabled = false;
+                updateMainPreviewTarget(graph);
+            }
+            return;
+        }
+
+        // 3. Otherwise (first play or graph was edited while stopped), wait for audio calculation
+        // to complete before starting transport so visuals and audio begin together without silence or mid-play refresh.
         try {
             globalPreviewBtn.disabled = true;
-            await previewNode(target.id, true, true, true);
+            await previewNode(target.id, true, false, false);
         } catch (e) {
             console.error('Playback generation error:', e);
         } finally {
@@ -786,7 +692,7 @@ async function toggleTransportPlayback(): Promise<void> {
         return;
     }
 
-    // 3. Fallback when there is NO graph target (empty workspace / standalone render playback):
+    // 4. Fallback when there is NO graph target (empty workspace / standalone render playback):
     if (loopEnabled && loopBuffer) {
         void playLoop(loopTime());
         return;
@@ -987,9 +893,9 @@ function rebuildTrackNodesFromGraph(graph: LGraph) {
         if (!node) continue;
         attachGhostProperties(node, graph);
         const p = node.properties || {};
-        const type = (typeof (node as any).getNodeType === 'function')
-            ? (node as any).getNodeType()
-            : (p.disabled || node.type === 'Audio/Disabled' ? 'disabled' : p.node_type || 'track');
+        const type = p.disabled
+            ? 'disabled'
+            : ((typeof (node as any).getNodeType === 'function' ? (node as any).getNodeType() : null) || p.node_type || 'track');
         if (type === 'asset_filter') p.refresh_mode = normalizeAssetRefreshMode(p.refresh_mode);
         trackNodes.set(node.id, {
             id: node.id,
@@ -1163,6 +1069,13 @@ async function syncGraphSampleMetadataFromLibrary(
         const filepath = String(node?.properties?.filepath || '');
         const id = node?.properties?.library_item_id;
         if (id != null || filepath) references.push({ id, absolute_path: filepath });
+        if (Array.isArray(node?.properties?.slots)) {
+            for (const s of node.properties.slots) {
+                const sPath = String(s?.filepath || '');
+                const sId = s?.library_item_id;
+                if (sId != null || sPath) references.push({ id: sId, absolute_path: sPath });
+            }
+        }
     }
     const files: LibraryFile[] = await resolveLibraryAssets(references);
 
@@ -1202,12 +1115,18 @@ async function syncGraphSampleMetadataFromLibrary(
         if (typeof sync !== 'function') return Promise.resolve(false);
         const modifierId = node.properties?.asset_modifier_id;
         const modifier = modifierId != null ? graph.getNodeById(modifierId) : null;
-        const assetPath = modifier?.properties?.output_value || node.properties?.filepath || '';
+        const hasSlots = Array.isArray(node.properties?.slots) && node.properties.slots.length >= 1;
+        const assetPath = hasSlots
+            ? (node.properties?.filepath || modifier?.properties?.output_value || '')
+            : (modifier?.properties?.output_value || node.properties?.filepath || '');
         const selectedItem = (modifier?.properties?.selected_items || []).find((item: any) =>
             (item.absolute_path || item.filepath) === assetPath
         );
-        const preferredId = modifier?.properties?.output_item_id ?? selectedItem?.id ?? node.properties?.library_item_id;
+        const preferredId = hasSlots
+            ? (node.properties?.library_item_id ?? selectedItem?.id ?? modifier?.properties?.output_item_id)
+            : (modifier?.properties?.output_item_id ?? selectedItem?.id ?? node.properties?.library_item_id);
         if (assetPath && node.properties?.filepath !== assetPath) node.updateProperty('filepath', assetPath);
+        if (preferredId != null && node.properties?.library_item_id !== preferredId) node.updateProperty('library_item_id', preferredId);
         return sync.call(node, files, preferredId).then((item: LibraryFile | null) => {
             if (!item) return false;
             const bpm = Number(node.properties?.original_bpm);
@@ -1244,8 +1163,10 @@ async function preloadSubtreeAssets(graph: LGraph, rootNodeId?: number): Promise
     for (const node of nodes) {
         if (!node) continue;
 
+        const nodeKind = (typeof (node as any).getNodeType === 'function' ? (node as any).getNodeType() : null) || node.properties?.node_type;
+
         // 1. SampleNode: preload audio buffer into memory
-        if (node.type === 'Audio/Sample' || node.properties?.node_type === 'sample' || typeof (node as any).ensureAudioLoaded === 'function') {
+        if (nodeKind === 'sample' || typeof (node as any).ensureAudioLoaded === 'function') {
             const filepath = String(node.properties?.filepath || '');
             if (filepath) {
                 if (typeof (node as any).ensureAudioLoaded === 'function') {
@@ -1270,7 +1191,7 @@ async function preloadSubtreeAssets(graph: LGraph, rootNodeId?: number): Promise
         }
 
         // 2. SequenceNode: ensure sequence pattern is parsed/loaded if filepath is set
-        if (node.type === 'Audio/Sequence' || node.properties?.node_type === 'sequence') {
+        if (nodeKind === 'sequence') {
             const filepath = String(node.properties?.filepath || '');
             const hasSequence = Array.isArray(node.properties?.sequence) && node.properties.sequence.length > 0;
             if (filepath && !hasSequence) {
@@ -1774,6 +1695,13 @@ previewRecalculateBtn.addEventListener('click', async () => {
     previewRecalculateBtn.disabled = true;
     previewRecalculateBtn.innerHTML = HEADER_REFRESH_ICON_SVG;
 
+    if (dspInvalidateTimer) {
+        clearTimeout(dspInvalidateTimer);
+        dspInvalidateTimer = null;
+    }
+    pendingInvalidatedNodes.clear();
+    pendingGlobalParamInvalidation = false;
+
     try {
         await fetch('/api/preview/invalidate', {
             method: 'POST',
@@ -1782,6 +1710,10 @@ previewRecalculateBtn.addEventListener('click', async () => {
         }).catch(() => { });
 
         if (graph) {
+            await withGraphEvaluationWindow(async () => {
+                await syncGraphSampleMetadataFromLibrary(graph, true, nodeId);
+                refreshArmedSeeds(graph, isGlobalFreezeActive, trackNodes);
+            });
             for (const node of ((graph as any)._nodes || [])) {
                 if (node) {
                     (node as any).isInvalidated = true;
@@ -1790,7 +1722,7 @@ previewRecalculateBtn.addEventListener('click', async () => {
             }
         }
 
-        await previewNode(nodeId, false, true, true);
+        await previewNode(nodeId, false, false, false);
     } catch (err) {
         const isAbort = (err as any)?.name === 'AbortError' || String(err).toLowerCase().includes('abort');
         if (!isAbort) {
@@ -2049,58 +1981,6 @@ export function deleteSelectedCables(graph?: LGraph): boolean {
     return true;
 }
 (window as any).deleteSelectedCables = deleteSelectedCables;
-const LEFT_PORT_BRANCH_INPUT = '__sinLeftPortBranchInput';
-
-function markLeftPortBranch(link: any, sourceNode: any, inputSlot: number) {
-    if (!link || !sourceNode) return;
-    link[LEFT_PORT_BRANCH_INPUT] = inputSlot;
-    link.__sinLeftPortBranchOwnerId = sourceNode.id;
-    sourceNode.properties = sourceNode.properties || {};
-    const branches = sourceNode.properties.left_port_branch_links || {};
-    branches[String(link.id)] = inputSlot;
-    sourceNode.properties.left_port_branch_links = branches;
-}
-
-function getLinkEndpoints(
-    graph: any,
-    link: any,
-    fallbackOrigin: [number, number],
-    fallbackTarget: [number, number]
-) {
-    const originNode = link ? graph?.getNodeById?.(link.origin_id) : null;
-    const targetNode = link ? graph?.getNodeById?.(link.target_id) : null;
-    const branchOwner = graph?.getNodeById?.(link?.__sinLeftPortBranchOwnerId)
-        || [originNode, targetNode].find((node: any) =>
-            Number.isInteger(node?.properties?.left_port_branch_links?.[String(link?.id)])
-        );
-    const inputSlot = link?.[LEFT_PORT_BRANCH_INPUT]
-        ?? branchOwner?.properties?.left_port_branch_links?.[String(link?.id)];
-
-    if (branchOwner && Number.isInteger(inputSlot)) {
-        const childNode = branchOwner.id === originNode?.id ? targetNode : originNode;
-        if (childNode) {
-            return {
-                origin: branchOwner.getConnectionPos(true, inputSlot),
-                target: childNode.getConnectionPos(false, childNode.id === originNode?.id ? link.origin_slot : 0)
-            };
-        }
-    }
-    return { origin: fallbackOrigin, target: fallbackTarget };
-}
-
-function getDistanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-    const dx = bx - ax;
-    const dy = by - ay;
-    const lenSq = dx * dx + dy * dy;
-    if (lenSq === 0) {
-        return Math.hypot(px - ax, py - ay);
-    }
-    let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-    t = Math.max(0, Math.min(1, t));
-    const projX = ax + t * dx;
-    const projY = ay + t * dy;
-    return Math.hypot(px - projX, py - projY);
-}
 
 // Monkey-patch LGraphNode.prototype.connect to redirect connections to free slots
 // Or dynamically allocate a new input slot if all existing slots are occupied.
@@ -2138,45 +2018,6 @@ const originalConnect = (LiteGraph as any).LGraphNode.prototype.connect;
     return link;
 };
 
-export function updateModifiersForParent(parentNode: any): void {
-    if (!parentNode || !parentNode.graph) return;
-    const allNodes: any[] = (parentNode.graph as any)._nodes || [];
-    const modifiers = allNodes.filter(n =>
-        n && isModifierNode(n) && n.properties?.parentId === parentNode.id
-    );
-    if (!modifiers.length) return;
-
-    const parentWidth = parentNode.size?.[0] || BaseNode.visualSize || 44;
-    const parentHeight = parentNode.size?.[1] || BaseNode.visualSize || 44;
-    const parentCenterX = parentNode.pos[0] + parentWidth * 0.5;
-    const parentBottomY = parentNode.pos[1] + parentHeight;
-
-    const spacing = 56;
-    const totalWidth = (modifiers.length - 1) * spacing + BaseNode.visualSize;
-    const startX = parentCenterX - totalWidth * 0.5;
-    const targetY = parentBottomY + 32;
-
-    modifiers.forEach((mod, index) => {
-        const targetX = startX + index * spacing;
-        if (!mod.pos) {
-            mod.pos = [targetX, targetY];
-        } else {
-            mod.pos[0] = targetX;
-            mod.pos[1] = targetY;
-        }
-    });
-}
-
-export function syncAllModifierPositions(graph?: any): void {
-    const targetGraph = graph || (window as any).editorGraph;
-    if (!targetGraph || !targetGraph._nodes) return;
-    for (const node of targetGraph._nodes) {
-        if (node && !isModifierNode(node)) {
-            updateModifiersForParent(node);
-        }
-    }
-}
-
 (window as any).updateModifiersForParent = updateModifiersForParent;
 (window as any).syncAllModifierPositions = syncAllModifierPositions;
 
@@ -2208,6 +2049,15 @@ const originalProcessKey = (LiteGraph as any).LGraphCanvas.prototype.processKey;
     if (e.keyCode === 46 || e.keyCode === 8 || e.code === 'Delete' || e.code === 'Backspace' || e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedLinkIds.size > 0) {
             deleteSelectedCables(this.graph);
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+        }
+    }
+    if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const activeTag = (document.activeElement as HTMLElement)?.tagName;
+        if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA' && activeTag !== 'SELECT') {
+            frameCanvasSelectionOrGraph(this);
             e.preventDefault();
             e.stopPropagation();
             return false;
@@ -2249,11 +2099,40 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
         const candidateNodes = (this.graph as any)._nodes || [];
         for (let i = candidateNodes.length - 1; i >= 0; i--) {
             const n = candidateNodes[i];
-            if (!n || n.flags?.collapsed || (n.flags as any)?.hidden || !Array.isArray(n.buttons) || n.buttons.length === 0) continue;
+            if (!n || n.flags?.collapsed || (n.flags as any)?.hidden || isModifierNode(n)) continue;
+            const isSelected = this.selected_nodes
+                ? Boolean(this.selected_nodes[n.id] || this.selected_nodes[String(n.id)])
+                : Boolean(n.is_selected);
+            const isHovered = this.node_over === n;
 
             const localX = offset[0] - n.pos[0];
             const localY = offset[1] - n.pos[1];
-            for (const btn of n.buttons) {
+
+            // Priority 1a: Bottom-right resize grip on resizable panel nodes
+            if (
+                n.resizable !== false &&
+                n.isVisualizationActive &&
+                localX >= n.size[0] - 11 &&
+                localX <= n.size[0] + 3 &&
+                localY >= n.size[1] - 11 &&
+                localY <= n.size[1] + 3
+            ) {
+                this.graph.beforeChange?.();
+                this.resizing_node = n;
+                if (this.canvas) this.canvas.style.cursor = "se-resize";
+                if (!isSelected) this.selectNode?.(n);
+                this.dirty_canvas = true;
+                this.setDirty(true, true);
+                e.preventDefault();
+                e.stopPropagation();
+                return true;
+            }
+
+            if (!Array.isArray(n.buttons) || n.buttons.length === 0) continue;
+            const activeButtons = typeof n.getVisibleCanvasButtons === 'function'
+                ? n.getVisibleCanvasButtons(isSelected, isHovered)
+                : (isSelected || !n.isVisualizationActive ? n.buttons : []);
+            for (const btn of activeButtons) {
                 if (btn.checkHit(localX, localY, n)) {
                     console.log(`[CanvasButton] Clicked '${btn.label}' (${btn.tooltip || 'button'}) on node #${n.id}`);
                     btn.onClick(e);
@@ -2340,6 +2219,14 @@ const originalProcessMouseMove = (LiteGraph as any).LGraphCanvas.prototype.proce
 // Render theme-cohesive styled box selection instead of invisible #FFF stroke on white canvas
 const originalDrawFrontCanvas = (LiteGraph as any).LGraphCanvas.prototype.drawFrontCanvas;
 (LiteGraph as any).LGraphCanvas.prototype.drawFrontCanvas = function () {
+    if (this.graph && this.ds?.scale != null) {
+        if (syncNodesDistanceStage(this.graph, Number(this.ds.scale))) {
+            this.dirty_bgcanvas = true;
+        }
+    }
+    if (this.node_dragged) {
+        this.dirty_bgcanvas = true;
+    }
     const rect = this.dragging_rectangle;
     if (rect) {
         this.dragging_rectangle = null;
@@ -2522,7 +2409,7 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
 
     for (let i = targetList.length - 1; i >= 0; i--) {
         const n = targetList[i];
-        if (!n || n.flags?.hidden) continue;
+        if (!n || n.flags?.hidden || isModifierNode(n)) continue;
 
         if ((n as any).collapsedDotMode) {
             const dotX = n.pos[0] + (n.size?.[0] || 44) * 0.5;
@@ -2567,6 +2454,7 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
     ctx.save();
     const baseWidth = this.connections_width || 2;
     const endpoints = getLinkEndpoints(this.graph, link, a, b);
+    const { cp1, cp2 } = getLinkControlPoints(endpoints.origin, endpoints.target);
 
     if (isSelected) {
         // High-visibility selection halo
@@ -2576,7 +2464,7 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
         ctx.lineJoin = "round";
         ctx.beginPath();
         ctx.moveTo(endpoints.origin[0], endpoints.origin[1]);
-        ctx.lineTo(endpoints.target[0], endpoints.target[1]);
+        ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], endpoints.target[0], endpoints.target[1]);
         ctx.stroke();
 
         ctx.lineWidth = baseWidth + 1;
@@ -2593,10 +2481,10 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    // Direct 1-to-1 full unbroken straight line
+    // Smooth horizontal S-curve Bezier cable
     ctx.beginPath();
     ctx.moveTo(endpoints.origin[0], endpoints.origin[1]);
-    ctx.lineTo(endpoints.target[0], endpoints.target[1]);
+    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], endpoints.target[0], endpoints.target[1]);
     ctx.stroke();
 
     ctx.restore();
@@ -2785,7 +2673,7 @@ function resolveMainPreviewNode(graph?: LGraph): any | null {
 
     const trackRoot = nodes.find(node =>
         canBeMainPreview(node)
-        && (node.type === 'Audio/Track' || node.properties?.node_type === 'track')
+        && ((node as any).getNodeType?.() === 'track' || node.properties?.node_type === 'track')
         && trackNodes.get(node.id)?.parentId == null
     );
     if (trackRoot) {
@@ -3095,12 +2983,12 @@ function updateGraphNodeCollapsing() {
 
     syncGraphHierarchy(graph);
 
-    for (const nodeId of trackNodes.keys()) {
-        const lgraphNode = graph.getNodeById(nodeId);
+    const allNodes: any[] = (graph as any)._nodes || [];
+    for (const lgraphNode of allNodes) {
         if (!lgraphNode) continue;
-
+        lgraphNode.flags = lgraphNode.flags || {};
         lgraphNode.flags.collapsed = false;
-        (lgraphNode as any).flags.hidden = false;
+        (lgraphNode.flags as any).hidden = isModifierNode(lgraphNode);
         (lgraphNode as any).collapsedDotMode = false;
     }
 
@@ -3388,32 +3276,47 @@ window.addEventListener('add-modulator-node', (e: any) => {
     }
 });
 
+window.addEventListener('open-node-properties', (e: any) => {
+    const nodeId = e.detail?.nodeId;
+    const graph = (window as any).editorGraph as LGraph;
+    const targetNode = nodeId != null ? graph?.getNodeById(nodeId) : null;
+    if (targetNode) {
+        openParamWindow(targetNode, { forceOpen: true });
+    }
+});
+
 window.addEventListener('add-asset-filter-to-param', (e: any) => {
     const nodeId = e.detail?.nodeId;
     const graph = (window as any).editorGraph as LGraph;
-    const ownerNode = nodeId != null ? graph?.getNodeById(nodeId) : null;
-    if (!ownerNode || (ownerNode.type !== 'Audio/Sample' && ownerNode.type !== 'Audio/Sequence')) return;
+    const ownerNode = nodeId != null ? (graph?.getNodeById(nodeId) as any) : null;
+    const ownerType = ownerNode?.getNodeType?.() || ownerNode?.properties?.node_type;
+    if (!ownerNode || (ownerType !== 'sample' && ownerType !== 'sequence')) return;
 
     const assignedId = ownerNode.properties?.asset_modifier_id;
     let modifierNode = assignedId != null ? graph.getNodeById(assignedId) : null;
     if (!modifierNode) {
         modifierNode = (((graph as any)._nodes || []) as any[]).find(candidate =>
-            candidate?.type === 'Audio/AssetFilter'
+            (candidate?.getNodeType?.() === 'asset_filter' || candidate?.type === 'Audio/AssetFilter')
             && candidate?.properties?.parentId === nodeId
         ) || null;
     }
     if (!modifierNode) modifierNode = addAssetFilterNode(nodeId, false);
     if (!modifierNode) return;
 
-    modifierNode.properties.accepted_asset_type = ownerNode.type === 'Audio/Sequence' ? 'sequence_source' : 'audio';
-    if (ownerNode.type === 'Audio/Sequence') {
+    const acceptedType = ownerNode.acceptedPoolAssetType || (ownerType === 'sequence' ? 'sequence_source' : 'audio');
+    modifierNode.properties.accepted_asset_type = acceptedType;
+    if (acceptedType === 'sequence_source') {
         (modifierNode as any).updateProperty('node_name', 'MIDI / Sequence Pool');
     }
     ownerNode.properties.asset_modifier_id = modifierNode.id;
     const ownerData = trackNodes.get(nodeId);
     if (ownerData) ownerData.asset_modifier_id = modifierNode.id;
     window.dispatchEvent(new CustomEvent('modifier-assignment-changed', { detail: { nodeId } }));
-    openParamWindow(modifierNode, { forceOpen: true });
+    if (activeParamNodeId === modifierNode.id && dockedPropertyPanels().length > 0) {
+        openParamWindow(ownerNode, { forceOpen: true });
+    } else {
+        openParamWindow(modifierNode, { forceOpen: true });
+    }
 });
 
 window.addEventListener('item-pool-preview-refresh', async (e: any) => {
@@ -3435,6 +3338,11 @@ window.addEventListener('item-pool-preview-refresh', async (e: any) => {
     if (!activeItem) return;
 
     // Find any nodes associated with this pool (either via asset_modifier_id or parentId)
+    const files = await resolveLibraryAssets(selectedItems);
+    for (const item of selectedItems) {
+        refreshLibraryAssetSnapshot(item, files);
+    }
+
     const nodes = (((graph as any)._nodes || []) as any[]);
     for (const node of nodes) {
         if (!node) continue;
@@ -3442,19 +3350,24 @@ window.addEventListener('item-pool-preview-refresh', async (e: any) => {
             poolNode.properties?.parentId === node.id;
         if (!isAssociated) continue;
 
-        if (node.type === 'Audio/Sample') {
-            const dragItem: LibraryDragItem = {
-                id: activeItem.id,
-                name: activeItem.name,
-                filepath: activeItem.filepath || activeItem.absolute_path,
-                itemType: activeItem.type || 'audio',
-                key: activeItem.key || undefined,
-                bpm: activeItem.bpm || undefined,
-                duration_seconds: activeItem.duration_seconds || undefined
-            };
-            await applyLibraryItemToSample(node, dragItem);
+        const nodeKind = node.getNodeType?.() || node.properties?.node_type;
+        if (nodeKind === 'sample') {
+            populateOwnerSlotsFromPool(poolNode, node, selectedItems);
+            const data = trackNodes.get(node.id);
+            if (data) {
+                data.filepath = node.properties?.filepath || data.filepath;
+                data.original_bpm = node.properties?.original_bpm ?? data.original_bpm;
+                data.key = node.properties?.key ?? data.key;
+                data.duration_seconds = node.properties?.duration_seconds ?? data.duration_seconds;
+            }
             node.setDirtyCanvas?.(true, true);
-        } else if (node.type === 'Audio/Sequence') {
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
+                detail: { nodeId: node.id }
+            }));
+            window.dispatchEvent(new CustomEvent('arrangement-source-changed', {
+                detail: { nodeId: node.id }
+            }));
+        } else if (nodeKind === 'sequence') {
             const dragItem: LibraryDragItem = {
                 id: activeItem.id,
                 name: activeItem.name,
@@ -3475,13 +3388,30 @@ function addAssetFilterNode(parentId: number, openProperties: boolean = true) {
 }
 
 function addRandomNode(parentId: number, openProperties: boolean = true) {
+    const graph = (window as any).editorGraph as LGraph;
+    const parentNode = graph?.getNodeById(parentId);
+    const existing = (((graph as any)?._nodes || []) as any[]).find(candidate =>
+        candidate &&
+        (candidate.type === 'Audio/Random' || candidate.properties?.node_type === 'random' || candidate.properties?.modifier_kind === 'random') &&
+        candidate.properties?.parentId === parentId
+    );
+    if (existing) {
+        if (openProperties) {
+            if (activeParamNodeId === existing.id && dockedPropertyPanels().length > 0 && parentNode) {
+                openParamWindow(parentNode, { forceOpen: true });
+            } else {
+                openParamWindow(existing, { forceOpen: true });
+            }
+        }
+        return existing;
+    }
     return addModulatorNode(parentId, "random", openProperties);
 }
 
 window.addEventListener('add-random-node', (e: any) => {
     const parentId = e.detail?.parentId;
     if (parentId != null) {
-        addRandomNode(parentId);
+        addRandomNode(parentId, true);
     }
 });
 
@@ -3520,6 +3450,8 @@ function addModulatorNode(
     modNode.properties.node_type = modifierKind;
     modNode.properties.parentId = parentId;
     modNode.title = modName;
+    modNode.flags = modNode.flags || {};
+    (modNode.flags as any).hidden = true;
 
     if (typeof (modNode as any).computeSize === 'function') {
         modNode.size = (modNode as any).computeSize();
@@ -3570,7 +3502,7 @@ window.addEventListener('preview-node', (e: any) => {
     // Legacy/custom controls may still emit parameter-change requests. Ignore
     // them so only an explicit node/context preview action performs calculation.
     if (changedNodeId != null && e.detail?.reason !== 'parameter-change') {
-        previewNode(changedNodeId, true);
+        void previewNode(changedNodeId, true, false, false);
     }
 });
 
@@ -4079,6 +4011,7 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
     const sampleType = item.itemType === "one_shot" ? "one_shot" : "loop";
 
     const resolvedKey = latest ? String(latest.key ?? '') : (item.key || metadata.key || "");
+    const resolvedItemId = latest?.id ?? item.id;
     if (typeof node.updateProperty === 'function') {
         node.updateProperty('node_name', nodeName);
         node.updateProperty('sample_type', sampleType);
@@ -4086,6 +4019,9 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
         node.updateProperty('target_bpm', targetBpm);
         node.updateProperty('bpm', targetBpm);
         node.updateProperty('key', resolvedKey);
+        if (resolvedItemId !== undefined) {
+            node.updateProperty('library_item_id', resolvedItemId);
+        }
         if (item.duration_seconds !== undefined) {
             node.updateProperty('duration_seconds', item.duration_seconds);
         }
@@ -4095,6 +4031,7 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
             node_name: nodeName,
             node_type: "sample",
             filepath: item.filepath,
+            library_item_id: resolvedItemId,
             sample_type: sampleType,
             original_bpm: originalBpm,
             target_bpm: targetBpm,
@@ -4268,7 +4205,7 @@ function addLibraryItemsToPool(node: any, items: LibraryDragItem[]) {
     }
 
     const selectedItems = [...byKey.values()];
-    const nextSeed = Math.random();
+    const nextSeed = node.properties.seed ?? 42;
     if (typeof node.updateProperty === 'function') {
         node.updateProperty('selected_items', selectedItems);
         node.updateProperty('seed', nextSeed);
@@ -4315,13 +4252,14 @@ async function attachLibrarySampleToSequence(sequenceNode: any, item: LibraryDra
 
 async function applyLibraryDropToNode(node: any, items: LibraryDragItem[]) {
     if (!node || items.length === 0) return false;
+    const nodeKind = node.getNodeType?.() || node.properties?.node_type;
 
-    if (node.type === "Audio/Sample") {
+    if (nodeKind === "sample") {
         const sample = items.find(item => !isMidiLibraryItem(item));
         return sample ? await applyLibraryItemToSample(node, sample) : false;
     }
 
-    if (node.type === "Audio/Sequence") {
+    if (nodeKind === "sequence") {
         let applied = false;
         const sequenceSource = items.find(isSequenceSourceLibraryItem);
         const sample = items.find(item => !isSequenceSourceLibraryItem(item));
@@ -4330,7 +4268,7 @@ async function applyLibraryDropToNode(node: any, items: LibraryDragItem[]) {
         return applied;
     }
 
-    if (node.type === "Audio/AssetFilter") {
+    if (nodeKind === "asset_filter") {
         return addLibraryItemsToPool(node, items);
     }
 
@@ -4583,6 +4521,17 @@ async function restoreCurrentStage(graph: LGraph, canvas: LGraphCanvas): Promise
         rebuildTrackNodesFromGraph(graph);
         loadGlobalParametersFromGraph(graph);
         updateGraphNodeCollapsing();
+        await withGraphEvaluationWindow(async () => {
+            const libraryFiles = await syncGraphSampleMetadataFromLibrary(graph, true);
+            await resolveAssignedAssetFilters(graph, undefined as any, {
+                kind: 'preview',
+                globalPreview: false,
+                globalFreeze: true,
+                libraryFiles
+            });
+        }).catch(err => {
+            console.warn('Could not pre-resolve stage asset pools on restore:', err);
+        });
         canvas.setDirty(true, true);
         void preloadSubtreeAssets(graph);
         lastSavedStageFingerprint = JSON.stringify(stage.graph);
@@ -4671,9 +4620,9 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     (window as any).editorGraph = graph;
                     loadGlobalParametersFromGraph(graph);
 
-                    // Render connections on top of main canvas so they update live in real-time during node drag
+                    // Render connections behind nodes so cables never cross over node text or waveforms
                     if (!graph.config) graph.config = {};
-                    (graph.config as any).links_ontop = true;
+                    (graph.config as any).links_ontop = false;
 
                     const graphCanvas = new LGraphCanvas(canvas, graph);
                     (window as any).editorCanvas = graphCanvas;
@@ -4740,75 +4689,6 @@ const dockview = new DockviewComponent(dockviewContainer, {
                             ctx.strokeStyle = "#8b5cf6";
                             ctx.stroke();
                             ctx.restore();
-                        }
-
-                        // Modifier ownership is represented as a dedicated
-                        // control cable into the parent's footer inlet. It is
-                        // visual metadata, not an audio graph link.
-                        const parentsWithVisibleModifiers = new Set<number>();
-                        for (const n of nodesList) {
-                            if (n && isModifierNode(n) && !(n.flags as any)?.hidden && n.properties?.parentId != null) {
-                                parentsWithVisibleModifiers.add(n.properties.parentId);
-                            }
-                        }
-
-                        for (const node of nodesList) {
-                            if (!node || (node.flags as any)?.hidden) continue;
-                            const isMod = (node as any).isModifier
-                                || node.type === "Audio/Modulator"
-                                || node.type === "Audio/AssetFilter"
-                                || node.type === "Audio/Random"
-                                || node.properties?.node_type === "modulator"
-                                || node.properties?.node_type === "asset_filter"
-                                || node.properties?.node_type === "random";
-
-                            if (!isMod) {
-                                if (!parentsWithVisibleModifiers.has(node.id) || node.flags?.collapsed) continue;
-                                const width = node.size?.[0] || 44;
-                                const height = node.size?.[1] || 44;
-                                const inletX = node.pos[0] + width * 0.5;
-                                const inletY = node.pos[1] + height;
-
-                                ctx.beginPath();
-                                ctx.arc(inletX, inletY, 4, 0, Math.PI * 2);
-                                ctx.fillStyle = "#7e22ce";
-                                ctx.fill();
-                                ctx.lineWidth = 1.5;
-                                ctx.strokeStyle = "#ffffff";
-                                ctx.stroke();
-                                continue;
-                            }
-
-                            const parentId = node.properties?.parentId;
-                            if (parentId == null) continue;
-                            const parentNode = graph.getNodeById(parentId);
-                            if (!parentNode || (parentNode.flags as any)?.hidden) continue;
-
-                            const parentWidth = parentNode.size?.[0] || 44;
-                            const parentHeight = parentNode.size?.[1] || 44;
-                            const parentX = parentNode.pos[0] + parentWidth * 0.5;
-                            const parentY = parentNode.pos[1] + parentHeight;
-                            const modWidth = node.size?.[0] || 44;
-                            const modX = node.pos[0] + modWidth * 0.5;
-                            const modY = node.pos[1];
-
-                            const modColor = (node as any).nodeColor || node.color || "#7e22ce";
-
-                            ctx.beginPath();
-                            ctx.moveTo(parentX, parentY);
-                            ctx.lineTo(modX, modY);
-                            ctx.lineWidth = 2.5;
-                            ctx.strokeStyle = modColor;
-                            ctx.lineCap = "round";
-                            ctx.stroke();
-
-                            ctx.beginPath();
-                            ctx.arc(modX, modY, 3.5, 0, Math.PI * 2);
-                            ctx.fillStyle = modColor;
-                            ctx.fill();
-                            ctx.lineWidth = 1.5;
-                            ctx.strokeStyle = "#ffffff";
-                            ctx.stroke();
                         }
 
                         ctx.restore();
@@ -4929,8 +4809,9 @@ const dockview = new DockviewComponent(dockviewContainer, {
                                 const defaultPosA = originNode.getConnectionPos(false, link.origin_slot);
                                 const defaultPosB = targetNode.getConnectionPos(true, link.target_slot);
                                 const { origin: posA, target: posB } = getLinkEndpoints(graph, link, defaultPosA, defaultPosB);
+                                const { cp1, cp2 } = getLinkControlPoints(posA, posB);
 
-                                const dist = getDistanceToSegment(canvasX, canvasY, posA[0], posA[1], posB[0], posB[1]);
+                                const dist = getDistanceToCubicBezier(canvasX, canvasY, posA, cp1, cp2, posB);
                                 if (dist < minDistance) {
                                     minDistance = dist;
                                     closestLink = link;
@@ -5300,6 +5181,48 @@ function formatApiError(status: number, errJson: any, rawText: string): string {
     return `Status code ${status}`;
 }
 
+async function evaluateGraphModifiersAndMetadata(
+    graph: LGraph,
+    nodeId: number,
+    kind: 'render' | 'preview',
+    refreshModifiers: boolean = true,
+    globalPreview: boolean = false
+): Promise<void> {
+    await withGraphEvaluationWindow(async () => {
+        const libraryFiles = await loggedTask('Resolve graph asset metadata', () =>
+            syncGraphSampleMetadataFromLibrary(graph, true, nodeId)
+        );
+        await loggedTask(`Resolve ${kind} asset pools`, () =>
+            resolveAssignedAssetFilters(graph, nodeId, {
+                kind,
+                globalPreview: kind === 'preview' ? (refreshModifiers ? globalPreview : false) : undefined,
+                globalFreeze: refreshModifiers ? isGlobalFreezeActive : true,
+                libraryFiles
+            })
+        );
+        if (refreshModifiers) {
+            await loggedTask('Resolve random modifiers', () =>
+                resolveAssignedRandomModifiers(graph, nodeId, {
+                    kind,
+                    globalPreview: kind === 'preview' ? globalPreview : undefined,
+                    globalFreeze: isGlobalFreezeActive
+                })
+            );
+        }
+    });
+}
+
+async function throwFormattedResponseError(res: Response, prefix: string): Promise<never> {
+    let errJson: any = null;
+    let rawText = '';
+    try {
+        errJson = await res.json();
+    } catch {
+        try { rawText = await res.text(); } catch { }
+    }
+    throw new Error(`${prefix}: ${formatApiError(res.status, errJson, rawText)}`);
+}
+
 async function renderNode(nodeId: number, autoPlay: boolean = true) {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
@@ -5317,26 +5240,8 @@ async function renderNode(nodeId: number, autoPlay: boolean = true) {
     console.log(`[Render] Starting disk render (/api/render) for node #${nodeId}`);
     runtimeLog(`Disk render requested for node ${nodeId}`, 'common');
     try {
-        let libraryFiles: LibraryFile[];
         try {
-            await withGraphEvaluationWindow(async () => {
-                libraryFiles = await loggedTask('Resolve graph asset metadata', () =>
-                    syncGraphSampleMetadataFromLibrary(graph, !isGlobalFreezeActive, nodeId)
-                );
-                await loggedTask('Resolve render asset pools', () =>
-                    resolveAssignedAssetFilters(graph, nodeId, {
-                        kind: 'render',
-                        globalFreeze: isGlobalFreezeActive,
-                        libraryFiles
-                    })
-                );
-                await loggedTask('Resolve random modifiers', () =>
-                    resolveAssignedRandomModifiers(graph, nodeId, {
-                        kind: 'render',
-                        globalFreeze: isGlobalFreezeActive
-                    })
-                );
-            });
+            await evaluateGraphModifiersAndMetadata(graph, nodeId, 'render', true, false);
         } catch (error) {
             console.error('Asset Filter resolution failed', error);
             const message = error instanceof Error ? error.message : String(error);
@@ -5367,15 +5272,7 @@ async function renderNode(nodeId: number, autoPlay: boolean = true) {
         );
 
         if (!res.ok) {
-            let errJson: any = null;
-            let rawText = '';
-            try {
-                errJson = await res.json();
-            } catch {
-                try { rawText = await res.text(); } catch { }
-            }
-            const errorDetail = formatApiError(res.status, errJson, rawText);
-            throw new Error(`Render failed: ${errorDetail}`);
+            await throwFormattedResponseError(res, 'Render failed');
         }
         const data = await res.json();
         appendServerRuntimeLog(data.runtime_log);
@@ -5425,6 +5322,8 @@ let previewRequestVersion = 0;
 let previewWorker: Promise<void> | null = null;
 let currentPreviewAbortController: AbortController | null = null;
 let currentPreviewSessionId = 0;
+let activePreviewAutoplay = false;
+let activePreviewNodeIdInFlight: number | null = null;
 
 async function calculatePreview(
     nodeId: number,
@@ -5444,46 +5343,43 @@ async function calculatePreview(
     const abortController = new AbortController();
     currentPreviewAbortController = abortController;
     const sessionId = ++currentPreviewSessionId;
+    activePreviewNodeIdInFlight = nodeId;
+    activePreviewAutoplay = autoplay || activePreviewAutoplay;
+
+    // Flush any pending debounced parameter invalidations immediately so the backend
+    // DAG cache is invalidated before rendering and no late timer aborts this stream.
+    if (dspInvalidateTimer) {
+        clearTimeout(dspInvalidateTimer);
+        dspInvalidateTimer = null;
+    }
+    if (pendingGlobalParamInvalidation || pendingInvalidatedNodes.size > 0) {
+        const idsToInvalidate = pendingGlobalParamInvalidation ? [] : Array.from(pendingInvalidatedNodes);
+        pendingInvalidatedNodes.clear();
+        pendingGlobalParamInvalidation = false;
+        await fetch('/api/preview/invalidate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node_ids: idsToInvalidate }),
+            signal: abortController.signal
+        }).catch(() => { });
+    }
 
     activeRamPreviewNodeId = nodeId;
     (window as any).activeRamPreviewNodeId = nodeId;
     const targetNode = graph.getNodeById(nodeId);
     const nodeName = targetNode?.properties?.node_name || targetNode?.title || ('Node #' + nodeId);
     const engineSync = EngineSyncManager.getInstance();
-    engineSync.setState('dsp_rendering', { nodeId, nodeName });
+    engineSync.setState(globalAudioScheduler.getIsPlaying() && !activePreviewAutoplay ? 'hot_swapping' : 'dsp_rendering', { nodeId, nodeName });
 
     if (targetNode) {
         (targetNode as any).isInvalidated = true;
-        if (!(targetNode as any).manifestStemBuffer && !(targetNode as any)._lastRenderedBuffer) {
-            (targetNode as any).bufferedProgress = 0;
-        }
+        (targetNode as any).bufferedProgress = 0;
         (targetNode as any).setDirtyCanvas?.(true, true);
     }
     (window as any).editorCanvas?.setDirty?.(true, true);
 
     try {
-        await withGraphEvaluationWindow(async () => {
-            const libraryFiles = await loggedTask('Resolve graph asset metadata', () =>
-                syncGraphSampleMetadataFromLibrary(graph, refreshModifiers && !isGlobalFreezeActive, nodeId)
-            );
-            if (refreshModifiers) {
-                await loggedTask('Resolve preview asset pools', () =>
-                    resolveAssignedAssetFilters(graph, nodeId, {
-                        kind: 'preview',
-                        globalPreview,
-                        globalFreeze: isGlobalFreezeActive,
-                        libraryFiles
-                    })
-                );
-                await loggedTask('Resolve random modifiers', () =>
-                    resolveAssignedRandomModifiers(graph, nodeId, {
-                        kind: 'preview',
-                        globalPreview,
-                        globalFreeze: isGlobalFreezeActive
-                    })
-                );
-            }
-        });
+        await evaluateGraphModifiersAndMetadata(graph, nodeId, 'preview', refreshModifiers, globalPreview);
         void preloadSubtreeAssets(graph, nodeId);
     } catch (error) {
         console.error('Asset Filter resolution failed', error);
@@ -5516,206 +5412,44 @@ async function calculatePreview(
         );
 
         if (!res.ok) {
-            let errJson: any = null;
-            let rawText = '';
-            try {
-                errJson = await res.json();
-            } catch {
-                try { rawText = await res.text(); } catch { }
-            }
-            const errorDetail = formatApiError(res.status, errJson, rawText);
-            throw new Error(`RAM preview failed: ${errorDetail}`);
+            await throwFormattedResponseError(res, 'RAM preview failed');
         }
 
-        const reader = res.body?.getReader();
-        if (!reader) throw new Error('ReadableStream not supported.');
+        const isSessionCurrent = () =>
+            requestVersion === previewRequestVersion && sessionId === currentPreviewSessionId;
 
-        let finalData: any = null;
+        const finalData = await readProgressivePreviewStream({
+            response: res,
+            signal: abortController.signal,
+            isSessionCurrent,
+            decodeWav: (raw) => globalAudioScheduler.decodeWav(raw),
+            decodeBase64Wav: (b64) => globalAudioScheduler.decodeBase64Wav(b64),
+            onBarChunk: async (chunkData, audioBuf) => {
+                if (!isSessionCurrent()) return;
+                const stagedProgress = globalAudioScheduler.stageBarChunk({
+                    barIndex: chunkData.bar_index,
+                    totalBars: chunkData.total_bars,
+                    bpm: chunkData.bpm,
+                    startSeconds: chunkData.start_seconds,
+                    durationSeconds: chunkData.duration_seconds,
+                    audioBuffer: audioBuf,
+                    peaks: chunkData.peaks
+                }, sessionId);
 
-        const processBarChunk = async (chunkData: any, audioBuf: AudioBuffer) => {
-            if (requestVersion !== previewRequestVersion || sessionId !== currentPreviewSessionId) {
-                return;
-            }
-            const chunkPayload = {
-                barIndex: chunkData.bar_index,
-                totalBars: chunkData.total_bars,
-                bpm: chunkData.bpm,
-                startSeconds: chunkData.start_seconds,
-                durationSeconds: chunkData.duration_seconds,
-                audioBuffer: audioBuf,
-                peaks: chunkData.peaks
-            };
+                engineSync.setState('streaming_chunks', {
+                    barsReceived: chunkData.bar_index + 1,
+                    totalBars: chunkData.total_bars,
+                    nodeId,
+                    nodeName
+                });
 
-            if (chunkData.bar_index === 0) {
-                globalAudioScheduler.startSession(chunkPayload, autoplay, sessionId);
-                if (autoplay || globalAudioScheduler.getIsPlaying()) {
-                    startPlaybackTelemetry();
-                    updatePlaybackControls();
+                if (targetNode) {
+                    (targetNode as any).bufferedProgress = stagedProgress;
+                    (targetNode as any).setDirtyCanvas?.(true, true);
                 }
-            } else {
-                globalAudioScheduler.addBarChunk(chunkPayload, sessionId);
+                (window as any).editorCanvas?.setDirty?.(true, false);
             }
-
-            engineSync.setState('streaming_chunks', {
-                barsReceived: chunkData.bar_index + 1,
-                totalBars: chunkData.total_bars,
-                nodeId,
-                nodeName
-            });
-
-            if (autoplay || !globalAudioScheduler.getIsPlaying()) {
-                const totalExpectedDuration = (chunkData.total_bars && chunkData.duration_seconds)
-                    ? chunkData.total_bars * chunkData.duration_seconds
-                    : 0;
-
-                const fullBuf = globalAudioScheduler.getFullAudioBuffer();
-                if (fullBuf) {
-                    (window as any).activeRamPreviewBuffer = fullBuf;
-                    masterWaveform.setAudioBuffer(fullBuf, totalExpectedDuration);
-                }
-            }
-
-            if (chunkData.manifest) {
-                distributeWorkspaceManifest(graph, chunkData.manifest);
-            }
-
-            if (targetNode) {
-                (targetNode as any).bufferedProgress = (chunkData.bar_index + 1) / chunkData.total_bars;
-                (targetNode as any).setDirtyCanvas?.(true, true);
-            }
-            masterPlayBtn.disabled = false;
-            masterLoopBtn.disabled = false;
-            (window as any).editorCanvas?.setDirty?.(true, true);
-        };
-
-        const isBinary = res.headers.get('content-type')?.includes('octet-stream');
-        if (isBinary) {
-            let buffer = new Uint8Array(0);
-            while (true) {
-                if (sessionId !== currentPreviewSessionId || abortController.signal.aborted) {
-                    reader.cancel();
-                    break;
-                }
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (value && value.length > 0) {
-                    const nextBuf = new Uint8Array(buffer.length + value.length);
-                    nextBuf.set(buffer, 0);
-                    nextBuf.set(value, buffer.length);
-                    buffer = nextBuf;
-                }
-
-                while (buffer.length >= 12) {
-                    if (buffer[0] !== 0x53 || buffer[1] !== 0x49 || buffer[2] !== 0x4E || buffer[3] !== 0x42) {
-                        let syncIdx = -1;
-                        for (let i = 1; i < buffer.length - 3; i++) {
-                            if (buffer[i] === 0x53 && buffer[i + 1] === 0x49 && buffer[i + 2] === 0x4E && buffer[i + 3] === 0x42) {
-                                syncIdx = i;
-                                break;
-                            }
-                        }
-                        if (syncIdx > 0) {
-                            buffer = buffer.subarray(syncIdx);
-                        } else {
-                            buffer = buffer.subarray(buffer.length - 3);
-                            break;
-                        }
-                    }
-
-                    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-                    const metaLen = view.getUint32(4, false);
-                    const audioLen = view.getUint32(8, false);
-                    const frameLen = 12 + metaLen + audioLen;
-                    if (buffer.length < frameLen) {
-                        break;
-                    }
-
-                    const metaBytes = buffer.subarray(12, 12 + metaLen);
-                    const audioBytes = buffer.subarray(12 + metaLen, frameLen);
-                    buffer = buffer.subarray(frameLen);
-
-                    let chunkData: any;
-                    try {
-                        chunkData = JSON.parse(new TextDecoder().decode(metaBytes));
-                    } catch (e) {
-                        console.error('[BinaryStream] JSON parse error:', e);
-                        continue;
-                    }
-
-                    if (sessionId !== currentPreviewSessionId || requestVersion !== previewRequestVersion) break;
-
-                    const cType = chunkData.chunk_type || chunkData.type;
-                    if (cType === 'bar' || cType === 'bar_chunk') {
-                        let audioBuf: AudioBuffer | null = null;
-                        if (audioBytes.length > 0) {
-                            const rawWavBuffer = audioBytes.buffer.slice(
-                                audioBytes.byteOffset,
-                                audioBytes.byteOffset + audioBytes.byteLength
-                            );
-                            audioBuf = await globalAudioScheduler.decodeWav(rawWavBuffer);
-                        }
-                        if (audioBuf && sessionId === currentPreviewSessionId && requestVersion === previewRequestVersion) {
-                            await processBarChunk(chunkData, audioBuf);
-                        }
-                    } else if (cType === 'complete') {
-                        finalData = chunkData;
-                        if (requestVersion === previewRequestVersion) {
-                            clearSubtreeInvalidated(graph, nodeId);
-                            if (targetNode) {
-                                (targetNode as any).bufferedProgress = 1.0;
-                                (targetNode as any).setDirtyCanvas?.(true, true);
-                            }
-                        }
-                    } else if (cType === 'error') {
-                        throw new Error(chunkData.error || 'Server streaming error');
-                    }
-                }
-            }
-        } else {
-            const decoder = new TextDecoder();
-            let streamBuffer = '';
-            while (true) {
-                if (sessionId !== currentPreviewSessionId || abortController.signal.aborted) {
-                    reader.cancel();
-                    break;
-                }
-                const { done, value } = await reader.read();
-                if (done) break;
-                streamBuffer += decoder.decode(value, { stream: true });
-                const lines = streamBuffer.split('\n');
-                streamBuffer = lines.pop() || '';
-
-                for (const line of lines) {
-                    if (!line.trim()) continue;
-                    if (sessionId !== currentPreviewSessionId || requestVersion !== previewRequestVersion) break;
-                    let chunkData: any;
-                    try {
-                        chunkData = JSON.parse(line);
-                    } catch {
-                        continue;
-                    }
-
-                    const cType = chunkData.chunk_type || chunkData.type;
-                    if (cType === 'bar' || cType === 'bar_chunk') {
-                        const audioBuf = await globalAudioScheduler.decodeBase64Wav(chunkData.audio_base64);
-                        if (audioBuf && sessionId === currentPreviewSessionId && requestVersion === previewRequestVersion) {
-                            await processBarChunk(chunkData, audioBuf);
-                        }
-                    } else if (cType === 'complete') {
-                        finalData = chunkData;
-                        if (requestVersion === previewRequestVersion) {
-                            clearSubtreeInvalidated(graph, nodeId);
-                            if (targetNode) {
-                                (targetNode as any).bufferedProgress = 1.0;
-                                (targetNode as any).setDirtyCanvas?.(true, true);
-                            }
-                        }
-                    } else if (cType === 'error') {
-                        throw new Error(chunkData.error || 'Server streaming error');
-                    }
-                }
-            }
-        }
+        });
 
         const fallbackUrl = `/api/preview/stream/${keyName}`;
         const data = finalData ? {
@@ -5728,7 +5462,7 @@ async function calculatePreview(
         appendServerRuntimeLog(data.runtime_log);
 
         if (data.status === 'success' && data.audio_url) {
-            if (requestVersion !== previewRequestVersion) {
+            if (requestVersion !== previewRequestVersion || sessionId !== currentPreviewSessionId) {
                 runtimeLog(`Discarded superseded preview for node ${nodeId}`, 'warning');
                 return;
             }
@@ -5736,24 +5470,46 @@ async function calculatePreview(
             (window as any).activeRamPreviewNodeId = nodeId;
             activeRamPreviewPayload = payload;
             activeRamPreviewSource = data.audio_url;
-            previewRecalculateBtn.disabled = false;
-            masterPlayBtn.disabled = false;
-            masterLoopBtn.disabled = false;
 
+            // 1. Atomically commit the full multi-bar session into the scheduler
             globalAudioScheduler.commitSession(sessionId);
             const fullBuf = globalAudioScheduler.getFullAudioBuffer();
             if (fullBuf) {
                 (window as any).activeRamPreviewBuffer = fullBuf;
-                masterWaveform.setAudioBuffer(fullBuf, data.total_duration);
+                masterWaveform.setAudioBuffer(fullBuf, data.total_duration || globalAudioScheduler.getTotalDuration());
             }
 
-            // Distribute workspace manifest to active nodes in graph
+            // 2. Distribute workspace manifest and await intermediate stem buffers BEFORE starting playback
+            // so waveforms never jump or refresh mid-playback.
             if (data.manifest && typeof data.manifest === 'object') {
-                distributeWorkspaceManifest(graph, data.manifest);
+                await distributeWorkspaceManifest(graph, data.manifest);
+            }
+            if (requestVersion !== previewRequestVersion || sessionId !== currentPreviewSessionId) {
+                return;
             }
 
             clearSubtreeInvalidated(graph, nodeId);
+            if (targetNode) {
+                (targetNode as any).bufferedProgress = 1.0;
+                (targetNode as any).setDirtyCanvas?.(true, true);
+            }
+
+            previewRecalculateBtn.disabled = false;
+            masterPlayBtn.disabled = false;
+            masterLoopBtn.disabled = false;
+
+            // 3. Start transport and visual telemetry together only after audio & stems are 100% ready
+            const shouldStartPlayback = activePreviewAutoplay;
+            activePreviewAutoplay = false;
+            if (shouldStartPlayback && !globalAudioScheduler.getIsPlaying()) {
+                await globalAudioScheduler.playFromStart();
+                startPlaybackTelemetry();
+            } else if (globalAudioScheduler.getIsPlaying()) {
+                startPlaybackTelemetry();
+            }
+
             updatePlaybackControls();
+            (window as any).editorCanvas?.setDirty?.(true, true);
 
             // Add/select RAM preview entry in toolbar dropdown
             let ramOpt = Array.from(tempFilesSelect.options).find(o => o.value === 'RAM_PREVIEW');
@@ -5799,18 +5555,25 @@ async function calculatePreview(
             nodeName
         });
         if (requestVersion === previewRequestVersion) {
+            activePreviewAutoplay = false;
             runtimeLog(`Preview failed for node ${nodeId}: ${(err as Error).message || String(err)}`, 'error');
         }
         if (requestVersion === previewRequestVersion) throw err;
+    } finally {
+        if (activePreviewNodeIdInFlight === nodeId && requestVersion === previewRequestVersion) {
+            activePreviewNodeIdInFlight = null;
+        }
     }
 }
 
-function distributeWorkspaceManifest(graph: LGraph, manifest: any) {
+async function distributeWorkspaceManifest(graph: LGraph, manifest: any): Promise<void> {
     if (!manifest || typeof manifest !== 'object') return;
     activeWorkspaceManifest = manifest;
     (window as any).activeWorkspaceManifest = manifest;
     const nodesMap = manifest.nodes || {};
     const graphNodes = (((graph as any)._nodes || []) as any[]);
+    const pendingLoads: Promise<any>[] = [];
+
     for (const gNode of graphNodes) {
         if (!gNode) continue;
         const manifestEntry = nodesMap[String(gNode.id)];
@@ -5827,28 +5590,41 @@ function distributeWorkspaceManifest(graph: LGraph, manifest: any) {
             gNode.manifestEvents = manifestEntry.events || [];
             gNode.manifestStemDuration = manifestEntry.duration_seconds;
 
-            // Sync resolved sample/pool filepath to node (skip overwriting dynamic pools that already have a primary filepath)
+            // Sync resolved sample/pool filepath to node (skip overwriting pooled or multi-slot nodes that already have a primary filepath)
+            const hasMultiSlots = Array.isArray(gNode.properties?.slots) && gNode.properties.slots.length > 1;
+            const isPooledOrSlotted = Boolean(
+                manifestEntry.is_pool ||
+                manifestEntry.is_dynamic_pool ||
+                hasMultiSlots ||
+                gNode.properties?.asset_modifier_id != null
+            );
             const isDynamicPoolWithPath = Boolean(
-                manifestEntry.is_dynamic_pool &&
+                isPooledOrSlotted &&
                 gNode.properties &&
                 typeof gNode.properties.filepath === 'string' &&
                 gNode.properties.filepath.trim().length > 0
             );
+            if (hasMultiSlots && typeof gNode.preloadAllSlotBuffers === 'function') {
+                pendingLoads.push(gNode.preloadAllSlotBuffers().catch(() => { }));
+            }
             if (manifestEntry.filepath && gNode.properties && !isDynamicPoolWithPath) {
                 const currentPath = String(gNode.properties.filepath || '');
                 if (currentPath !== manifestEntry.filepath || !gNode.audioBuffer) {
                     gNode.properties.filepath = manifestEntry.filepath;
                     gNode.loadedFilepath = manifestEntry.filepath;
+                    gNode.syncActiveSlotFromProperties?.();
                     delete gNode.manifestStemBuffer;
-                    fetchAudioBuffer(manifestEntry.filepath).then(buf => {
-                        if (buf) {
-                            gNode.audioBuffer = buf;
-                            if (buf.duration) {
-                                gNode.properties.duration_seconds = buf.duration;
+                    pendingLoads.push(
+                        fetchAudioBuffer(manifestEntry.filepath).then(buf => {
+                            if (buf) {
+                                gNode.audioBuffer = buf;
+                                if (buf.duration) {
+                                    gNode.properties.duration_seconds = buf.duration;
+                                }
+                                gNode.setDirtyCanvas?.(true, true);
                             }
-                            gNode.setDirtyCanvas?.(true, true);
-                        }
-                    }).catch(() => { });
+                        }).catch(() => { })
+                    );
                 }
             }
 
@@ -5869,19 +5645,25 @@ function distributeWorkspaceManifest(graph: LGraph, manifest: any) {
                 } else {
                     const shouldFetchStem = (gNode.id === activeParamNodeId || (Boolean(gNode.isVisualizationActive) && !gNode.flags?.collapsed));
                     if (shouldFetchStem && (!gNode.manifestStemBuffer || stemUrlChanged)) {
-                        fetchAudioBuffer(manifestEntry.audio_url).then(buf => {
-                            if (buf && gNode.id !== activeRamPreviewNodeId) {
-                                gNode.manifestStemBuffer = buf;
-                                gNode._lastRenderedBuffer = buf;
-                                gNode._lastRenderedGain = getNodeGainMultiplier(gNode);
-                                gNode.setDirtyCanvas?.(true, true);
-                            }
-                        }).catch(() => { });
+                        pendingLoads.push(
+                            fetchAudioBuffer(manifestEntry.audio_url).then(buf => {
+                                if (buf && gNode.id !== activeRamPreviewNodeId) {
+                                    gNode.manifestStemBuffer = buf;
+                                    gNode._lastRenderedBuffer = buf;
+                                    gNode._lastRenderedGain = getNodeGainMultiplier(gNode);
+                                    gNode.setDirtyCanvas?.(true, true);
+                                }
+                            }).catch(() => { })
+                        );
                     }
                 }
             }
             gNode.setDirtyCanvas?.(true, true);
         }
+    }
+
+    if (pendingLoads.length > 0) {
+        await Promise.all(pendingLoads);
     }
 }
 
@@ -5918,18 +5700,27 @@ function previewNode(
     nodeId: number,
     autoplay: boolean = true,
     globalPreview: boolean = false,
-    refreshModifiers: boolean = true
+    refreshModifiers: boolean = false
 ): Promise<void> {
+    if (dspInvalidateTimer) {
+        clearTimeout(dspInvalidateTimer);
+        dspInvalidateTimer = null;
+    }
+    const effectiveAutoplay = autoplay
+        || (activePreviewAutoplay && !globalAudioScheduler.getIsPlaying() && activePreviewNodeIdInFlight === nodeId)
+        || Boolean(pendingPreviewRequest?.autoplay && pendingPreviewRequest.nodeId === nodeId);
+
     if (pendingPreviewRequest) {
         runtimeLog(`Replaced queued preview for node ${pendingPreviewRequest.nodeId}`, 'warning');
     }
     if (currentPreviewAbortController) {
         currentPreviewAbortController.abort();
     }
-    pendingPreviewRequest = { nodeId, autoplay, globalPreview, refreshModifiers };
+    activePreviewAutoplay = effectiveAutoplay;
+    pendingPreviewRequest = { nodeId, autoplay: effectiveAutoplay, globalPreview, refreshModifiers };
     previewRequestVersion++;
     runtimeLog(`Preview queued for node ${nodeId}`, 'common');
-    setPreviewCalculatingState(globalAudioScheduler.getIsPlaying());
+    setPreviewCalculatingState(globalAudioScheduler.getIsPlaying() || !effectiveAutoplay);
     if (!previewWorker) previewWorker = runPreviewQueue();
     return previewWorker;
 }
@@ -5955,7 +5746,14 @@ const NON_DSP_PROPERTIES = new Set([
     'name',
     'description',
     'tags',
-    'favorite'
+    'favorite',
+    'duration_seconds',
+    'active_slot',
+    'library_item_id',
+    'key_proposal',
+    'original_bpm_proposal',
+    'key_is_local_override',
+    'original_bpm_is_local_override'
 ]);
 
 let dspInvalidateTimer: any = null;

@@ -3,9 +3,33 @@
  * Converts LiteGraph node structures into canonical AudioNodeModel payload dictionaries.
  */
 
+import {
+    type NodeSlot,
+    resolveCycleSeeds,
+    resolveStepSlots,
+    wrapSlotIndex,
+} from './slotLanguage.ts';
+
 export interface SerializationOptions {
     includeDynamicPools?: boolean;
     isFrozen?: boolean;
+}
+
+function normalizeStepParametersList(rawStepParameters: any): Array<Record<string, any>> | undefined {
+    if (!Array.isArray(rawStepParameters)) return undefined;
+    return rawStepParameters.map((step: any) => {
+        const cloned = { ...(step || {}) };
+        if (typeof cloned.sample_start === 'number' && cloned.sample_start > 1) {
+            cloned.sample_start = cloned.sample_start / 100;
+        }
+        if (typeof cloned.probability === 'number' && cloned.probability > 1) {
+            cloned.probability = cloned.probability / 100;
+        }
+        if (typeof cloned.gate_length === 'number' && cloned.gate_length > 1) {
+            cloned.gate_length = cloned.gate_length / 100;
+        }
+        return cloned;
+    });
 }
 
 export function serializeNodeSubtree(
@@ -39,6 +63,9 @@ export function serializeNodeSubtree(
         const data = trackNodes.get(nodeId);
         const nodeObj = graph.getNodeById(nodeId);
         if (!data && !nodeObj) return null;
+        if (typeof nodeObj?.syncActiveSlotFromProperties === 'function') {
+            nodeObj.syncActiveSlotFromProperties();
+        }
         if (typeof window !== 'undefined' && typeof (window as any).syncGhostTrackData === 'function') {
             (window as any).syncGhostTrackData(nodeObj, data);
         }
@@ -50,7 +77,10 @@ export function serializeNodeSubtree(
         const name = data?.name || nodeObj?.title || nodeObj?.properties?.node_name || "AudioNode";
         const assignedModifierId = nodeObj?.properties?.asset_modifier_id ?? data?.asset_modifier_id;
         const assignedModifier = assignedModifierId != null ? graph.getNodeById(assignedModifierId) : null;
-        const filepath = assignedModifier?.properties?.output_value || data?.filepath || nodeObj?.properties?.filepath || null;
+        const hasPopulatedSlots = Array.isArray(nodeObj?.properties?.slots) && nodeObj.properties.slots.some((s: any) => Boolean(s?.filepath));
+        const filepath = (hasPopulatedSlots
+            ? (nodeObj?.properties?.filepath || assignedModifier?.properties?.output_value || data?.filepath)
+            : (assignedModifier?.properties?.output_value || data?.filepath || nodeObj?.properties?.filepath)) || null;
         const original_bpm = nodeObj?.properties?.original_bpm ?? data?.original_bpm ?? assignedModifier?.properties?.output_bpm ?? undefined;
         const rawTargetBpm = nodeObj?.properties?.target_bpm ?? data?.target_bpm;
         const configuredBpm = nodeObj?.properties?.bpm ?? data?.bpm;
@@ -73,21 +103,7 @@ export function serializeNodeSubtree(
 
         const sequence = nodeObj?.properties?.sequence ?? data?.sequence ?? (nodeType === "sequence" ? [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] : undefined);
         const rawStepParameters = nodeObj?.properties?.step_parameters ?? data?.step_parameters;
-        const stepParameters = Array.isArray(rawStepParameters)
-            ? rawStepParameters.map((step: any) => {
-                const cloned = { ...(step || {}) };
-                if (typeof cloned.sample_start === 'number' && cloned.sample_start > 1) {
-                    cloned.sample_start = cloned.sample_start / 100;
-                }
-                if (typeof cloned.probability === 'number' && cloned.probability > 1) {
-                    cloned.probability = cloned.probability / 100;
-                }
-                if (typeof cloned.gate_length === 'number' && cloned.gate_length > 1) {
-                    cloned.gate_length = cloned.gate_length / 100;
-                }
-                return cloned;
-            })
-            : undefined;
+        const stepParameters = normalizeStepParametersList(rawStepParameters);
         const stepLength = nodeObj?.properties?.step_length ?? data?.step_length ?? (nodeType === "sequence" ? 0.25 : undefined);
         const fadeMs = nodeObj?.properties?.fade_ms ?? data?.fade_ms ?? (nodeType === "sequence" ? 0 : undefined);
         const rawTotalBars = nodeObj?.properties?.total_bars ?? data?.total_bars;
@@ -207,6 +223,106 @@ export function serializeNodeSubtree(
             || (typeof document !== 'undefined' ? (document.querySelector('#workspace-preset-select') as HTMLSelectElement)?.value : null)
             || 'project';
 
+        const upstreamSlotCount = Math.max(1, childModels[0]?.slots?.length || 1);
+        const rawSlots = Array.isArray(nodeObj?.properties?.slots)
+            ? nodeObj.properties.slots
+            : (Array.isArray(data?.slots) ? data.slots : []);
+        const activeIdx = Math.max(0, Number(nodeObj?.activeSlotIndex ?? nodeObj?.properties?.active_slot ?? 0));
+        const seedSalt = Number(nodeObj?.properties?.seed_salt ?? data?.seed_salt ?? 0) * 9973;
+
+        let slots: NodeSlot[] = [];
+        if (nodeType === 'sample') {
+            if (rawSlots.length > 0) {
+                slots = rawSlots.map((s: any, idx: number) => ({
+                    slot: idx,
+                    label: s?.label,
+                    filepath: s?.filepath ?? (idx === activeIdx ? filepath : undefined),
+                    library_item_id: s?.library_item_id ?? (idx === activeIdx ? (nodeObj?.properties?.library_item_id ?? data?.library_item_id) : undefined),
+                    original_bpm: s?.original_bpm ?? (idx === activeIdx ? original_bpm : undefined),
+                    key: s?.key ?? (idx === activeIdx ? key : undefined),
+                    duration_seconds: s?.duration_seconds,
+                    crop_start: s?.crop_start ?? s?.sample_start ?? crop_start,
+                    crop_end: s?.crop_end ?? s?.sample_end ?? crop_end,
+                }));
+            } else {
+                slots = [{
+                    slot: 0,
+                    filepath: filepath || undefined,
+                    library_item_id: nodeObj?.properties?.library_item_id ?? data?.library_item_id,
+                    original_bpm: original_bpm,
+                    key: key,
+                    crop_start: crop_start,
+                    crop_end: crop_end,
+                }];
+            }
+        } else if (nodeType === 'sequence') {
+            const sampleSlotExpr = String(nodeObj?.properties?.sample_slot ?? data?.sample_slot ?? '0');
+            const seqLen = Array.isArray(sequence) && sequence.length > 0 ? sequence.length : 16;
+            const patternBeats = Math.max(0.25, seqLen * Number(stepLength || 0.25));
+            const totalBeats = Number(total_bars || 4.0) * 4.0;
+            const numCycles = Math.max(1, Math.ceil(totalBeats / patternBeats));
+
+            if (rawSlots.length > 0) {
+                slots = rawSlots.map((s: any, idx: number) => {
+                    const isActive = idx === activeIdx;
+                    const slotSeq = isActive && Array.isArray(sequence)
+                        ? [...sequence]
+                        : (Array.isArray(s?.sequence) ? [...s.sequence] : (Array.isArray(sequence) ? [...sequence] : []));
+                    const slotStepParams = (isActive && stepParameters)
+                        ? stepParameters
+                        : (normalizeStepParametersList(s?.step_parameters) || stepParameters);
+                    const slotSampleSlot = isActive
+                        ? sampleSlotExpr
+                        : String(s?.sample_slot ?? sampleSlotExpr);
+                    const slotSeed = isActive ? (seed ?? s?.seed ?? 42) : (s?.seed ?? seed ?? 42);
+                    const slotCycleSeeds = resolveCycleSeeds(slotSeed, numCycles, Number(nodeId || 1) + idx + seedSalt);
+                    const slotStepSlots = resolveStepSlots(slotSampleSlot, slotSeq.length || 16, upstreamSlotCount, slotCycleSeeds[0]);
+                    return {
+                        slot: idx,
+                        label: s?.label,
+                        sequence: slotSeq,
+                        step_parameters: slotStepParams,
+                        sample_slot: slotSampleSlot,
+                        step_slots: slotStepSlots,
+                        seed: slotSeed,
+                        cycle_seeds: slotCycleSeeds,
+                    };
+                });
+            } else {
+                const cycleSeeds0 = resolveCycleSeeds(seed ?? 42, numCycles, Number(nodeId || 1) + seedSalt);
+                const stepSlots0 = resolveStepSlots(sampleSlotExpr, seqLen, upstreamSlotCount, cycleSeeds0[0]);
+                slots = [{
+                    slot: 0,
+                    sequence: Array.isArray(sequence) ? [...sequence] : [],
+                    step_parameters: stepParameters,
+                    sample_slot: sampleSlotExpr,
+                    step_slots: stepSlots0,
+                    seed: seed ?? 42,
+                    cycle_seeds: cycleSeeds0,
+                }];
+            }
+        }
+
+        const sample_slot = nodeType === 'sequence'
+            ? String(nodeObj?.properties?.sample_slot ?? data?.sample_slot ?? '0')
+            : undefined;
+        const cycle_seeds = nodeType === 'sequence' && slots.length > 0
+            ? (slots[0].cycle_seeds || [])
+            : (nodeType === 'arrangement'
+                ? resolveCycleSeeds(seed ?? 42, (Array.isArray(section_points) ? section_points.length : 0) + 1, Number(nodeId || 1) + seedSalt)
+                : []);
+        const step_slots = nodeType === 'sequence' && slots.length > 0
+            ? (slots[0].step_slots || [])
+            : [];
+
+        const rawSectionSlots = nodeObj?.properties?.section_slots ?? data?.section_slots;
+        const numSections = (Array.isArray(section_points) ? section_points.length : 0) + 1;
+        const section_slots = nodeType === 'arrangement'
+            ? Array.from({ length: numSections }, (_, i) =>
+                wrapSlotIndex(Array.isArray(rawSectionSlots) ? rawSectionSlots[i] : 0, upstreamSlotCount)
+            )
+            : [];
+
         const model = {
             node_id: nodeId,
             node_name: name,
@@ -245,6 +361,11 @@ export function serializeNodeSubtree(
             section_sample_start: section_sample_start,
             section_quant: section_quant,
             section_quant_anchor: section_quant_anchor,
+            slots: slots,
+            sample_slot: sample_slot,
+            step_slots: step_slots,
+            cycle_seeds: cycle_seeds,
+            section_slots: section_slots,
             selected_items: selected_items,
             playbackMode: playbackMode,
             seed: seed,

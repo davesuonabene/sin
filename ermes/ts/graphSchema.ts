@@ -6,6 +6,9 @@
  * before converting them to LiteGraph workspace data.
  */
 
+import type { NodeSlot } from './slotLanguage';
+export type { NodeSlot } from './slotLanguage';
+
 export const GRAPH_DOCUMENT_FORMAT = 'sin-graph' as const;
 export const GRAPH_DOCUMENT_VERSION = 1 as const;
 
@@ -51,7 +54,7 @@ export interface GraphAssetPool {
     selected_items?: GraphAssetLocator[];
     playbackMode?: 'Random' | 'Sequential' | string;
     refresh_mode?: GraphAssetPoolRefreshMode | string;
-    seed?: number;
+    seed?: number | string;
     sequence_index?: number;
     fixed_item?: GraphAssetLocator | null;
     accepted_asset_type?: 'audio' | 'midi' | 'sequence_source' | string;
@@ -62,6 +65,10 @@ export interface GraphAssetPool {
 export interface GraphNodeProperties extends Record<string, unknown> {
     /** Optional readable alias; conversion flattens it to current node fields. */
     asset_pool?: GraphAssetPool;
+    slots?: NodeSlot[];
+    sample_slot?: string;
+    section_slots?: number[];
+    seed?: number | string;
 }
 
 export interface GraphNode {
@@ -227,8 +234,8 @@ function validateAssetPool(
         && (typeof value.refresh_mode !== 'string' || !GRAPH_POOL_REFRESH_MODES.has(value.refresh_mode))) {
         errors.push(`Asset pool refresh_mode on node "${nodeId}" is unsupported.`);
     }
-    if (value.seed !== undefined && !isFiniteNumber(value.seed)) {
-        errors.push(`Asset pool seed on node "${nodeId}" must be numeric.`);
+    if (value.seed !== undefined && !isFiniteNumber(value.seed) && typeof value.seed !== 'string') {
+        errors.push(`Asset pool seed on node "${nodeId}" must be numeric or a seed expression string.`);
     }
     if (value.sequence_index !== undefined && !isFiniteNumber(value.sequence_index)) {
         errors.push(`Asset pool sequence_index on node "${nodeId}" must be numeric.`);

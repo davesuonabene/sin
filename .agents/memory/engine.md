@@ -68,19 +68,19 @@ graph TD
 
 Rather than forcing the user to wait for an entire 8- or 16-bar track to render before hearing sound, the engine renders and streams audio **progressively on a bar-by-bar basis** over a high-performance HTTP stream:
 
-1. **Graph Compilation:**
+1. **Graph Compilation & Multi-Slot Resolution:**
    - The UI identifies the audition target (Master Track or isolated node) via `resolveMainPreviewNode(graph)`.
-   - Dynamic asset pools (`asset_filter`) and random modifiers (`random`) are resolved in ERMES with seeds advanced according to refresh mode (`global`, `local`, `parent`).
-   - The graph subtree is compiled into an invariant `AudioNodeModel` payload.
+   - Pool `{ id }` locators are hydrated from GAIA via `syncGraphSampleMetadataFromLibrary(graph, true, nodeId)` (with a self-healing `resolveLibraryAssets` fallback in `resolveAssetFilterNode`), and any uninitialized pools are resolved without advancing seeds when `refreshModifiers` is `false`.
+   - ERMES compiles the graph subtree (`serializeNodeSubtree`) into an invariant `AudioNodeModel` payload, resolving multi-slot banks (`slots: NodeSlot[]`), connected-path step slot patterns (`sample_slot` $\to$ `step_slots`), per-cycle PRNG seeds (`cycle_seeds`), and per-section arrangement slot selectors (`section_slots`) with modulo wrapping (`idx % S`) via `ermes/ts/slotLanguage.ts`.
 
-2. **Backend Execution:**
+2. **Backend Execution & Per-Slot DAG Caching:**
    - FastAPI endpoint `/api/preview/stream-progressive` initializes `System(bpm=payload.bpm, render_mode="preview")`.
    - The root object (`MasterTrackObject`, `ArrangementObject`, or `SequenceObject`) renders the audio DAG.
-   - Nodes query `GLOBAL_DAG_CACHE.get(node_id, fingerprint)`:
-     - **Cache Hit:** Reuses previously computed float32 audio arrays and restored manifest states in microseconds.
-     - **Cache Miss:** Runs full DSP (sample loading, rubberband time-stretch, step sequencing, chain effects), registers DAG dependency edges via `GLOBAL_DAG_CACHE.register_edge(parent_id, child_id)`, and stores the output in `GLOBAL_DAG_CACHE`.
+   - Multi-slot nodes (`SampleObject.generate_slot(slot_idx)`, `SequenceObject.generate_slot(slot_idx)`) query `GLOBAL_DAG_CACHE.get(node_id, fingerprint, slot_idx=slot_idx)`:
+     - **Cache Hit:** Reuses previously computed float32 audio arrays for `(node_id, slot_idx)` and restored manifest states in microseconds.
+     - **Cache Miss:** Runs full DSP (sample loading, rubberband time-stretch, vectorized multi-slot step sequencing, chain effects), registers DAG dependency edges via `GLOBAL_DAG_CACHE.register_edge(parent_id, child_id)`, and stores the output in `GLOBAL_DAG_CACHE` keyed by `(node_id, slot_idx)`.
    - Intermediate stem audio arrays are captured for all child tracks and arrangements.
-   - Event trigger timestamps (start time, duration, sequence origin) are recorded into `system.manifest`.
+   - Event trigger timestamps (start time, duration, sequence origin, slot index) are recorded into `system.manifest`.
 
 3. **Binary Framing Protocol (`SINB`):**
    When `format=binary` is specified (default), each progressive chunk is packed into a 12-byte binary framed block:
@@ -99,10 +99,10 @@ Rather than forcing the user to wait for an entire 8- or 16-bar track to render 
    - **Zero-Copy Parsing:** The frontend slices `audioBytes` with `DataView` and passes raw ArrayBuffer directly to Web Audio `AudioContext.decodeAudioData()`, completely bypassing Base64 string decoding and saving ~33% bandwidth.
    - **NDJSON Fallback:** For backwards compatibility, omit `?format=binary` to stream newline-delimited JSON chunks with Base64 payloads.
 
-4. **Frontend Ingestion & Scheduling (`GaplessAudioScheduler`):**
-   - **Bar 0 Arrival:** Decoded via `ctx.decodeAudioData`. If autoplay is requested, playback starts immediately (`time-to-first-sound < 150ms`).
-   - **Subsequent Bars:** Appended to `barBuffers` map and stitched sample-accurately into the Web Audio timeline using lookahead scheduling.
-   - **Waveform & Telemetry:** Full audio buffer is merged into `activeRamPreviewBuffer` for the master waveform, while `distributeWorkspaceManifest` distributes stem buffers and event markers to individual canvas nodes.
+4. **Frontend Ingestion, Bar Staging & Lockstep Transport Startup (`GaplessAudioScheduler`):**
+   - **Off-Screen Bar Staging (`stageBarChunk`):** Incoming bar chunks are decoded via `ctx.decodeAudioData` and staged into the background session map via `globalAudioScheduler.stageBarChunk(chunkPayload, sessionId)`. This smoothly updates `node.bufferedProgress` (`0..1`) without prematurely starting silent playback on `bar_index === 0` or overwriting `fullAudioBuffer` with partial 1-bar buffers.
+   - **Atomic Session Commit (`commitSession`):** When the `complete` chunk arrives, `globalAudioScheduler.commitSession(sessionId)` atomically publishes the full multi-bar session (and seamlessly crossfades if transport is already playing during a hot-swap).
+   - **Awaited Stem Distribution & Lockstep Startup:** `await distributeWorkspaceManifest(graph, data.manifest)` awaits all intermediate stem and sample buffers before transport begins, and `await globalAudioScheduler.playFromStart()` / `playAsync()` awaits `AudioContext.resume()` (`ensureContextReady()`) before starting the audio clock and `startPlaybackTelemetry()` together—guaranteeing zero silent playhead movement and zero mid-playback visual/audio refreshes.
 
 ---
 
@@ -124,10 +124,10 @@ The backend cache in `core/dag_cache.py` prevents redundant recalculations:
 
 | Action | User Intent | UI Behavior | Engine Behavior |
 | :--- | :--- | :--- | :--- |
-| **Play (`Space` / Global Play)** | Audition / resume playback | Starts `globalAudioScheduler.play()`. If graph is invalidated or first-generation, triggers preview first. | Resumes active buffer or renders dirty nodes. Preserves active seeds and pool choices. |
+| **Play (`Space` / Global Play)** | Audition / resume playback | If rendered buffer is valid and synced, resumes immediately via `await globalAudioScheduler.playAsync()`. If a background preview is already in-flight for the target node, promotes it (`activePreviewAutoplay = true`) and awaits completion. Otherwise awaits `previewNode(target.id, true, false, false)` before starting playhead and audio in lockstep. | Resumes active buffer or renders dirty nodes with `refreshModifiers = false`. Never advances seeds or mutates the visual preview. |
 | **Stop (`Space` / Global Pause)** | Pause playback | Pauses scheduler and resets transport telemetry. | Engine remains idle; buffers remain cached in memory. |
-| **Refresh (`↻` Button)** | Re-roll generative elements | Immediately stops playback, clears client stem buffers, marks graph invalidated. | Fully purges `GLOBAL_DAG_CACHE` and RAM store, advances global seeds/pools, re-renders clean audio in background (`autoplay=false`). |
-| **Hot Swap (Slider / Parameter)** | Live sound tweaking while playing | Playback **continues uninterrupted**; debounces 150ms then triggers background stream. | Incremental downstream invalidation; streams new bar chunks; scheduler seamlessly crossfades matching bar without interruption. |
+| **Refresh (`↻` Button)** | Roll armed generative seeds | Runs `refreshArmedSeeds(graph, isGlobalFreezeActive)` inside `withGraphEvaluationWindow` to roll all seeds with `seed_refresh !== false` and immediately populate `slots[0..S-1]` in Stage 1 while playback continues or stays stopped. | Purges `GLOBAL_DAG_CACHE`, re-renders Stage 2 in background (`autoplay=false`), and atomically swaps via `commitSession(sessionId)` when ready. |
+| **Hot Swap (Slider / Parameter)** | Live sound tweaking | Playback **continues uninterrupted**; debounces settled edits (`flushPendingParameterUpdate`), then triggers a background stream (`previewNode(targetId, false, false, false)`). | Incremental downstream invalidation; stages bar chunks in background and atomically swaps via `commitSession(sessionId)` upon completion. |
 
 ---
 
@@ -379,15 +379,17 @@ SIN can function as a standalone hardware instrument or groovebox:
 ## 6. Implementation Summary & Verification Record
 
 ### Delivered in This Phase:
+- [x] **TouchDesigner-Style Multi-Slot Node Addressing (`node[n]`):** Dynamic `slots: NodeSlot[]` banks on `SampleNode` and `SequenceNode`, connected-path slot dispatch (`sample_slot` pattern micro-language on `SequenceNode`, per-section `section_slots` on `ArrangementNode`) with modulo wrapping (`idx % S`), and per-slot backend DAG caching (`(node_id, slot_idx)`).
+- [x] **Shared Deterministic PRNG & Armed Seed Refresh:** Bit-identical `mulberry32` + `hashSeed` (FNV-1a) in `ermes/ts/slotLanguage.ts` and `ermes/py/slot_language.py`, unified `seed` + `seed_refresh` controllers, and non-cascading `refreshArmedSeeds` evaluation.
+- [x] **Lockstep Audio/Visual Preview & Session Staging:** Off-screen bar staging via `GaplessAudioScheduler.stageBarChunk`, atomic session publishing via `commitSession`, awaited stem buffer distribution (`distributeWorkspaceManifest`), and `ensureContextReady` (`playFromStart` / `playAsync`) so visuals and audio always start together without silence or mid-play refreshes.
 - [x] **UI State Machine Integration:** `EngineSyncManager` with 7 explicit states, non-colliding toolbar badge, and node invalidation / buffer indicators.
 - [x] **Telemetry Profiler in Runtime Console:** Real-time telemetry strip (Render, Stream, Total, Buffer) and category filtering (`All`, `App`, `Engine`, `Errors`).
 - [x] **Binary Streaming Protocol (`SINB`):** 12-byte framed binary chunks, zero-copy ArrayBuffer decoding, and seamless NDJSON fallback.
 - [x] **AudioWorklet Ring Buffer Scheduler:** Thread-isolated ring buffer processor with quiescent CPU optimization.
-- [x] **Codebase Audit & Edge Case Fixes:** Resolved `hotSwapBarBuffer` bar index isolation, `seek` multi-bar loop race condition, and `ContextVar` generator scope boundary.
 - [x] **Automated Test Coverage:**
-  - 41 frontend unit tests passing (`npm test`).
-  - Production TypeScript build passing (`npm run build`).
-  - 165 backend unit tests passing (`python -m unittest discover -s tests`).
+  - 81 frontend unit tests passing (`npm --prefix editor test`).
+  - Production TypeScript build passing (`npm --prefix editor run build`).
+  - 198 backend unit tests passing (`python tests/run.py`).
 
 ### Upcoming Architectural Roadmap:
 - [ ] **Phase 1:** Implement `AudioOutputDevice` base abstraction and `StreamOutputDevice` in `core/hal/`.

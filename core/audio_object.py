@@ -1,13 +1,23 @@
 from __future__ import annotations
 import hashlib
+import os
+import random
 from pathlib import Path
-from typing import List, Tuple, Optional, Union, Any, TYPE_CHECKING
+from typing import List, Tuple, Optional, Union, Any, Dict, TYPE_CHECKING
 import numpy as np
 from core.base_object import BaseObject
 from core.analyzers import BPMAnalyzer
 from core.dsp import stretch_audio, load_sample, process_sample_transform
 from core.runtime_trace import get_runtime_cache, set_runtime_cache, trace_runtime
 from core.dag_cache import GLOBAL_DAG_CACHE
+from ermes.py.slot_language import (
+    hash_seed,
+    mulberry32,
+    normalize_numeric_seed,
+    resolve_cycle_seeds,
+    resolve_step_slots,
+    wrap_slot_index,
+)
 
 if TYPE_CHECKING:
     from core.system import System
@@ -158,6 +168,65 @@ class AudioObject(BaseObject):
         eff_iter = int(iteration) if getattr(self, "seed_mode", None) == "moving" else 0
         return (render_mode, sr, bpm, loop_flag, parent_bars, eff_iter)
 
+    def _try_get_cached_render(
+        self,
+        cache_ctx: tuple,
+        system: Optional[System] = None,
+        slot: int = 0,
+        restore_natural_duration: bool = False,
+    ) -> Optional[np.ndarray]:
+        if self.node_id is None or not getattr(self, "fingerprint", None):
+            return None
+        cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint, context=cache_ctx, slot=slot)
+        if cached is None:
+            return None
+        if system is not None and system.render_mode == "preview":
+            cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx, slot=slot)
+            if cached_extra and "manifest_state" in cached_extra:
+                system.restore_manifest_state(cached_extra["manifest_state"])
+            if restore_natural_duration:
+                if cached_extra and "natural_duration" in cached_extra:
+                    self._natural_duration = cached_extra["natural_duration"]
+                else:
+                    self._natural_duration = float(cached.shape[-1]) / float(system.sample_rate)
+        return cached
+
+    def _store_cached_render(
+        self,
+        output_buffer: np.ndarray,
+        cache_ctx: tuple,
+        system: Optional[System] = None,
+        slot: int = 0,
+        extra: Optional[Dict[str, Any]] = None,
+        capture_manifest: bool = True,
+    ) -> None:
+        if self.node_id is None or not getattr(self, "fingerprint", None):
+            return
+        payload_extra: Dict[str, Any] = dict(extra) if extra else {}
+        if capture_manifest and system is not None:
+            manifest_state = system.capture_manifest_state()
+            if manifest_state:
+                payload_extra["manifest_state"] = manifest_state
+        GLOBAL_DAG_CACHE.store(
+            self.node_id,
+            self.fingerprint,
+            output_buffer,
+            extra=payload_extra or None,
+            context=cache_ctx,
+            slot=slot,
+        )
+
+    def _tile_loop_to_bars(self, data_to_render: np.ndarray, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        loop_sample = kwargs.get("loop", True)
+        eff_bars = self.total_bars if (self.total_bars is not None and self.total_bars > 0) else kwargs.get("parent_total_bars")
+        if loop_sample and self.sample_type == "loop" and eff_bars is not None and eff_bars > 0 and system is not None:
+            target_samples = system.beat_to_samples(eff_bars * 4.0)
+            if data_to_render.shape[-1] > 0 and data_to_render.shape[-1] < target_samples:
+                reps = int(np.ceil(target_samples / data_to_render.shape[-1]))
+                tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
+                return tiled[..., :target_samples]
+        return data_to_render
+
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
         """
         Recursive DSP render method:
@@ -167,14 +236,9 @@ class AudioObject(BaseObject):
           and SUMs them into a parent master numpy array.
         """
         cache_ctx = self._cache_context(system, **kwargs)
-        if self.node_id is not None and getattr(self, "fingerprint", None):
-            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint, context=cache_ctx)
-            if cached is not None:
-                if system is not None and system.render_mode == "preview":
-                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx)
-                    if cached_extra and "manifest_state" in cached_extra:
-                        system.restore_manifest_state(cached_extra["manifest_state"])
-                return cached
+        cached = self._try_get_cached_render(cache_ctx, system)
+        if cached is not None:
+            return cached
 
         # Leaf node case: Raw sample data exists and no children
         if self.audio_data is not None and len(self.children) == 0:
@@ -199,17 +263,9 @@ class AudioObject(BaseObject):
                 key_match_algorithm=self.key_match_algorithm,
             )
 
-            loop_sample = kwargs.get("loop", True)
-            eff_bars = self.total_bars if (self.total_bars is not None and self.total_bars > 0) else kwargs.get("parent_total_bars")
-            if loop_sample and self.sample_type == "loop" and eff_bars is not None and eff_bars > 0 and system is not None:
-                target_samples = system.beat_to_samples(eff_bars * 4.0)
-                if data_to_render.shape[-1] > 0 and data_to_render.shape[-1] < target_samples:
-                    reps = int(np.ceil(target_samples / data_to_render.shape[-1]))
-                    tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
-                    data_to_render = tiled[..., :target_samples]
+            data_to_render = self._tile_loop_to_bars(data_to_render, system, **kwargs)
             leaf_out = self.apply_chain(data_to_render, system)
-            if self.node_id is not None and getattr(self, "fingerprint", None):
-                GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, leaf_out, context=cache_ctx)
+            self._store_cached_render(leaf_out, cache_ctx, system, capture_manifest=False)
             return leaf_out
 
         if system is None:
@@ -325,21 +381,17 @@ class AudioObject(BaseObject):
         if system is not None and self.node_id is not None:
             dur = float(output_buffer.shape[-1]) / float(system.sample_rate)
             system.record_node_stem(self.node_id, self.node_type, self.name, output_buffer, dur)
-        if self.node_id is not None and getattr(self, "fingerprint", None):
-            manifest_state = system.capture_manifest_state() if system is not None else None
-            GLOBAL_DAG_CACHE.store(
-                self.node_id,
-                self.fingerprint,
-                output_buffer,
-                extra={"manifest_state": manifest_state} if manifest_state else None,
-                context=cache_ctx,
-            )
+        self._store_cached_render(output_buffer, cache_ctx, system)
         return output_buffer
+
+    def render_slot(self, slot: int = 0, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        """Render a specific slot of this AudioObject (defaults to slot 0 / standard render)."""
+        return self.render(system=system, **kwargs)
 
 
 class SampleObject(AudioObject):
     """
-    Leaf node that strictly loads a specific audio file and renders it.
+    Leaf node that strictly loads a specific audio file (or multi-slot sample array) and renders it.
     Does not process timeline children.
     """
     def __init__(
@@ -364,7 +416,8 @@ class SampleObject(AudioObject):
         key_match_algorithm: str = "nearest",
         target_bpm: Optional[float] = None,
         node_id: Optional[int] = None,
-        node_type: str = "sample"
+        node_type: str = "sample",
+        slots: Optional[List[Any]] = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -389,41 +442,69 @@ class SampleObject(AudioObject):
             node_id=node_id,
             node_type=node_type
         )
+        self.slots: List[Dict[str, Any]] = self._normalize_slots(slots)
 
-    def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+    def _normalize_slots(self, raw_slots: Optional[List[Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        if isinstance(raw_slots, list):
+            for idx, item in enumerate(raw_slots):
+                if hasattr(item, "model_dump"):
+                    d = item.model_dump()
+                elif hasattr(item, "dict"):
+                    d = item.dict()
+                elif isinstance(item, dict):
+                    d = dict(item)
+                else:
+                    continue
+                d.setdefault("slot", idx)
+                normalized.append(d)
+        if not normalized:
+            normalized.append({
+                "slot": 0,
+                "filepath": self.filepath,
+                "original_bpm": self._original_bpm,
+                "crop_start": self.crop_start,
+                "crop_end": self.crop_end,
+            })
+        return normalized
+
+    def render_slot(self, slot: int = 0, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        eff_slot = wrap_slot_index(slot, len(self.slots))
         cache_ctx = self._cache_context(system, **kwargs)
-        if self.node_id is not None and getattr(self, "fingerprint", None):
-            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint, context=cache_ctx)
-            if cached is not None:
-                if system is not None and system.render_mode == "preview":
-                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx)
-                    if cached_extra and "manifest_state" in cached_extra:
-                        system.restore_manifest_state(cached_extra["manifest_state"])
-                    if cached_extra and "natural_duration" in cached_extra:
-                        self._natural_duration = cached_extra["natural_duration"]
-                    else:
-                        self._natural_duration = float(cached.shape[-1]) / float(system.sample_rate) if system is not None else 0.0
-                return cached
+        cached = self._try_get_cached_render(cache_ctx, system, slot=eff_slot, restore_natural_duration=True)
+        if cached is not None:
+            return cached
 
-        if not self.filepath:
+        slot_cfg = self.slots[eff_slot] if eff_slot < len(self.slots) else {}
+        slot_filepath = slot_cfg.get("filepath") or self.filepath
+        if not slot_filepath:
             return np.zeros(0, dtype=np.float32)
+
+        slot_filepath_str = str(slot_filepath)
+        if not os.path.exists(slot_filepath_str):
+            alt_path = os.path.join("assets", slot_filepath_str)
+            if os.path.exists(alt_path):
+                slot_filepath_str = alt_path
 
         sr = system.sample_rate if system is not None else 44100
         try:
-            audio_array, _ = load_sample(self.filepath, target_sr=sr)
+            audio_array, _ = load_sample(slot_filepath_str, target_sr=sr)
         except Exception as e:
             import logging
-            logging.getLogger("beat_generator.core").warning(f"Failed to load sample '{self.filepath}': {e}")
+            logging.getLogger("beat_generator.core").warning(f"Failed to load sample '{slot_filepath_str}': {e}")
             return np.zeros(0, dtype=np.float32)
 
         if audio_array.shape[-1] == 0:
             return np.zeros(0, dtype=np.float32)
 
+        slot_crop_start = float(slot_cfg.get("crop_start") if slot_cfg.get("crop_start") is not None else self.crop_start)
+        slot_crop_end = float(slot_cfg.get("crop_end") if slot_cfg.get("crop_end") is not None else self.crop_end)
+
         # Apply crop range
-        if self.crop_start > 0.0 or self.crop_end < 1.0:
+        if slot_crop_start > 0.0 or slot_crop_end < 1.0:
             total_samples = audio_array.shape[-1]
-            s_idx = int(max(0.0, min(1.0, self.crop_start)) * total_samples)
-            e_idx = int(max(0.0, min(1.0, self.crop_end)) * total_samples)
+            s_idx = int(max(0.0, min(1.0, slot_crop_start)) * total_samples)
+            e_idx = int(max(0.0, min(1.0, slot_crop_end)) * total_samples)
             if s_idx < e_idx:
                 audio_array = audio_array[..., s_idx:e_idx]
             else:
@@ -432,15 +513,20 @@ class SampleObject(AudioObject):
         if audio_array.shape[-1] == 0:
             return np.zeros(0, dtype=np.float32)
 
-        if self._original_bpm is None:
-            self.detect_and_set_bpm(sample_rate=sr)
+        slot_bpm = slot_cfg.get("original_bpm") if slot_cfg.get("original_bpm") is not None else self._original_bpm
+        if slot_bpm is None and self.sample_type not in ("one_shot", "oneshot"):
+            slot_bpm = BPMAnalyzer.from_filename(slot_filepath_str)
+            if slot_bpm is None and audio_array.shape[-1] > 0:
+                slot_bpm = BPMAnalyzer.from_duration(float(audio_array.shape[-1]) / float(sr))
+            if eff_slot == 0 and slot_bpm is not None:
+                self._original_bpm = slot_bpm
 
         target_bpm = self.target_bpm if self.target_bpm is not None else (system.bpm if system is not None else 120.0)
         try:
             data_to_render = process_sample_transform(
                 audio_data=audio_array,
                 sr=sr,
-                original_bpm=self._original_bpm,
+                original_bpm=slot_bpm,
                 target_bpm=target_bpm,
                 transpose=self.transpose,
                 cents=self.cents,
@@ -454,50 +540,48 @@ class SampleObject(AudioObject):
             )
         except Exception as e:
             import logging
-            logging.getLogger("beat_generator.core").error(f"Error transforming sample '{self.filepath}': {e}")
+            logging.getLogger("beat_generator.core").error(f"Error transforming sample '{slot_filepath_str}': {e}")
             return np.zeros(0, dtype=np.float32)
 
         sample_natural_dur = float(data_to_render.shape[-1]) / float(system.sample_rate) if system is not None and data_to_render.shape[-1] > 0 else 0.0
         self._natural_duration = sample_natural_dur
 
-        loop_sample = kwargs.get("loop", True)
-        eff_bars = self.total_bars if (self.total_bars is not None and self.total_bars > 0) else kwargs.get("parent_total_bars")
-        if loop_sample and self.sample_type == "loop" and eff_bars is not None and eff_bars > 0 and system is not None:
-            target_samples = system.beat_to_samples(eff_bars * 4.0)
-            if data_to_render.shape[-1] > 0 and data_to_render.shape[-1] < target_samples:
-                reps = int(np.ceil(target_samples / data_to_render.shape[-1]))
-                tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
-                data_to_render = tiled[..., :target_samples]
-
+        data_to_render = self._tile_loop_to_bars(data_to_render, system, **kwargs)
         output_buffer = self.apply_chain(data_to_render, system)
         if system is not None and self.node_id is not None:
+            slot_paths = [str(s.get("filepath")) for s in self.slots if s.get("filepath")]
+            primary_path = slot_paths[0] if slot_paths else slot_filepath_str
+            extra_meta: Dict[str, Any] = {"filepath": primary_path, "slot": eff_slot}
+            if len(slot_paths) > 1:
+                extra_meta["pool_filepaths"] = slot_paths
+                extra_meta["is_pool"] = True
+                extra_meta["is_dynamic_pool"] = True
             system.record_node_stem(
                 self.node_id,
                 "sample",
                 self.name,
                 output_buffer,
                 sample_natural_dur,
-                extra={"filepath": self.filepath}
+                extra=extra_meta,
             )
-        if self.node_id is not None and getattr(self, "fingerprint", None):
-            manifest_state = system.capture_manifest_state() if system is not None else None
-            GLOBAL_DAG_CACHE.store(
-                self.node_id,
-                self.fingerprint,
-                output_buffer,
-                extra={
-                    "manifest_state": manifest_state,
-                    "natural_duration": getattr(self, "_natural_duration", sample_natural_dur),
-                } if manifest_state or hasattr(self, "_natural_duration") else None,
-                context=cache_ctx,
-            )
+        self._store_cached_render(
+            output_buffer,
+            cache_ctx,
+            system,
+            slot=eff_slot,
+            extra={"natural_duration": getattr(self, "_natural_duration", sample_natural_dur)},
+        )
         return output_buffer
+
+    def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        return self.render_slot(0, system=system, **kwargs)
 
 
 class SequenceObject(AudioObject):
     """
     Rhythmic step sequencer node that takes a single child audio object (sample)
     and outputs a rhythmically sequenced audio array based on an internal step array.
+    Supports multiple sequence slots and per-step sample slot selection (`sample_slot` / `step_slots`).
     """
     def __init__(
         self,
@@ -508,7 +592,7 @@ class SequenceObject(AudioObject):
         play_mode: str = "gate",
         release: float = 0.0,
         fade_ms: float = 0.0,
-        seed: Optional[Union[float, int]] = None,
+        seed: Optional[Union[str, float, int]] = None,
         seed_mode: str = "moving",
         volume: float = 1.0,
         pan: float = 0.0,
@@ -528,7 +612,11 @@ class SequenceObject(AudioObject):
         loop: bool = True,
         key_match_mode: str = "off",
         key_match_algorithm: str = "nearest",
-        node_id: Optional[int] = None
+        node_id: Optional[int] = None,
+        slots: Optional[List[Any]] = None,
+        sample_slot: Optional[str] = "0",
+        step_slots: Optional[List[int]] = None,
+        cycle_seeds: Optional[List[int]] = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -567,9 +655,39 @@ class SequenceObject(AudioObject):
         except (TypeError, ValueError):
             parsed_fade_ms = 0.0
         self.fade_ms: float = max(0.0, min(5.0, parsed_fade_ms if np.isfinite(parsed_fade_ms) else 0.0))
-        self.seed: Union[float, int] = seed if seed is not None else 42
+        self.seed: Union[str, float, int] = seed if seed is not None else 42
         self.seed_mode: str = str(seed_mode).lower() if seed_mode else "moving"
-        self.is_dynamic: bool = (self.seed_mode == "moving")
+        self.sample_slot: str = str(sample_slot if sample_slot is not None else "0")
+        self.step_slots: List[int] = [int(s) for s in (step_slots or [])]
+        self.cycle_seeds: List[int] = [int(c) for c in (cycle_seeds or [])]
+        self.slots: List[Dict[str, Any]] = self._normalize_slots(slots)
+        self.is_dynamic: bool = (self.seed_mode == "moving" and not self.cycle_seeds and not isinstance(self.seed, str))
+
+    def _normalize_slots(self, raw_slots: Optional[List[Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        if isinstance(raw_slots, list):
+            for idx, item in enumerate(raw_slots):
+                if hasattr(item, "model_dump"):
+                    d = item.model_dump()
+                elif hasattr(item, "dict"):
+                    d = item.dict()
+                elif isinstance(item, dict):
+                    d = dict(item)
+                else:
+                    continue
+                d.setdefault("slot", idx)
+                normalized.append(d)
+        if not normalized:
+            normalized.append({
+                "slot": 0,
+                "sequence": list(self.sequence),
+                "step_parameters": list(self.step_parameters),
+                "sample_slot": self.sample_slot,
+                "step_slots": list(self.step_slots),
+                "seed": self.seed,
+                "cycle_seeds": list(self.cycle_seeds),
+            })
+        return normalized
 
     def _apply_step_fade(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
         """Apply symmetrical linear edge fades to one rendered step trigger."""
@@ -583,9 +701,10 @@ class SequenceObject(AudioObject):
         envelope = np.minimum(envelope, 1.0).astype(np.float32, copy=False)
         return audio * envelope
 
-    def _step_parameters(self, index: int) -> Dict[str, Any]:
+    def _step_parameters(self, index: int, params_list: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """Return a sanitized step configuration, including legacy defaults."""
-        raw = self.step_parameters[index] if index < len(self.step_parameters) else {}
+        source_list = params_list if params_list is not None else self.step_parameters
+        raw = source_list[index] if index < len(source_list) else {}
         if hasattr(raw, "model_dump"):
             raw = raw.model_dump()
         elif not isinstance(raw, dict):
@@ -644,16 +763,12 @@ class SequenceObject(AudioObject):
             "subdivisions": subdivisions,
         }
 
-    def render(self, system: Optional[System] = None, iteration: int = 0, **kwargs: Any) -> np.ndarray:
+    def render_slot(self, slot: int = 0, system: Optional[System] = None, iteration: int = 0, **kwargs: Any) -> np.ndarray:
+        eff_slot = wrap_slot_index(slot, max(1, len(self.slots)))
         cache_ctx = self._cache_context(system, iteration=iteration, **kwargs)
-        if self.node_id is not None and getattr(self, "fingerprint", None):
-            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint, context=cache_ctx)
-            if cached is not None:
-                if system is not None and system.render_mode == "preview":
-                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx)
-                    if cached_extra and "manifest_state" in cached_extra:
-                        system.restore_manifest_state(cached_extra["manifest_state"])
-                return cached
+        cached = self._try_get_cached_render(cache_ctx, system, slot=eff_slot)
+        if cached is not None:
+            return cached
 
         if system is None:
             raise ValueError("System instance must be provided to render a SequenceObject.")
@@ -661,27 +776,28 @@ class SequenceObject(AudioObject):
         if not self.children:
             return np.zeros(0, dtype=np.float32)
 
+        slot_cfg = self.slots[eff_slot] if eff_slot < len(self.slots) else {}
+        active_sequence = list(slot_cfg.get("sequence") if isinstance(slot_cfg.get("sequence"), list) else self.sequence)
+        active_step_params = slot_cfg.get("step_parameters") if isinstance(slot_cfg.get("step_parameters"), list) else self.step_parameters
+        active_sample_slot = str(slot_cfg.get("sample_slot") if slot_cfg.get("sample_slot") is not None else self.sample_slot)
+        active_seed = slot_cfg.get("seed") if slot_cfg.get("seed") is not None else self.seed
+
+        if len(active_sequence) == 0:
+            return np.zeros(0, dtype=np.float32)
+
         # Render the first child (the sample) as a single un-tiled trigger cycle
         _, first_child = self.children[0]
         if self.node_id is not None and getattr(first_child, "node_id", None) is not None:
             GLOBAL_DAG_CACHE.register_edge(parent_id=self.node_id, child_id=first_child.node_id)
         is_dynamic = getattr(first_child, "is_dynamic", False)
+        upstream_slot_count = max(1, len(getattr(first_child, "slots", None) or [1]))
 
         child_kwargs = dict(kwargs)
         child_kwargs["loop"] = False
         child_kwargs.pop("parent_total_bars", None)
 
-        cached_child_audio = None
-        if not is_dynamic:
-            cached_child_audio = first_child.render(system, **child_kwargs)
-            if cached_child_audio.shape[-1] == 0 or len(self.sequence) == 0:
-                return np.zeros(0, dtype=np.float32)
-
-        if len(self.sequence) == 0:
-            return np.zeros(0, dtype=np.float32)
-
         # Calculate total pattern duration in beats & samples
-        pattern_duration_beats = len(self.sequence) * self.step_length
+        pattern_duration_beats = len(active_sequence) * self.step_length
         pattern_samples = system.beat_to_samples(pattern_duration_beats)
 
         loop_pattern = kwargs.get("loop", True) and getattr(self, "loop", True)
@@ -699,25 +815,66 @@ class SequenceObject(AudioObject):
             timeline_samples = None
             max_end_sample = pattern_samples
 
-        rendered_steps = []
+        raw_cycle_seeds = slot_cfg.get("cycle_seeds") if isinstance(slot_cfg.get("cycle_seeds"), list) and slot_cfg.get("cycle_seeds") else self.cycle_seeds
+        active_cycle_seeds = (
+            list(raw_cycle_seeds)
+            if raw_cycle_seeds
+            else resolve_cycle_seeds(active_seed, num_repeats, (self.node_id or 1) + eff_slot)
+        )
+
+        raw_step_slots = slot_cfg.get("step_slots") if isinstance(slot_cfg.get("step_slots"), list) and slot_cfg.get("step_slots") else self.step_slots
+        base_step_slots = (
+            [wrap_slot_index(s, upstream_slot_count) for s in raw_step_slots]
+            if raw_step_slots
+            else resolve_step_slots(active_sample_slot, len(active_sequence), upstream_slot_count, active_cycle_seeds[0])
+        )
+
+        has_rand_slot = "rand" in active_sample_slot.lower()
+        slot_audio_map: Dict[int, np.ndarray] = {}
+        if not is_dynamic:
+            slots_to_prerender = (
+                list(range(upstream_slot_count))
+                if has_rand_slot
+                else sorted(set(base_step_slots) | {0})
+            )
+            for s_idx in slots_to_prerender:
+                slot_audio_map[s_idx] = first_child.render_slot(s_idx, system=system, **child_kwargs)
+            if all(arr.shape[-1] == 0 for arr in slot_audio_map.values()):
+                for s_idx in range(upstream_slot_count):
+                    if s_idx not in slot_audio_map:
+                        slot_audio_map[s_idx] = first_child.render_slot(s_idx, system=system, **child_kwargs)
+                if all(arr.shape[-1] == 0 for arr in slot_audio_map.values()):
+                    return np.zeros(0, dtype=np.float32)
+
+        rendered_steps: List[Tuple[int, np.ndarray, int, float]] = []
 
         for rep in range(num_repeats):
             rep_beat_offset = rep * pattern_duration_beats
             if timeline_samples is not None and system.beat_to_samples(rep_beat_offset) >= timeline_samples:
                 break
 
-            if self.seed_mode == "moving":
-                seed_str = f"{self.seed}_{iteration}_{rep}"
+            base_rep_seed = active_cycle_seeds[rep % len(active_cycle_seeds)]
+            if self.seed_mode == "moving" and not raw_cycle_seeds and not isinstance(active_seed, str):
+                rep_seed = hash_seed(base_rep_seed, iteration, rep + 1)
             else:
-                seed_str = str(self.seed)
-            eff_seed = int(hashlib.md5(seed_str.encode()).hexdigest(), 16) & 0xFFFFFFFF
-            rng = np.random.default_rng(eff_seed)
+                rep_seed = base_rep_seed
 
-            for step_idx, step_val in enumerate(self.sequence):
+            rng = mulberry32(hash_seed(rep_seed, rep, 0x1357))
+            rep_step_slots = (
+                resolve_step_slots(active_sample_slot, len(active_sequence), upstream_slot_count, rep_seed)
+                if has_rand_slot
+                else base_step_slots
+            )
+
+            for step_idx, step_val in enumerate(active_sequence):
                 if step_val == 1:
-                    params = self._step_parameters(step_idx)
-                    if rng.random() >= params["probability"]:
+                    params = self._step_parameters(step_idx, active_step_params)
+                    if rng() >= params["probability"]:
                         continue
+
+                    step_slot = rep_step_slots[step_idx % len(rep_step_slots)] if rep_step_slots else 0
+                    if not is_dynamic and step_slot not in slot_audio_map:
+                        slot_audio_map[step_slot] = first_child.render_slot(step_slot, system=system, **child_kwargs)
 
                     repeats = params["subdivisions"]
                     base_beat = rep_beat_offset + (step_idx + params["offset"]) * self.step_length
@@ -732,11 +889,15 @@ class SequenceObject(AudioObject):
                         start_sample = subdivision_boundaries[subdivision_idx]
                         slot_end_sample = subdivision_boundaries[subdivision_idx + 1]
                         slot_samples = max(1, slot_end_sample - start_sample)
-                        audio = first_child.render(system, **child_kwargs) if is_dynamic else cached_child_audio
+                        audio = (
+                            first_child.render_slot(step_slot, system=system, **child_kwargs)
+                            if is_dynamic
+                            else slot_audio_map.get(step_slot, slot_audio_map.get(0, np.zeros(0, dtype=np.float32)))
+                        )
                         velocity = float(params["velocity"])
 
                         # Apply sample_start (normalized 0.0 to 1.0) before copying/scaling
-                        sample_start_ratio = params.get("sample_start", 0.0)
+                        sample_start_ratio = float(params.get("sample_start", 0.0))
                         if sample_start_ratio > 0.0 and audio.shape[-1] > 0:
                             orig_samples = audio.shape[-1]
                             start_offset = min(orig_samples, int(round(orig_samples * sample_start_ratio)))
@@ -750,10 +911,6 @@ class SequenceObject(AudioObject):
                         if audio.shape[-1] == 0:
                             continue
 
-                        # Apply gate_length & release:
-                        # - gate_mult < 1.0: explicitly clamps step duration to slot_samples * gate_mult (gated/staccato), followed by release.
-                        # - gate_mult >= 1.0 (default): gate is fully open; sample is NOT clamped to slot_samples.
-                        #   It plays to its natural end (or release decay), and in mono mode ("gate") is truncated when a subsequent note arrives.
                         gate_mult = max(0.0, min(1.0, float(params.get("gate_length", 1.0))))
                         rel_pct = max(0.0, min(1.0, self.release))
                         sample_len = audio.shape[-1]
@@ -788,20 +945,18 @@ class SequenceObject(AudioObject):
                         if audio.shape[-1] == 0:
                             continue
 
-                        rendered_steps.append((start_sample, audio))
+                        rendered_steps.append((start_sample, audio, step_slot, sample_start_ratio))
 
         # Mono vs Multivoice voice handling:
-        # In mono mode ("gate" / "mono"), a subsequent trigger truncates any currently playing sample tail.
-        # In multivoice mode ("trigger" / "multivoice" / "poly"), notes ring out independently without truncation.
         is_mono = self.play_mode in ("gate", "mono")
-        voice_cut_steps = []
+        voice_cut_steps: List[Tuple[int, np.ndarray, int, float]] = []
         for i in range(len(rendered_steps)):
-            start_i, audio_i = rendered_steps[i]
+            start_i, audio_i, slot_i, start_ratio_i = rendered_steps[i]
 
             if is_mono:
                 next_start = None
                 for j in range(i + 1, len(rendered_steps)):
-                    s_j, _ = rendered_steps[j]
+                    s_j, _, _, _ = rendered_steps[j]
                     if s_j > start_i:
                         next_start = s_j
                         break
@@ -815,14 +970,15 @@ class SequenceObject(AudioObject):
 
             if audio_i.shape[-1] > 0:
                 audio_i = self._apply_step_fade(audio_i, system.sample_rate)
-                voice_cut_steps.append((start_i, audio_i))
+                voice_cut_steps.append((start_i, audio_i, slot_i, start_ratio_i))
                 end_sample = start_i + audio_i.shape[-1]
                 if end_sample > max_end_sample:
                     max_end_sample = end_sample
 
-        channel_sources = [audio for _, audio in voice_cut_steps]
-        if cached_child_audio is not None:
-            channel_sources.append(cached_child_audio)
+        channel_sources = [audio for _, audio, _, _ in voice_cut_steps]
+        for arr in slot_audio_map.values():
+            if arr is not None and arr.shape[-1] > 0:
+                channel_sources.append(arr)
         channel_shape = (
             np.broadcast_shapes(*(audio.shape[:-1] for audio in channel_sources))
             if channel_sources
@@ -830,7 +986,7 @@ class SequenceObject(AudioObject):
         )
         master_buffer = np.zeros((*channel_shape, max_end_sample), dtype=np.float32)
 
-        for start_sample, audio in voice_cut_steps:
+        for start_sample, audio, _, _ in voice_cut_steps:
             end_sample = start_sample + audio.shape[-1]
             master_buffer[..., start_sample:end_sample] += audio
 
@@ -850,32 +1006,27 @@ class SequenceObject(AudioObject):
                 self.name,
                 output_buffer,
                 dur,
-                extra={"sequence": self.sequence, "step_length": self.step_length}
+                extra={"sequence": active_sequence, "step_length": self.step_length, "slot": eff_slot}
             )
         base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
         if system is not None and getattr(first_child, "node_id", None) is not None:
-            for start_i, audio_i in voice_cut_steps:
+            for start_i, audio_i, slot_i, start_ratio_i in voice_cut_steps:
                 evt_time = base_offset_sec + (float(start_i) / float(system.sample_rate))
                 evt_dur = float(audio_i.shape[-1]) / float(system.sample_rate)
                 system.record_node_event(first_child.node_id, {
                     "time": round(evt_time, 4),
                     "duration": round(evt_dur, 4),
-                    "sequence_id": self.node_id
+                    "sequence_id": self.node_id,
+                    "slot": slot_i,
+                    "sample_start": round(float(start_ratio_i), 4),
+                    "loop": False,
                 })
-        if self.node_id is not None and getattr(self, "fingerprint", None):
-            manifest_state = system.capture_manifest_state() if system is not None else None
-            GLOBAL_DAG_CACHE.store(
-                self.node_id,
-                self.fingerprint,
-                output_buffer,
-                extra={"manifest_state": manifest_state} if manifest_state else None,
-                context=cache_ctx,
-            )
+        self._store_cached_render(output_buffer, cache_ctx, system, slot=eff_slot)
         return output_buffer
 
+    def render(self, system: Optional[System] = None, iteration: int = 0, **kwargs: Any) -> np.ndarray:
+        return self.render_slot(0, system=system, iteration=iteration, **kwargs)
 
-import random
-import os
 
 class ItemPoolObject(AudioObject):
     def __init__(
@@ -1028,7 +1179,11 @@ class ItemPoolObject(AudioObject):
             return self.current_pool[0]["absolute_path"]
             
         if str(self.playback_mode).strip().casefold() == "sequential":
-            next_idx = (int(self.seed or 0) + self._render_count) % pool_size
+            try:
+                seed_int = int(self.seed or 0)
+            except (TypeError, ValueError):
+                seed_int = normalize_numeric_seed(self.seed, 0)
+            next_idx = (seed_int + self._render_count) % pool_size
             self.last_played_index = next_idx
             if advance:
                 self._render_count += 1
@@ -1046,6 +1201,9 @@ class ItemPoolObject(AudioObject):
             self._render_count += 1
         return self.current_pool[next_idx]["absolute_path"]
         
+    def render_slot(self, slot_idx: int = 0, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        return self.render(system=system, **kwargs)
+
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
         should_advance = self.refresh_mode in {
             "local",
@@ -1145,16 +1303,7 @@ class ItemPoolObject(AudioObject):
                 set_runtime_cache(trace_marker, True)
             
         sample_natural_dur = float(data_to_render.shape[-1]) / float(system.sample_rate) if system is not None and data_to_render.shape[-1] > 0 else 0.0
-
-        loop_sample = kwargs.get("loop", True)
-        eff_bars = self.total_bars if (self.total_bars is not None and self.total_bars > 0) else kwargs.get("parent_total_bars")
-        if loop_sample and self.sample_type == "loop" and eff_bars is not None and eff_bars > 0 and system is not None:
-            target_samples = system.beat_to_samples(eff_bars * 4.0)
-            if data_to_render.shape[-1] > 0 and data_to_render.shape[-1] < target_samples:
-                reps = int(np.ceil(target_samples / data_to_render.shape[-1]))
-                tiled = np.tile(data_to_render, (1, reps) if data_to_render.ndim > 1 else (reps,))
-                data_to_render = tiled[..., :target_samples]
-
+        data_to_render = self._tile_loop_to_bars(data_to_render, system, **kwargs)
         output_buffer = self.apply_chain(data_to_render, system)
         if system is not None and self.node_id is not None:
             existing_entry = system.manifest.get("nodes", {}).get(str(self.node_id), {})
@@ -1184,15 +1333,14 @@ class ArrangementObject(AudioObject):
     """
     Arrangement node that takes one or more child audio objects (loops) with a predefined length
     and repeats them to fill a user defined time length (`total_bars`).
-    Each section owns its playback probability, source offset, quantization and anchor.
-    If multiple children are provided, one is picked at random for each active iteration.
+    Each section owns its playback probability, source offset, quantization, anchor, and slot selector (`section_slots`).
     """
     def __init__(
         self,
         name: str = "ArrangementObject",
         total_bars: float = 4.0,
         probability: float = 1.0,
-        seed: Optional[float] = None,
+        seed: Optional[Union[str, float, int]] = None,
         volume: float = 1.0,
         pan: float = 0.0,
         original_bpm: Optional[float] = None,
@@ -1205,6 +1353,8 @@ class ArrangementObject(AudioObject):
         section_sample_start: Optional[List[float]] = None,
         section_quant: Optional[List[str]] = None,
         section_quant_anchor: Optional[List[str]] = None,
+        section_slots: Optional[List[int]] = None,
+        cycle_seeds: Optional[List[int]] = None,
         quant: Optional[Union[str, float]] = "auto",
         quant_anchor: str = "start",
         node_id: Optional[int] = None,
@@ -1222,16 +1372,13 @@ class ArrangementObject(AudioObject):
             node_type=node_type
         )
         self.total_bars = float(total_bars)
-        self.seed = seed if seed is not None else random.random()
+        self.seed = seed if seed is not None else 42
         self.section_points = sorted({
             float(point) for point in (section_points or [])
             if 0.0 < float(point) < self.total_bars
         })
         num_sections = len(self.section_points) + 1
         raw_section_enabled = section_enabled or []
-        # Retired arrangement controls are accepted only at this boundary so
-        # old work remains audible. They are folded into local arrays: a legacy
-        # disabled section becomes a zero-probability section.
         try:
             legacy_probability = max(0.0, min(1.0, float(probability)))
         except (TypeError, ValueError):
@@ -1245,6 +1392,7 @@ class ArrangementObject(AudioObject):
         raw_sample_start = list(section_sample_start) if section_sample_start is not None else []
         raw_quant = list(section_quant) if section_quant is not None else []
         raw_anchor = list(section_quant_anchor) if section_quant_anchor is not None else []
+        raw_slots = list(section_slots) if section_slots is not None else []
         self.section_probability = [
             0.0 if index < len(raw_section_enabled) and raw_section_enabled[index] is False else
             self._valid_probability(raw_probability[index], legacy_probability)
@@ -1265,6 +1413,15 @@ class ArrangementObject(AudioObject):
             legacy_anchor
             for index in range(num_sections)
         ]
+        self.section_slots = [
+            int(raw_slots[index] or 0) if index < len(raw_slots) else 0
+            for index in range(num_sections)
+        ]
+        self.cycle_seeds = (
+            [int(c) for c in cycle_seeds]
+            if cycle_seeds
+            else resolve_cycle_seeds(self.seed, num_sections, self.node_id or 1)
+        )
 
     @staticmethod
     def _valid_probability(value: Any, fallback: float) -> float:
@@ -1315,6 +1472,10 @@ class ArrangementObject(AudioObject):
             if val in ("start", "end"):
                 return str(val)
         return "start"
+
+    def get_section_slot(self, section_index: int, upstream_slot_count: int = 1) -> int:
+        raw_slot = self.section_slots[section_index] if 0 <= section_index < len(self.section_slots) else 0
+        return wrap_slot_index(raw_slot, upstream_slot_count)
 
     def get_section_quant_samples(self, section_index: int, child: AudioObject, audio: np.ndarray, system: System) -> Optional[int]:
         s_quant = self.get_section_quant(section_index)
@@ -1367,14 +1528,9 @@ class ArrangementObject(AudioObject):
 
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
         cache_ctx = self._cache_context(system, **kwargs)
-        if self.node_id is not None and getattr(self, "fingerprint", None):
-            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint, context=cache_ctx)
-            if cached is not None:
-                if system is not None and system.render_mode == "preview":
-                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx)
-                    if cached_extra and "manifest_state" in cached_extra:
-                        system.restore_manifest_state(cached_extra["manifest_state"])
-                return cached
+        cached = self._try_get_cached_render(cache_ctx, system)
+        if cached is not None:
+            return cached
 
         if system is None:
             raise ValueError("System instance must be provided to render.")
@@ -1386,47 +1542,46 @@ class ArrangementObject(AudioObject):
         if not self.children:
             return np.zeros(total_samples_to_fill, dtype=np.float32)
 
-        import hashlib
-        import random
-        
-        # Pre-render or identify dynamic children
-        cached_audios = []
-        child_template_events: Dict[Any, Dict[str, List[dict]]] = {}
-        for child_idx, (_, child) in enumerate(self.children):
+        for _, child in self.children:
             if self.node_id is not None and getattr(child, "node_id", None) is not None:
                 GLOBAL_DAG_CACHE.register_edge(parent_id=self.node_id, child_id=child.node_id)
-            if getattr(child, "is_dynamic", False):
-                cached_audios.append(None)
-            else:
-                before_counts = {
-                    nid: len(nentry.get("events", []))
-                    for nid, nentry in (system.manifest.get("nodes", {}) if system is not None else {}).items()
-                }
-                child_kwargs = dict(kwargs)
-                child_kwargs["loop"] = False
-                child_kwargs["timeline_offset_sec"] = 0.0
-                audio = child.render(system, **child_kwargs)
-                cached_audios.append(audio)
-                if system is not None:
-                    captured = {}
-                    for nid, nentry in system.manifest.get("nodes", {}).items():
-                        start_idx = before_counts.get(nid, 0)
-                        evts = nentry.get("events", [])[start_idx:]
-                        if evts:
-                            captured[nid] = [dict(e) for e in evts]
-                            del nentry["events"][start_idx:]
-                    child_template_events[child_idx] = captured
 
-        observed_channel_shapes = [
-            audio.shape[:-1]
-            for audio in cached_audios
-            if audio is not None
-        ]
-        rendered_events: List[Tuple[int, np.ndarray, Optional[int], Any, int, int]] = []
-        
-        # Use a reproducible random generator based on the seed
-        seed_hash = int(hashlib.md5(str(self.seed).encode()).hexdigest(), 16)
-        rng = random.Random(seed_hash)
+        cached_slot_audios: Dict[Tuple[int, int], np.ndarray] = {}
+        child_template_events: Dict[Any, Dict[str, List[dict]]] = {}
+        observed_channel_shapes: List[Tuple[int, ...]] = []
+
+        def _render_child_slot(c_idx: int, c_obj: AudioObject, slot_idx: int, iter_idx: int = 0) -> Tuple[np.ndarray, Any]:
+            is_dyn = getattr(c_obj, "is_dynamic", False)
+            cache_key = (c_idx, slot_idx)
+            if not is_dyn and cache_key in cached_slot_audios:
+                return cached_slot_audios[cache_key], cache_key
+
+            evt_key = f"dyn_{iter_idx}" if is_dyn else cache_key
+            before_counts = {
+                nid: len(nentry.get("events", []))
+                for nid, nentry in (system.manifest.get("nodes", {}) if system is not None else {}).items()
+            }
+            child_kwargs = dict(kwargs)
+            child_kwargs["loop"] = False
+            child_kwargs["timeline_offset_sec"] = 0.0
+            if is_dyn:
+                audio_out = c_obj.render_slot(slot_idx, system=system, iteration=iter_idx, **child_kwargs)
+            else:
+                audio_out = c_obj.render_slot(slot_idx, system=system, **child_kwargs)
+                cached_slot_audios[cache_key] = audio_out
+            observed_channel_shapes.append(audio_out.shape[:-1])
+            if system is not None:
+                captured = {}
+                for nid, nentry in system.manifest.get("nodes", {}).items():
+                    start_idx = before_counts.get(nid, 0)
+                    evts = nentry.get("events", [])[start_idx:]
+                    if evts:
+                        captured[nid] = [dict(e) for e in evts]
+                        del nentry["events"][start_idx:]
+                child_template_events[evt_key] = captured
+            return audio_out, evt_key
+
+        rendered_events: List[Tuple[int, np.ndarray, Optional[int], Any, int, int, int, int, int, bool]] = []
         
         iteration_count = 0
         boundaries = self.get_section_boundaries()
@@ -1437,42 +1592,40 @@ class ArrangementObject(AudioObject):
 
             sec_prob = self.get_section_probability(section_index)
             sec_sample_start = self.get_section_sample_start(section_index)
+            sec_quant = self.get_section_quant(section_index)
+            is_continuous = sec_quant in ("auto", "continuous")
             sec_anchor = self.get_section_quant_anchor(section_index)
+            sec_seed = self.cycle_seeds[section_index % len(self.cycle_seeds)] if self.cycle_seeds else 42
+            sec_rng = mulberry32(hash_seed(sec_seed, section_index, 0xA44A))
 
             while cell_start < section_end:
-                child_idx = rng.randint(0, len(self.children) - 1)
-                audio = cached_audios[child_idx]
+                child_idx = int(sec_rng() * len(self.children)) if len(self.children) > 1 else 0
                 _, child = self.children[child_idx]
+                upstream_slots = max(1, len(getattr(child, "slots", None) or [1]))
+                target_slot = self.get_section_slot(section_index, upstream_slots)
 
-                dyn_key = None
-                if audio is None:
-                    dyn_key = f"dyn_{iteration_count}"
-                    before_counts = {
-                        nid: len(nentry.get("events", []))
-                        for nid, nentry in (system.manifest.get("nodes", {}) if system is not None else {}).items()
-                    }
-                    child_kwargs = dict(kwargs)
-                    child_kwargs["loop"] = False
-                    child_kwargs["timeline_offset_sec"] = 0.0
-                    audio = child.render(system, iteration=iteration_count, **child_kwargs)
-                    observed_channel_shapes.append(audio.shape[:-1])
-                    if system is not None:
-                        captured = {}
-                        for nid, nentry in system.manifest.get("nodes", {}).items():
-                            start_idx = before_counts.get(nid, 0)
-                            evts = nentry.get("events", [])[start_idx:]
-                            if evts:
-                                captured[nid] = [dict(e) for e in evts]
-                                del nentry["events"][start_idx:]
-                        child_template_events[dyn_key] = captured
+                audio, evt_key = _render_child_slot(child_idx, child, target_slot, iteration_count)
                 iteration_count += 1
                 if audio.shape[-1] == 0:
                     break
 
                 quant_samples = self.get_section_quant_samples(section_index, child, audio, system)
                 sample_count = audio.shape[-1]
-                sample_offset = min(sample_count, int(sample_count * sec_sample_start))
-                playable_audio = audio[..., sample_offset:]
+                if is_continuous:
+                    sample_offset = (int(sample_count * sec_sample_start) % sample_count) if sample_count > 0 else 0
+                    if 0 < sample_offset < sample_count:
+                        playable_audio = np.concatenate([audio[..., sample_offset:], audio[..., :sample_offset]], axis=-1)
+                    else:
+                        playable_audio = audio
+                    target_cell_len = quant_samples if quant_samples is not None else (section_end - cell_start)
+                    if target_cell_len > playable_audio.shape[-1] and playable_audio.shape[-1] > 0:
+                        reps = int(np.ceil(target_cell_len / playable_audio.shape[-1]))
+                        tiled = np.tile(playable_audio, (1, reps) if playable_audio.ndim > 1 else (reps,))
+                        playable_audio = tiled[..., :target_cell_len]
+                else:
+                    sample_offset = min(sample_count, int(sample_count * sec_sample_start))
+                    playable_audio = audio[..., sample_offset:]
+
                 if playable_audio.shape[-1] == 0:
                     if quant_samples is None:
                         break
@@ -1484,21 +1637,22 @@ class ArrangementObject(AudioObject):
                 event_start = cell_start if sec_anchor == "start" else cell_end - playable_samples
                 event_end = event_start + playable_samples
 
-                # Gate every trigger to its quant cell. This keeps arrangement
-                # playback monophonic: a long source cannot overlap the next
-                # trigger, regardless of whether it is start- or end-anchored.
                 write_start = max(section_start, cell_start, event_start)
                 write_end = min(section_end, cell_end, event_end)
-                if write_start < write_end and rng.random() < sec_prob:
+                if write_start < write_end and sec_rng() < sec_prob:
                     source_start = write_start - event_start
                     source_end = source_start + (write_end - write_start)
                     rendered_events.append((
                         write_start,
                         playable_audio[..., source_start:source_end],
                         getattr(child, "node_id", None),
-                        dyn_key if dyn_key is not None else child_idx,
+                        evt_key,
                         source_start,
-                        source_end
+                        source_end,
+                        target_slot,
+                        sample_offset,
+                        sample_count,
+                        is_continuous,
                     ))
 
                 if quant_samples is None or quant_samples <= 0:
@@ -1511,7 +1665,7 @@ class ArrangementObject(AudioObject):
             else ()
         )
         master_buffer = np.zeros((*channel_shape, total_samples_to_fill), dtype=np.float32)
-        for write_start, event_audio, child_node_id, evt_key, source_start, source_end in rendered_events:
+        for write_start, event_audio, child_node_id, evt_key, source_start, source_end, _, _, _, _ in rendered_events:
             write_end = write_start + event_audio.shape[-1]
             master_buffer[..., write_start:write_end] += event_audio
 
@@ -1529,36 +1683,41 @@ class ArrangementObject(AudioObject):
         base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
         if system is not None:
             sr = float(system.sample_rate)
-            for write_start, event_audio, child_node_id, evt_key, source_start, source_end in rendered_events:
+            for write_start, event_audio, child_node_id, evt_key, source_start, source_end, target_slot, sample_offset, sample_count, is_continuous in rendered_events:
                 if child_node_id is not None:
                     evt_time = base_offset_sec + (float(write_start) / sr)
                     evt_dur = float(event_audio.shape[-1]) / sr
+                    eff_offset = ((sample_offset + source_start) % sample_count) if (is_continuous and sample_count > 0) else min(sample_count, sample_offset + source_start)
+                    eff_sample_start = (float(eff_offset) / float(sample_count)) if sample_count > 0 else 0.0
                     system.record_node_event(child_node_id, {
                         "time": round(evt_time, 4),
                         "duration": round(evt_dur, 4),
-                        "arrangement_id": self.node_id
+                        "arrangement_id": self.node_id,
+                        "slot": target_slot,
+                        "sample_start": round(eff_sample_start, 4),
+                        "loop": bool(is_continuous),
                     })
                 if evt_key in child_template_events:
                     source_start_sec = float(source_start) / sr
                     source_end_sec = float(source_end) / sr
+                    offset_sec = float(sample_offset) / sr
+                    wrap_tail_sec = float(sample_count - sample_offset) / sr
                     for desc_node_id, desc_evts in child_template_events[evt_key].items():
                         for devt in desc_evts:
                             t_rel = float(devt.get("time", 0.0))
                             d_rel = float(devt.get("duration", 0.0))
-                            if t_rel >= source_start_sec - 0.002 and t_rel < source_end_sec:
+                            if t_rel >= offset_sec - 0.002:
+                                t_playable = max(0.0, t_rel - offset_sec)
+                            elif is_continuous and sample_offset > 0:
+                                t_playable = t_rel + wrap_tail_sec
+                            else:
+                                continue
+                            if t_playable >= source_start_sec - 0.002 and t_playable < source_end_sec:
                                 new_evt = dict(devt)
-                                actual_time = base_offset_sec + (float(write_start) / sr) + (t_rel - source_start_sec)
+                                actual_time = base_offset_sec + (float(write_start) / sr) + (t_playable - source_start_sec)
                                 new_evt["time"] = round(actual_time, 4)
-                                new_evt["duration"] = round(min(d_rel, source_end_sec - t_rel), 4)
+                                new_evt["duration"] = round(min(d_rel, source_end_sec - t_playable), 4)
                                 new_evt["arrangement_id"] = self.node_id
                                 system.record_node_event(int(desc_node_id), new_evt)
-        if self.node_id is not None and getattr(self, "fingerprint", None):
-            manifest_state = system.capture_manifest_state() if system is not None else None
-            GLOBAL_DAG_CACHE.store(
-                self.node_id,
-                self.fingerprint,
-                output_buffer,
-                extra={"manifest_state": manifest_state} if manifest_state else None,
-                context=cache_ctx,
-            )
+        self._store_cached_render(output_buffer, cache_ctx, system)
         return output_buffer

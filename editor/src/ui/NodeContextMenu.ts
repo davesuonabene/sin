@@ -132,12 +132,46 @@ export class NodeContextMenu {
         colorsContainer.appendChild(colorGrid);
         this.menuElement.appendChild(colorsContainer);
 
+        const isRenderEnabled = node.properties?.render_enabled !== false;
+        const isFreezeProtected = node.properties?.freeze_refresh !== false;
+        const isViewerCookEnabled = node.properties?.visualization_enabled !== false;
+        const isFarStage = Number((node as any).currentDistanceStage) === 3;
+
         const items: NodeContextMenuItem[] = [
             {
                 id: 'preview',
                 label: 'Preview (RAM)',
                 action: (n) => {
                     window.dispatchEvent(new CustomEvent('preview-node', { detail: { nodeId: n.id } }));
+                }
+            },
+            {
+                id: 'viewer-cook',
+                label: isFarStage
+                    ? 'Viewer Cook (Shut at Far Distance)'
+                    : (isViewerCookEnabled ? 'Viewer Cook: ON (Shut Iride)' : 'Viewer Cook: OFF (Enable Iride)'),
+                action: (n) => {
+                    if (typeof n.toggleVisualization === 'function') {
+                        n.toggleVisualization();
+                    }
+                }
+            },
+            {
+                id: 'render-toggle',
+                label: isRenderEnabled ? 'Global Render (R): Included' : 'Global Render (R): Excluded',
+                action: (n) => {
+                    const current = n.properties?.render_enabled !== false;
+                    n.updateProperty?.('render_enabled', !current);
+                    n.setDirtyCanvas?.(true, true);
+                }
+            },
+            {
+                id: 'freeze-toggle',
+                label: isFreezeProtected ? 'Freeze Protection (❄): ON' : 'Freeze Protection (❄): OFF',
+                action: (n) => {
+                    const current = n.properties?.freeze_refresh !== false;
+                    n.updateProperty?.('freeze_refresh', !current);
+                    n.setDirtyCanvas?.(true, true);
                 }
             },
             {

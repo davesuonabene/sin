@@ -2,6 +2,7 @@ import { type FieldSchema } from '../../fields/FieldSchema.ts';
 import { type BaseNode } from '../../nodes/BaseNode.ts';
 import { StepValueControl } from './StepValueControl.ts';
 import { type SequenceDocument } from '../../nodes/SequenceNode.ts';
+import { SlotStrip } from './SlotStrip.ts';
 
 type StepParameters = Record<string, number | boolean> & {
     subdivision_enabled: boolean;
@@ -173,6 +174,39 @@ export class SequenceGridSection {
         header.append(nameInput, saveStatus, poolButton, saveButton);
         wrapper.appendChild(header);
 
+        const seqNodeWithSlots = node as BaseNode & {
+            activeSlotIndex?: number;
+            getSlots?: () => any[];
+            selectSlot?: (index: number) => void;
+            addSlot?: () => number;
+            removeSlot?: (index: number) => void;
+            getResolvedStepSlots?: (stepCount?: number) => number[];
+        };
+        if (typeof seqNodeWithSlots.getSlots === 'function') {
+            const slots = seqNodeWithSlots.getSlots();
+            const stripEl = SlotStrip.render({
+                slotCount: slots.length,
+                activeSlot: seqNodeWithSlots.activeSlotIndex ?? 0,
+                accentColor: (node as any).nodeColor || (node as any).color || '#ec4899',
+                onSelect: async (idx) => {
+                    seqNodeWithSlots.selectSlot?.(idx);
+                    windowContext?.refreshAudioPreview?.();
+                    await windowContext?.renderTabContent?.();
+                },
+                onAdd: async () => {
+                    seqNodeWithSlots.addSlot?.();
+                    windowContext?.refreshAudioPreview?.();
+                    await windowContext?.renderTabContent?.();
+                },
+                onRemove: async (idx) => {
+                    seqNodeWithSlots.removeSlot?.(idx);
+                    windowContext?.refreshAudioPreview?.();
+                    await windowContext?.renderTabContent?.();
+                }
+            });
+            wrapper.insertBefore(stripEl, header);
+        }
+
         const viewport = document.createElement('div');
         viewport.className = 'td-seq-grid-viewport';
 
@@ -307,6 +341,143 @@ export class SequenceGridSection {
             ...(node.properties?.collapsed_step_modifiers || {})
         };
 
+        const rawActiveParam = node.properties?.active_step_parameter;
+        let activeFieldKey = (typeof rawActiveParam === 'string' && parameterFields.some(f => f.key === rawActiveParam))
+            ? rawActiveParam
+            : (parameterFields.find(f => f.key === 'velocity')?.key || parameterFields[0]?.key || 'velocity');
+
+        let isExploded = Boolean(node.properties?.step_modifiers_exploded);
+
+        // Top selector bar for single-line / exploded switching
+        const selectorBar = document.createElement('div');
+        selectorBar.className = 'td-seq-row-label td-seq-param-bar';
+        const initialActiveField = parameterFields.find(f => f.key === activeFieldKey) || parameterFields[0];
+        selectorBar.dataset.rowFieldKey = initialActiveField?.key || activeFieldKey;
+        selectorBar.dataset.rowFieldLabel = initialActiveField?.label || activeFieldKey;
+
+        const selectorWrap = document.createElement('div');
+        selectorWrap.className = 'td-seq-selector-wrap';
+
+        const selectorBtn = document.createElement('button');
+        selectorBtn.type = 'button';
+        selectorBtn.className = 'td-seq-param-selector-btn';
+        selectorBtn.setAttribute('aria-haspopup', 'listbox');
+        selectorBtn.setAttribute('aria-expanded', 'false');
+        selectorBtn.title = 'Select parameter to display in row';
+
+        const selectorText = document.createElement('span');
+        selectorText.className = 'td-seq-param-selector-text';
+        selectorText.textContent = initialActiveField?.label || activeFieldKey;
+
+        const selectorArrow = document.createElement('span');
+        selectorArrow.className = 'td-seq-param-selector-arrow';
+        selectorArrow.textContent = '▾';
+
+        selectorBtn.append(selectorText, selectorArrow);
+        selectorWrap.appendChild(selectorBtn);
+
+        const dropdownMenu = document.createElement('div');
+        dropdownMenu.className = 'td-seq-dropdown-menu sin-menu-surface';
+        dropdownMenu.style.display = 'none';
+        dropdownMenu.setAttribute('role', 'listbox');
+        selectorWrap.appendChild(dropdownMenu);
+
+        let isDropdownOpen = false;
+
+        const populateDropdown = () => {
+            dropdownMenu.innerHTML = '';
+            for (const field of parameterFields) {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = `td-seq-dropdown-item ${field.key === activeFieldKey ? 'is-active' : ''}`;
+                item.textContent = field.label;
+                item.setAttribute('role', 'option');
+                item.setAttribute('aria-selected', String(field.key === activeFieldKey));
+                item.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setActiveField(field.key);
+                    closeDropdown();
+                });
+                dropdownMenu.appendChild(item);
+            }
+        };
+
+        const closeDropdown = () => {
+            if (!isDropdownOpen) return;
+            isDropdownOpen = false;
+            dropdownMenu.style.display = 'none';
+            selectorBtn.setAttribute('aria-expanded', 'false');
+            selectorArrow.textContent = '▾';
+            document.removeEventListener('pointerdown', onDocClick, true);
+        };
+
+        const onDocClick = (e: Event) => {
+            const target = e.target as Node | null;
+            if (target && !selectorWrap.contains(target)) {
+                closeDropdown();
+            }
+        };
+
+        const openDropdown = () => {
+            if (isDropdownOpen) return;
+            populateDropdown();
+            dropdownMenu.style.display = 'flex';
+            isDropdownOpen = true;
+            selectorBtn.setAttribute('aria-expanded', 'true');
+            selectorArrow.textContent = '▴';
+            setTimeout(() => {
+                if (isDropdownOpen) {
+                    document.addEventListener('pointerdown', onDocClick, true);
+                }
+            }, 0);
+        };
+
+        selectorBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isDropdownOpen) {
+                closeDropdown();
+            } else {
+                openDropdown();
+            }
+        });
+
+        selectorBtn.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!isDropdownOpen) openDropdown();
+            } else if (e.key === 'Escape' && isDropdownOpen) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeDropdown();
+            }
+        });
+
+        const explodeBtn = document.createElement('button');
+        explodeBtn.type = 'button';
+        explodeBtn.className = 'td-seq-explode-toggle';
+        explodeBtn.textContent = isExploded ? 'hide' : 'show all';
+        explodeBtn.title = isExploded ? 'Hide extra parameters (single line)' : 'Show all parameters';
+
+        explodeBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setExploded(!isExploded);
+        });
+
+        selectorBar.append(selectorWrap, explodeBtn);
+        grid.appendChild(selectorBar);
+
+        interface ParameterRowBinding {
+            field: FieldSchema;
+            label: HTMLElement;
+            toggleBtn: HTMLButtonElement;
+            elements: HTMLElement[];
+        }
+        const fieldRowBindings: ParameterRowBinding[] = [];
+
         for (const field of parameterFields) {
             const isRowCollapsed = Boolean(collapsedModifiers[field.key]);
             const rowElements: HTMLElement[] = [];
@@ -330,14 +501,21 @@ export class SequenceGridSection {
 
             label.append(toggleBtn, labelText);
 
+            label.addEventListener('click', (e) => {
+                if ((e.target as HTMLElement).closest('.td-seq-row-toggle')) return;
+                setActiveField(field.key);
+            });
+
             const updateRowCollapseVisual = (collapsed: boolean) => {
                 toggleBtn.textContent = collapsed ? '▶' : '▼';
                 toggleBtn.title = collapsed ? `Expand ${field.label}` : `Collapse ${field.label}`;
                 toggleBtn.setAttribute('aria-label', toggleBtn.title);
                 toggleBtn.setAttribute('aria-expanded', String(!collapsed));
-                rowElements.forEach(el => {
-                    el.classList.toggle('is-collapsed-row', collapsed);
-                });
+                if (isExploded) {
+                    rowElements.forEach(el => {
+                        el.classList.toggle('is-collapsed-row', collapsed);
+                    });
+                }
             };
 
             const toggleRow = (e?: Event) => {
@@ -430,7 +608,65 @@ export class SequenceGridSection {
                     rowElements.push(spacer);
                 }
             });
+
+            fieldRowBindings.push({
+                field,
+                label,
+                toggleBtn,
+                elements: rowElements
+            });
         }
+
+        const applyVisibility = () => {
+            if (!isExploded) {
+                for (const binding of fieldRowBindings) {
+                    binding.label.style.display = 'none';
+                    binding.label.classList.remove('is-active-row-label');
+                    if (binding.field.key === activeFieldKey) {
+                        binding.elements.forEach(el => {
+                            el.style.display = '';
+                            el.classList.remove('is-collapsed-row');
+                        });
+                    } else {
+                        binding.elements.forEach(el => {
+                            el.style.display = 'none';
+                        });
+                    }
+                }
+            } else {
+                for (const binding of fieldRowBindings) {
+                    binding.label.style.display = 'flex';
+                    binding.label.classList.toggle('is-active-row-label', binding.field.key === activeFieldKey);
+                    const isRowCollapsed = Boolean(collapsedModifiers[binding.field.key]);
+                    binding.elements.forEach(el => {
+                        el.style.display = '';
+                        el.classList.toggle('is-collapsed-row', isRowCollapsed);
+                    });
+                }
+            }
+        };
+
+        const setActiveField = (key: string) => {
+            activeFieldKey = key;
+            node.updateProperty('active_step_parameter', key);
+            const target = parameterFields.find(f => f.key === key);
+            selectorText.textContent = target?.label || key;
+            selectorBar.dataset.rowFieldKey = key;
+            selectorBar.dataset.rowFieldLabel = target?.label || key;
+            applyVisibility();
+            windowContext?.applyOverlays?.();
+        };
+
+        const setExploded = (exploded: boolean) => {
+            isExploded = exploded;
+            node.updateProperty('step_modifiers_exploded', exploded);
+            explodeBtn.textContent = isExploded ? 'hide' : 'show all';
+            explodeBtn.title = isExploded ? 'Hide extra parameters (single line)' : 'Show all parameters';
+            applyVisibility();
+            windowContext?.applyOverlays?.();
+        };
+
+        applyVisibility();
 
         windowContext?.applyOverlays?.();
     }

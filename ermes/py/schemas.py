@@ -3,7 +3,7 @@ ERMES Canonical Pydantic Models & Schemas
 Serves as the single source of truth for graph serialization payloads across SIN.
 """
 
-from typing import List, Optional, Literal, Dict, Any
+from typing import List, Optional, Literal, Dict, Any, Union
 from pydantic import BaseModel, field_validator
 
 
@@ -22,6 +22,31 @@ class FxModuleModel(BaseModel):
             return str(v)
         data = info.data if hasattr(info, 'data') else {}
         return data.get('id') or data.get('type') or 'Module'
+
+
+class NodeSlotModel(BaseModel):
+    slot: int = 0
+    label: Optional[str] = None
+    filepath: Optional[str] = None
+    library_item_id: Optional[Union[int, str]] = None
+    original_bpm: Optional[float] = None
+    key: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    crop_start: Optional[float] = None
+    crop_end: Optional[float] = None
+    sequence: Optional[List[int]] = None
+    step_parameters: Optional[List[Dict[str, Any]]] = None
+    sample_slot: Optional[str] = None
+    step_slots: Optional[List[int]] = None
+    seed: Optional[Union[str, float, int]] = None
+    cycle_seeds: Optional[List[int]] = None
+
+    def get(self, key: str, default: Any = None) -> Any:
+        val = getattr(self, key, default)
+        return default if val is None else val
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
 
 
 class AudioNodeModel(BaseModel):
@@ -51,13 +76,18 @@ class AudioNodeModel(BaseModel):
     fade_ms: float = 0.0
     selected_items: Optional[List[Dict[str, Any]]] = None
     playbackMode: Optional[str] = None
-    seed: Optional[float] = None
+    seed: Optional[Union[str, float, int]] = None
     seed_mode: Optional[str] = "moving"
     refresh_mode: Literal[
         "local", "parent", "ancestor", "global", "off",
         "local_refresh", "parent_refresh", "global_refresh",
         "parent_render", "self_render", "manual", "fixed"
     ] = "off"
+    slots: List[NodeSlotModel] = []
+    sample_slot: Optional[str] = "0"
+    step_slots: List[int] = []
+    cycle_seeds: List[int] = []
+    section_slots: List[int] = []
     total_bars: Optional[float] = None
     probability: Optional[float] = None
     section_points: List[float] = []
@@ -103,6 +133,7 @@ class AudioNodeModel(BaseModel):
 
     @field_validator('section_points', 'section_enabled', 'section_probability',
                      'section_sample_start', 'section_quant', 'section_quant_anchor',
+                     'slots', 'step_slots', 'cycle_seeds', 'section_slots',
                      'chain', 'children', mode='before')
     @classmethod
     def sanitize_lists(cls, v):
@@ -111,7 +142,7 @@ class AudioNodeModel(BaseModel):
 
 class PoolResolveRequest(BaseModel):
     selected_items: List[Dict[str, Any]] = []
-    seed: float = 0.0
+    seed: Union[str, float, int] = 0.0
     playbackMode: str = "Random"
     items_resolved: bool = False
     previous_sample: Optional[str] = None
