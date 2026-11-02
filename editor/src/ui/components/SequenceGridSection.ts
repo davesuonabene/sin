@@ -55,23 +55,43 @@ export class SequenceGridSection {
             } as StepParameters;
         };
 
-        const sequence = Array.isArray(node.properties.sequence)
-            ? node.properties.sequence.slice(0, STEP_COUNT)
+        const rawSequence = Array.isArray(node.properties.sequence)
+            ? [...node.properties.sequence]
             : [];
-        while (sequence.length < STEP_COUNT) {
-            sequence.push(sequence.length % 4 === 0 ? 1 : 0);
+        while (rawSequence.length < STEP_COUNT) {
+            rawSequence.push(rawSequence.length % 4 === 0 ? 1 : 0);
         }
+        const sequence = rawSequence.slice(0, STEP_COUNT);
 
+        const totalSteps = Math.max(STEP_COUNT, rawSequence.length);
         const existingParameters = Array.isArray(node.properties.step_parameters)
-            ? node.properties.step_parameters.slice(0, STEP_COUNT)
+            ? node.properties.step_parameters
             : [];
-        const stepParameters: StepParameters[] = Array.from({ length: STEP_COUNT }, (_, index) => ({
-            ...makeDefaultStep(),
-            ...(existingParameters[index] || {})
-        }));
+        const fullStepParameters: StepParameters[] = Array.from({ length: totalSteps }, (_, index) => {
+            const raw = existingParameters[index] || {};
+            const merged = {
+                ...makeDefaultStep(),
+                ...raw
+            };
+            if (typeof merged.probability === 'number' && merged.probability > 1.0) {
+                merged.probability = Number((merged.probability / 100).toFixed(4));
+            }
+            if (typeof merged.sample_start === 'number' && merged.sample_start > 1.0) {
+                merged.sample_start = Number((merged.sample_start / 100).toFixed(4));
+            }
+            if (typeof merged.gate_length === 'number' && merged.gate_length > 1.0) {
+                merged.gate_length = Number((merged.gate_length / 100).toFixed(4));
+            }
+            return merged;
+        });
+        const stepParameters: StepParameters[] = fullStepParameters.slice(0, STEP_COUNT);
 
-        node.properties.sequence = sequence;
-        node.properties.step_parameters = stepParameters;
+        if (!Array.isArray(node.properties.sequence) || node.properties.sequence.length < STEP_COUNT) {
+            node.properties.sequence = [...rawSequence];
+        }
+        if (!Array.isArray(node.properties.step_parameters) || node.properties.step_parameters.length < totalSteps) {
+            node.properties.step_parameters = fullStepParameters.map(s => ({ ...s }));
+        }
 
         const wrapper = document.createElement('div');
         wrapper.className = 'td-param-group td-seq-parameter-group';
@@ -210,10 +230,12 @@ export class SequenceGridSection {
                 value: Boolean(value),
                 ariaLabel: `Step ${index + 1}`,
                 onChange: nextValue => {
-                    sequence[index] = nextValue ? 1 : 0;
+                    const nextBit = nextValue ? 1 : 0;
+                    sequence[index] = nextBit;
+                    rawSequence[index] = nextBit;
                     grid.querySelectorAll<HTMLElement>(`.td-step-value-control[data-step-index="${index}"]`)
                         .forEach(control => control.classList.toggle('is-step-off', !nextValue));
-                    node.updateProperty('sequence', [...sequence]);
+                    node.updateProperty('sequence', [...rawSequence]);
                     windowContext.refreshAudioPreview();
                 }
             });
@@ -348,8 +370,9 @@ export class SequenceGridSection {
                         if (field.key === 'subdivisions') {
                             targetParameters.subdivision_enabled = value > 1;
                         }
+                        fullStepParameters[targetIndex] = { ...targetParameters };
                     });
-                    node.updateProperty('step_parameters', [...stepParameters]);
+                    node.updateProperty('step_parameters', fullStepParameters.map(s => ({ ...s })));
                     windowContext.refreshAudioPreview();
                     windowContext?.applyOverlays?.();
                 };

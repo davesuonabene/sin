@@ -1,5 +1,5 @@
 import { type FieldSchema } from '../../fields/FieldSchema.ts';
-import { getParameterWheelStep, registerParameterWheelControl } from '../ParameterWheelMenu.ts';
+import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from '../ParameterWheelMenu.ts';
 
 interface NumericStepValueOptions {
     field: FieldSchema<number>;
@@ -58,7 +58,7 @@ export class StepValueControl {
         this.input.className = 'td-step-value-input';
         if (field.min !== undefined) this.input.min = String(field.min);
         if (field.max !== undefined) this.input.max = String(field.max);
-        this.input.step = String(field.step ?? (field.type === 'int' ? 1 : 'any'));
+        this.input.step = String(field.step ?? (field.type === 'int' ? 1 : 0.1));
 
         let inputDebounceTimer: any = null;
         this.input.addEventListener('input', () => {
@@ -82,27 +82,27 @@ export class StepValueControl {
         });
 
         const resolveWheelStep = (): number => {
-            if (field.type === 'int') {
-                return getParameterWheelStep(true);
-            }
-            if (typeof field.step === 'number' && field.step > 0 && field.step < 1.0) {
-                return field.step;
-            }
-            const min = field.min ?? 0;
-            const max = field.max ?? 1;
-            if (max - min <= 1.0) {
-                return 0.01;
-            }
-            return getParameterWheelStep(false);
+            return getParameterWheelStep(field.type === 'int');
         };
 
-        registerParameterWheelControl(this.input);
+        registerParameterWheelControl(this.input, {
+            isInteger: field.type === 'int',
+            getValue: () => this.value,
+            setValue: (nextVal) => {
+                const nextValue = this.normalizeValue(nextVal);
+                if (nextValue !== this.value) {
+                    this.setValue(nextValue);
+                    onChange(nextValue);
+                }
+            },
+            formatValue: (val) => this.formatValue(this.normalizeValue(val)),
+        });
         this.input.addEventListener('wheel', event => {
             event.preventDefault();
-            if (event.altKey) return;
+            if (event.altKey || this.input.disabled) return;
             const direction = event.deltaY < 0 ? 1 : -1;
             const increment = resolveWheelStep();
-            const nextValue = this.normalizeValue(this.value + increment * direction);
+            const nextValue = this.normalizeValue(roundStepValue(this.value + increment * direction, increment));
             this.setValue(nextValue);
             onChange(nextValue);
         }, { passive: false });
@@ -257,8 +257,8 @@ export class StepValueControl {
     }
 
     private decimalPlaces(): number {
-        const step = Number(this.field.step ?? 0.01);
+        const step = Number(this.field.step ?? 0.1);
         const decimal = String(step).split('.')[1];
-        return Math.min(6, decimal?.length ?? 0);
+        return Math.min(6, Math.max(3, decimal?.length ?? 0));
     }
 }

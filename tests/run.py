@@ -22,7 +22,13 @@ SUITES = {
     "all": ["test_*.py"],
     "quick": ["test_*.py"],
     "full": ["test_*.py"],
-    "core": ["test_core.py", "test_stretching.py"],
+    "core": [
+        "test_core.py",
+        "test_stretching.py",
+        "test_shared_dsp.py",
+        "test_dag_cache.py",
+        "test_ermes_snapshot.py",
+    ],
     "cli": ["test_cli.py", "test_gaia_metadata_cli.py"],
     "gaia": [
         "test_gaia_library.py",
@@ -31,12 +37,15 @@ SUITES = {
         "test_gaia_deletion.py",
         "test_gaia_profiles.py",
         "test_gaia_playlists.py",
+        "test_gaia_graph_builder.py",
     ],
     "projects": [
         "test_gaia_projects.py",
         "test_gaia_media_editor.py",
         "test_gaia_reconciler.py",
+        "test_gaia_media_render.py",
     ],
+    "api": ["test_api_streaming.py"],
 }
 
 
@@ -69,10 +78,13 @@ def detect_changed_patterns() -> list[str]:
             patterns.update(SUITES["cli"])
         elif "cli.py" in p_lower:
             patterns.update(SUITES["cli"])
+        elif "api.py" in p_lower:
+            patterns.update(SUITES["api"])
+            patterns.update(SUITES["core"])
         elif "gaia/" in p_lower:
             patterns.update(SUITES["gaia"])
             patterns.update(SUITES["projects"])
-        elif "presets/" in p_lower or "saves/" in p_lower:
+        elif "tests/fixtures/" in p_lower or "saves/" in p_lower:
             patterns.update(SUITES["cli"])
 
     return sorted(patterns) if patterns else SUITES["quick"]
@@ -85,10 +97,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         epilog="""Suites:
   quick     Run fast unit suite (default, skips expensive regressions)
   full      Run all unit, scale, and integration tests
-  core      Audio engine, DSP, and stretching (test_core, test_stretching)
+  core      Audio engine, DSP, caching, and stretching (test_core, test_stretching, test_shared_dsp, test_dag_cache, test_ermes_snapshot)
   cli       CLI commands, preset QA, and options (test_cli, test_gaia_metadata_cli)
-  gaia      GAIA library management and vaults
-  projects  GAIA project manifests, media editor, and reconciler
+  gaia      GAIA library management, vaults, and graph builder
+  projects  GAIA project manifests, media editor, reconciler, and media render
+  api       FastAPI progressive streaming and DAG invalidation
 
 Examples:
   python tests/run.py
@@ -102,7 +115,7 @@ Examples:
     parser.add_argument(
         "targets",
         nargs="*",
-        help="Optional suite name ('quick', 'full', 'core', 'gaia', 'projects', 'cli') or test file/method.",
+        help="Optional suite name ('quick', 'full', 'core', 'gaia', 'projects', 'cli', 'api') or test file/method.",
     )
     parser.add_argument(
         "-s", "--suite",

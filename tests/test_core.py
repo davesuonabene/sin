@@ -879,6 +879,60 @@ class TestRenderExportResolution(unittest.TestCase):
         finally:
             Path(wav_path).unlink(missing_ok=True)
 
+    def test_sequence_with_loop_sample_renders_single_cycle_per_trigger(self):
+        from core.dag_cache import GLOBAL_DAG_CACHE
+        GLOBAL_DAG_CACHE.clear()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+            wav_path = tf.name
+            # 0.5s sample at 8000 Hz = 4000 samples (1 beat at 120 BPM)
+            sf.write(wav_path, np.ones(4000, dtype=np.float32) * 0.5, 8000)
+
+        try:
+            payload = AudioNodeModel(
+                id=200,
+                node_name="SeqWithLoopChild",
+                node_type="sequence",
+                total_bars=2.0,
+                sequence=[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                step_length=0.25,
+                play_mode="trigger",
+                children=[
+                    AudioNodeModel(
+                        id=201,
+                        node_name="LoopChild",
+                        node_type="sample",
+                        filepath=wav_path,
+                        sample_type="loop",
+                        original_bpm=120.0,
+                        stretch_mode="off",
+                    )
+                ],
+            )
+            system = System(bpm=120.0, sample_rate=8000)
+            seq_obj = build_node_object(payload)
+            rendered = seq_obj.render(system)
+            # In a 2-bar sequence (16 beats = 8.0s = 64000 samples), step 0 triggers at beat 0
+            # and repeats at bar 2 (beat 4 = 2.0s = sample 16000).
+            # Because loop=False is passed when SequenceObject renders its child, the 0.5s sample
+            # must NOT tile across beats 1, 2, 3 (samples 4000..15999 must be silent).
+            self.assertGreater(float(np.max(np.abs(rendered[:3900]))), 0.1)
+            self.assertAlmostEqual(float(np.max(np.abs(rendered[4500:15500]))), 0.0, places=5)
+        finally:
+            Path(wav_path).unlink(missing_ok=True)
+            GLOBAL_DAG_CACHE.clear()
+
+    def test_top_level_gain_db_normalized_into_chain(self):
+        node_obj = build_node_object({
+            "id": 300,
+            "node_type": "track",
+            "node_name": "GainTrack",
+            "gain": -6.0,
+            "chain": []
+        })
+        self.assertEqual(len(node_obj.chain), 1)
+        self.assertEqual(node_obj.chain[0]["type"], "gain")
+        self.assertAlmostEqual(node_obj.chain[0]["params"]["gain_db"], -6.0, places=4)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -256,7 +256,134 @@ def validate_graph(doc: Dict[str, Any]) -> Tuple[bool, List[str]]:
 AUDIO_NODE_TYPES = frozenset({"sample", "sequence", "arrangement", "track"})
 
 # Properties the compiler reads that are not AudioNodeModel fields themselves.
-COMPILER_CONSUMED_PROPERTIES = frozenset({"node_name", "key_match_transpose"})
+COMPILER_CONSUMED_PROPERTIES = frozenset({"node_name", "key_match_transpose", "gain"})
+
+
+def _normalize_gain_into_chain(props: Dict[str, Any], remove_top_gain: bool = False) -> List[Dict[str, Any]]:
+    """Normalizes top-level properties.gain (in dB) into a Post Gain chain module when chain is empty."""
+    raw_chain = [copy.deepcopy(m) for m in (props.get("chain") or []) if isinstance(m, dict)]
+    top_gain = props.get("gain")
+    if remove_top_gain and "gain" in props:
+        props.pop("gain", None)
+    if top_gain is not None and not raw_chain:
+        try:
+            g_db = float(top_gain)
+            g_lin = 0.0 if g_db <= -35.9 else round(float(10.0 ** (g_db / 20.0)), 6)
+            raw_chain = [{
+                "id": "post_gain_0",
+                "type": "gain",
+                "name": "Post Gain",
+                "enabled": True,
+                "fixed": True,
+                "params": {"gain": g_lin, "gain_db": g_db},
+            }]
+        except (TypeError, ValueError):
+            pass
+    if raw_chain:
+        props["chain"] = raw_chain
+    return raw_chain
+
+
+def _normalize_random_destinations(mod_props: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Normalizes legacy 'targets' or canonical 'destinations' on a random modifier node."""
+    dests = mod_props.get("destinations")
+    if isinstance(dests, list) and dests:
+        return copy.deepcopy(dests)
+    targets = mod_props.get("targets")
+    if not isinstance(targets, list):
+        return []
+    normalized: List[Dict[str, Any]] = []
+    for idx, t in enumerate(targets):
+        if not isinstance(t, dict):
+            continue
+        raw_field = str(t.get("paramKey") or t.get("field") or "").strip()
+        if not raw_field:
+            continue
+        if raw_field.startswith("step_parameters.") and raw_field.count(".") == 1:
+            param_key = raw_field.split(".", 1)[1]
+        else:
+            param_key = raw_field
+        default_base = 1.0 if param_key == "velocity" else (100.0 if param_key == "probability" else 0.0)
+        normalized.append({
+            "id": str(t.get("id") or f"dest_{idx}"),
+            "paramKey": param_key,
+            "paramLabel": str(t.get("paramLabel") or param_key.capitalize()),
+            "minPercent": float(t.get("minPercent", t.get("min", 0.0))),
+            "maxPercent": float(t.get("maxPercent", t.get("max", 0.0))),
+            "baseValue": float(t.get("baseValue", default_base)),
+            "enabled": bool(t.get("enabled", True)),
+        })
+    return normalized
+
+
+def _apply_seeded_random_to_props(props: Dict[str, Any], destinations: List[Dict[str, Any]], seed: Any) -> None:
+    """Applies deterministic seeded random modulation to sequence step_parameters or scalar properties."""
+    if not destinations:
+        return
+    import hashlib
+    import random as _py_random
+
+    seed_str = str(seed if seed is not None else 42)
+    rng = _py_random.Random(int(hashlib.md5(seed_str.encode()).hexdigest(), 16))
+    field_spans = {
+        "velocity": (0.0, 1.0, 1.0),
+        "offset": (-0.5, 0.5, 1.0),
+        "probability": (0.0, 100.0, 100.0),
+        "subdivisions": (1.0, 8.0, 7.0),
+        "sample_start": (0.0, 1.0, 1.0),
+        "gate_length": (0.01, 1.0, 0.99),
+        "transpose": (-24.0, 24.0, 48.0),
+        "cents": (-100.0, 100.0, 200.0),
+        "release": (0.0, 1.0, 1.0),
+        "fade_ms": (0.0, 5.0, 5.0),
+    }
+
+    def _eval_rel(base_val: float, min_pct: float, max_pct: float, key: str) -> float:
+        lo_bound, hi_bound, span = field_spans.get(key, (None, None, abs(base_val) if abs(base_val) > 1e-4 else 1.0))
+        min_off = (min_pct / 100.0) * span
+        max_off = (max_pct / 100.0) * span
+        lo, hi = min(min_off, max_off), max(min_off, max_off)
+        val = base_val + (lo + rng.random() * (hi - lo))
+        if lo_bound is not None:
+            val = max(lo_bound, val)
+        if hi_bound is not None:
+            val = min(hi_bound, val)
+        return round(val, 4)
+
+    for dest in destinations:
+        if not isinstance(dest, dict) or not dest.get("enabled", True):
+            continue
+        pkey = str(dest.get("paramKey") or "")
+        min_pct = float(dest.get("minPercent", 0.0))
+        max_pct = float(dest.get("maxPercent", 0.0))
+        if pkey in ("velocity", "offset", "probability", "subdivisions", "sample_start", "gate_length"):
+            seq = props.get("sequence")
+            step_count = len(seq) if isinstance(seq, list) and len(seq) > 0 else 16
+            step_params = props.get("step_parameters")
+            if not isinstance(step_params, list) or len(step_params) == 0:
+                step_params = [
+                    {"velocity": 1.0, "offset": 0.0, "probability": 100.0, "subdivisions": 1, "subdivision_enabled": False}
+                    for _ in range(step_count)
+                ]
+                props["step_parameters"] = step_params
+            for sp in step_params:
+                if not isinstance(sp, dict):
+                    continue
+                default_v = 1.0 if pkey == "velocity" else (100.0 if pkey == "probability" else (1.0 if pkey == "subdivisions" else 0.0))
+                base_v = float(sp.get(pkey, dest.get("baseValue", default_v)))
+                new_v = _eval_rel(base_v, min_pct, max_pct, pkey)
+                if pkey == "subdivisions":
+                    new_int = max(1, int(round(new_v)))
+                    sp["subdivisions"] = new_int
+                    sp["subdivision_enabled"] = new_int > 1
+                else:
+                    sp[pkey] = new_v
+        elif pkey in props or dest.get("baseValue") is not None:
+            try:
+                base_v = float(props.get(pkey, dest.get("baseValue", 0.0)))
+                props[pkey] = _eval_rel(base_v, min_pct, max_pct, pkey)
+            except (TypeError, ValueError):
+                pass
 
 # Must stay in sync with core.fx.FX_PROCESSORS (gain staging only).
 KNOWN_FX_TYPES = frozenset({
@@ -348,6 +475,14 @@ def graph_to_workspace(doc: Dict[str, Any]) -> Dict[str, Any]:
         props = copy.deepcopy(node.get("properties", {}))
         props.setdefault("node_name", node.get("name", DEFAULT_NODE_NAMES.get(ntype, "AudioNode")))
         props.setdefault("node_type", ntype)
+
+        if ntype in AUDIO_NODE_TYPES:
+            _normalize_gain_into_chain(props, remove_top_gain=True)
+        elif ntype == "random":
+            norm_dests = _normalize_random_destinations(props)
+            if norm_dests and not props.get("destinations"):
+                props["destinations"] = norm_dests
+            props.pop("targets", None)
 
         if "chain" in props and isinstance(props["chain"], list):
             for mod in props["chain"]:
@@ -462,7 +597,11 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
     if not lead_key:
         lead_key = str(settings.get("key", "C")).strip()
 
-    def build_node(nid: str, parent_total_bars: Optional[float] = None) -> AudioNodeModel:
+    def build_node(
+        nid: str,
+        parent_total_bars: Optional[float] = None,
+        parent_ntype: Optional[str] = None,
+    ) -> AudioNodeModel:
         raw_node = nodes_by_id[nid]
         props = copy.deepcopy(raw_node.get("properties", {}))
         ntype = raw_node.get("type", "track")
@@ -481,11 +620,12 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
                 if mod_props.get("output_value") and not props.get("filepath"):
                     props["filepath"] = mod_props["output_value"]
             elif mod_type == "random":
-                props.setdefault("random_destinations", mod_props.get("destinations", []))
+                dests = _normalize_random_destinations(mod_props)
+                _apply_seeded_random_to_props(props, dests, mod_props.get("seed"))
                 props.setdefault("seed", mod_props.get("seed"))
 
-        # Chain modules
-        raw_chain = props.get("chain", [])
+        # Chain modules (normalize top-level gain in dB into chain if needed)
+        raw_chain = _normalize_gain_into_chain(props, remove_top_gain=False)
         fx_chain: List[FxModuleModel] = []
         for fx in raw_chain:
             if isinstance(fx, dict):
@@ -503,8 +643,12 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             target_bpm = global_bpm
 
         raw_total_bars = props.get("total_bars")
-        if raw_total_bars is None or str(raw_total_bars).lower() == "global":
-            total_bars = parent_total_bars if parent_total_bars is not None else (global_bars if ntype in ("sequence", "arrangement", "track") else None)
+        if raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
+            if ntype == "sample":
+                is_loop = props.get("sample_type", "loop") == "loop"
+                total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track")) else None
+            else:
+                total_bars = parent_total_bars if parent_total_bars is not None else (global_bars if ntype in ("sequence", "arrangement", "track") else None)
         else:
             total_bars = float(raw_total_bars)
 
@@ -513,7 +657,7 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
         children: List[AudioNodeModel] = []
         for cid in child_ids:
             if cid in nodes_by_id:
-                children.append(build_node(cid, parent_total_bars=total_bars))
+                children.append(build_node(cid, parent_total_bars=total_bars, parent_ntype=ntype))
 
         base_transpose = float(props.get("transpose", 0.0))
         if props.get("key_match_mode") == "follow":
@@ -524,15 +668,18 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
                 algo = str(props.get("key_match_algorithm", "nearest")).strip()
                 base_transpose += calculate_key_match_transpose(src_key, lead_key, algo)
 
+        node_id_val = int(nid) if str(nid).isdigit() else None
         return AudioNodeModel(
+            node_id=node_id_val,
             node_name=name,
             node_type=ntype,
             sample_type=props.get("sample_type", "loop"),
             filepath=props.get("filepath"),
-            original_bpm=props.get("original_bpm", 120.0),
+            original_bpm=props.get("original_bpm"),
             target_bpm=float(target_bpm),
             key=props.get("key", ""),
             start_beat=float(props.get("start_beat", 0.0)),
+            mix_mode=props.get("mix_mode", "sum"),
             bpm=float(target_bpm),
             sequence=props.get("sequence"),
             step_parameters=props.get("step_parameters"),
@@ -573,7 +720,7 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
 
 def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: Optional[int] = None) -> AudioNodeModel:
     """Compile a LiteGraph workspace preset dictionary directly to an AudioNodeModel tree."""
-    graph = preset.get("graph", {})
+    graph = preset.get("graph") if "graph" in preset and "nodes" not in preset else preset
     nodes = graph.get("nodes", [])
     links = graph.get("links", [])
     extra = graph.get("extra", {})
@@ -618,7 +765,11 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
     if not lead_key:
         lead_key = str(globals_params.get("key", "C")).strip()
 
-    def build_node(num_id: int, parent_total_bars: Optional[float] = None) -> AudioNodeModel:
+    def build_node(
+        num_id: int,
+        parent_total_bars: Optional[float] = None,
+        parent_ntype: Optional[str] = None,
+    ) -> AudioNodeModel:
         raw_node = nodes_by_num_id[num_id]
         props = copy.deepcopy(raw_node.get("properties", {}))
         lite_type = raw_node.get("type", "Audio/Track")
@@ -648,10 +799,11 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
         for cand in nodes:
             if cand.get("type") == "Audio/Random" and cand.get("properties", {}).get("parentId") == num_id:
                 cand_props = cand.get("properties", {})
-                props.setdefault("random_destinations", cand_props.get("destinations", []))
+                dests = _normalize_random_destinations(cand_props)
+                _apply_seeded_random_to_props(props, dests, cand_props.get("seed"))
                 props.setdefault("seed", cand_props.get("seed"))
 
-        raw_chain = props.get("chain", [])
+        raw_chain = _normalize_gain_into_chain(props, remove_top_gain=False)
         fx_chain: List[FxModuleModel] = []
         for fx in raw_chain:
             if isinstance(fx, dict):
@@ -669,8 +821,12 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             target_bpm = global_bpm
 
         raw_total_bars = props.get("total_bars")
-        if raw_total_bars is None or str(raw_total_bars).lower() == "global":
-            total_bars = parent_total_bars if parent_total_bars is not None else (global_bars if ntype in ("sequence", "arrangement", "track") else None)
+        if raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
+            if ntype == "sample":
+                is_loop = props.get("sample_type", "loop") == "loop"
+                total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track")) else None
+            else:
+                total_bars = parent_total_bars if parent_total_bars is not None else (global_bars if ntype in ("sequence", "arrangement", "track") else None)
         else:
             total_bars = float(raw_total_bars)
 
@@ -678,7 +834,7 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
         children: List[AudioNodeModel] = []
         for cid in child_ids:
             if cid in nodes_by_num_id:
-                children.append(build_node(cid, parent_total_bars=total_bars))
+                children.append(build_node(cid, parent_total_bars=total_bars, parent_ntype=ntype))
 
         base_transpose = float(props.get("transpose", 0.0))
         if props.get("key_match_mode") == "follow":
@@ -690,14 +846,16 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
                 base_transpose += calculate_key_match_transpose(src_key, lead_key, algo)
 
         return AudioNodeModel(
+            node_id=int(num_id),
             node_name=name,
             node_type=ntype,
             sample_type=props.get("sample_type", "loop"),
             filepath=props.get("filepath"),
-            original_bpm=props.get("original_bpm", 120.0),
+            original_bpm=props.get("original_bpm"),
             target_bpm=float(target_bpm),
             key=props.get("key", ""),
             start_beat=float(props.get("start_beat", 0.0)),
+            mix_mode=props.get("mix_mode", "sum"),
             bpm=float(target_bpm),
             sequence=props.get("sequence"),
             step_parameters=props.get("step_parameters"),

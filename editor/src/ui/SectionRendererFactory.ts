@@ -261,6 +261,7 @@ export class SectionRendererFactory {
 
             node.updateProperty(key, value);
             if (key === 'color') {
+                if (node.properties) node.properties.user_color = true;
                 node.color = value;
                 node.bgcolor = value;
                 currentColorIndicator.style.backgroundColor = value;

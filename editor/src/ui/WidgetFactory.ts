@@ -3,7 +3,7 @@ import { type BaseNode } from '../nodes/BaseNode.ts';
 import { fetchLibrary } from '../api.ts';
 import { groupFileVersions } from '../libraryVersioning.ts';
 import { RadioGroup } from './components/RadioGroup.ts';
-import { getParameterWheelStep, registerParameterWheelControl } from './ParameterWheelMenu.ts';
+import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from './ParameterWheelMenu.ts';
 
 function formatDb(db: number): string {
     if (db <= -35.9) return "-inf dB";
@@ -212,6 +212,7 @@ export class WidgetFactory {
 
             select.addEventListener('change', () => {
                 const previousValue = this.getFieldValue(node, field);
+                if (Object.is(previousValue, select.value)) return;
                 const updated = this.setFieldValue(node, field, select.value);
                 onChange(field.key, updated, previousValue);
             });
@@ -263,7 +264,7 @@ export class WidgetFactory {
         range.value = String(currentVal);
         if (field.min !== undefined) range.min = String(field.min);
         if (field.max !== undefined) range.max = String(field.max);
-        if (field.step !== undefined) range.step = String(field.step);
+        range.step = String(field.step ?? (field.type === 'int' ? 1 : 0.1));
 
         const valDisplay = document.createElement('span');
         valDisplay.style.fontSize = '10px';
@@ -274,30 +275,37 @@ export class WidgetFactory {
 
         const update = (newVal: number) => {
             const previousValue = this.getFieldValue(node, field);
+            if (Object.is(previousValue, newVal)) return;
+            if (!this.mayEditField(node, field, newVal)) {
+                range.value = String(previousValue ?? field.default ?? 0);
+                return;
+            }
             const updated = this.setFieldValue(node, field, newVal);
+            range.value = String(updated);
             valDisplay.textContent = `${updated}${field.unit || ''}`;
             onChange(field.key, updated, previousValue);
         };
 
         const resolveWheelStep = (): number => {
-            if (field.type === 'int') return getParameterWheelStep(true);
-            if (typeof field.step === 'number' && field.step > 0 && field.step < 1.0) return field.step;
-            const min = field.min ?? 0;
-            const max = field.max ?? 1;
-            if (max - min <= 1.0) return 0.01;
-            return getParameterWheelStep(false);
+            return getParameterWheelStep(field.type === 'int');
         };
 
         range.addEventListener('input', () => {
             update(parseFloat(range.value));
         });
-        registerParameterWheelControl(range);
+        registerParameterWheelControl(range, {
+            isInteger: field.type === 'int',
+            getValue: () => Number(this.getFieldValue(node, field) ?? field.default ?? 0),
+            setValue: (nextVal) => update(nextVal),
+            formatValue: (val) => `${val}${field.unit || ''}`,
+        });
         range.addEventListener('wheel', event => {
             event.preventDefault();
-            if (event.altKey) return;
+            if (event.altKey || range.disabled) return;
             const direction = event.deltaY < 0 ? 1 : -1;
+            const step = resolveWheelStep();
             const currentValue = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
-            update(currentValue + direction * resolveWheelStep());
+            update(roundStepValue(currentValue + direction * step, step));
         }, { passive: false });
 
         wrapper.appendChild(range);
@@ -318,6 +326,7 @@ export class WidgetFactory {
 
         input.addEventListener('change', () => {
             const previousValue = this.getFieldValue(node, field);
+            if (Object.is(previousValue, input.value)) return;
             if (!this.mayEditField(node, field, input.value)) {
                 input.value = String(previousValue ?? '');
                 return;
@@ -357,6 +366,7 @@ export class WidgetFactory {
         const commit = () => {
             const previousValue = this.getFieldValue(node, field);
             const val = input.value.trim() || String(field.default || 'exports');
+            if (Object.is(previousValue, val)) return;
             if (!this.mayEditField(node, field, val)) {
                 input.value = String(previousValue ?? '');
                 return;
@@ -408,12 +418,12 @@ export class WidgetFactory {
 
         if (field.min !== undefined) input.min = String(field.min);
         if (field.max !== undefined) input.max = String(field.max);
-        if (field.step !== undefined) input.step = String(field.step);
-        else if (field.type === 'int') input.step = '1';
+        input.step = String(field.step ?? (field.type === 'int' ? 1 : 0.1));
 
         const commit = () => {
             const previousValue = this.getFieldValue(node, field);
             const raw = field.type === 'int' ? parseInt(input.value, 10) : parseFloat(input.value);
+            if (Object.is(previousValue, raw)) return;
             if (!this.mayEditField(node, field, raw)) {
                 input.value = String(previousValue);
                 return;
@@ -430,8 +440,9 @@ export class WidgetFactory {
             clearTimeout(numDebounceTimer);
             numDebounceTimer = setTimeout(() => {
                 const raw = field.type === 'int' ? parseInt(input.value, 10) : parseFloat(input.value);
+                const previousValue = this.getFieldValue(node, field);
+                if (Object.is(previousValue, raw)) return;
                 if (Number.isFinite(raw) && this.mayEditField(node, field, raw)) {
-                    const previousValue = this.getFieldValue(node, field);
                     const updated = this.setFieldValue(node, field, raw);
                     if (!Object.is(updated, previousValue)) {
                         onChange(field.key, updated, previousValue);
@@ -453,22 +464,11 @@ export class WidgetFactory {
         });
 
         const resolveWheelStep = (): number => {
-            if (field.type === 'int') return getParameterWheelStep(true);
-            if (typeof field.step === 'number' && field.step > 0 && field.step < 1.0) return field.step;
-            const min = field.min ?? 0;
-            const max = field.max ?? 1;
-            if (max - min <= 1.0) return 0.01;
-            return getParameterWheelStep(false);
+            return getParameterWheelStep(field.type === 'int');
         };
 
-        registerParameterWheelControl(input);
-        input.addEventListener('wheel', event => {
-            event.preventDefault();
-            if (event.altKey) return;
-            const currentValue = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
-            const direction = event.deltaY < 0 ? 1 : -1;
+        const applyDirectValue = (nextValue: number) => {
             const previousValue = this.getFieldValue(node, field);
-            const nextValue = currentValue + direction * resolveWheelStep();
             if (!this.mayEditField(node, field, nextValue)) {
                 input.value = String(previousValue);
                 return;
@@ -476,6 +476,21 @@ export class WidgetFactory {
             const updated = this.setFieldValue(node, field, nextValue);
             input.value = String(updated);
             if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+        };
+
+        registerParameterWheelControl(input, {
+            isInteger: field.type === 'int',
+            getValue: () => Number(this.getFieldValue(node, field) ?? field.default ?? 0),
+            setValue: (nextVal) => applyDirectValue(nextVal),
+        });
+        input.addEventListener('wheel', event => {
+            event.preventDefault();
+            if (event.altKey || input.disabled) return;
+            const currentValue = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
+            const direction = event.deltaY < 0 ? 1 : -1;
+            const step = resolveWheelStep();
+            const nextValue = roundStepValue(currentValue + direction * step, step);
+            applyDirectValue(nextValue);
         }, { passive: false });
         return input;
     }
@@ -501,7 +516,7 @@ export class WidgetFactory {
         input.className = 'td-param-input';
         if (field.min !== undefined) input.min = String(field.min);
         if (field.max !== undefined) input.max = String(field.max);
-        input.step = String(field.step ?? 0.01);
+        input.step = String(field.step ?? 0.1);
 
         const getGlobalValue = () => {
             const graph = (window as any).editorGraph;
@@ -513,16 +528,23 @@ export class WidgetFactory {
                 if (nodeData?.parentId != null) {
                     const parentData = trackNodesMap?.get(nodeData.parentId);
                     const parentNode = graph.getNodeById(nodeData.parentId);
-                    const parentBpm = parentData?.target_bpm ?? parentData?.bpm ?? parentNode?.properties?.target_bpm ?? parentNode?.properties?.bpm;
-                    if (Number.isFinite(Number(parentBpm))) {
-                        return Number(parentBpm);
+                    if (paramKey === 'bpm') {
+                        const parentBpm = parentData?.target_bpm ?? parentData?.bpm ?? parentNode?.properties?.target_bpm ?? parentNode?.properties?.bpm;
+                        if (Number.isFinite(Number(parentBpm))) {
+                            return Number(parentBpm);
+                        }
+                    } else if (paramKey === 'total_bars') {
+                        const parentBars = parentData?.total_bars ?? parentNode?.properties?.total_bars;
+                        if (Number.isFinite(Number(parentBars))) {
+                            return Number(parentBars);
+                        }
                     }
                 }
             }
 
             const getter = (window as any).getGlobalParameter;
             const value = typeof getter === 'function' ? Number(getter(paramKey)) : Number.NaN;
-            return Number.isFinite(value) ? value : (typeof field.default === 'number' ? field.default : (paramKey === 'bpm' ? 120 : 0));
+            return Number.isFinite(value) ? value : (typeof field.default === 'number' ? field.default : (paramKey === 'bpm' ? 120 : (paramKey === 'total_bars' ? 4 : 0)));
         };
         let lastLocalValue: number | null = null;
         const refresh = () => {
@@ -550,6 +572,7 @@ export class WidgetFactory {
         const commit = () => {
             const previousValue = this.getFieldValue(node, field);
             const raw = parseFloat(input.value);
+            if (Object.is(previousValue, raw)) return;
             const updated = this.setFieldValue(node, field, raw);
             refresh();
             if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
@@ -561,6 +584,7 @@ export class WidgetFactory {
             const nextValue = isGlobal
                 ? (lastLocalValue ?? getGlobalValue())
                 : 'global';
+            if (Object.is(previousValue, nextValue)) return;
             const updated = this.setFieldValue(node, field, nextValue);
             refresh();
             if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
@@ -572,16 +596,27 @@ export class WidgetFactory {
             commit();
             input.blur();
         });
-        registerParameterWheelControl(input);
+        const applyGlobalNumberValue = (nextVal: number) => {
+            if (input.disabled) return;
+            const previousValue = this.getFieldValue(node, field);
+            if (Object.is(previousValue, nextVal)) return;
+            const updated = this.setFieldValue(node, field, nextVal);
+            refresh();
+            if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+        };
+        registerParameterWheelControl(input, {
+            isInteger: false,
+            getValue: () => Number(this.getFieldValue(node, field) ?? field.default ?? 0),
+            setValue: (nextVal) => applyGlobalNumberValue(nextVal),
+        });
         input.addEventListener('wheel', event => {
             event.preventDefault();
             if (event.altKey || input.disabled) return;
             const currentValue = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
             const direction = event.deltaY < 0 ? 1 : -1;
-            const previousValue = this.getFieldValue(node, field);
-            const updated = this.setFieldValue(node, field, currentValue + direction * getParameterWheelStep());
-            refresh();
-            if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+            const step = getParameterWheelStep();
+            const nextVal = roundStepValue(currentValue + direction * step, step);
+            applyGlobalNumberValue(nextVal);
         }, { passive: false });
         const handleGlobalChange = () => {
             if (!wrapper.isConnected) {
@@ -625,6 +660,7 @@ export class WidgetFactory {
 
         select.addEventListener('change', () => {
             const previousValue = this.getFieldValue(node, field);
+            if (Object.is(previousValue, select.value)) return;
             const updated = this.setFieldValue(node, field, select.value);
             onChange(field.key, updated, previousValue);
         });
@@ -646,6 +682,7 @@ export class WidgetFactory {
             ariaLabel: field.label,
             onChange: value => {
                 const previousValue = this.getFieldValue(node, field);
+                if (Object.is(previousValue, value)) return;
                 const updated = this.setFieldValue(node, field, value);
                 onChange(field.key, updated, previousValue);
             }
@@ -664,6 +701,7 @@ export class WidgetFactory {
 
         input.addEventListener('change', () => {
             const previousValue = this.getFieldValue(node, field);
+            if (Object.is(previousValue, input.checked)) return;
             const updated = this.setFieldValue(node, field, input.checked);
             onChange(field.key, updated, previousValue);
         });
@@ -709,13 +747,16 @@ export class WidgetFactory {
 
         container.addEventListener('pointermove', (e: PointerEvent) => {
             if (!isDragging) return;
-            const previousValue = this.getFieldValue(node, field);
             const dx = e.clientX - startX;
             const deltaDb = dx * 0.15;
             const newDb = Math.round((startDb + deltaDb) * 10) / 10;
+            if (newDb === activeDb) return;
+            const previousValue = this.getFieldValue(node, field);
             updateUI(newDb);
             const updated = this.setFieldValue(node, field, activeDb);
-            onChange(field.key, updated, previousValue);
+            if (!Object.is(updated, previousValue)) {
+                onChange(field.key, updated, previousValue);
+            }
         });
 
         const stopDrag = (e: PointerEvent) => {
@@ -729,15 +770,25 @@ export class WidgetFactory {
         container.addEventListener('pointerup', stopDrag);
         container.addEventListener('pointercancel', stopDrag);
 
-        registerParameterWheelControl(container);
+        const applyDbValue = (nextDb: number) => {
+            const previousValue = this.getFieldValue(node, field);
+            updateUI(nextDb);
+            const updated = this.setFieldValue(node, field, activeDb);
+            if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+        };
+
+        registerParameterWheelControl(container, {
+            isInteger: false,
+            getValue: () => activeDb,
+            setValue: (nextDb) => applyDbValue(nextDb),
+            formatValue: (val) => formatDb(Math.max(-36.0, Math.min(12.0, val))),
+        });
         container.addEventListener('wheel', event => {
             event.preventDefault();
             if (event.altKey) return;
-            const previousValue = this.getFieldValue(node, field);
             const direction = event.deltaY < 0 ? 1 : -1;
-            updateUI(activeDb + direction * getParameterWheelStep());
-            const updated = this.setFieldValue(node, field, activeDb);
-            if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+            const step = getParameterWheelStep();
+            applyDbValue(roundStepValue(activeDb + direction * step, step));
         }, { passive: false });
 
         container.addEventListener('dblclick', (e) => {
@@ -762,9 +813,11 @@ export class WidgetFactory {
                 const parsed = parseFloat(input.value);
                 if (!isNaN(parsed)) {
                     const previousValue = this.getFieldValue(node, field);
-                    updateUI(parsed);
-                    const updated = this.setFieldValue(node, field, activeDb);
-                    onChange(field.key, updated, previousValue);
+                    if (!Object.is(previousValue, parsed)) {
+                        updateUI(parsed);
+                        const updated = this.setFieldValue(node, field, activeDb);
+                        onChange(field.key, updated, previousValue);
+                    }
                 }
                 container.innerHTML = '';
                 container.appendChild(labelText);
@@ -815,6 +868,7 @@ export class WidgetFactory {
 
         const commitValue = (val: number) => {
             const previousValue = this.getFieldValue(node, field);
+            if (Object.is(previousValue, val)) return;
             const updated = this.setFieldValue(node, field, val);
             input.value = String(updated);
             onChange(field.key, updated, previousValue);
@@ -823,10 +877,14 @@ export class WidgetFactory {
         input.addEventListener('change', () => {
             commitValue(Number(input.value) || 0);
         });
-        registerParameterWheelControl(input);
+        registerParameterWheelControl(input, {
+            isInteger: true,
+            getValue: () => Number(this.getFieldValue(node, field) ?? 42),
+            setValue: (val) => commitValue(Math.round(val)),
+        });
         input.addEventListener('wheel', event => {
             event.preventDefault();
-            if (event.altKey) return;
+            if (event.altKey || input.disabled) return;
             const direction = event.deltaY < 0 ? 1 : -1;
             commitValue(Number(input.value) + direction * getParameterWheelStep(true));
         }, { passive: false });

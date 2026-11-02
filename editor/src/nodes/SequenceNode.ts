@@ -3,6 +3,7 @@ import { BaseNode } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { SequenceRenderer, type RenderBox, type SignalTelemetry, type SequenceStep } from '../../../packages/iride/src/index.ts';
+import { compositeSequenceBuffer, getNodeGainMultiplier } from '../audioCompositor.ts';
 
 export interface SequenceChannel {
     on: number[];
@@ -57,15 +58,15 @@ export class SequenceNode extends BaseNode {
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Sequence', tab: 'COMMON' },
         { key: 'total_bars', label: 'Total Bars', type: 'global_float', default: 'global', min: 0.25, max: 128, step: 0.25, unit: 'bars', tab: 'SEQUENCE', description: 'Pattern playback duration. "global" inherits from parent track or project setting.' },
-        { key: 'sample_start', label: 'Sample Start', type: 'float', default: 0, min: 0, max: 100, step: 1, unit: '%', tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' }, description: 'Sample playback start position for this step.' },
-        { key: 'gate_length', label: 'Gate Length', type: 'float', default: 1.0, min: 0.0, max: 1.0, step: 0.01, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' }, description: 'Multiplier for current step length (0.0 to 1.0), followed by release.' },
-        { key: 'velocity', label: 'Velocity', type: 'float', default: 1, min: 0, max: 1, step: 0.01, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' } },
-        { key: 'offset', label: 'Offset', type: 'float', default: 0, min: -0.5, max: 0.5, step: 0.01, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'bipolar', direction: 'horizontal' } },
-        { key: 'probability', label: 'Probability', type: 'int', default: 100, min: 0, max: 100, step: 1, unit: '%', tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' } },
+        { key: 'sample_start', label: 'Sample Start', type: 'float', default: 0.0, min: 0.0, max: 1.0, step: 0.1, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' }, description: 'Normalized sample playback start position for this step (0.0 to 1.0).' },
+        { key: 'gate_length', label: 'Gate Length', type: 'float', default: 1.0, min: 0.0, max: 1.0, step: 0.1, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' }, description: 'Multiplier for current step length (0.0 to 1.0), followed by release.' },
+        { key: 'velocity', label: 'Velocity', type: 'float', default: 1.0, min: 0.0, max: 1.0, step: 0.1, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' } },
+        { key: 'offset', label: 'Offset', type: 'float', default: 0.0, min: -0.5, max: 0.5, step: 0.1, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'bipolar', direction: 'horizontal' } },
+        { key: 'probability', label: 'Probability', type: 'float', default: 1.0, min: 0.0, max: 1.0, step: 0.1, tab: 'SEQUENCE', stepVisual: { mode: 'fill', polarity: 'unipolar', direction: 'vertical' } },
         { key: 'subdivisions', label: 'Subdivisions', type: 'int', default: 1, min: 1, max: 16, step: 1, tab: 'SEQUENCE', stepVisual: { mode: 'fragments' } },
-        { key: 'step_length', label: 'Step Length', type: 'float', default: 0.25, min: 0.0625, max: 4.0, step: 0.0625, unit: 'bars', tab: 'SEQUENCE' },
+        { key: 'step_length', label: 'Step Length', type: 'float', default: 0.25, min: 0.0625, max: 4.0, step: 0.0625, unit: 'beats', tab: 'SEQUENCE' },
         { key: 'play_mode', label: 'Voice Mode', type: 'radio', default: 'gate', options: [{ value: 'gate', label: 'Mono' }, { value: 'trigger', label: 'Multivoice' }], tab: 'SEQUENCE', description: 'Mono cuts previous playing sample when a note comes in; Multivoice allows overlapping voices.' },
-        { key: 'release', label: 'Release', type: 'float', default: 0.0, min: 0.0, max: 1.0, step: 0.01, tab: 'SEQUENCE', description: 'Fade-out release mapped to sample percentage (0.0 to 1.0).' },
+        { key: 'release', label: 'Release', type: 'float', default: 0.0, min: 0.0, max: 1.0, step: 0.1, tab: 'SEQUENCE', description: 'Fade-out release mapped to sample percentage (0.0 to 1.0).' },
         { key: 'fade_ms', label: 'Step Fade', type: 'float', default: 0, min: 0, max: 5, step: 0.1, unit: 'ms', tab: 'SEQUENCE', description: 'Applies a short gain fade at the start and end of every triggered sample.' },
         { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'SEQUENCE' },
         { key: 'seed_mode', label: 'Seed Mode', type: 'radio', default: 'moving', options: [{ value: 'moving', label: 'Moving (per iteration)' }, { value: 'fixed', label: 'Fixed (looped by arranger)' }], tab: 'SEQUENCE' }
@@ -93,18 +94,22 @@ export class SequenceNode extends BaseNode {
             const value = Number(parameters[index]?.[key]);
             return Number.isFinite(value) ? value : fallback;
         };
+        const normValueFor = (key: string, index: number, fallback: number) => {
+            const raw = valueFor(key, index, fallback);
+            return raw > 1.0 ? raw / 100.0 : raw;
+        };
         return {
             format: 'sin-sequence',
             version: 1,
             name: String(this.properties.node_name || this.title || 'Sequence').trim() || 'Sequence',
             channels: [{
                 on: sequence.map(value => value ? 1 : 0),
-                probability: sequence.map((_, index) => valueFor('probability', index, 100)),
+                probability: sequence.map((_, index) => normValueFor('probability', index, 1.0)),
                 offset: sequence.map((_, index) => valueFor('offset', index, 0)),
-                velocity: sequence.map((_, index) => valueFor('velocity', index, 1)),
+                velocity: sequence.map((_, index) => valueFor('velocity', index, 1.0)),
                 subdivisions: sequence.map((_, index) => valueFor('subdivisions', index, 1)),
-                sample_start: sequence.map((_, index) => valueFor('sample_start', index, 0)),
-                gate_length: sequence.map((_, index) => valueFor('gate_length', index, 1.0)),
+                sample_start: sequence.map((_, index) => normValueFor('sample_start', index, 0.0)),
+                gate_length: sequence.map((_, index) => normValueFor('gate_length', index, 1.0)),
             }]
         };
     }
@@ -122,15 +127,19 @@ export class SequenceNode extends BaseNode {
             return Number.isFinite(numeric) ? Math.max(min, Math.min(max, numeric)) : fallback;
         };
         const stepParameters = Array.from({ length: stepCount }, (_, index) => {
+            const rawProb = Number(channel.probability?.[index] ?? 1.0);
+            const normProb = rawProb > 1.0 ? rawProb / 100.0 : rawProb;
+            const rawStart = Number(channel.sample_start?.[index] ?? 0.0);
+            const normStart = rawStart > 1.0 ? rawStart / 100.0 : rawStart;
             const rawGate = Number(channel.gate_length?.[index] ?? 1.0);
             const normGate = rawGate > 1.0 ? rawGate / 100.0 : rawGate;
             return {
-                probability: Math.round(bounded(channel.probability[index], 0, 100, 100)),
+                probability: bounded(normProb, 0.0, 1.0, 1.0),
                 offset: bounded(channel.offset[index], -0.5, 0.5, 0),
                 velocity: bounded(channel.velocity[index], 0, 1, 1),
                 subdivisions: Math.round(bounded(channel.subdivisions[index], 1, 16, 1)),
                 subdivision_enabled: bounded(channel.subdivisions[index], 1, 16, 1) > 1,
-                sample_start: bounded(channel.sample_start?.[index], 0, 100, 0),
+                sample_start: bounded(normStart, 0.0, 1.0, 0.0),
                 gate_length: bounded(normGate, 0.0, 1.0, 1.0),
             };
         });
@@ -157,11 +166,11 @@ export class SequenceNode extends BaseNode {
             length_inherited: true,
             sequence: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
             step_parameters: Array.from({ length: SequenceNode.stepCount }, () => ({
-                sample_start: 0,
+                sample_start: 0.0,
                 gate_length: 1.0,
-                offset: 0,
-                velocity: 1,
-                probability: 100,
+                offset: 0.0,
+                velocity: 1.0,
+                probability: 1.0,
                 subdivision_enabled: false,
                 subdivisions: 1
             })),
@@ -225,8 +234,10 @@ export class SequenceNode extends BaseNode {
             const param = rawParams[i] || {};
             const velocity = typeof param.velocity === 'number' ? param.velocity : 1.0;
             const subdivisions = Number(param.subdivisions) || 1;
-            const probability = typeof param.probability === 'number' ? param.probability / 100 : 1.0;
-            const sampleStart = typeof param.sample_start === 'number' ? param.sample_start / 100 : 0.0;
+            const rawProb = typeof param.probability === 'number' ? param.probability : 1.0;
+            const probability = rawProb > 1.0 ? rawProb / 100 : Math.max(0.0, Math.min(1.0, rawProb));
+            const rawStart = typeof param.sample_start === 'number' ? param.sample_start : 0.0;
+            const sampleStart = rawStart > 1.0 ? rawStart / 100 : Math.max(0.0, Math.min(1.0, rawStart));
             const rawGate = typeof param.gate_length === 'number' ? param.gate_length : 1.0;
             const gateLength = rawGate > 1.0 ? rawGate / 100 : Math.max(0.0, Math.min(1.0, rawGate));
 
@@ -248,6 +259,65 @@ export class SequenceNode extends BaseNode {
         });
 
         this.sequenceRenderer.render(ctx, bounds, telemetry);
+    }
+
+    private _cachedCompositedBuffer: AudioBuffer | null = null;
+    private _lastSampleBufferRef: AudioBuffer | null = null;
+    private _lastSeqFingerprint: string = '';
+
+    override getAudioBuffer(visited?: Set<number>): AudioBuffer | null {
+        if ((this as any).manifestStemBuffer) return (this as any).manifestStemBuffer;
+        if ((this as any)._lastRenderedBuffer) return (this as any)._lastRenderedBuffer;
+
+        const cycleSet = visited || new Set<number>();
+        if (cycleSet.has(this.id)) return null;
+        cycleSet.add(this.id);
+
+        const inputNodes = this.getInputNodes();
+        let inputSampleBuffer: AudioBuffer | null = null;
+        for (const inputNode of inputNodes) {
+            const buf = inputNode?.getAudioBuffer?.(cycleSet) || inputNode?.audioBuffer;
+            if (buf) {
+                inputSampleBuffer = buf;
+                break;
+            }
+        }
+        if (!inputSampleBuffer) return null;
+
+        const getGlobal = (typeof window !== 'undefined') ? (window as any).getGlobalParameter : null;
+        const globalBars = typeof getGlobal === 'function' ? Number(getGlobal('total_bars')) : 4;
+        const globalBpm = typeof getGlobal === 'function' ? Number(getGlobal('bpm')) : 120;
+
+        const totalBarsSetting = this.properties?.total_bars;
+        const totalBars = (totalBarsSetting === 'global' || !Number.isFinite(Number(totalBarsSetting)))
+            ? (Number.isFinite(globalBars) && globalBars > 0 ? globalBars : 4)
+            : Math.max(0.25, Number(totalBarsSetting));
+
+        const bpm = Number.isFinite(globalBpm) && globalBpm > 0 ? globalBpm : 120;
+        const stepLength = Number(this.properties?.step_length) || 0.25;
+        const seq = Array.isArray(this.properties?.sequence) ? this.properties.sequence : [];
+        const params = Array.isArray(this.properties?.step_parameters) ? this.properties.step_parameters : [];
+
+        const nodeGain = getNodeGainMultiplier(this);
+        const fp = `${totalBars}_${bpm}_${stepLength}_${seq.join(',')}_${params.length}_${nodeGain}`;
+        if (this._cachedCompositedBuffer && this._lastSampleBufferRef === inputSampleBuffer && this._lastSeqFingerprint === fp) {
+            return this._cachedCompositedBuffer;
+        }
+
+        const composited = compositeSequenceBuffer(
+            inputSampleBuffer,
+            seq,
+            params,
+            stepLength,
+            totalBars,
+            bpm,
+            nodeGain
+        );
+
+        this._cachedCompositedBuffer = composited;
+        this._lastSampleBufferRef = inputSampleBuffer;
+        this._lastSeqFingerprint = fp;
+        return composited;
     }
 }
 

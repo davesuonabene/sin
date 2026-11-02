@@ -1,4 +1,4 @@
-import { registerParameterWheelControl } from './ParameterWheelMenu';
+import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from './ParameterWheelMenu';
 
 export class TrackPropertiesWindow {
     container: HTMLElement;
@@ -213,15 +213,24 @@ export class TrackPropertiesWindow {
 
         const bpmInput = this.container.querySelector('#track-bpm-input') as HTMLInputElement | null;
         if (bpmInput) {
-            registerParameterWheelControl(bpmInput);
+            registerParameterWheelControl(bpmInput, {
+                isInteger: false,
+                getValue: () => this.getBpm(),
+                setValue: (val) => {
+                    const next = Math.max(20, Math.min(300, roundStepValue(val)));
+                    this.setGlobal({ bpm: next });
+                },
+            });
             bpmInput.addEventListener('change', () => {
                 const val = parseFloat(bpmInput.value);
                 if (!isNaN(val)) this.setGlobal({ bpm: val });
             });
             bpmInput.addEventListener('wheel', (e) => {
                 e.preventDefault();
-                const delta = e.deltaY < 0 ? 1 : -1;
-                const next = Math.max(20, Math.min(300, this.getBpm() + delta));
+                if (e.altKey || bpmInput.disabled) return;
+                const dir = e.deltaY < 0 ? 1 : -1;
+                const step = getParameterWheelStep(false);
+                const next = Math.max(20, Math.min(300, roundStepValue(this.getBpm() + dir * step, step)));
                 this.setGlobal({ bpm: next });
             });
         }
@@ -237,15 +246,24 @@ export class TrackPropertiesWindow {
 
         const barsInput = this.container.querySelector('#track-bars-input') as HTMLInputElement | null;
         if (barsInput) {
-            registerParameterWheelControl(barsInput);
+            registerParameterWheelControl(barsInput, {
+                isInteger: false,
+                getValue: () => this.getTotalBars(),
+                setValue: (val) => {
+                    const next = Math.max(0.25, Math.min(128, roundStepValue(val)));
+                    this.setGlobal({ total_bars: next });
+                },
+            });
             barsInput.addEventListener('change', () => {
                 const val = parseFloat(barsInput.value);
                 if (!isNaN(val)) this.setGlobal({ total_bars: val });
             });
             barsInput.addEventListener('wheel', (e) => {
                 e.preventDefault();
-                const delta = e.deltaY < 0 ? 0.25 : -0.25;
-                const next = Math.max(0.25, Math.min(128, this.getTotalBars() + delta));
+                if (e.altKey || barsInput.disabled) return;
+                const dir = e.deltaY < 0 ? 1 : -1;
+                const step = getParameterWheelStep(false);
+                const next = Math.max(0.25, Math.min(128, roundStepValue(this.getTotalBars() + dir * step, step)));
                 this.setGlobal({ total_bars: next });
             });
         }

@@ -1,4 +1,5 @@
 import { type BaseNode, getDefaultFxChain } from '../../nodes/BaseNode.ts';
+import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from '../ParameterWheelMenu.ts';
 
 function linearToDb(gain: number): number {
     if (gain <= 0.0001) return -36;
@@ -29,23 +30,33 @@ function makeGainControl(
     let currentDb = module.params?.gain_db !== undefined
         ? Number(module.params.gain_db)
         : linearToDb(Number(module.params?.gain ?? 1));
+    module.params = module.params || {};
+    if (module.params.gain_db === undefined) {
+        module.params.gain_db = currentDb;
+        module.params.gain = dbToLinear(currentDb);
+    }
     const renderValue = () => {
         const valueEl = box.querySelector('.float-val-text') as HTMLElement | null;
         if (valueEl) valueEl.textContent = formatDb(currentDb);
     };
     const commit = (db: number) => {
-        currentDb = Math.max(-36, Math.min(12, Math.round(db * 10) / 10));
+        const rounded = Math.max(-36, Math.min(12, Math.round(db * 10) / 10));
+        if (rounded === currentDb && module.params?.gain_db !== undefined) return;
+        currentDb = rounded;
         renderValue();
-        module.params = module.params || {};
-        module.params.gain = dbToLinear(currentDb);
-        module.params.gain_db = currentDb;
-        node.updateProperty('chain', [...chain]);
+        module.params = {
+            ...(module.params || {}),
+            gain: dbToLinear(currentDb),
+            gain_db: currentDb,
+        };
+        node.updateProperty('chain', chain.map((m: any) => (m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m)));
     };
-    commit(currentDb);
+    renderValue();
 
     let dragging = false;
     let startX = 0;
     let startDb = currentDb;
+    let pendingRaf = 0;
     box.addEventListener('pointerdown', event => {
         if (event.button !== 0) return;
         dragging = true;
@@ -57,16 +68,45 @@ function makeGainControl(
     });
     box.addEventListener('pointermove', event => {
         if (!dragging) return;
-        commit(startDb + (event.clientX - startX) * 0.15);
+        const targetDb = startDb + (event.clientX - startX) * 0.15;
+        if (pendingRaf) return;
+        pendingRaf = requestAnimationFrame(() => {
+            pendingRaf = 0;
+            if (dragging) {
+                commit(targetDb);
+            }
+        });
     });
     const stopDragging = (event: PointerEvent) => {
         if (!dragging) return;
         dragging = false;
+        if (pendingRaf) {
+            cancelAnimationFrame(pendingRaf);
+            pendingRaf = 0;
+        }
+        const delta = (event.clientX - startX) * 0.15;
+        if (Math.abs(delta) >= 0.05) {
+            commit(startDb + delta);
+        }
         box.classList.remove('dragging');
         box.releasePointerCapture?.(event.pointerId);
     };
     box.addEventListener('pointerup', stopDragging);
     box.addEventListener('pointercancel', stopDragging);
+
+    registerParameterWheelControl(box, {
+        isInteger: false,
+        getValue: () => currentDb,
+        setValue: (db) => commit(db),
+        formatValue: (db) => formatDb(Math.max(-36, Math.min(12, db))),
+    });
+    box.addEventListener('wheel', event => {
+        event.preventDefault();
+        if (event.altKey) return;
+        const direction = event.deltaY < 0 ? 1 : -1;
+        const step = getParameterWheelStep(false);
+        commit(roundStepValue(currentDb + direction * step, step));
+    }, { passive: false });
 
     box.addEventListener('dblclick', event => {
         event.stopPropagation();
@@ -103,8 +143,7 @@ export class FxChainSection {
         _windowContext: any
     ): Promise<void> {
         if (!node.properties.chain || !Array.isArray(node.properties.chain) || node.properties.chain.length === 0) {
-            node.properties.chain = getDefaultFxChain();
-            node.updateProperty('chain', node.properties.chain);
+            node.updateProperty('chain', getDefaultFxChain());
         }
 
         const rawChain: any[] = node.properties.chain;

@@ -1,3 +1,5 @@
+import { APPEARANCE_COLOR_PRESETS } from '../config/appearance.ts';
+
 export interface NodeContextMenuItem {
     id: string;
     label: string;
@@ -62,6 +64,73 @@ export class NodeContextMenu {
             <span class="ctx-menu-id">#${node.id}</span>
         `;
         this.menuElement.appendChild(header);
+
+        // Color Grid for selected nodes
+        const colorsContainer = document.createElement('div');
+        colorsContainer.className = 'ctx-menu-colors';
+
+        const colorsHeader = document.createElement('div');
+        colorsHeader.className = 'ctx-menu-colors-header';
+        colorsHeader.textContent = 'Color';
+        colorsContainer.appendChild(colorsHeader);
+
+        const colorGrid = document.createElement('div');
+        colorGrid.className = 'ctx-menu-colors-grid';
+
+        const currentColor = String(node.properties?.color || node.color || '').toLowerCase();
+
+        APPEARANCE_COLOR_PRESETS.forEach(preset => {
+            const swatch = document.createElement('button');
+            swatch.type = 'button';
+            swatch.className = `ctx-color-swatch ${preset.value.toLowerCase() === currentColor ? 'active' : ''}`;
+            swatch.style.backgroundColor = preset.value;
+            swatch.title = preset.label;
+            swatch.setAttribute('aria-label', preset.label);
+
+            swatch.onpointerdown = (e) => {
+                e.stopPropagation();
+            };
+
+            swatch.onclick = (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                this.hide();
+
+                const graphCanvas = (window as any).editorCanvas;
+                const selectedMap = (graphCanvas?.selected_nodes || {}) as Record<string | number, any>;
+                const isNodeSelected = selectedMap[node.id] || node.is_selected;
+                const targetNodes: any[] = isNodeSelected && Object.keys(selectedMap).length > 0
+                    ? Object.values(selectedMap)
+                    : [node];
+
+                for (const target of targetNodes) {
+                    if (!target) continue;
+                    if (typeof target.updateProperty === 'function') {
+                        target.updateProperty('color', preset.value);
+                    } else if (target.properties) {
+                        target.properties.color = preset.value;
+                    }
+                    if (target.properties) {
+                        target.properties.user_color = true;
+                    }
+                    target.color = preset.value;
+                    target.bgcolor = preset.value;
+                    target.boxcolor = preset.value;
+                    target.setDirtyCanvas?.(true, true);
+                    if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
+                            detail: { nodeId: target.id }
+                        }));
+                    }
+                }
+                graphCanvas?.setDirty?.(true, true);
+            };
+
+            colorGrid.appendChild(swatch);
+        });
+
+        colorsContainer.appendChild(colorGrid);
+        this.menuElement.appendChild(colorsContainer);
 
         const items: NodeContextMenuItem[] = [
             {

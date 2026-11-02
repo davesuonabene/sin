@@ -1,7 +1,7 @@
 const audioBufferCache = new Map<string, Promise<AudioBuffer | null>>();
 let sharedAudioContext: AudioContext | null = null;
 
-function getSharedAudioContext(): AudioContext | null {
+export function getSharedAudioContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
     if (!sharedAudioContext) {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;

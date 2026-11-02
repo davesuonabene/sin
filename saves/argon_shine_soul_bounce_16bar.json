@@ -124,7 +124,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.7079,
-                "gain_db": -3.0
+                "gain_db": -3
               }
             },
             {
@@ -134,14 +134,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 1
-        }
+          "asset_modifier_id": 1,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 3,
@@ -186,8 +190,12 @@
           "refresh_mode": "global",
           "output_type": "asset_path",
           "node_type": "asset_filter",
-          "parentId": 4
-        }
+          "parentId": 4,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 4,
@@ -232,7 +240,7 @@
         "properties": {
           "node_name": "808 Syncopated Glide Pocket",
           "step_length": 0.25,
-          "total_bars": 4.0,
+          "total_bars": 4,
           "play_mode": "gate",
           "release": 0.06,
           "sequence": [
@@ -255,34 +263,34 @@
           ],
           "step_parameters": [
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.92,
               "velocity": 0.96,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.92,
               "velocity": 0.84,
               "offset": 0.015,
@@ -291,88 +299,88 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.92,
               "velocity": 0.9,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.92,
               "velocity": 0.9,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.92,
               "velocity": 0.84,
               "offset": 0.015,
@@ -381,27 +389,31 @@
               "subdivision_enabled": true
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 3
-        }
+          "asset_modifier_id": 3,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 5,
@@ -425,7 +437,7 @@
         "title": "Random",
         "properties": {
           "node_name": "808 Sub Groove Modulator",
-          "seed": 108.0,
+          "seed": 108,
           "seed_mode": "moving",
           "refresh_mode": "global",
           "destinations": [
@@ -439,21 +451,21 @@
               "enabled": true,
               "baseValueArray": [
                 0.96,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.84,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.9,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
                 0.9,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.84,
-                0.0,
-                0.0
+                0,
+                0
               ]
             },
             {
@@ -462,25 +474,25 @@
               "paramLabel": "Pocket Micro-Timing",
               "minPercent": -6,
               "maxPercent": 8,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true,
               "baseValueArray": [
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
                 0.015,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0.015,
-                0.0,
-                0.0
+                0,
+                0
               ]
             },
             {
@@ -514,14 +526,18 @@
           "targets": [
             {
               "field": "step_parameters.velocity",
-              "min": -10.0,
-              "max": 10.0,
+              "min": -10,
+              "max": 10,
               "type": "relative_percent"
             }
           ],
           "node_type": "random",
-          "parentId": 4
-        }
+          "parentId": 4,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 6,
@@ -565,21 +581,21 @@
         "title": "Arrangement",
         "properties": {
           "node_name": "808 4-Section Arrangement",
-          "total_bars": 16.0,
+          "total_bars": 16,
           "section_points": [
-            4.0,
-            8.0,
-            12.0
+            4,
+            8,
+            12
           ],
           "section_probability": [
             0.9,
-            1.0,
-            1.0,
-            1.0
+            1,
+            1,
+            1
           ],
           "section_sample_start": [
-            0.0,
-            0.0,
+            0,
+            0,
             0.25,
             0.5
           ],
@@ -597,8 +613,12 @@
           ],
           "quant": "auto",
           "quant_anchor": "start",
-          "node_type": "arrangement"
-        }
+          "node_type": "arrangement",
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 7,
@@ -651,7 +671,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.7943,
-                "gain_db": -2.0
+                "gain_db": -2
               }
             },
             {
@@ -661,13 +681,17 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 8,
@@ -796,14 +820,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 8
-        }
+          "asset_modifier_id": 8,
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 10,
@@ -854,8 +882,12 @@
           "refresh_mode": "global",
           "output_type": "asset_path",
           "node_type": "asset_filter",
-          "parentId": 11
-        }
+          "parentId": 11,
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 11,
@@ -900,7 +932,7 @@
         "properties": {
           "node_name": "Kick Soul Bounce Pocket",
           "step_length": 0.25,
-          "total_bars": 4.0,
+          "total_bars": 4,
           "sequence": [
             1,
             0,
@@ -921,71 +953,71 @@
           ],
           "step_parameters": [
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.98,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.9,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.62,
               "offset": 0.024,
               "probability": 82,
@@ -993,62 +1025,62 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.9,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.9,
               "offset": 0.018,
               "probability": 92,
@@ -1056,18 +1088,22 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 10
-        }
+          "asset_modifier_id": 10,
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 12,
@@ -1091,7 +1127,7 @@
         "title": "Random",
         "properties": {
           "node_name": "Kick Pocket Humanizer",
-          "seed": 208.0,
+          "seed": 208,
           "seed_mode": "moving",
           "refresh_mode": "global",
           "destinations": [
@@ -1105,21 +1141,21 @@
               "enabled": true,
               "baseValueArray": [
                 0.98,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0.9,
                 0.62,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.9,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
                 0.9,
-                0.0
+                0
               ]
             },
             {
@@ -1128,25 +1164,25 @@
               "paramLabel": "Dilla Swing Offset",
               "minPercent": -5,
               "maxPercent": 8,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true,
               "baseValueArray": [
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0.024,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0.018,
-                0.0
+                0
               ]
             },
             {
@@ -1180,14 +1216,18 @@
           "targets": [
             {
               "field": "step_parameters.velocity",
-              "min": -8.0,
-              "max": 6.0,
+              "min": -8,
+              "max": 6,
               "type": "relative_percent"
             }
           ],
           "node_type": "random",
-          "parentId": 11
-        }
+          "parentId": 11,
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 13,
@@ -1231,23 +1271,23 @@
         "title": "Arrangement",
         "properties": {
           "node_name": "Kick 4-Section Arrangement",
-          "total_bars": 16.0,
+          "total_bars": 16,
           "section_points": [
-            4.0,
-            8.0,
-            12.0
+            4,
+            8,
+            12
           ],
           "section_probability": [
             0.95,
-            1.0,
-            1.0,
-            1.0
+            1,
+            1,
+            1
           ],
           "section_sample_start": [
-            0.0,
-            0.0,
+            0,
+            0,
             0.25,
-            0.0
+            0
           ],
           "section_quant": [
             "auto",
@@ -1263,8 +1303,12 @@
           ],
           "quant": "auto",
           "quant_anchor": "start",
-          "node_type": "arrangement"
-        }
+          "node_type": "arrangement",
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 14,
@@ -1383,7 +1427,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.7943,
-                "gain_db": -2.0
+                "gain_db": -2
               }
             },
             {
@@ -1393,14 +1437,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 14
-        }
+          "asset_modifier_id": 14,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 16,
@@ -1451,8 +1499,12 @@
           "refresh_mode": "global",
           "output_type": "asset_path",
           "node_type": "asset_filter",
-          "parentId": 17
-        }
+          "parentId": 17,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 17,
@@ -1497,7 +1549,7 @@
         "properties": {
           "node_name": "Snare Lazy Backbeat & Fill",
           "step_length": 0.25,
-          "total_bars": 4.0,
+          "total_bars": 4,
           "sequence": [
             0,
             0,
@@ -1518,44 +1570,44 @@
           ],
           "step_parameters": [
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.95,
               "offset": 0.018,
               "probability": 100,
@@ -1563,71 +1615,71 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.95,
               "offset": 0.018,
               "probability": 100,
@@ -1635,26 +1687,26 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.66,
               "offset": 0.012,
               "probability": 76,
@@ -1663,8 +1715,12 @@
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 16
-        }
+          "asset_modifier_id": 16,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 18,
@@ -1688,7 +1744,7 @@
         "title": "Random",
         "properties": {
           "node_name": "Snare Dynamics & Flam Modulator",
-          "seed": 308.0,
+          "seed": 308,
           "seed_mode": "moving",
           "refresh_mode": "global",
           "destinations": [
@@ -1701,21 +1757,21 @@
               "baseValue": 0.95,
               "enabled": true,
               "baseValueArray": [
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
                 0.95,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0.95,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.66
               ]
             },
@@ -1728,21 +1784,21 @@
               "baseValue": 0.018,
               "enabled": true,
               "baseValueArray": [
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
                 0.018,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0.018,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.012
               ]
             },
@@ -1777,14 +1833,18 @@
           "targets": [
             {
               "field": "step_parameters.velocity",
-              "min": -10.0,
-              "max": 6.0,
+              "min": -10,
+              "max": 6,
               "type": "relative_percent"
             }
           ],
           "node_type": "random",
-          "parentId": 17
-        }
+          "parentId": 17,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 19,
@@ -1828,22 +1888,22 @@
         "title": "Arrangement",
         "properties": {
           "node_name": "Snare 4-Section Arrangement",
-          "total_bars": 16.0,
+          "total_bars": 16,
           "section_points": [
-            4.0,
-            8.0,
-            12.0
+            4,
+            8,
+            12
           ],
           "section_probability": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
+            1,
+            1,
+            1,
+            1
           ],
           "section_sample_start": [
-            0.0,
-            0.0,
-            0.0,
+            0,
+            0,
+            0,
             0.25
           ],
           "section_quant": [
@@ -1860,8 +1920,12 @@
           ],
           "quant": "auto",
           "quant_anchor": "start",
-          "node_type": "arrangement"
-        }
+          "node_type": "arrangement",
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 20,
@@ -1990,14 +2054,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 20
-        }
+          "asset_modifier_id": 20,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 22,
@@ -2051,8 +2119,12 @@
           "refresh_mode": "global",
           "output_type": "asset_path",
           "node_type": "asset_filter",
-          "parentId": 23
-        }
+          "parentId": 23,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 23,
@@ -2097,7 +2169,7 @@
         "properties": {
           "node_name": "Hat Swung 16th & Ratchet Rolls",
           "step_length": 0.125,
-          "total_bars": 4.0,
+          "total_bars": 4,
           "sequence": [
             1,
             1,
@@ -2134,17 +2206,17 @@
           ],
           "step_parameters": [
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.94,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2152,17 +2224,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2170,17 +2242,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 88,
@@ -2188,35 +2260,35 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.94,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2224,17 +2296,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2242,17 +2314,17 @@
               "subdivision_enabled": true
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 88,
@@ -2260,17 +2332,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2278,17 +2350,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.94,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2296,17 +2368,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2314,17 +2386,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 88,
@@ -2332,17 +2404,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2350,17 +2422,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.94,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2368,17 +2440,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2386,17 +2458,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 88,
@@ -2404,17 +2476,17 @@
               "subdivision_enabled": true
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.86,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.58,
               "offset": 0.022,
               "probability": 100,
@@ -2423,8 +2495,12 @@
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 22
-        }
+          "asset_modifier_id": 22,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 24,
@@ -2448,7 +2524,7 @@
         "title": "Random",
         "properties": {
           "node_name": "Hat Shimmer Groove Modulator",
-          "seed": 408.0,
+          "seed": 408,
           "seed_mode": "moving",
           "refresh_mode": "global",
           "destinations": [
@@ -2468,7 +2544,7 @@
                 0.86,
                 0.58,
                 0.86,
-                0.0,
+                0,
                 0.94,
                 0.58,
                 0.86,
@@ -2479,7 +2555,7 @@
                 0.58,
                 0.94,
                 0.58,
-                0.0,
+                0,
                 0.58,
                 0.86,
                 0.58,
@@ -2504,37 +2580,37 @@
               "baseValue": 0.015,
               "enabled": true,
               "baseValueArray": [
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022,
-                0.0,
+                0,
                 0.022
               ]
             },
@@ -2585,14 +2661,18 @@
           "targets": [
             {
               "field": "step_parameters.velocity",
-              "min": -18.0,
-              "max": 12.0,
+              "min": -18,
+              "max": 12,
               "type": "relative_percent"
             }
           ],
           "node_type": "random",
-          "parentId": 23
-        }
+          "parentId": 23,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 25,
@@ -2636,20 +2716,20 @@
         "title": "Arrangement",
         "properties": {
           "node_name": "Hat 4-Section Arrangement",
-          "total_bars": 16.0,
+          "total_bars": 16,
           "section_points": [
-            4.0,
-            8.0,
-            12.0
+            4,
+            8,
+            12
           ],
           "section_probability": [
             0.9,
-            1.0,
-            1.0,
-            1.0
+            1,
+            1,
+            1
           ],
           "section_sample_start": [
-            0.0,
+            0,
             0.25,
             0.5,
             0.75
@@ -2668,8 +2748,12 @@
           ],
           "quant": "auto",
           "quant_anchor": "start",
-          "node_type": "arrangement"
-        }
+          "node_type": "arrangement",
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 26,
@@ -2803,7 +2887,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.5012,
-                "gain_db": -6.0
+                "gain_db": -6
               }
             },
             {
@@ -2813,14 +2897,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 26
-        }
+          "asset_modifier_id": 26,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 28,
@@ -2865,8 +2953,12 @@
           "refresh_mode": "global",
           "output_type": "asset_path",
           "node_type": "asset_filter",
-          "parentId": 29
-        }
+          "parentId": 29,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 29,
@@ -2911,7 +3003,7 @@
         "properties": {
           "node_name": "Ghost Rim Syncopated Pocket",
           "step_length": 0.125,
-          "total_bars": 4.0,
+          "total_bars": 4,
           "sequence": [
             0,
             0,
@@ -2948,26 +3040,26 @@
           ],
           "step_parameters": [
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.72,
               "offset": -0.01,
               "probability": 88,
@@ -2975,26 +3067,26 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.56,
               "offset": 0.02,
               "probability": 78,
@@ -3002,35 +3094,35 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.56,
               "offset": 0.02,
               "probability": 88,
@@ -3038,44 +3130,44 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.72,
               "offset": -0.01,
               "probability": 88,
@@ -3083,35 +3175,35 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.72,
               "offset": -0.01,
               "probability": 88,
@@ -3119,26 +3211,26 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.56,
               "offset": 0.02,
               "probability": 88,
@@ -3146,17 +3238,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.56,
               "offset": 0.02,
               "probability": 78,
@@ -3164,17 +3256,17 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.56,
               "offset": 0.02,
               "probability": 88,
@@ -3182,44 +3274,44 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.72,
               "offset": -0.01,
               "probability": 78,
@@ -3227,8 +3319,8 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
+              "sample_start": 0,
+              "gate_length": 1,
               "velocity": 0.56,
               "offset": 0.02,
               "probability": 88,
@@ -3237,8 +3329,12 @@
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 28
-        }
+          "asset_modifier_id": 28,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 30,
@@ -3262,7 +3358,7 @@
         "title": "Random",
         "properties": {
           "node_name": "Ghost Perc Dynamics Modulator",
-          "seed": 508.0,
+          "seed": 508,
           "seed_mode": "moving",
           "refresh_mode": "global",
           "destinations": [
@@ -3275,36 +3371,36 @@
               "baseValue": 0.64,
               "enabled": true,
               "baseValueArray": [
-                0.0,
-                0.0,
+                0,
+                0,
                 0.72,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.56,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
                 0.56,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
                 0.72,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
                 0.72,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.56,
-                0.0,
+                0,
                 0.56,
-                0.0,
+                0,
                 0.56,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
                 0.72,
                 0.56
               ]
@@ -3315,39 +3411,39 @@
               "paramLabel": "Syncopated Jitter",
               "minPercent": -12,
               "maxPercent": 12,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true,
               "baseValueArray": [
-                0.0,
-                0.0,
+                0,
+                0,
                 -0.01,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.02,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
                 0.02,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
                 -0.01,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
                 -0.01,
-                0.0,
-                0.0,
+                0,
+                0,
                 0.02,
-                0.0,
+                0,
                 0.02,
-                0.0,
+                0,
                 0.02,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
                 -0.01,
                 0.02
               ]
@@ -3399,14 +3495,18 @@
           "targets": [
             {
               "field": "step_parameters.velocity",
-              "min": -22.0,
-              "max": 15.0,
+              "min": -22,
+              "max": 15,
               "type": "relative_percent"
             }
           ],
           "node_type": "random",
-          "parentId": 29
-        }
+          "parentId": 29,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 31,
@@ -3450,23 +3550,23 @@
         "title": "Arrangement",
         "properties": {
           "node_name": "Ghost Perc Arrangement",
-          "total_bars": 16.0,
+          "total_bars": 16,
           "section_points": [
-            4.0,
-            8.0,
-            12.0
+            4,
+            8,
+            12
           ],
           "section_probability": [
             0.7,
             0.95,
             0.85,
-            1.0
+            1
           ],
           "section_sample_start": [
-            0.0,
+            0,
             0.25,
             0.5,
-            0.0
+            0
           ],
           "section_quant": [
             "auto",
@@ -3482,8 +3582,12 @@
           ],
           "quant": "auto",
           "quant_anchor": "start",
-          "node_type": "arrangement"
-        }
+          "node_type": "arrangement",
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 32,
@@ -3561,13 +3665,17 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 33,
@@ -3696,14 +3804,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 33
-        }
+          "asset_modifier_id": 33,
+          "color": "#d97706"
+        },
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706"
       },
       {
         "id": 35,
@@ -3747,16 +3859,16 @@
         "title": "Arrangement",
         "properties": {
           "node_name": "Atmosphere Arrangement",
-          "total_bars": 16.0,
+          "total_bars": 16,
           "section_points": [
-            8.0
+            8
           ],
           "section_probability": [
-            1.0,
-            1.0
+            1,
+            1
           ],
           "section_sample_start": [
-            0.0,
+            0,
             0.15
           ],
           "section_quant": [
@@ -3769,8 +3881,12 @@
           ],
           "quant": "auto",
           "quant_anchor": "start",
-          "node_type": "arrangement"
-        }
+          "node_type": "arrangement",
+          "color": "#d97706"
+        },
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706"
       },
       {
         "id": 36,
@@ -3822,8 +3938,8 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             },
             {
@@ -3833,13 +3949,17 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 37,
@@ -3987,7 +4107,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.7079,
-                "gain_db": -3.0
+                "gain_db": -3
               }
             },
             {
@@ -3997,14 +4117,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 37
-        }
+          "asset_modifier_id": 37,
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 39,
@@ -4106,8 +4230,12 @@
           "refresh_mode": "global",
           "output_type": "asset_path",
           "node_type": "asset_filter",
-          "parentId": 40
-        }
+          "parentId": 40,
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 40,
@@ -4152,7 +4280,7 @@
         "properties": {
           "node_name": "Prism Melodic Chop Sequencer",
           "step_length": 0.125,
-          "total_bars": 4.0,
+          "total_bars": 4,
           "play_mode": "gate",
           "release": 0.08,
           "sequence": [
@@ -4191,19 +4319,19 @@
           ],
           "step_parameters": [
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.92,
               "velocity": 0.95,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4212,16 +4340,16 @@
               "sample_start": 0.125,
               "gate_length": 0.85,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4230,16 +4358,16 @@
               "sample_start": 0.25,
               "gate_length": 0.92,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4248,7 +4376,7 @@
               "sample_start": 0.375,
               "gate_length": 0.85,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4263,19 +4391,19 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.92,
               "velocity": 0.95,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4284,16 +4412,16 @@
               "sample_start": 0.25,
               "gate_length": 0.85,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4302,7 +4430,7 @@
               "sample_start": 0.5,
               "gate_length": 0.92,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4317,10 +4445,10 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4338,16 +4466,16 @@
               "sample_start": 0.125,
               "gate_length": 0.92,
               "velocity": 0.95,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4356,7 +4484,7 @@
               "sample_start": 0.375,
               "gate_length": 0.85,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4371,10 +4499,10 @@
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4392,34 +4520,34 @@
               "sample_start": 0.625,
               "gate_length": 0.85,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.92,
               "velocity": 0.95,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0,
-              "offset": 0.0,
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4428,7 +4556,7 @@
               "sample_start": 0.375,
               "gate_length": 0.85,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4446,7 +4574,7 @@
               "sample_start": 0.625,
               "gate_length": 0.92,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 100,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4464,7 +4592,7 @@
               "sample_start": 0.875,
               "gate_length": 0.85,
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "probability": 92,
               "subdivisions": 1,
               "subdivision_enabled": false
@@ -4480,8 +4608,12 @@
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 39
-        }
+          "asset_modifier_id": 39,
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 41,
@@ -4505,7 +4637,7 @@
         "title": "Random",
         "properties": {
           "node_name": "Melodic Chops Expression Modulator",
-          "seed": 608.0,
+          "seed": 608,
           "seed_mode": "moving",
           "refresh_mode": "global",
           "destinations": [
@@ -4519,31 +4651,31 @@
               "enabled": true,
               "baseValueArray": [
                 0.95,
-                0.0,
+                0,
                 0.88,
-                0.0,
+                0,
                 0.88,
-                0.0,
+                0,
                 0.88,
                 0.88,
                 0.95,
-                0.0,
+                0,
                 0.88,
-                0.0,
+                0,
                 0.88,
                 0.88,
-                0.0,
+                0,
                 0.88,
                 0.95,
-                0.0,
+                0,
                 0.88,
                 0.88,
-                0.0,
+                0,
                 0.88,
                 0.88,
-                0.0,
+                0,
                 0.95,
-                0.0,
+                0,
                 0.88,
                 0.88,
                 0.88,
@@ -4558,40 +4690,40 @@
               "paramLabel": "MPC Chop Swing",
               "minPercent": -5,
               "maxPercent": 6,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true,
               "baseValueArray": [
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0.012,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0.012,
-                0.0,
+                0,
                 0.012,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
                 0.012,
-                0.0,
+                0,
                 0.012,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0.012,
-                0.0,
+                0,
                 0.012,
-                0.0,
+                0,
                 0.012
               ]
             },
@@ -4642,14 +4774,18 @@
           "targets": [
             {
               "field": "step_parameters.velocity",
-              "min": -12.0,
-              "max": 8.0,
+              "min": -12,
+              "max": 8,
               "type": "relative_percent"
             }
           ],
           "node_type": "random",
-          "parentId": 40
-        }
+          "parentId": 40,
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 42,
@@ -4693,20 +4829,20 @@
         "title": "Arrangement",
         "properties": {
           "node_name": "Melodic 4-Section Progression",
-          "total_bars": 16.0,
+          "total_bars": 16,
           "section_points": [
-            4.0,
-            8.0,
-            12.0
+            4,
+            8,
+            12
           ],
           "section_probability": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
+            1,
+            1,
+            1,
+            1
           ],
           "section_sample_start": [
-            0.0,
+            0,
             0.25,
             0.5,
             0.75
@@ -4725,8 +4861,12 @@
           ],
           "quant": "auto",
           "quant_anchor": "start",
-          "node_type": "arrangement"
-        }
+          "node_type": "arrangement",
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 43,
@@ -4750,7 +4890,7 @@
         "title": "Random",
         "properties": {
           "node_name": "Section Slice Progression Modulator",
-          "seed": 708.0,
+          "seed": 708,
           "seed_mode": "moving",
           "refresh_mode": "global",
           "destinations": [
@@ -4763,7 +4903,7 @@
               "baseValue": 0.25,
               "enabled": true,
               "baseValueArray": [
-                0.0,
+                0,
                 0.25,
                 0.5,
                 0.75
@@ -4773,14 +4913,18 @@
           "targets": [
             {
               "field": "section_sample_start",
-              "min": -15.0,
-              "max": 15.0,
+              "min": -15,
+              "max": 15,
               "type": "relative_percent"
             }
           ],
           "node_type": "random",
-          "parentId": 42
-        }
+          "parentId": 42,
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 44,
@@ -4843,13 +4987,17 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 45,
@@ -4926,12 +5074,16 @@
               "fixed": true,
               "params": {
                 "gain": 0.7079,
-                "gain_db": -3.0
+                "gain_db": -3
               }
             }
           ],
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#0f172a"
+        },
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b"
       }
     ],
     "links": [
@@ -4941,7 +5093,8 @@
         0,
         4,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         2,
@@ -4949,7 +5102,8 @@
         0,
         6,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         3,
@@ -4957,7 +5111,8 @@
         0,
         7,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         4,
@@ -4965,7 +5120,8 @@
         0,
         45,
         0,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         5,
@@ -4973,7 +5129,8 @@
         0,
         11,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         6,
@@ -4981,7 +5138,8 @@
         0,
         13,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         7,
@@ -4989,7 +5147,8 @@
         0,
         32,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         8,
@@ -4997,7 +5156,8 @@
         0,
         17,
         0,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         9,
@@ -5005,7 +5165,8 @@
         0,
         19,
         0,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         10,
@@ -5013,7 +5174,8 @@
         0,
         32,
         1,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         11,
@@ -5021,7 +5183,8 @@
         0,
         23,
         0,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         12,
@@ -5029,7 +5192,8 @@
         0,
         25,
         0,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         13,
@@ -5037,7 +5201,8 @@
         0,
         32,
         2,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         14,
@@ -5045,7 +5210,8 @@
         0,
         29,
         0,
-        "audio"
+        "audio",
+        "#db2777"
       ],
       [
         15,
@@ -5053,7 +5219,8 @@
         0,
         31,
         0,
-        "audio"
+        "audio",
+        "#db2777"
       ],
       [
         16,
@@ -5061,7 +5228,8 @@
         0,
         32,
         3,
-        "audio"
+        "audio",
+        "#db2777"
       ],
       [
         17,
@@ -5069,7 +5237,8 @@
         0,
         45,
         1,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         18,
@@ -5077,7 +5246,8 @@
         0,
         35,
         0,
-        "audio"
+        "audio",
+        "#d97706"
       ],
       [
         19,
@@ -5085,7 +5255,8 @@
         0,
         36,
         0,
-        "audio"
+        "audio",
+        "#d97706"
       ],
       [
         20,
@@ -5093,7 +5264,8 @@
         0,
         45,
         2,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         21,
@@ -5101,7 +5273,8 @@
         0,
         40,
         0,
-        "audio"
+        "audio",
+        "#0891b2"
       ],
       [
         22,
@@ -5109,7 +5282,8 @@
         0,
         42,
         0,
-        "audio"
+        "audio",
+        "#0891b2"
       ],
       [
         23,
@@ -5117,7 +5291,8 @@
         0,
         44,
         0,
-        "audio"
+        "audio",
+        "#0891b2"
       ],
       [
         24,
@@ -5125,7 +5300,8 @@
         0,
         45,
         3,
-        "audio"
+        "audio",
+        "#4f46e5"
       ]
     ],
     "groups": [],
@@ -5134,7 +5310,7 @@
     },
     "extra": {
       "global_parameters": {
-        "bpm": 136.0,
+        "bpm": 136,
         "total_bars": 16,
         "key": "Cm"
       },

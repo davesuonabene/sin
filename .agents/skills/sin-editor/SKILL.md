@@ -19,13 +19,13 @@ Use this skill when you need to construct, edit, inspect, validate, or render au
    - Attachments: modifier parameter bindings (`owner` -> `modifier`, `type: "asset_pool"` | `"random"` | `"modulator"`).
    - Route drum & bass channels through dual submix buses (`Punch Drum Bus` and `Sub Bass Bus`) before `Master Output` (`role: "master"`).
 3. **Validate & Verify**:
-   - Validate topology: `sin compose validate presets/drums/<name>.json --json`.
-   - Verify assets on disk: `sin library verify presets/drums/<name>.json --json`.
+   - Validate topology: `sin compose validate scratch/<name>.json --json`.
+   - Verify assets on disk: `sin library verify scratch/<name>.json --json`.
 4. **Convert for Browser (Auto-Layout)**:
-   - Convert to workspace format: `sin compose convert presets/drums/<name>.json --to workspace --out saves/<name>.json`.
+   - Convert to workspace format: `sin compose convert scratch/<name>.json --to workspace --out saves/<name>.json`.
    - ERMES auto-layout automatically assigns clean, non-overlapping 2D coordinates for the canvas.
 5. **Render & QA**:
-   - Headless render with metrics: `sin render presets/drums/<name>.json --qa --out temp_renders/<name>.wav`.
+   - Headless render with metrics: `sin render saves/<name>.json --qa --out temp_renders/<name>.wav`.
    - Ensure peak level stays below 0 dBFS.
 
 ## Canonical Schema Quick Reference

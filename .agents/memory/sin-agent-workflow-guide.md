@@ -184,13 +184,13 @@ Always route rhythm sections through dedicated submix buses before the master tr
 
 ## 6. End-to-End Production & Verification Workflow
 
-When authoring or modifying a preset:
+When authoring or modifying a workspace save:
 1. **Search Assets:** Use `sin library search --tag <Tag> --limit <N> --json` to gather exact asset IDs from `gaia.db`.
-2. **Draft Graph:** Construct the canonical `sin-graph` JSON under `presets/drums/<name>.json`.
-3. **Validate Topology:** Run `sin compose validate presets/drums/<name>.json --json`.
-4. **Verify Locators:** Run `sin library verify presets/drums/<name>.json --json` to ensure 100% of referenced files exist on disk.
-5. **Convert for Browser:** Run `sin compose convert presets/drums/<name>.json --to workspace --out saves/<name>.json` to apply auto-layout.
-6. **DSP Render & QA:** Run `sin render presets/drums/<name>.json --qa --out temp_renders/<name>.wav` to verify duration, peak level (< 0 dBFS), and silence checks.
+2. **Draft Graph:** Construct the canonical `sin-graph` JSON (e.g. in `scratch/<name>.json`).
+3. **Validate Topology:** Run `sin compose validate scratch/<name>.json --json`.
+4. **Verify Locators:** Run `sin library verify scratch/<name>.json --json` to ensure 100% of referenced files exist on disk.
+5. **Convert for Browser:** Run `sin compose convert scratch/<name>.json --to workspace --out saves/<name>.json` to apply auto-layout.
+6. **DSP Render & QA:** Run `sin render saves/<name>.json --qa --out temp_renders/<name>.wav` to verify duration, peak level (< 0 dBFS), and silence checks.
 
 ---
 

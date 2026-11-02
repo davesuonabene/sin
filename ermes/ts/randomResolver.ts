@@ -200,11 +200,49 @@ export function applyRandomModulation(
     options: { forceRefresh?: boolean; randomFactorGenerator?: () => number } = {}
 ): void {
     if (!modifierNode?.properties || !ownerNode) return;
+    if ((!Array.isArray(modifierNode.properties.destinations) || modifierNode.properties.destinations.length === 0) && Array.isArray(modifierNode.properties.targets)) {
+        modifierNode.properties.destinations = modifierNode.properties.targets
+            .filter((t: any) => t && typeof t === 'object')
+            .map((t: any, idx: number) => {
+                const rawField = String(t.paramKey || t.field || '').trim();
+                const paramKey = rawField.startsWith('step_parameters.') && rawField.split('.').length === 2
+                    ? rawField.split('.')[1]
+                    : rawField;
+                const defaultBase = paramKey === 'velocity' || paramKey === 'probability' || paramKey === 'gate_length' ? 1 : 0;
+                return {
+                    id: String(t.id || `dest_${idx}`),
+                    paramKey,
+                    paramLabel: String(t.paramLabel || (paramKey.charAt(0).toUpperCase() + paramKey.slice(1))),
+                    minPercent: Number(t.minPercent ?? t.min ?? 0),
+                    maxPercent: Number(t.maxPercent ?? t.max ?? 0),
+                    baseValue: Number(t.baseValue ?? defaultBase),
+                    enabled: t.enabled !== false,
+                };
+            });
+    }
     const destinations: RandomDestination[] = Array.isArray(modifierNode.properties.destinations)
         ? modifierNode.properties.destinations
         : [];
 
     let updatedAny = false;
+
+    const ensureOwnerStepParameters = () => {
+        if (!ownerNode.properties) ownerNode.properties = {};
+        if (!Array.isArray(ownerNode.properties.step_parameters) || ownerNode.properties.step_parameters.length === 0) {
+            const stepCount = Array.isArray(ownerNode.properties.sequence) && ownerNode.properties.sequence.length > 0
+                ? ownerNode.properties.sequence.length
+                : 16;
+            ownerNode.properties.step_parameters = Array.from({ length: stepCount }, () => ({
+                probability: 1.0,
+                offset: 0,
+                velocity: 1,
+                subdivisions: 1,
+                subdivision_enabled: false,
+                sample_start: 0,
+                gate_length: 1,
+            }));
+        }
+    };
 
     for (const dest of destinations) {
         if (!dest.enabled) continue;
@@ -213,10 +251,14 @@ export function applyRandomModulation(
 
         // Check if destination targets a specific step in step_parameters (e.g. step_parameters.2.probability)
         const stepMatch = dest.paramKey.match(/^step_parameters\.(\d+)\.(.+)$/);
+        if (stepMatch) {
+            ensureOwnerStepParameters();
+        }
         if (stepMatch && Array.isArray(ownerNode.properties?.step_parameters)) {
             const stepIdx = parseInt(stepMatch[1], 10);
             const fieldKey = stepMatch[2];
-            const stepObj = ownerNode.properties.step_parameters[stepIdx];
+            const nextSteps = ownerNode.properties.step_parameters.map((s: any) => ({ ...(s || {}) }));
+            const stepObj = nextSteps[stepIdx];
             if (stepObj && stepObj[fieldKey] !== undefined) {
                 if (dest.baseValue === undefined || !Number.isFinite(dest.baseValue)) {
                     dest.baseValue = Number(stepObj[fieldKey]);
@@ -239,11 +281,13 @@ export function applyRandomModulation(
                     stepObj.subdivision_enabled = newVal > 1;
                 }
                 if (typeof ownerNode.updateProperty === 'function') {
-                    ownerNode.updateProperty('step_parameters', [...ownerNode.properties.step_parameters]);
+                    ownerNode.updateProperty('step_parameters', nextSteps);
+                } else {
+                    ownerNode.properties.step_parameters = nextSteps;
                 }
                 const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
                 if (cachedNode) {
-                    cachedNode.step_parameters = ownerNode.properties.step_parameters.map((s: any) => ({ ...s }));
+                    cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
                 }
                 updatedAny = true;
             }
@@ -251,15 +295,17 @@ export function applyRandomModulation(
         }
 
         // Check if destination targets all steps in step_parameters (e.g. paramKey is 'velocity', 'offset', 'probability', 'subdivisions')
-        if (Array.isArray(ownerNode.properties?.step_parameters) && ['velocity', 'offset', 'probability', 'subdivisions'].includes(dest.paramKey)) {
+        if (['velocity', 'offset', 'probability', 'subdivisions', 'sample_start', 'gate_length'].includes(dest.paramKey) && (ownerNode.type === 'Audio/Sequence' || ownerNode.properties?.node_type === 'sequence' || Array.isArray(ownerNode.properties?.step_parameters))) {
+            ensureOwnerStepParameters();
             const fieldKey = dest.paramKey;
             const factorGen = options.randomFactorGenerator || Math.random;
             if (!dest.baseValueArray || !Array.isArray(dest.baseValueArray) || dest.baseValueArray.length !== ownerNode.properties.step_parameters.length) {
-                dest.baseValueArray = ownerNode.properties.step_parameters.map((s: any) => Number(s?.[fieldKey] ?? 0));
+                dest.baseValueArray = ownerNode.properties.step_parameters.map((s: any) => Number(s?.[fieldKey] ?? (fieldKey === 'velocity' || fieldKey === 'gate_length' || fieldKey === 'subdivisions' || fieldKey === 'probability' ? 1 : 0)));
             }
             const baseValues: number[] = dest.baseValueArray || [];
-            for (let i = 0; i < ownerNode.properties.step_parameters.length; i++) {
-                const stepObj = ownerNode.properties.step_parameters[i];
+            const nextSteps = ownerNode.properties.step_parameters.map((s: any) => ({ ...(s || {}) }));
+            for (let i = 0; i < nextSteps.length; i++) {
+                const stepObj = nextSteps[i];
                 if (stepObj && stepObj[fieldKey] !== undefined) {
                     const stepBase = baseValues[i] ?? Number(stepObj[fieldKey]);
                     const factor = factorGen();
@@ -281,11 +327,13 @@ export function applyRandomModulation(
                 }
             }
             if (typeof ownerNode.updateProperty === 'function') {
-                ownerNode.updateProperty('step_parameters', [...ownerNode.properties.step_parameters]);
+                ownerNode.updateProperty('step_parameters', nextSteps);
+            } else {
+                ownerNode.properties.step_parameters = nextSteps;
             }
             const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
             if (cachedNode) {
-                cachedNode.step_parameters = ownerNode.properties.step_parameters.map((s: any) => ({ ...s }));
+                cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
             }
             updatedAny = true;
             continue;
@@ -372,7 +420,8 @@ export function restoreBaseValues(modifierNode: any, ownerNode: any): void {
         if (stepMatch && Array.isArray(ownerNode.properties?.step_parameters)) {
             const stepIdx = parseInt(stepMatch[1], 10);
             const fieldKey = stepMatch[2];
-            const stepObj = ownerNode.properties.step_parameters[stepIdx];
+            const nextSteps = ownerNode.properties.step_parameters.map((s: any) => ({ ...(s || {}) }));
+            const stepObj = nextSteps[stepIdx];
             if (stepObj && dest.baseValue !== undefined && Number.isFinite(dest.baseValue)) {
                 stepObj[fieldKey] = dest.baseValue;
                 if (fieldKey === 'subdivisions') {
@@ -380,22 +429,25 @@ export function restoreBaseValues(modifierNode: any, ownerNode: any): void {
                 }
                 dest.currentValue = dest.baseValue;
                 if (typeof ownerNode.updateProperty === 'function') {
-                    ownerNode.updateProperty('step_parameters', [...ownerNode.properties.step_parameters]);
+                    ownerNode.updateProperty('step_parameters', nextSteps);
+                } else {
+                    ownerNode.properties.step_parameters = nextSteps;
                 }
                 const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
                 if (cachedNode) {
-                    cachedNode.step_parameters = ownerNode.properties.step_parameters.map((s: any) => ({ ...s }));
+                    cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
                 }
             }
             continue;
         }
 
         // Handle all steps restoration when targeting 'velocity', 'offset', 'probability', 'subdivisions'
-        if (Array.isArray(ownerNode.properties?.step_parameters) && ['velocity', 'offset', 'probability', 'subdivisions'].includes(dest.paramKey)) {
+        if (Array.isArray(ownerNode.properties?.step_parameters) && ['velocity', 'offset', 'probability', 'subdivisions', 'sample_start', 'gate_length'].includes(dest.paramKey)) {
             const fieldKey = dest.paramKey;
             if (dest.baseValueArray && Array.isArray(dest.baseValueArray)) {
-                for (let i = 0; i < ownerNode.properties.step_parameters.length; i++) {
-                    const stepObj = ownerNode.properties.step_parameters[i];
+                const nextSteps = ownerNode.properties.step_parameters.map((s: any) => ({ ...(s || {}) }));
+                for (let i = 0; i < nextSteps.length; i++) {
+                    const stepObj = nextSteps[i];
                     if (stepObj && dest.baseValueArray[i] !== undefined) {
                         stepObj[fieldKey] = dest.baseValueArray[i];
                         if (fieldKey === 'subdivisions') {
@@ -404,11 +456,13 @@ export function restoreBaseValues(modifierNode: any, ownerNode: any): void {
                     }
                 }
                 if (typeof ownerNode.updateProperty === 'function') {
-                    ownerNode.updateProperty('step_parameters', [...ownerNode.properties.step_parameters]);
+                    ownerNode.updateProperty('step_parameters', nextSteps);
+                } else {
+                    ownerNode.properties.step_parameters = nextSteps;
                 }
                 const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
                 if (cachedNode) {
-                    cachedNode.step_parameters = ownerNode.properties.step_parameters.map((s: any) => ({ ...s }));
+                    cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
                 }
             }
             continue;

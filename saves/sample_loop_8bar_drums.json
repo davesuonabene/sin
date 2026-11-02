@@ -72,7 +72,7 @@
           "bpm": "global",
           "target_bpm": 102,
           "total_bars": "global",
-          "color": "#4f46e5",
+          "color": "#0f172a",
           "icon": "mixer",
           "shape": "diamond",
           "node_type": "track",
@@ -81,9 +81,9 @@
           "original_bpm": 102,
           "key": "Fmin"
         },
-        "color": "#4f46e5",
-        "bgcolor": "#4f46e5",
-        "boxcolor": "#4338ca",
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b",
         "shape": 1
       },
       {
@@ -275,16 +275,16 @@
           "selected_step": 0,
           "seed": 102,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#7c3aed",
           "icon": "sequence",
           "shape": "square",
           "is_main_preview": false,
           "target_bpm": 102,
           "bpm": 102
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed",
         "shape": 1
       },
       {
@@ -362,7 +362,7 @@
               }
             }
           ],
-          "color": "#10b981",
+          "color": "#7c3aed",
           "icon": "sample",
           "shape": "circle",
           "is_main_preview": false,
@@ -370,9 +370,9 @@
           "asset_modifier_id": 11,
           "key_match_target": ""
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed",
         "shape": 1
       },
       {
@@ -448,7 +448,7 @@
           "quant_anchor": "start",
           "seed": 45,
           "start_beat": 0,
-          "color": "#f59e0b",
+          "color": "#ea580c",
           "icon": "arrangement",
           "shape": "square",
           "is_main_preview": false,
@@ -457,9 +457,9 @@
           "target_bpm": 102,
           "bpm": 102
         },
-        "color": "#f59e0b",
-        "bgcolor": "#f59e0b",
-        "boxcolor": "#d97706",
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c",
         "shape": 1
       },
       {
@@ -651,16 +651,16 @@
           "selected_step": 0,
           "seed": 103,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#ea580c",
           "icon": "sequence",
           "shape": "square",
           "is_main_preview": false,
           "target_bpm": 102,
           "bpm": 102
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c",
         "shape": 1
       },
       {
@@ -738,7 +738,7 @@
               }
             }
           ],
-          "color": "#10b981",
+          "color": "#ea580c",
           "icon": "sample",
           "shape": "circle",
           "is_main_preview": false,
@@ -746,9 +746,9 @@
           "asset_modifier_id": 15,
           "key_match_target": ""
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c",
         "shape": 1
       },
       {
@@ -1002,16 +1002,16 @@
           "selected_step": 0,
           "seed": 101,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#0284c7",
           "icon": "sequence",
           "shape": "square",
           "is_main_preview": false,
           "target_bpm": 102,
           "bpm": 102
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
         "shape": 1
       },
       {
@@ -1089,7 +1089,7 @@
               }
             }
           ],
-          "color": "#10b981",
+          "color": "#0284c7",
           "icon": "sample",
           "shape": "circle",
           "is_main_preview": false,
@@ -1097,9 +1097,9 @@
           "asset_modifier_id": 7,
           "key_match_target": ""
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
         "shape": 1
       },
       {
@@ -1282,7 +1282,7 @@
           "stretch_mode": "time_stretch",
           "stretch_factor": 1,
           "chain": [],
-          "color": "#10b981",
+          "color": "#059669",
           "icon": "sample",
           "shape": "circle",
           "is_main_preview": false,
@@ -1291,8 +1291,8 @@
           "key_match_target": "",
           "duration_seconds": 61.1765
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
+        "color": "#059669",
+        "bgcolor": "#059669",
         "boxcolor": "#059669",
         "shape": 1
       },
@@ -1369,7 +1369,7 @@
           "quant_anchor": "start",
           "seed": 42,
           "start_beat": 0,
-          "color": "#f59e0b",
+          "color": "#059669",
           "icon": "arrangement",
           "shape": "square",
           "is_main_preview": false,
@@ -1381,9 +1381,9 @@
           "bpm": 102,
           "key": "Fmin"
         },
-        "color": "#f59e0b",
-        "bgcolor": "#f59e0b",
-        "boxcolor": "#d97706",
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669",
         "shape": 1
       },
       {
@@ -1459,7 +1459,7 @@
           "quant_anchor": "start",
           "seed": 43,
           "start_beat": 0,
-          "color": "#f59e0b",
+          "color": "#0284c7",
           "icon": "arrangement",
           "shape": "square",
           "is_main_preview": false,
@@ -1468,9 +1468,9 @@
           "target_bpm": 102,
           "bpm": 102
         },
-        "color": "#f59e0b",
-        "bgcolor": "#f59e0b",
-        "boxcolor": "#d97706",
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
         "shape": 1
       },
       {
@@ -1546,7 +1546,7 @@
           "quant_anchor": "start",
           "seed": 44,
           "start_beat": 0,
-          "color": "#f59e0b",
+          "color": "#7c3aed",
           "icon": "arrangement",
           "shape": "square",
           "is_main_preview": false,
@@ -1555,9 +1555,9 @@
           "target_bpm": 102,
           "bpm": 102
         },
-        "color": "#f59e0b",
-        "bgcolor": "#f59e0b",
-        "boxcolor": "#d97706",
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed",
         "shape": 1
       }
     ],
@@ -1568,7 +1568,8 @@
         0,
         2,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         2,
@@ -1576,7 +1577,8 @@
         0,
         1,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         3,
@@ -1584,7 +1586,8 @@
         0,
         4,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         4,
@@ -1592,7 +1595,8 @@
         0,
         1,
         1,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         5,
@@ -1600,7 +1604,8 @@
         0,
         5,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         6,
@@ -1608,7 +1613,8 @@
         0,
         8,
         0,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         7,
@@ -1616,7 +1622,8 @@
         0,
         1,
         2,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         8,
@@ -1624,7 +1631,8 @@
         0,
         9,
         0,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         9,
@@ -1632,7 +1640,8 @@
         0,
         12,
         0,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         10,
@@ -1640,7 +1649,8 @@
         0,
         1,
         3,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         11,
@@ -1648,7 +1658,8 @@
         0,
         13,
         0,
-        "audio"
+        "audio",
+        "#ea580c"
       ]
     ],
     "groups": [],

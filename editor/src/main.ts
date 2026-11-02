@@ -20,7 +20,7 @@ import { MasterWaveform } from './ui/MasterWaveform';
 import { RuntimeLogPanel } from './ui/RuntimeLogPanel';
 import { EngineSyncManager } from './ui/EngineSyncManager';
 import { appendServerRuntimeLog, installFetchLogging, loggedTask, runtimeLog, updateEngineTelemetry } from './runtimeLog';
-import { attachGhostProperties, createGhostNode, detachGhostDependents, isGhostNode, syncGhostTrackData } from './ghosts';
+import { attachGhostProperties, createGhostNode, detachGhostDependents, getGhostSource, isGhostNode, syncGhostTrackData } from './ghosts';
 import { installSeparatedNodeClipboard } from './nodeClipboard';
 import { clearLibraryCache, fetchLibrary, findLibraryFile, findLibraryFileById, findLibraryFileForPoolLocator, refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from './api';
 import { serializeNodeSubtree } from '../../ermes/ts/serializer';
@@ -29,6 +29,8 @@ import { resolveAssignedRandomModifiers } from '../../ermes/ts/randomResolver';
 import { defaultTransportClock } from '../../packages/iride/src/index.ts';
 import { clearAudioBufferCache, fetchAudioBuffer } from './audioBufferCache';
 import { globalAudioScheduler } from './audioScheduler';
+import { getNodeGainMultiplier } from './audioCompositor';
+import { applySignalFlowColors } from './graphColorEngine';
 
 const appElement = document.getElementById('app');
 if (!appElement) throw new Error('Could not find #app element');
@@ -60,7 +62,7 @@ topHeader.innerHTML = `
                         <button id="new-stage-btn" class="header-menu-action sin-menu-item">New</button>
                         <div class="header-menu-separator sin-menu-divider"></div>
                         <label class="header-menu-label" for="workspace-preset-select">Workspace</label>
-                        <select id="workspace-preset-select" class="header-select workspace-preset-select sin-select" aria-label="Workspace preset">
+                        <select id="workspace-preset-select" class="header-select workspace-preset-select sin-select" aria-label="Workspace save">
                             <option value="">No saved workspaces</option>
                         </select>
                         <div class="header-menu-row">
@@ -189,7 +191,11 @@ floatingObserver.observe(dockviewContainer, {
     subtree: true
 });
 
-window.addEventListener('pointermove', scheduleFloatingPanelClamp, { passive: true });
+window.addEventListener('pointermove', (e: PointerEvent) => {
+    if (e.buttons > 0) {
+        scheduleFloatingPanelClamp();
+    }
+}, { passive: true });
 
 const tempFilesSelect = playbackFooter.querySelector('#temp-files-select') as HTMLSelectElement;
 const masterPlayer = playbackFooter.querySelector('#master-player') as HTMLAudioElement;
@@ -262,7 +268,7 @@ function setGlobalParameters(values: Partial<GlobalParameters>, graph?: LGraph) 
         }
     }
     window.dispatchEvent(new CustomEvent('global-parameters-changed', { detail: { ...globalParameters } }));
-    fetch('/api/preview/invalidate', { method: 'POST' }).catch(() => {});
+    fetch('/api/preview/invalidate', { method: 'POST' }).catch(() => { });
     if (globalAudioScheduler.getIsPlaying()) {
         const targetId = (activeRamPreviewNodeId != null && targetGraph?.getNodeById(activeRamPreviewNodeId))
             ? activeRamPreviewNodeId
@@ -596,7 +602,7 @@ function attachMasterMediaElementSource(): void {
     }
     if (!ctx) return;
     if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
+        ctx.resume().catch(() => { });
     }
     try {
         const sourceNode = ctx.createMediaElementSource(masterPlayer);
@@ -668,9 +674,13 @@ function tickPlaybackTelemetry() {
         masterWaveform.setPlayback(curTime, dur);
     }
 
-    defaultTransportClock.setBpm(globalParameters.bpm);
+    defaultTransportClock.setBpm(
+        globalAudioScheduler.getIsPlaying()
+            ? (globalAudioScheduler.getBpm() || globalParameters.bpm)
+            : globalParameters.bpm
+    );
     defaultTransportClock.update(curTime, dur, isPlaying);
-    (window as any).editorCanvas?.setDirty?.(true, true);
+    (window as any).editorCanvas?.setDirty?.(true, false);
 
     if (isPlaying) {
         telemetryAnimationFrame = requestAnimationFrame(tickPlaybackTelemetry);
@@ -967,6 +977,7 @@ function prepareWorkspaceGraph(rawGraph: any) {
             return makeDisabledNodeInfo(nodeInfo, reason);
         }
     });
+    applySignalFlowColors(graphInfo);
     return graphInfo;
 }
 
@@ -1052,6 +1063,7 @@ function graphResolutionNodes(graph: LGraph, rootNodeId?: number): any[] {
 function markNodeAndAncestorsInvalidated(graph: LGraph, nodeId: number) {
     const visited = new Set<number>();
     const pending = [nodeId];
+    const allNodes = (((graph as any)._nodes || []) as any[]);
     while (pending.length > 0) {
         const currId = pending.pop();
         if (currId == null || visited.has(currId)) continue;
@@ -1059,7 +1071,20 @@ function markNodeAndAncestorsInvalidated(graph: LGraph, nodeId: number) {
         const node = graph.getNodeById(currId);
         if (node) {
             (node as any).isInvalidated = true;
+            (node as any)._cachedMixedInput = null;
+            (node as any)._cachedCompositedBuffer = null;
+            (node as any)._lastRenderedBuffer = null;
+            delete (node as any).manifestStemBuffer;
             (node as any).setDirtyCanvas?.(true, true);
+        }
+        // Invalidate any ghost nodes linked to this source node
+        for (const candidate of allNodes) {
+            if (candidate && candidate.id != null && !visited.has(candidate.id)) {
+                const ghostSrc = getGhostSource(candidate, graph);
+                if (ghostSrc && ghostSrc.id === currId) {
+                    pending.push(candidate.id);
+                }
+            }
         }
         // In LiteGraph, audio links flow from child (origin) to parent/mixer (target).
         // Downstream ancestors that depend on this node are connected to its outputs.
@@ -1362,7 +1387,7 @@ async function loadWorkspacePreset(name: string) {
         cancelScheduledStageSave();
         if (stageSaveInFlight && stageSaveCompletion) await stageSaveCompletion;
         stageHydrating = true;
-        setStageSaveState('loading', `Loading workspace preset ${name}`);
+        setStageSaveState('loading', `Loading workspace ${name}`);
         const response = await fetch(`/api/workspaces/${encodeURIComponent(name)}`);
         if (!response.ok) {
             const data = await response.json().catch(() => ({}));
@@ -1466,7 +1491,7 @@ newStageBtn.addEventListener('click', () => {
 });
 
 saveWorkspaceAsBtn.addEventListener('click', async () => {
-    const name = window.prompt('Workspace preset name:');
+    const name = window.prompt('Save workspace as:');
     if (!name?.trim()) return;
     await saveWorkspacePreset(name.trim());
 });
@@ -1484,7 +1509,7 @@ loadWorkspaceBtn.addEventListener('click', async () => {
 
 deleteWorkspaceBtn.addEventListener('click', async () => {
     const name = workspacePresetSelect.value;
-    if (!name || !window.confirm(`Delete workspace preset "${name}"?`)) return;
+    if (!name || !window.confirm(`Delete workspace "${name}"?`)) return;
     try {
         const response = await fetch(`/api/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE' });
         if (!response.ok) {
@@ -1495,7 +1520,7 @@ deleteWorkspaceBtn.addEventListener('click', async () => {
         fileMenu.open = false;
         setWorkspaceButtonMessage(deleteWorkspaceBtn, 'Deleted', 'Delete');
     } catch (error) {
-        console.error('Could not delete workspace preset', error);
+        console.error('Could not delete workspace', error);
         setWorkspaceButtonMessage(deleteWorkspaceBtn, 'Delete failed', 'Delete');
     }
 });
@@ -1523,7 +1548,7 @@ refreshLibraryBtn?.addEventListener('click', async () => {
     const graph = (window as any).editorGraph as LGraph | undefined;
     const canvas = (window as any).editorCanvas as LGraphCanvas | undefined;
     if (graph) {
-        await syncGraphSampleMetadataFromLibrary(graph, false).catch(() => {});
+        await syncGraphSampleMetadataFromLibrary(graph, false).catch(() => { });
         canvas?.setDirty(true, true);
     }
 });
@@ -1688,6 +1713,31 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
     if (isTyping) {
         return;
     }
+    if (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27) {
+        const graphCanvas = (window as any).editorCanvas as LGraphCanvas | undefined;
+        let changed = false;
+        if (graphCanvas?.selected_nodes && Object.keys(graphCanvas.selected_nodes).length > 0) {
+            graphCanvas.deselectAllNodes?.();
+            changed = true;
+        }
+        if (selectedLinkIds.size > 0) {
+            selectedLinkIds.clear();
+            changed = true;
+        }
+        if (changed) {
+            graphCanvas?.setDirty?.(true, true);
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+    }
+    if ((e.code === 'Delete' || e.code === 'Backspace' || e.key === 'Delete' || e.key === 'Backspace' || e.keyCode === 46 || e.keyCode === 8) && !isTyping) {
+        if (deleteSelectedCables()) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+    }
     if (e.code === 'Space' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
         if (activeEl && (activeEl.tagName === 'SELECT' || activeEl.closest('.dialog-modal') || activeEl.closest('.sin-modal'))) {
             return;
@@ -1703,7 +1753,7 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
         e.preventDefault();
         togglePropertiesPanel();
     }
-});
+}, true);
 
 globalPreviewBtn.addEventListener('click', () => {
     if (globalPreviewBtn.disabled) return;
@@ -1729,13 +1779,12 @@ previewRecalculateBtn.addEventListener('click', async () => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ node_ids: [] })
-        }).catch(() => {});
+        }).catch(() => { });
 
         if (graph) {
             for (const node of ((graph as any)._nodes || [])) {
                 if (node) {
                     (node as any).isInvalidated = true;
-                    delete (node as any).manifestStemBuffer;
                     (node as any).setDirtyCanvas?.(true, true);
                 }
             }
@@ -1785,7 +1834,7 @@ function clearActiveWorkspaceManifest() {
     (window as any).activeRamPreviewBuffer = null;
     globalAudioScheduler.reset();
     clearAudioBufferCache();
-    fetch('/api/preview/clear', { method: 'POST' }).catch(() => {});
+    fetch('/api/preview/clear', { method: 'POST' }).catch(() => { });
     const graph = (window as any).editorGraph as LGraph;
     if (graph) {
         const nodes = (((graph as any)._nodes || []) as any[]);
@@ -1948,10 +1997,58 @@ LiteGraph.NODE_TEXT_SIZE = 13;
 LiteGraph.NODE_SUBTEXT_SIZE = 0;
 LiteGraph.NODE_DEFAULT_SHAPE = "box" as any;
 
-// Cable Breaker cursor SVG Data URI
-const BREAKER_CURSOR = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23ef4444' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='6' cy='6' r='3'/><circle cx='6' cy='18' r='3'/><line x1='8.5' y1='7.5' x2='18' y2='17'/><line x1='8.5' y1='16.5' x2='18' y2='7'/></svg>") 12 12, pointer`;
-
 let hoveredLink: any = null;
+const selectedLinkIds: Set<number> = new Set();
+(window as any).selectedLinkIds = selectedLinkIds;
+
+export function deleteSelectedCables(graph?: LGraph): boolean {
+    if (selectedLinkIds.size === 0) return false;
+    const targetGraph = graph || ((window as any).editorGraph as LGraph) || ((window as any).editorCanvas?.graph as LGraph);
+    if (!targetGraph) return false;
+
+    const idsToDelete = Array.from(selectedLinkIds);
+    selectedLinkIds.clear();
+    hoveredLink = null;
+
+    let removed = false;
+    for (const linkId of idsToDelete) {
+        const linksMap = targetGraph.links as Record<string | number, any> | undefined;
+        const link = linksMap ? (linksMap[linkId] || linksMap[String(linkId)]) : null;
+        if (link) {
+            const branchOwner = targetGraph.getNodeById(link.__sinLeftPortBranchOwnerId);
+            if (branchOwner?.properties?.left_port_branch_links) {
+                delete branchOwner.properties.left_port_branch_links[String(linkId)];
+            }
+            const targetNode = targetGraph.getNodeById(link.target_id);
+            if (targetNode) {
+                targetNode.disconnectInput(link.target_slot);
+            }
+            const originNode = targetGraph.getNodeById(link.origin_id);
+            if (originNode) {
+                originNode.disconnectOutput(link.origin_slot);
+            }
+            targetGraph.removeLink(linkId);
+            removed = true;
+        } else {
+            targetGraph.removeLink(linkId);
+            removed = true;
+        }
+        if (linksMap) {
+            delete linksMap[linkId];
+            delete linksMap[String(linkId)];
+        }
+    }
+
+    if (removed) {
+        syncGraphHierarchy(targetGraph);
+        updateGraphNodeCollapsing();
+        window.dispatchEvent(new CustomEvent('graph-connections-changed'));
+        (window as any).editorCanvas?.setDirty?.(true, true);
+        scheduleStageSave();
+    }
+    return true;
+}
+(window as any).deleteSelectedCables = deleteSelectedCables;
 const LEFT_PORT_BRANCH_INPUT = '__sinLeftPortBranchInput';
 
 function markLeftPortBranch(link: any, sourceNode: any, inputSlot: number) {
@@ -2091,14 +2188,58 @@ const originalProcessKey = (LiteGraph as any).LGraphCanvas.prototype.processKey;
     if (e.keyCode === 32 || e.code === 'Space') {
         return;
     }
+    if (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27) {
+        let changed = false;
+        if (this.selected_nodes && Object.keys(this.selected_nodes).length > 0) {
+            this.deselectAllNodes?.();
+            changed = true;
+        }
+        if (selectedLinkIds.size > 0) {
+            selectedLinkIds.clear();
+            changed = true;
+        }
+        if (changed) {
+            this.setDirty(true, true);
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+    }
+    if (e.keyCode === 46 || e.keyCode === 8 || e.code === 'Delete' || e.code === 'Backspace' || e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedLinkIds.size > 0) {
+            deleteSelectedCables(this.graph);
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+        }
+    }
     return originalProcessKey ? originalProcessKey.apply(this, arguments) : undefined;
 };
+
+let lastMouseDownPos: [number, number] | null = null;
+let lastMouseDownHitNode: any = null;
+let lastMouseDownWasEmptyBackground = false;
 
 const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.processMouseDown;
 (LiteGraph as any).LGraphCanvas.prototype.processMouseDown = function (e: MouseEvent) {
     const previousAllowDragCanvas = this.allow_dragcanvas;
-    const boxSelect = e.button === 0 && e.shiftKey && !e.ctrlKey;
+    const offset = this.convertEventToCanvasOffset ? this.convertEventToCanvasOffset(e) : [0, 0];
+    const hitNode = this.getNodeOnPos ? this.getNodeOnPos(offset[0], offset[1], (this.graph as any)?._nodes, 0) : null;
+    const emptyCanvasDrag = e.button === 0 && !hitNode && !this.connecting_node && !hoveredLink;
+    const boxSelect = (e.button === 0 && e.shiftKey && !e.ctrlKey) || emptyCanvasDrag;
     const additiveSelect = e.button === 0 && e.ctrlKey && !e.shiftKey;
+
+    lastMouseDownPos = [e.clientX, e.clientY];
+    lastMouseDownHitNode = hitNode;
+    lastMouseDownWasEmptyBackground = Boolean(emptyCanvasDrag);
+
+    // If clicking a node or background without shift/ctrl, deselect cables
+    if (e.button === 0 && !e.shiftKey && !e.ctrlKey && !hoveredLink) {
+        if (selectedLinkIds.size > 0) {
+            selectedLinkIds.clear();
+            this.setDirty(true, true);
+        }
+    }
 
     // Priority 1: Check if an action button on any node was clicked.
     // Must be handled BEFORE LiteGraph's output slot hitbox detection
@@ -2196,6 +2337,38 @@ const originalProcessMouseMove = (LiteGraph as any).LGraphCanvas.prototype.proce
     return res;
 };
 
+// Render theme-cohesive styled box selection instead of invisible #FFF stroke on white canvas
+const originalDrawFrontCanvas = (LiteGraph as any).LGraphCanvas.prototype.drawFrontCanvas;
+(LiteGraph as any).LGraphCanvas.prototype.drawFrontCanvas = function () {
+    const rect = this.dragging_rectangle;
+    if (rect) {
+        this.dragging_rectangle = null;
+    }
+    const res = originalDrawFrontCanvas ? originalDrawFrontCanvas.apply(this, arguments) : undefined;
+    if (rect) {
+        this.dragging_rectangle = rect;
+        const ctx = this.ctx || this.canvas?.getContext?.('2d');
+        if (ctx && this.ds) {
+            ctx.save();
+            this.ds.toCanvasContext(ctx);
+
+            const rx = rect[2] < 0 ? rect[0] + rect[2] : rect[0];
+            const ry = rect[3] < 0 ? rect[1] + rect[3] : rect[1];
+            const rw = Math.abs(rect[2]);
+            const rh = Math.abs(rect[3]);
+
+            ctx.fillStyle = 'rgba(2, 132, 199, 0.08)';
+            ctx.fillRect(rx, ry, rw, rh);
+            ctx.strokeStyle = '#0284c7';
+            ctx.lineWidth = 1.25 / this.ds.scale;
+            ctx.setLineDash([4 / this.ds.scale, 2 / this.ds.scale]);
+            ctx.strokeRect(rx, ry, rw, rh);
+            ctx.restore();
+        }
+    }
+    return res;
+};
+
 const originalProcessNodeSelected = (LiteGraph as any).LGraphCanvas.prototype.processNodeSelected;
 (LiteGraph as any).LGraphCanvas.prototype.processNodeSelected = function (node: any, e: MouseEvent) {
     const keepGroup = node?.is_selected
@@ -2216,7 +2389,54 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
     const nodeOver = this.node_over;
     const leftPortBranchInput = connectingOutput?.[LEFT_PORT_BRANCH_INPUT];
 
+    const mouseDownPos = lastMouseDownPos;
+    const mouseDownHitNode = lastMouseDownHitNode;
+    const wasEmptyBg = lastMouseDownWasEmptyBackground;
+    const isLeftButton = e.button === 0;
+    const isSimpleClick = Boolean(mouseDownPos && Math.hypot(e.clientX - mouseDownPos[0], e.clientY - mouseDownPos[1]) < 6);
+
+    const hadDraggingRect = Boolean(this.dragging_rectangle);
+    const draggingRectW = this.dragging_rectangle ? Math.abs(this.dragging_rectangle[2]) : 0;
+    const draggingRectH = this.dragging_rectangle ? Math.abs(this.dragging_rectangle[3]) : 0;
+
     const res = originalProcessMouseUp.call(this, e);
+
+    if (isLeftButton && !e.shiftKey && !e.ctrlKey && !connectingNode) {
+        if (wasEmptyBg) {
+            const isSmallClick = isSimpleClick || (hadDraggingRect && draggingRectW <= 10 && draggingRectH <= 10);
+            if (isSmallClick) {
+                // Clicked on empty canvas background -> deselect everything
+                this.deselectAllNodes?.();
+                if (selectedLinkIds.size > 0) {
+                    selectedLinkIds.clear();
+                }
+                this.setDirty(true, true);
+            } else if (hadDraggingRect && (draggingRectW > 10 || draggingRectH > 10)) {
+                // Box drag released on canvas -> if box enclosed 0 nodes, clear selection
+                if (!this.selected_nodes || Object.keys(this.selected_nodes).length === 0) {
+                    this.deselectAllNodes?.();
+                    if (selectedLinkIds.size > 0) {
+                        selectedLinkIds.clear();
+                    }
+                    this.setDirty(true, true);
+                } else if (selectedLinkIds.size > 0) {
+                    selectedLinkIds.clear();
+                    this.setDirty(true, true);
+                }
+            }
+        } else if (isSimpleClick && mouseDownHitNode) {
+            // Clicked on a node without drag -> ensure ONLY this node is selected
+            if (Object.keys(this.selected_nodes || {}).length > 1 || !this.selected_nodes?.[mouseDownHitNode.id]) {
+                this.selectNodes([mouseDownHitNode], false);
+                this.setDirty(true, true);
+                this.onNodeSelected?.(mouseDownHitNode);
+            }
+            if (selectedLinkIds.size > 0) {
+                selectedLinkIds.clear();
+                this.setDirty(true, true);
+            }
+        }
+    }
 
     // A normal connection consumes the temporary marker in `connect`. For the
     // empty-canvas node picker, retain the intent locally until its callback.
@@ -2254,7 +2474,7 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
         }
 
         popupMenu.show(clientX, clientY, (nodeType) => {
-                const newNode = addRootNode(nodeType, canvasPos);
+            const newNode = addRootNode(nodeType, canvasPos);
             if (newNode && connectingNode) {
                 if (isOutput && Number.isInteger(leftPortBranchInput)) {
                     // A left-port branch creates a child of the clicked node:
@@ -2323,10 +2543,10 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
 };
 
 // Custom renderLink override:
-// 1. Keeps slate color when moving nodes (prevents white highlight flash)
+// 1. Keeps route signal color and shows selection halo when selected
 // 2. Removes center anchor dots
 // 3. Renders full unbroken straight lines from Point A to Point B without input/output stub breaks
-// 4. Highlights cable in bright red (#ef4444) when hovered by Breaker cursor
+// 4. Highlights cable smoothly when hovered without automatic cutting
 (LiteGraph as any).LGraphCanvas.prototype.renderLink = function (
     ctx: CanvasRenderingContext2D,
     a: [number, number],
@@ -2341,16 +2561,37 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
     }
 
     const isHovered = hoveredLink && link && link.id === hoveredLink.id;
-    const lineColor = isHovered ? "#ef4444" : (color || (link && link.color) || "#94a3b8");
+    const isSelected = link && selectedLinkIds.has(link.id);
+    const baseColor = color || (link && link.color) || "#94a3b8";
 
     ctx.save();
-    ctx.lineWidth = isHovered ? (this.connections_width || 2) + 1.5 : (this.connections_width || 2);
-    ctx.strokeStyle = lineColor;
-    ctx.fillStyle = lineColor;
+    const baseWidth = this.connections_width || 2;
+    const endpoints = getLinkEndpoints(this.graph, link, a, b);
+
+    if (isSelected) {
+        // High-visibility selection halo
+        ctx.lineWidth = baseWidth + 3.5;
+        ctx.strokeStyle = "rgba(2, 132, 199, 0.45)";
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(endpoints.origin[0], endpoints.origin[1]);
+        ctx.lineTo(endpoints.target[0], endpoints.target[1]);
+        ctx.stroke();
+
+        ctx.lineWidth = baseWidth + 1;
+        ctx.strokeStyle = "#0284c7";
+    } else if (isHovered) {
+        ctx.lineWidth = baseWidth + 1.5;
+        ctx.strokeStyle = baseColor;
+    } else {
+        ctx.lineWidth = baseWidth;
+        ctx.strokeStyle = baseColor;
+    }
+
+    ctx.fillStyle = ctx.strokeStyle;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-
-    const endpoints = getLinkEndpoints(this.graph, link, a, b);
 
     // Direct 1-to-1 full unbroken straight line
     ctx.beginPath();
@@ -2533,7 +2774,26 @@ function resolveMainPreviewNode(graph?: LGraph): any | null {
         }
     }
 
-    const firstRoot = (((graph as any)._nodes || []) as any[]).find(node =>
+    const nodes = (((graph as any)._nodes || []) as any[]);
+    const masterRoleNode = nodes.find(node =>
+        canBeMainPreview(node) && (node.properties?.role === 'master' || node.properties?.is_main_preview)
+    );
+    if (masterRoleNode) {
+        state.node_id = masterRoleNode.id;
+        return masterRoleNode;
+    }
+
+    const trackRoot = nodes.find(node =>
+        canBeMainPreview(node)
+        && (node.type === 'Audio/Track' || node.properties?.node_type === 'track')
+        && trackNodes.get(node.id)?.parentId == null
+    );
+    if (trackRoot) {
+        state.node_id = trackRoot.id;
+        return trackRoot;
+    }
+
+    const firstRoot = nodes.find(node =>
         canBeMainPreview(node) && trackNodes.get(node.id)?.parentId == null
     ) || null;
     state.node_id = firstRoot?.id ?? null;
@@ -2624,26 +2884,6 @@ function closeAllParamWindows(exceptNodeId?: number) {
             }
         }
     }
-}
-
-function isNodeInSubtree(nodeId: number, targetId: number): boolean {
-    if (nodeId === targetId) return true;
-    const data = trackNodes.get(nodeId);
-    if (!data || !data.children) return false;
-    for (const childId of data.children) {
-        if (isNodeInSubtree(childId, targetId)) return true;
-    }
-    return false;
-}
-
-function isChildParamShown(parentId: number): boolean {
-    if (activeParamNodeId === null) return false;
-    const parentData = trackNodes.get(parentId);
-    if (!parentData || !parentData.children) return false;
-    for (const childId of parentData.children) {
-        if (isNodeInSubtree(childId, activeParamNodeId)) return true;
-    }
-    return false;
 }
 
 function syncBpmInheritance(graph?: LGraph) {
@@ -2801,6 +3041,7 @@ function syncGraphHierarchy(graph?: LGraph) {
     syncArrangementLengthInheritance(targetGraph);
     updateMainPreviewTarget(targetGraph);
     syncAllModifierPositions(targetGraph);
+    applySignalFlowColors(targetGraph);
 }
 
 let connectionsChangeTimer: any = null;
@@ -2833,7 +3074,7 @@ window.addEventListener('graph-connections-changed', () => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ node_ids: [] })
-        }).catch(() => {});
+        }).catch(() => { });
 
         // If active playback is ongoing, trigger seamless in-place hot-swap preview
         if (globalAudioScheduler.getIsPlaying()) {
@@ -2854,29 +3095,13 @@ function updateGraphNodeCollapsing() {
 
     syncGraphHierarchy(graph);
 
-    for (const [nodeId, data] of trackNodes.entries()) {
+    for (const nodeId of trackNodes.keys()) {
         const lgraphNode = graph.getNodeById(nodeId);
         if (!lgraphNode) continue;
 
-        if (isModifierNode(lgraphNode) || data.type === "modulator" || data.type === "asset_filter" || data.type === "random") {
-            lgraphNode.flags.collapsed = false;
-            (lgraphNode as any).flags.hidden = false;
-            (lgraphNode as any).collapsedDotMode = false;
-        } else if (data.parentId === null) {
-            lgraphNode.flags.collapsed = false;
-            (lgraphNode as any).flags.hidden = false;
-        } else {
-            const isSelfWindowOpen = (activeParamNodeId === nodeId);
-            const isSelfChildParamOpen = isChildParamShown(nodeId);
-
-            if (isSelfWindowOpen || isSelfChildParamOpen) {
-                lgraphNode.flags.collapsed = false;
-                (lgraphNode as any).flags.hidden = false;
-            } else {
-                lgraphNode.flags.collapsed = true;
-                (lgraphNode as any).flags.hidden = false;
-            }
-        }
+        lgraphNode.flags.collapsed = false;
+        (lgraphNode as any).flags.hidden = false;
+        (lgraphNode as any).collapsedDotMode = false;
     }
 
     syncAllModifierPositions(graph);
@@ -2983,7 +3208,7 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
                 node.manifestStemBuffer = buf;
                 node.setDirtyCanvas?.(true, true);
             }
-        }).catch(() => {});
+        }).catch(() => { });
     }
     if (panel) {
         if (!isFloatingPanel(panel)) {
@@ -3519,7 +3744,7 @@ function addChildNode(
             }
         }
     }
-    
+
     // Connect link in LiteGraph: Child output (0) -> Parent free input
     childNode.connect(0, parentNode, targetSlot);
 
@@ -3782,6 +4007,65 @@ function addRootNode(
     return rootNode;
 }
 
+function insertNodeIntoLink(
+    targetLink: any,
+    nodeType: "sample" | "item_pool" | "sequence" | "track" | "arrangement",
+    canvasPos: [number, number]
+): any | null {
+    const graph = (window as any).editorGraph as LGraph;
+    const canvas = (window as any).editorCanvas as LGraphCanvas;
+    if (!graph || !targetLink) return null;
+
+    const originNode = graph.getNodeById(targetLink.origin_id);
+    const targetNode = graph.getNodeById(targetLink.target_id);
+    if (!originNode || !targetNode) return null;
+
+    const originSlot = targetLink.origin_slot;
+    const targetSlot = targetLink.target_slot;
+    const linkId = targetLink.id;
+    const leftPortBranchInput = targetLink[LEFT_PORT_BRANCH_INPUT];
+
+    // 1. Create the new node centered at the insertion position
+    const newNode = addRootNode(nodeType, canvasPos);
+    if (!newNode) return null;
+
+    const width = newNode.size?.[0] || 140;
+    const height = newNode.size?.[1] || 80;
+    newNode.pos = [canvasPos[0] - width / 2, canvasPos[1] - height / 2];
+
+    // 2. Remove the original link to free the destination slot
+    graph.removeLink(linkId);
+
+    // 3. Connect originNode -> newNode (input 0)
+    if (newNode.inputs && newNode.inputs.length > 0) {
+        originNode.connect(originSlot, newNode, 0);
+    }
+
+    // 4. Connect newNode (output 0) -> targetNode (targetSlot)
+    if (newNode.outputs && newNode.outputs.length > 0) {
+        const newLink = newNode.connect(0, targetNode, targetSlot);
+        if (Number.isInteger(leftPortBranchInput)) {
+            markLeftPortBranch(newLink, targetNode, leftPortBranchInput);
+        }
+    }
+
+    // 5. Select the newly inserted node and focus it
+    if (canvas && typeof (canvas as any).selectNode === 'function') {
+        (canvas as any).selectNode(newNode);
+    }
+
+    // 6. Synchronize hierarchy, audio inheritance, collapsing, and engine
+    syncGraphHierarchy(graph);
+    updateGraphNodeCollapsing();
+    window.dispatchEvent(new CustomEvent('graph-connections-changed'));
+    if (canvas) {
+        canvas.setDirty(true, true);
+    }
+
+    return newNode;
+}
+(window as any).insertNodeIntoLink = insertNodeIntoLink;
+
 async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
     if (!node?.properties || isMidiLibraryItem(item)) return false;
 
@@ -3794,17 +4078,31 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
     const nodeName = item.name || item.filepath.split(/[\\/]/).pop() || "Sample";
     const sampleType = item.itemType === "one_shot" ? "one_shot" : "loop";
 
-    Object.assign(node.properties, {
-        node_name: nodeName,
-        node_type: "sample",
-        filepath: item.filepath,
-        sample_type: sampleType,
-        original_bpm: originalBpm,
-        target_bpm: targetBpm,
-        bpm: targetBpm,
-        key: latest ? String(latest.key ?? '') : (item.key || metadata.key || ""),
-        duration_seconds: item.duration_seconds ?? undefined
-    });
+    const resolvedKey = latest ? String(latest.key ?? '') : (item.key || metadata.key || "");
+    if (typeof node.updateProperty === 'function') {
+        node.updateProperty('node_name', nodeName);
+        node.updateProperty('sample_type', sampleType);
+        node.updateProperty('original_bpm', originalBpm);
+        node.updateProperty('target_bpm', targetBpm);
+        node.updateProperty('bpm', targetBpm);
+        node.updateProperty('key', resolvedKey);
+        if (item.duration_seconds !== undefined) {
+            node.updateProperty('duration_seconds', item.duration_seconds);
+        }
+        node.updateProperty('filepath', item.filepath);
+    } else {
+        Object.assign(node.properties, {
+            node_name: nodeName,
+            node_type: "sample",
+            filepath: item.filepath,
+            sample_type: sampleType,
+            original_bpm: originalBpm,
+            target_bpm: targetBpm,
+            bpm: targetBpm,
+            key: resolvedKey,
+            duration_seconds: item.duration_seconds ?? undefined
+        });
+    }
     node.title = nodeName;
 
     const data = trackNodes.get(node.id);
@@ -3817,11 +4115,15 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
             original_bpm: originalBpm,
             target_bpm: targetBpm,
             bpm: targetBpm,
-            key: latest ? String(latest.key ?? '') : (item.key || metadata.key || ""),
+            key: resolvedKey,
             duration_seconds: item.duration_seconds ?? undefined
         });
     }
 
+    const graph = (window as any).editorGraph as LGraph;
+    if (graph && !isGraphEvaluating()) {
+        markNodeAndAncestorsInvalidated(graph, node.id);
+    }
     node.setDirtyCanvas?.(true, true);
     window.dispatchEvent(new CustomEvent('arrangement-source-changed', {
         detail: { nodeId: node.id },
@@ -3966,8 +4268,14 @@ function addLibraryItemsToPool(node: any, items: LibraryDragItem[]) {
     }
 
     const selectedItems = [...byKey.values()];
-    node.properties.selected_items = selectedItems;
-    node.properties.seed = Math.random();
+    const nextSeed = Math.random();
+    if (typeof node.updateProperty === 'function') {
+        node.updateProperty('selected_items', selectedItems);
+        node.updateProperty('seed', nextSeed);
+    } else {
+        node.properties.selected_items = selectedItems;
+        node.properties.seed = nextSeed;
+    }
     const data = trackNodes.get(node.id);
     if (data) {
         data.selected_items = selectedItems;
@@ -4074,6 +4382,10 @@ let stageSaveQueued = false;
 let stageHydrating = false;
 let stageReady = false;
 let lastSavedStageFingerprint: string | null = null;
+const DEFAULT_STAGE_SAVE_DELAY_MS = 2500;
+const STAGE_SAVE_ERROR_COOLDOWN_MS = 8000;
+let lastStageSaveErrorAt = 0;
+let lastStageSaveErrorMessage: string | null = null;
 
 function setStageSaveState(state: StageSaveState, title?: string) {
     if (!stageSaveStatus) return;
@@ -4112,7 +4424,7 @@ function cancelScheduledStageSave() {
     stageSaveQueued = false;
 }
 
-function scheduleStageSave(delay = 650) {
+function scheduleStageSave(delay = DEFAULT_STAGE_SAVE_DELAY_MS) {
     if (!stageReady || stageHydrating || isGraphEvaluating()) return;
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
@@ -4125,10 +4437,20 @@ function scheduleStageSave(delay = 650) {
 
     setStageSaveState('unsaved');
     if (stageSaveTimer !== null) window.clearTimeout(stageSaveTimer);
+
+    let effectiveDelay = delay;
+    // For non-immediate auto-saves, back off if an error occurred recently to avoid hammering the network
+    if (delay > 0 && lastStageSaveErrorAt > 0) {
+        const elapsedSinceError = performance.now() - lastStageSaveErrorAt;
+        if (elapsedSinceError < STAGE_SAVE_ERROR_COOLDOWN_MS) {
+            effectiveDelay = Math.max(delay, STAGE_SAVE_ERROR_COOLDOWN_MS - elapsedSinceError);
+        }
+    }
+
     stageSaveTimer = window.setTimeout(() => {
         stageSaveTimer = null;
         void saveCurrentStage();
-    }, delay);
+    }, effectiveDelay);
 }
 
 async function saveCurrentStage() {
@@ -4151,11 +4473,11 @@ async function saveCurrentStage() {
     setStageSaveState('saving');
     const saveStartedAt = performance.now();
     runtimeLog('Saving current stage started', 'debug');
+    let saveFailed = false;
     try {
         const response = await fetch('/api/stage', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            keepalive: true,
             body: JSON.stringify({ stage: current.stage })
         });
         if (!response.ok) {
@@ -4163,13 +4485,21 @@ async function saveCurrentStage() {
             throw new Error(data.detail || `Could not save current stage (${response.status})`);
         }
         lastSavedStageFingerprint = current.fingerprint;
+        lastStageSaveErrorAt = 0;
+        lastStageSaveErrorMessage = null;
         const latest = createCurrentStage(graph).fingerprint;
         setStageSaveState(latest === lastSavedStageFingerprint ? 'saved' : 'unsaved');
         runtimeLog(`Saving current stage complete (${Math.round(performance.now() - saveStartedAt)} ms)`, 'debug');
     } catch (error) {
+        saveFailed = true;
+        lastStageSaveErrorAt = performance.now();
         console.error('Could not auto-save current stage', error);
         setStageSaveState('error');
-        runtimeLog(`Saving current stage failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+        const message = error instanceof Error ? error.message : String(error);
+        if (message !== lastStageSaveErrorMessage) {
+            runtimeLog(`Saving current stage failed: ${message}`, 'error');
+            lastStageSaveErrorMessage = message;
+        }
     } finally {
         stageSaveInFlight = false;
         const resolveCompletion = resolveStageSaveCompletion;
@@ -4178,7 +4508,7 @@ async function saveCurrentStage() {
         resolveCompletion?.();
         if (stageSaveQueued) {
             stageSaveQueued = false;
-            scheduleStageSave(0);
+            scheduleStageSave(saveFailed ? STAGE_SAVE_ERROR_COOLDOWN_MS : DEFAULT_STAGE_SAVE_DELAY_MS);
         }
     }
 }
@@ -4305,8 +4635,13 @@ window.addEventListener('pagehide', () => {
     if (!graph) return;
     const current = createCurrentStage(graph);
     if (current.fingerprint === lastSavedStageFingerprint) return;
-    const body = new Blob([JSON.stringify({ stage: current.stage })], { type: 'application/json' });
-    if (!navigator.sendBeacon('/api/stage', body)) void saveCurrentStage();
+    const payload = JSON.stringify({ stage: current.stage });
+    // Browsers impose a 64KB limit on sendBeacon. Only attempt beacon when within quota.
+    if (payload.length <= 65536) {
+        const body = new Blob([payload], { type: 'application/json' });
+        if (navigator.sendBeacon('/api/stage', body)) return;
+    }
+    void saveCurrentStage();
 });
 
 const dockview = new DockviewComponent(dockviewContainer, {
@@ -4325,6 +4660,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                 canvas.style.height = '100%';
                 canvas.style.display = 'block';
                 canvas.style.backgroundColor = '#ffffff';
+                canvas.setAttribute('tabindex', '0');
                 element.appendChild(canvas);
                 element.addEventListener('contextmenu', (e: MouseEvent) => {
                     e.preventDefault();
@@ -4409,6 +4745,13 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         // Modifier ownership is represented as a dedicated
                         // control cable into the parent's footer inlet. It is
                         // visual metadata, not an audio graph link.
+                        const parentsWithVisibleModifiers = new Set<number>();
+                        for (const n of nodesList) {
+                            if (n && isModifierNode(n) && !(n.flags as any)?.hidden && n.properties?.parentId != null) {
+                                parentsWithVisibleModifiers.add(n.properties.parentId);
+                            }
+                        }
+
                         for (const node of nodesList) {
                             if (!node || (node.flags as any)?.hidden) continue;
                             const isMod = (node as any).isModifier
@@ -4420,10 +4763,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                                 || node.properties?.node_type === "random";
 
                             if (!isMod) {
-                                const hasVisibleModifiers = nodesList.some((n: any) =>
-                                    n && isModifierNode(n) && n.properties?.parentId === node.id && !(n.flags as any)?.hidden
-                                );
-                                if (!hasVisibleModifiers || node.flags?.collapsed) continue;
+                                if (!parentsWithVisibleModifiers.has(node.id) || node.flags?.collapsed) continue;
                                 const width = node.size?.[0] || 44;
                                 const height = node.size?.[1] || 44;
                                 const inletX = node.pos[0] + width * 0.5;
@@ -4485,6 +4825,20 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         }
                         if (node) {
                             nodeContextMenu.show(e.clientX, e.clientY, node);
+                        } else if (hoveredLink) {
+                            const targetLink = hoveredLink;
+                            const clientX = e ? e.clientX : window.innerWidth / 2;
+                            const clientY = e ? e.clientY : window.innerHeight / 2;
+                            const offset = this.convertEventToCanvasOffset(e);
+                            const canvasPos: [number, number] = [offset[0], offset[1]];
+
+                            hoveredLink = null;
+                            canvas.style.cursor = "default";
+                            graphCanvas.setDirty(true, true);
+
+                            popupMenu.show(clientX, clientY, (nodeType) => {
+                                insertNodeIntoLink(targetLink, nodeType, canvasPos);
+                            }, { mode: 'insert', placeholder: 'Insert OP into cable...' });
                         } else {
                             const offset = this.convertEventToCanvasOffset(e);
                             popupMenu.show(e.clientX, e.clientY, (nodeType) => {
@@ -4501,6 +4855,19 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         const node = (graphCanvas as any).getNodeOnPos(offset[0], offset[1], (graph as any)._nodes, 0);
                         if (node) {
                             nodeContextMenu.show(e.clientX, e.clientY, node);
+                        } else if (hoveredLink) {
+                            const targetLink = hoveredLink;
+                            const clientX = e.clientX;
+                            const clientY = e.clientY;
+                            const canvasPos: [number, number] = [offset[0], offset[1]];
+
+                            hoveredLink = null;
+                            canvas.style.cursor = "default";
+                            graphCanvas.setDirty(true, true);
+
+                            popupMenu.show(clientX, clientY, (nodeType) => {
+                                insertNodeIntoLink(targetLink, nodeType, canvasPos);
+                            }, { mode: 'insert', placeholder: 'Insert OP into cable...' });
                         }
                     });
 
@@ -4532,7 +4899,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     });
 
                     canvas.addEventListener('mousemove', (e: MouseEvent) => {
-                        if (!graph || graphCanvas.node_over || graphCanvas.connecting_node || graphCanvas.dragging_canvas || (graphCanvas as any).selected_group_resizing) {
+                        if (!graph || e.buttons !== 0 || graphCanvas.node_over || graphCanvas.connecting_node || graphCanvas.dragging_canvas || graphCanvas.node_dragged || (graphCanvas as any).selected_group_resizing) {
                             if (hoveredLink) {
                                 hoveredLink = null;
                                 canvas.style.cursor = "default";
@@ -4574,7 +4941,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         if (hoveredLink !== closestLink) {
                             hoveredLink = closestLink;
                             if (hoveredLink) {
-                                canvas.style.cursor = BREAKER_CURSOR;
+                                canvas.style.cursor = "pointer";
                             } else {
                                 canvas.style.cursor = "default";
                             }
@@ -4584,16 +4951,44 @@ const dockview = new DockviewComponent(dockviewContainer, {
 
                     canvas.addEventListener('mousedown', (e: MouseEvent) => {
                         if (e.button === 0 && hoveredLink) {
-                            const linkIdToDelete = hoveredLink.id;
-                            hoveredLink = null;
-                            canvas.style.cursor = "default";
-                            graph.removeLink(linkIdToDelete);
-                            syncGraphHierarchy(graph);
-                            updateGraphNodeCollapsing();
-                            window.dispatchEvent(new CustomEvent('graph-connections-changed'));
+                            canvas.focus?.();
+                            const isMulti = e.shiftKey || e.ctrlKey;
+                            if (isMulti) {
+                                if (selectedLinkIds.has(hoveredLink.id)) {
+                                    selectedLinkIds.delete(hoveredLink.id);
+                                } else {
+                                    selectedLinkIds.add(hoveredLink.id);
+                                }
+                            } else {
+                                selectedLinkIds.clear();
+                                selectedLinkIds.add(hoveredLink.id);
+                                graphCanvas.deselectAllNodes?.();
+                            }
                             graphCanvas.setDirty(true, true);
                             e.stopPropagation();
                             e.preventDefault();
+                        } else if (e.button === 0 && !hoveredLink && !e.shiftKey && !e.ctrlKey) {
+                            if (selectedLinkIds.size > 0) {
+                                selectedLinkIds.clear();
+                                graphCanvas.setDirty(true, true);
+                            }
+                        } else if (e.button === 2 && hoveredLink) {
+                            const targetLink = hoveredLink;
+                            const clientX = e.clientX;
+                            const clientY = e.clientY;
+                            const offset = graphCanvas.convertEventToCanvasOffset(e);
+                            const canvasPos: [number, number] = [offset[0], offset[1]];
+
+                            hoveredLink = null;
+                            canvas.style.cursor = "default";
+                            graphCanvas.setDirty(true, true);
+
+                            e.stopPropagation();
+                            e.preventDefault();
+
+                            popupMenu.show(clientX, clientY, (nodeType) => {
+                                insertNodeIntoLink(targetLink, nodeType, canvasPos);
+                            }, { mode: 'insert', placeholder: 'Insert OP into cable...' });
                         }
                     }, true);
 
@@ -4659,7 +5054,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                             if (graphCanvas.bgcanvas) {
                                 graphCanvas.bgcanvas.style.backgroundColor = "#ffffff";
                             }
-                            graphCanvas.setDirty(true, true);
+                            graphCanvas.draw(true, true);
                         });
                     });
                     resizeObserver.observe(element);
@@ -4790,6 +5185,40 @@ stageSaveStatus.setAttribute('role', 'status');
 stageSaveStatus.setAttribute('aria-live', 'polite');
 dockviewContainer.appendChild(stageSaveStatus);
 setStageSaveState('loading');
+
+const transportToggle = document.createElement('button');
+transportToggle.id = 'transport-bar-toggle';
+transportToggle.className = 'transport-bar-toggle';
+transportToggle.type = 'button';
+transportToggle.setAttribute('aria-label', 'Toggle Transport Bar');
+
+const syncTransportBarState = (open: boolean) => {
+    transportToggle.classList.toggle('is-collapsed', !open);
+    transportToggle.setAttribute('aria-expanded', String(open));
+    transportToggle.title = open ? 'Hide Transport Bar' : 'Show Transport Bar';
+    playbackFooter.classList.toggle('is-collapsed', !open);
+    dockview.layout(dockviewContainer.clientWidth, dockviewContainer.clientHeight);
+};
+
+const storedTransportState = typeof localStorage !== 'undefined' ? localStorage.getItem('sin-transport-bar-open') : null;
+let isTransportOpen = storedTransportState !== null ? storedTransportState === 'true' : false;
+
+transportToggle.innerHTML = `
+    <svg class="transport-toggle-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path class="transport-toggle-arrow" d="M3 6l5 5 5-5"/>
+    </svg>
+`;
+
+transportToggle.addEventListener('click', () => {
+    isTransportOpen = !isTransportOpen;
+    if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('sin-transport-bar-open', String(isTransportOpen));
+    }
+    syncTransportBarState(isTransportOpen);
+});
+
+dockviewContainer.appendChild(transportToggle);
+syncTransportBarState(isTransportOpen);
 const engineSync = EngineSyncManager.getInstance();
 engineSync.attachTo(dockviewContainer);
 new RuntimeLogPanel(dockviewContainer);
@@ -4943,7 +5372,7 @@ async function renderNode(nodeId: number, autoPlay: boolean = true) {
             try {
                 errJson = await res.json();
             } catch {
-                try { rawText = await res.text(); } catch {}
+                try { rawText = await res.text(); } catch { }
             }
             const errorDetail = formatApiError(res.status, errJson, rawText);
             throw new Error(`Render failed: ${errorDetail}`);
@@ -5024,9 +5453,10 @@ async function calculatePreview(
     engineSync.setState('dsp_rendering', { nodeId, nodeName });
 
     if (targetNode) {
-        delete (targetNode as any).manifestStemBuffer;
-        (targetNode as any).bufferedProgress = 0;
         (targetNode as any).isInvalidated = true;
+        if (!(targetNode as any).manifestStemBuffer && !(targetNode as any)._lastRenderedBuffer) {
+            (targetNode as any).bufferedProgress = 0;
+        }
         (targetNode as any).setDirtyCanvas?.(true, true);
     }
     (window as any).editorCanvas?.setDirty?.(true, true);
@@ -5091,7 +5521,7 @@ async function calculatePreview(
             try {
                 errJson = await res.json();
             } catch {
-                try { rawText = await res.text(); } catch {}
+                try { rawText = await res.text(); } catch { }
             }
             const errorDetail = formatApiError(res.status, errJson, rawText);
             throw new Error(`RAM preview failed: ${errorDetail}`);
@@ -5103,6 +5533,9 @@ async function calculatePreview(
         let finalData: any = null;
 
         const processBarChunk = async (chunkData: any, audioBuf: AudioBuffer) => {
+            if (requestVersion !== previewRequestVersion || sessionId !== currentPreviewSessionId) {
+                return;
+            }
             const chunkPayload = {
                 barIndex: chunkData.bar_index,
                 totalBars: chunkData.total_bars,
@@ -5148,9 +5581,6 @@ async function calculatePreview(
 
             if (targetNode) {
                 (targetNode as any).bufferedProgress = (chunkData.bar_index + 1) / chunkData.total_bars;
-                if (chunkData.bar_index >= chunkData.total_bars - 1) {
-                    clearSubtreeInvalidated(graph, nodeId);
-                }
                 (targetNode as any).setDirtyCanvas?.(true, true);
             }
             masterPlayBtn.disabled = false;
@@ -5212,7 +5642,7 @@ async function calculatePreview(
                         continue;
                     }
 
-                    if (sessionId !== currentPreviewSessionId) break;
+                    if (sessionId !== currentPreviewSessionId || requestVersion !== previewRequestVersion) break;
 
                     const cType = chunkData.chunk_type || chunkData.type;
                     if (cType === 'bar' || cType === 'bar_chunk') {
@@ -5224,15 +5654,17 @@ async function calculatePreview(
                             );
                             audioBuf = await globalAudioScheduler.decodeWav(rawWavBuffer);
                         }
-                        if (audioBuf && sessionId === currentPreviewSessionId) {
+                        if (audioBuf && sessionId === currentPreviewSessionId && requestVersion === previewRequestVersion) {
                             await processBarChunk(chunkData, audioBuf);
                         }
                     } else if (cType === 'complete') {
                         finalData = chunkData;
-                        clearSubtreeInvalidated(graph, nodeId);
-                        if (targetNode) {
-                            (targetNode as any).bufferedProgress = 1.0;
-                            (targetNode as any).setDirtyCanvas?.(true, true);
+                        if (requestVersion === previewRequestVersion) {
+                            clearSubtreeInvalidated(graph, nodeId);
+                            if (targetNode) {
+                                (targetNode as any).bufferedProgress = 1.0;
+                                (targetNode as any).setDirtyCanvas?.(true, true);
+                            }
                         }
                     } else if (cType === 'error') {
                         throw new Error(chunkData.error || 'Server streaming error');
@@ -5255,7 +5687,7 @@ async function calculatePreview(
 
                 for (const line of lines) {
                     if (!line.trim()) continue;
-                    if (sessionId !== currentPreviewSessionId) break;
+                    if (sessionId !== currentPreviewSessionId || requestVersion !== previewRequestVersion) break;
                     let chunkData: any;
                     try {
                         chunkData = JSON.parse(line);
@@ -5266,15 +5698,17 @@ async function calculatePreview(
                     const cType = chunkData.chunk_type || chunkData.type;
                     if (cType === 'bar' || cType === 'bar_chunk') {
                         const audioBuf = await globalAudioScheduler.decodeBase64Wav(chunkData.audio_base64);
-                        if (audioBuf && sessionId === currentPreviewSessionId) {
+                        if (audioBuf && sessionId === currentPreviewSessionId && requestVersion === previewRequestVersion) {
                             await processBarChunk(chunkData, audioBuf);
                         }
                     } else if (cType === 'complete') {
                         finalData = chunkData;
-                        clearSubtreeInvalidated(graph, nodeId);
-                        if (targetNode) {
-                            (targetNode as any).bufferedProgress = 1.0;
-                            (targetNode as any).setDirtyCanvas?.(true, true);
+                        if (requestVersion === previewRequestVersion) {
+                            clearSubtreeInvalidated(graph, nodeId);
+                            if (targetNode) {
+                                (targetNode as any).bufferedProgress = 1.0;
+                                (targetNode as any).setDirtyCanvas?.(true, true);
+                            }
                         }
                     } else if (cType === 'error') {
                         throw new Error(chunkData.error || 'Server streaming error');
@@ -5380,14 +5814,27 @@ function distributeWorkspaceManifest(graph: LGraph, manifest: any) {
     for (const gNode of graphNodes) {
         if (!gNode) continue;
         const manifestEntry = nodesMap[String(gNode.id)];
+        if (!manifestEntry) {
+            if (gNode.manifestEvents && gNode.manifestEvents.length > 0) {
+                gNode.manifestEvents = [];
+                gNode.setDirtyCanvas?.(true, true);
+            }
+            continue;
+        }
         if (manifestEntry) {
             const stemUrlChanged = gNode.manifestStemUrl !== manifestEntry.audio_url;
             gNode.manifestStemUrl = manifestEntry.audio_url;
             gNode.manifestEvents = manifestEntry.events || [];
             gNode.manifestStemDuration = manifestEntry.duration_seconds;
 
-            // Sync resolved sample/pool filepath to node
-            if (manifestEntry.filepath && gNode.properties) {
+            // Sync resolved sample/pool filepath to node (skip overwriting dynamic pools that already have a primary filepath)
+            const isDynamicPoolWithPath = Boolean(
+                manifestEntry.is_dynamic_pool &&
+                gNode.properties &&
+                typeof gNode.properties.filepath === 'string' &&
+                gNode.properties.filepath.trim().length > 0
+            );
+            if (manifestEntry.filepath && gNode.properties && !isDynamicPoolWithPath) {
                 const currentPath = String(gNode.properties.filepath || '');
                 if (currentPath !== manifestEntry.filepath || !gNode.audioBuffer) {
                     gNode.properties.filepath = manifestEntry.filepath;
@@ -5401,7 +5848,7 @@ function distributeWorkspaceManifest(graph: LGraph, manifest: any) {
                             }
                             gNode.setDirtyCanvas?.(true, true);
                         }
-                    }).catch(() => {});
+                    }).catch(() => { });
                 }
             }
 
@@ -5410,19 +5857,27 @@ function distributeWorkspaceManifest(graph: LGraph, manifest: any) {
                 gNode.properties.duration_seconds = manifestEntry.duration_seconds;
             }
 
-            // Lazily fetch intermediate stem buffers only for the currently inspected node;
-            // other nodes load their stem buffer on demand when opened in the Properties Panel.
-            if (manifestEntry.audio_url && manifestEntry.node_type !== 'sample' && gNode.id !== activeRamPreviewNodeId) {
-                if (stemUrlChanged || gNode.isInvalidated) {
-                    delete gNode.manifestStemBuffer;
-                }
-                if (gNode.id === activeParamNodeId && !gNode.manifestStemBuffer) {
-                    fetchAudioBuffer(manifestEntry.audio_url).then(buf => {
-                        if (buf && gNode.id !== activeRamPreviewNodeId) {
-                            gNode.manifestStemBuffer = buf;
-                            gNode.setDirtyCanvas?.(true, true);
-                        }
-                    }).catch(() => {});
+            // Fetch intermediate stem buffers for visible nodes to populate high-fidelity DSP waveforms
+            if (manifestEntry.audio_url && manifestEntry.node_type !== 'sample') {
+                if (gNode.id === activeRamPreviewNodeId) {
+                    const fullBuf = globalAudioScheduler.getFullAudioBuffer();
+                    if (fullBuf) {
+                        gNode.manifestStemBuffer = fullBuf;
+                        gNode._lastRenderedBuffer = fullBuf;
+                        gNode._lastRenderedGain = getNodeGainMultiplier(gNode);
+                    }
+                } else {
+                    const shouldFetchStem = (gNode.id === activeParamNodeId || (Boolean(gNode.isVisualizationActive) && !gNode.flags?.collapsed));
+                    if (shouldFetchStem && (!gNode.manifestStemBuffer || stemUrlChanged)) {
+                        fetchAudioBuffer(manifestEntry.audio_url).then(buf => {
+                            if (buf && gNode.id !== activeRamPreviewNodeId) {
+                                gNode.manifestStemBuffer = buf;
+                                gNode._lastRenderedBuffer = buf;
+                                gNode._lastRenderedGain = getNodeGainMultiplier(gNode);
+                                gNode.setDirtyCanvas?.(true, true);
+                            }
+                        }).catch(() => { });
+                    }
                 }
             }
             gNode.setDirtyCanvas?.(true, true);
@@ -5468,6 +5923,9 @@ function previewNode(
     if (pendingPreviewRequest) {
         runtimeLog(`Replaced queued preview for node ${pendingPreviewRequest.nodeId}`, 'warning');
     }
+    if (currentPreviewAbortController) {
+        currentPreviewAbortController.abort();
+    }
     pendingPreviewRequest = { nodeId, autoplay, globalPreview, refreshModifiers };
     previewRequestVersion++;
     runtimeLog(`Preview queued for node ${nodeId}`, 'common');
@@ -5477,7 +5935,6 @@ function previewNode(
 }
 
 const NON_DSP_PROPERTIES = new Set([
-    'freeze_refresh',
     'render_enabled',
     'visualization_enabled',
     'visual_width',
@@ -5489,6 +5946,8 @@ const NON_DSP_PROPERTIES = new Set([
     'color',
     'bgcolor',
     'boxcolor',
+    'icon',
+    'shape',
     'pos',
     'size',
     'selected',
@@ -5505,7 +5964,12 @@ let isPointerManipulatingParam = false;
 let pendingGlobalParamInvalidation = false;
 
 function flushPendingParameterUpdate() {
-    if (isPointerManipulatingParam || isGraphEvaluating()) return;
+    if (isPointerManipulatingParam || isGraphEvaluating()) {
+        if (pendingGlobalParamInvalidation || pendingInvalidatedNodes.size > 0) {
+            scheduleSettledParameterUpdate(150);
+        }
+        return;
+    }
     if (dspInvalidateTimer) {
         clearTimeout(dspInvalidateTimer);
         dspInvalidateTimer = null;
@@ -5518,21 +5982,26 @@ function flushPendingParameterUpdate() {
 
     if (!hadPending) return;
 
+    const graph = (window as any).editorGraph as LGraph;
+    const targetId = activeRamPreviewNodeId ?? (graph ? resolveMainPreviewNode(graph)?.id : undefined);
+
     fetch('/api/preview/invalidate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ node_ids: idsToInvalidate })
-    }).catch(() => {});
-
-    // Parameter changes occur after the edit completes, rendering Stage 2 in the background
-    // and swapping atomically via GaplessAudioScheduler.commitSession() without interrupting playback.
-    if (globalAudioScheduler.getIsPlaying() && activeRamPreviewNodeId != null) {
-        EngineSyncManager.getInstance().setState('hot_swapping');
-        void previewNode(activeRamPreviewNodeId, false, false, false);
-    }
+    }).catch(() => { }).finally(() => {
+        // Parameter changes occur after the edit completes, rendering Stage 2 in the background
+        // and swapping atomically via GaplessAudioScheduler.commitSession() without interrupting playback.
+        if (targetId != null) {
+            if (globalAudioScheduler.getIsPlaying()) {
+                EngineSyncManager.getInstance().setState('hot_swapping');
+            }
+            void previewNode(targetId, false, false, false);
+        }
+    });
 }
 
-function scheduleSettledParameterUpdate(delayMs = 240) {
+function scheduleSettledParameterUpdate(delayMs = 300) {
     if (dspInvalidateTimer) {
         clearTimeout(dspInvalidateTimer);
     }
@@ -5550,7 +6019,7 @@ const handlePointerFinish = () => {
     if (!isPointerManipulatingParam) return;
     isPointerManipulatingParam = false;
     if (pendingGlobalParamInvalidation || pendingInvalidatedNodes.size > 0) {
-        scheduleSettledParameterUpdate(120);
+        scheduleSettledParameterUpdate(150);
     }
 };
 window.addEventListener('pointerup', handlePointerFinish, { passive: true, capture: true });
@@ -5576,7 +6045,7 @@ window.addEventListener('node-property-changed', (e: any) => {
     pendingInvalidatedNodes.add(changedNodeId);
 
     if (!isPointerManipulatingParam) {
-        scheduleSettledParameterUpdate(240);
+        scheduleSettledParameterUpdate(300);
     }
 });
 
@@ -5587,7 +6056,6 @@ window.addEventListener('global-parameters-changed', () => {
         for (const node of ((graph as any)._nodes || [])) {
             if (node) {
                 (node as any).isInvalidated = true;
-                delete (node as any).manifestStemBuffer;
                 (node as any).setDirtyCanvas?.(true, true);
             }
         }
@@ -5597,6 +6065,6 @@ window.addEventListener('global-parameters-changed', () => {
     pendingGlobalParamInvalidation = true;
 
     if (!isPointerManipulatingParam) {
-        scheduleSettledParameterUpdate(240);
+        scheduleSettledParameterUpdate(300);
     }
 });

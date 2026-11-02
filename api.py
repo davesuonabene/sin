@@ -1,4 +1,5 @@
 import os
+import io
 import json
 import hashlib
 import logging
@@ -1414,6 +1415,18 @@ def get_library(vault_id: Optional[int] = None):
                 res.append(c)
             return res
 
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _fetch_url_json(url: str, timeout: float = 6.0):
+            try:
+                r = urllib.request.Request(url, headers={'Accept': 'application/json'})
+                with urllib.request.urlopen(r, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        return json.loads(resp.read().decode('utf-8'))
+            except Exception as e:
+                logger.debug(f"[API /library] Parallel query failed for {url}: {e}")
+            return None
+
         for requested_vault_id in requested_vault_ids:
             query = f"?vault_id={requested_vault_id}&limit=10000"
             req = urllib.request.Request(f"http://127.0.0.1:8001/items/{query}", headers={'Accept': 'application/json'})
@@ -1422,7 +1435,41 @@ def get_library(vault_id: Optional[int] = None):
             with urllib.request.urlopen(req, timeout=15.0) as response:
                 if response.status != 200:
                     continue
-                for f in json.loads(response.read().decode('utf-8')):
+                vault_items = json.loads(response.read().decode('utf-8'))
+
+                # Pre-fetch project tables and collection contents concurrently in parallel
+                project_ids_to_fetch = [
+                    f["id"] for f in vault_items
+                    if f.get("type") == "project" and f.get("id")
+                ]
+                collection_ids_to_fetch = [
+                    f["id"] for f in vault_items
+                    if f.get("type") in {"collection", "folder"} and f.get("id") and not f.get("contents")
+                ]
+
+                project_tables: dict[int, list[dict]] = {}
+                collection_contents_map: dict[int, list[dict]] = {}
+
+                if project_ids_to_fetch or collection_ids_to_fetch:
+                    with ThreadPoolExecutor(max_workers=8) as executor:
+                        proj_futures = {
+                            pid: executor.submit(_fetch_url_json, f"http://127.0.0.1:8001/projects/{pid}/table", 8.0)
+                            for pid in project_ids_to_fetch
+                        }
+                        col_futures = {
+                            cid: executor.submit(_fetch_url_json, f"http://127.0.0.1:8001/items/{cid}/contents", 8.0)
+                            for cid in collection_ids_to_fetch
+                        }
+                        for pid, fut in proj_futures.items():
+                            res = fut.result()
+                            if res and isinstance(res, list):
+                                project_tables[pid] = res
+                        for cid, fut in col_futures.items():
+                            res = fut.result()
+                            if res and isinstance(res, list):
+                                collection_contents_map[cid] = res
+
+                for f in vault_items:
                     abs_path = f.get("absolute_path") or ""
                     key = f.get("key")
                     bpm = f.get("bpm")
@@ -1431,66 +1478,55 @@ def get_library(vault_id: Optional[int] = None):
                     item_id = f.get("id")
                     contents = f.get("contents", [])
 
-                    # For projects, load full referenced items via /projects/{id}/table
+                    # For projects, load full referenced items from pre-fetched project_tables
                     if item_type == "project" and item_id:
-                        try:
-                            table_req = urllib.request.Request(f"http://127.0.0.1:8001/projects/{item_id}/table", headers={'Accept': 'application/json'})
-                            with urllib.request.urlopen(table_req, timeout=8.0) as table_resp:
-                                if table_resp.status == 200:
-                                    table_rows = json.loads(table_resp.read().decode('utf-8'))
-                                    merged_contents = []
-                                    seen_item_ids = set()
-                                    for row in table_rows:
-                                        target_item = row.get("item") or {}
-                                        ref = row.get("reference") or {}
-                                        ref_attrs = ref.get("attributes") or {}
-                                        target_attrs = target_item.get("attributes") or {}
-                                        tid = target_item.get("id")
-                                        if tid in seen_item_ids:
-                                            continue
-                                        seen_item_ids.add(tid)
-                                        tpath = target_item.get("absolute_path") or ""
-                                        folder_name = ref_attrs.get("folder") or target_attrs.get("folder") or None
-                                        merged_contents.append({
-                                            "id": tid,
-                                            "child_id": tid,
-                                            "reference_id": ref.get("id"),
-                                            "collection_id": item_id,
-                                            "filename": os.path.basename(tpath),
-                                            "title": target_item.get("title") or os.path.basename(tpath),
-                                            "absolute_path": tpath,
-                                            "relative_path": target_item.get("relative_path") or os.path.basename(tpath),
-                                            "folder": folder_name,
-                                            "type": target_item.get("type", "sample"),
-                                            "tags": ref.get("tags") or target_item.get("tags") or [],
-                                            "key": target_item.get("key"),
-                                            "bpm": target_item.get("bpm"),
-                                            "duration_seconds": target_item.get("duration_seconds"),
-                                            "favourite": bool(target_item.get("favourite") or target_attrs.get("favourite", False)),
-                                            "is_external": bool(row.get("is_external", False)),
-                                            "versions": row.get("versions"),
-                                            "version_group": row.get("version_group"),
-                                            "stream_url": f"/api/library/stream/{tid}" if tid is not None else None,
-                                        })
-                                    # Preserve any manifest contents that weren't in project_table
-                                    for c in contents:
-                                        cid = c.get("child_id") or c.get("id")
-                                        if cid not in seen_item_ids:
-                                            merged_contents.append(c)
-                                    contents = merged_contents
-                        except Exception as p_err:
-                            logger.debug(f"[API /library] Project table query failed for {item_id}: {p_err}")
+                        table_rows = project_tables.get(item_id, [])
+                        if table_rows:
+                            merged_contents = []
+                            seen_item_ids = set()
+                            for row in table_rows:
+                                target_item = row.get("item") or {}
+                                ref = row.get("reference") or {}
+                                ref_attrs = ref.get("attributes") or {}
+                                target_attrs = target_item.get("attributes") or {}
+                                tid = target_item.get("id")
+                                if tid in seen_item_ids:
+                                    continue
+                                seen_item_ids.add(tid)
+                                tpath = target_item.get("absolute_path") or ""
+                                folder_name = ref_attrs.get("folder") or target_attrs.get("folder") or None
+                                merged_contents.append({
+                                    "id": tid,
+                                    "child_id": tid,
+                                    "reference_id": ref.get("id"),
+                                    "collection_id": item_id,
+                                    "filename": os.path.basename(tpath),
+                                    "title": target_item.get("title") or os.path.basename(tpath),
+                                    "absolute_path": tpath,
+                                    "relative_path": target_item.get("relative_path") or os.path.basename(tpath),
+                                    "folder": folder_name,
+                                    "type": target_item.get("type", "sample"),
+                                    "tags": ref.get("tags") or target_item.get("tags") or [],
+                                    "key": target_item.get("key"),
+                                    "bpm": target_item.get("bpm"),
+                                    "duration_seconds": target_item.get("duration_seconds"),
+                                    "favourite": bool(target_item.get("favourite") or target_attrs.get("favourite", False)),
+                                    "is_external": bool(row.get("is_external", False)),
+                                    "versions": row.get("versions"),
+                                    "version_group": row.get("version_group"),
+                                    "stream_url": f"/api/library/stream/{tid}" if tid is not None else None,
+                                })
+                            # Preserve any manifest contents that weren't in project_table
+                            for c in contents:
+                                cid = c.get("child_id") or c.get("id")
+                                if cid not in seen_item_ids:
+                                    merged_contents.append(c)
+                            contents = merged_contents
 
-                    # For collections, if contents is empty, query /items/{id}/contents
+                    # For collections, if contents is empty, populate from pre-fetched collection_contents_map
                     elif item_type in {"collection", "folder"} and item_id:
                         if not contents:
-                            try:
-                                col_req = urllib.request.Request(f"http://127.0.0.1:8001/items/{item_id}/contents", headers={'Accept': 'application/json'})
-                                with urllib.request.urlopen(col_req, timeout=8.0) as col_resp:
-                                    if col_resp.status == 200:
-                                        contents = json.loads(col_resp.read().decode('utf-8'))
-                            except Exception as c_err:
-                                logger.debug(f"[API /library] Collection contents query failed for {item_id}: {c_err}")
+                            contents = collection_contents_map.get(item_id, [])
                         if contents and any(isinstance(c, dict) and c.get("type") in {"collection", "folder", "sample_pack"} for c in contents):
                             contents = _expand_nested_collection_contents(item_id, contents)
 

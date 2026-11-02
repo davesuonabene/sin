@@ -48,7 +48,7 @@ class System:
             node_entry.update(extra)
         # Store numpy buffer only for composite track nodes that require intermediate stem encoding.
         # Leaf nodes (samples, pools, sequences, arrangements) only provide manifest metadata.
-        if node_type in ("track", "master", "bus"):
+        if node_type in ("track", "master", "bus", "arrangement"):
             if not hasattr(self, "_node_stems"):
                 self._node_stems = {}
             self._node_stems[str(node_id)] = audio_array

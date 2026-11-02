@@ -166,11 +166,13 @@ export class WaveformCropSection {
 
         const initialS = node.properties.crop_start !== undefined ? Number(node.properties.crop_start) : 0.0;
         const initialE = node.properties.crop_end !== undefined ? Number(node.properties.crop_end) : 1.0;
+        const getNodeColor = () => (node as any).nodeColor || (node as any).color || node.properties?.color || '#059669';
 
         const visualizer = new WaveformVisualizer({
             container: visContainer,
             cropStart: initialS,
             cropEnd: initialE,
+            waveformColor: getNodeColor(),
             onCropChange: (s: number, e: number) => {
                 const roundedS = Math.round(s * 100) / 100;
                 const roundedE = Math.round(e * 100) / 100;
@@ -181,6 +183,28 @@ export class WaveformCropSection {
                 windowContext.refreshAudioPreview();
             }
         });
+
+        const onPropChanged = (event: Event) => {
+            const detail = (event as CustomEvent).detail;
+            if (detail?.nodeId === node.id && (detail?.key === 'color' || detail?.property === 'color')) {
+                visualizer.setWaveformColor(detail.value || getNodeColor());
+            }
+        };
+        const onNodeRefreshed = (event: Event) => {
+            const detail = (event as CustomEvent).detail;
+            if (detail?.nodeId === node.id) {
+                visualizer.setWaveformColor(getNodeColor());
+            }
+        };
+        window.addEventListener('node-property-changed', onPropChanged);
+        window.addEventListener('node-properties-refreshed', onNodeRefreshed);
+
+        const origDestroy = visualizer.destroy.bind(visualizer);
+        visualizer.destroy = () => {
+            window.removeEventListener('node-property-changed', onPropChanged);
+            window.removeEventListener('node-properties-refreshed', onNodeRefreshed);
+            origDestroy();
+        };
 
         windowContext.currentWaveformVisualizer = visualizer;
         windowContext.updateCropFromFields = (s: number, e: number) => {

@@ -19,6 +19,7 @@ export interface ArrangementVisualizerOptions {
     sectionQuant?: string[];
     sectionQuantAnchor?: ArrangementAnchor[];
     selectedSection: number;
+    nodeColor?: string;
     mode?: ArrangementVisualizerMode;
     source?: ArrangementSourceVisual | null;
     onSectionStructureChange: (
@@ -33,6 +34,49 @@ export interface ArrangementVisualizerOptions {
     onMergeCut?: (cutIndex: number) => void;
 }
 
+function colorWithAlpha(color: string, alpha: number): string {
+    if (!color) return `rgba(245, 158, 11, ${alpha})`;
+    if (color.startsWith('#')) {
+        let c = color.slice(1);
+        if (c.length === 3) c = c.split('').map(x => x + x).join('');
+        const num = parseInt(c, 16);
+        if (!isNaN(num)) {
+            const r = (num >> 16) & 255;
+            const g = (num >> 8) & 255;
+            const b = num & 255;
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+    }
+    if (color.startsWith('rgb(')) {
+        return color.replace('rgb(', 'rgba(').replace(')', `, ${alpha})`);
+    }
+    if (color.startsWith('rgba(')) {
+        return color.replace(/[\d\.]+\)$/, `${alpha})`);
+    }
+    return color;
+}
+
+function getOrCreateOffscreenCanvas(existing: HTMLCanvasElement | null, width: number, height: number): HTMLCanvasElement | null {
+    if (typeof document === 'undefined') return null;
+    const w = Math.max(1, Math.floor(width));
+    const h = Math.max(1, Math.floor(height));
+    if (existing) {
+        if (existing.width !== w || existing.height !== h) {
+            existing.width = w;
+            existing.height = h;
+        }
+        return existing;
+    }
+    try {
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        return c;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Clean, lightweight IRIDE-style arrangement visualizer with dual Selection / Edit modes.
  */
@@ -41,6 +85,7 @@ export class ArrangementVisualizer {
     private readonly context: CanvasRenderingContext2D;
     private readonly resizeObserver: ResizeObserver;
     private options: ArrangementVisualizerOptions;
+    private nodeColor: string = '#f59e0b';
     private mode: ArrangementVisualizerMode = 'select';
     private hoverSection: number | null = null;
     private hoverCutIndex: number | null = null;
@@ -54,6 +99,9 @@ export class ArrangementVisualizer {
     private readonly height = 60;
     private readonly padding = 3;
     private animationFrameId: number | null = null;
+    private maskCanvas: HTMLCanvasElement | null = null;
+    private tintCanvas: HTMLCanvasElement | null = null;
+    private maskFingerprint: string = '';
 
     constructor(options: ArrangementVisualizerOptions) {
         this.options = {
@@ -64,6 +112,7 @@ export class ArrangementVisualizer {
             sectionQuant: [...(options.sectionQuant || [])],
             sectionQuantAnchor: [...(options.sectionQuantAnchor || [])]
         };
+        this.nodeColor = options.nodeColor || '#f59e0b';
         this.mode = options.mode || 'select';
         this.canvas = document.createElement('canvas');
         this.canvas.className = 'arrangement-visualizer-canvas';
@@ -115,6 +164,11 @@ export class ArrangementVisualizer {
 
     getMode(): ArrangementVisualizerMode {
         return this.mode;
+    }
+
+    setNodeColor(color: string): void {
+        this.nodeColor = color || '#f59e0b';
+        this.draw();
     }
 
     setTotalBars(totalBars: number): void {
@@ -419,7 +473,75 @@ export class ArrangementVisualizer {
             }
         }
 
-        // Render Section Boxes (Label-Free: Section Numbers Only)
+        // Render Section Boxes using cached mask & tint canvas
+        const currentFp = `${Math.floor(width)}_${Math.floor(height)}_${totalBars}_${boundaries.join(',')}_${(this.options.sectionProbability || []).join(',')}`;
+        const mask = getOrCreateOffscreenCanvas(this.maskCanvas, width, height);
+        const tint = getOrCreateOffscreenCanvas(this.tintCanvas, width, height);
+
+        if (mask && tint) {
+            this.maskCanvas = mask;
+            this.tintCanvas = tint;
+            const mCtx = mask.getContext('2d');
+            const tCtx = tint.getContext('2d');
+
+            if (mCtx && tCtx) {
+                if (this.maskFingerprint !== currentFp) {
+                    this.maskFingerprint = currentFp;
+                    mCtx.clearRect(0, 0, width, height);
+
+                    for (let i = 0; i < sectionCount; i++) {
+                        const startBar = boundaries[i];
+                        const endBar = boundaries[i + 1];
+                        const lengthBars = endBar - startBar;
+                        const secX = this.padding + startBar * barWidth;
+                        const secW = Math.max(2, lengthBars * barWidth - 1);
+                        const secH = height - this.padding * 2;
+
+                        const prob = typeof this.options.sectionProbability?.[i] === 'number'
+                            ? Math.max(0, Math.min(1, this.options.sectionProbability[i]))
+                            : 1.0;
+
+                        mCtx.fillStyle = `rgba(255, 255, 255, ${0.12 + prob * 0.35})`;
+                        drawRoundRect(mCtx, secX, this.padding, secW, secH, 3);
+                        mCtx.fill();
+
+                        mCtx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+                        mCtx.lineWidth = 0.75;
+                        mCtx.stroke();
+                    }
+                }
+
+                // Tint the cached mask with the node color
+                tCtx.clearRect(0, 0, width, height);
+                tCtx.drawImage(mask, 0, 0);
+                tCtx.globalCompositeOperation = 'source-in';
+                tCtx.fillStyle = this.nodeColor;
+                tCtx.fillRect(0, 0, width, height);
+                tCtx.globalCompositeOperation = 'source-over';
+
+                ctx.drawImage(tint, 0, 0);
+            }
+        } else {
+            for (let i = 0; i < sectionCount; i++) {
+                const startBar = boundaries[i];
+                const endBar = boundaries[i + 1];
+                const lengthBars = endBar - startBar;
+                const secX = this.padding + startBar * barWidth;
+                const secW = Math.max(2, lengthBars * barWidth - 1);
+                const secH = height - this.padding * 2;
+                const prob = typeof this.options.sectionProbability?.[i] === 'number'
+                    ? Math.max(0, Math.min(1, this.options.sectionProbability[i]))
+                    : 1.0;
+                ctx.fillStyle = colorWithAlpha(this.nodeColor, 0.12 + prob * 0.35);
+                drawRoundRect(ctx, secX, this.padding, secW, secH, 3);
+                ctx.fill();
+                ctx.strokeStyle = colorWithAlpha(this.nodeColor, 0.45);
+                ctx.lineWidth = 0.75;
+                ctx.stroke();
+            }
+        }
+
+        // Dynamic overlays: Selection, playback, hover, and section number labels
         for (let i = 0; i < sectionCount; i++) {
             const startBar = boundaries[i];
             const endBar = boundaries[i + 1];
@@ -436,24 +558,28 @@ export class ArrangementVisualizer {
             const isHovered = this.hoverSection === i;
             const isPlayingInSec = currentBar >= startBar && currentBar < endBar;
 
-            // Section background styling
             if (isSelected) {
-                ctx.fillStyle = '#f59e0b';
+                ctx.fillStyle = this.nodeColor;
+                drawRoundRect(ctx, secX, this.padding, secW, secH, 3);
+                ctx.fill();
+                ctx.strokeStyle = this.nodeColor;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
             } else if (isPlayingInSec) {
-                ctx.fillStyle = 'rgba(245, 158, 11, 0.75)';
+                ctx.fillStyle = colorWithAlpha(this.nodeColor, 0.75);
+                drawRoundRect(ctx, secX, this.padding, secW, secH, 3);
+                ctx.fill();
+                ctx.strokeStyle = colorWithAlpha(this.nodeColor, 0.8);
+                ctx.lineWidth = 0.75;
+                ctx.stroke();
             } else if (isHovered) {
-                ctx.fillStyle = `rgba(245, 158, 11, ${0.28 + prob * 0.35})`;
-            } else {
-                ctx.fillStyle = `rgba(245, 158, 11, ${0.12 + prob * 0.35})`;
+                ctx.fillStyle = colorWithAlpha(this.nodeColor, 0.28 + prob * 0.35);
+                drawRoundRect(ctx, secX, this.padding, secW, secH, 3);
+                ctx.fill();
+                ctx.strokeStyle = colorWithAlpha(this.nodeColor, 0.8);
+                ctx.lineWidth = 0.75;
+                ctx.stroke();
             }
-
-            drawRoundRect(ctx, secX, this.padding, secW, secH, 3);
-            ctx.fill();
-
-            // Border
-            ctx.strokeStyle = isSelected ? '#b45309' : isHovered ? '#d97706' : 'rgba(245, 158, 11, 0.45)';
-            ctx.lineWidth = isSelected ? 1.5 : 0.75;
-            ctx.stroke();
 
             // Label-free: Only Section Number S1, S2...
             if (secW > 12) {
@@ -469,7 +595,7 @@ export class ArrangementVisualizer {
         // In Edit Mode: Draw subtle hover split guide without text badge
         if (this.mode === 'edit' && this.hoverSnapBar !== null) {
             const snapX = this.padding + this.hoverSnapBar * barWidth;
-            ctx.strokeStyle = '#d97706';
+            ctx.strokeStyle = this.nodeColor;
             ctx.lineWidth = 1.5;
             ctx.setLineDash([4, 3]);
             ctx.beginPath();
@@ -487,7 +613,7 @@ export class ArrangementVisualizer {
             const isMergeHovered = this.hoverMergeCutIndex === pIdx;
 
             // Divider vertical line
-            ctx.strokeStyle = isCutHovered ? '#b45309' : '#d97706';
+            ctx.strokeStyle = isCutHovered ? this.nodeColor : colorWithAlpha(this.nodeColor, 0.85);
             ctx.lineWidth = isCutHovered ? 2.5 : 1.5;
             ctx.beginPath();
             ctx.moveTo(cutX, this.padding);
@@ -495,7 +621,7 @@ export class ArrangementVisualizer {
             ctx.stroke();
 
             // Handle notch at bottom
-            ctx.fillStyle = isCutHovered ? '#b45309' : '#d97706';
+            ctx.fillStyle = isCutHovered ? this.nodeColor : colorWithAlpha(this.nodeColor, 0.85);
             ctx.beginPath();
             ctx.arc(cutX, height - this.padding - 5, isCutHovered ? 3.5 : 2.5, 0, Math.PI * 2);
             ctx.fill();
@@ -504,7 +630,7 @@ export class ArrangementVisualizer {
             if (this.mode === 'edit') {
                 const mergeBtnY = this.padding + 10;
                 const mergeRadius = isMergeHovered ? 7.5 : 6;
-                ctx.fillStyle = isMergeHovered ? '#ef4444' : 'rgba(245, 158, 11, 0.9)';
+                ctx.fillStyle = isMergeHovered ? '#ef4444' : colorWithAlpha(this.nodeColor, 0.9);
                 ctx.beginPath();
                 ctx.arc(cutX, mergeBtnY, mergeRadius, 0, Math.PI * 2);
                 ctx.fill();

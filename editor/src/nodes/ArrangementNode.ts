@@ -3,6 +3,7 @@ import { BaseNode } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { ArrangementRenderer, type RenderBox, type SignalTelemetry, type ArrangementSection } from '../../../packages/iride/src/index.ts';
+import { compositeArrangementBuffer, getNodeGainMultiplier, applyGainToBuffer } from '../audioCompositor.ts';
 
 export interface ArrangementSectionStructure {
     points: number[];
@@ -46,8 +47,8 @@ export class ArrangementNode extends BaseNode {
 
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Arrangement', tab: 'COMMON' },
-        { key: 'section_probability', label: 'Probability', type: 'float', default: 1.0, min: 0, max: 1, step: 0.05, tab: 'ARRANGEMENT', description: 'Playback probability for the selected section.' },
-        { key: 'section_sample_start', label: 'Sample Start', type: 'slider', default: 0.0, min: 0, max: 1, step: 0.01, tab: 'ARRANGEMENT', description: 'Normalized source position for the selected section.' },
+        { key: 'section_probability', label: 'Probability', type: 'float', default: 1.0, min: 0, max: 1, step: 0.1, tab: 'ARRANGEMENT', description: 'Playback probability for the selected section.' },
+        { key: 'section_sample_start', label: 'Sample Start', type: 'slider', default: 0.0, min: 0, max: 1, step: 0.1, tab: 'ARRANGEMENT', description: 'Normalized source position for the selected section.' },
         { key: 'section_quant', label: 'Quantize', type: 'select', default: 'auto', options: [{ value: 'auto', label: 'Continuous' }, { value: 'bar', label: 'Bar' }, { value: '0.5', label: 'Half Bar' }, { value: 'beat', label: 'Beat' }, { value: 'none', label: 'Once' }], tab: 'ARRANGEMENT', description: 'Retrigger interval for the selected section.' },
         { key: 'section_quant_anchor', label: 'Anchor', type: 'select', default: 'start', options: [{ value: 'start', label: 'Start' }, { value: 'end', label: 'End' }], tab: 'ARRANGEMENT', description: 'Align each section trigger to the start or end of its quant cell.' },
         { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'ARRANGEMENT' }
@@ -367,38 +368,103 @@ export class ArrangementNode extends BaseNode {
         };
     }
 
+    private _cachedVisualSections: ArrangementSection[] | null = null;
+    private _cachedVisualFingerprint: string = '';
+
     override drawVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
         const totalBars = Math.max(0.25, Number(this.properties?.total_bars) || 4.0);
         const structure = this.getSectionStructure();
-        const cutPoints = Array.isArray(structure.points) ? [...structure.points].sort((a, b) => a - b) : [];
-        const sectionBoundaries = [0, ...cutPoints.filter(p => p > 0 && p < totalBars), totalBars];
+        const fingerprint = `${totalBars}:${JSON.stringify(structure)}`;
 
-        const sections: ArrangementSection[] = [];
-        for (let i = 0; i < sectionBoundaries.length - 1; i++) {
-            const startBar = sectionBoundaries[i];
-            const endBar = sectionBoundaries[i + 1];
-            const lengthBars = Math.max(0.01, endBar - startBar);
-            const prob = typeof structure.probability[i] === 'number' ? structure.probability[i] : 1.0;
-            const sampleStart = typeof structure.sampleStart[i] === 'number' ? structure.sampleStart[i] : 0.0;
-            const quant = structure.quant[i] || 'auto';
+        let sections = this._cachedVisualSections;
+        if (!sections || this._cachedVisualFingerprint !== fingerprint) {
+            this._cachedVisualFingerprint = fingerprint;
+            const cutPoints = Array.isArray(structure.points) ? [...structure.points].sort((a, b) => a - b) : [];
+            const sectionBoundaries = [0, ...cutPoints.filter(p => p > 0 && p < totalBars), totalBars];
 
-            sections.push({
-                index: i,
-                startBar,
-                lengthBars,
-                probability: prob,
-                sampleStart,
-                quant
-            });
+            sections = [];
+            for (let i = 0; i < sectionBoundaries.length - 1; i++) {
+                const startBar = sectionBoundaries[i];
+                const endBar = sectionBoundaries[i + 1];
+                const lengthBars = Math.max(0.01, endBar - startBar);
+                const prob = typeof structure.probability[i] === 'number' ? structure.probability[i] : 1.0;
+                const sampleStart = typeof structure.sampleStart[i] === 'number' ? structure.sampleStart[i] : 0.0;
+                const quant = structure.quant[i] || 'auto';
+
+                sections.push({
+                    index: i,
+                    startBar,
+                    lengthBars,
+                    probability: prob,
+                    sampleStart,
+                    quant
+                });
+            }
+            this._cachedVisualSections = sections;
         }
 
         this.arrangementRenderer.setSignal({
             totalBars,
-            sections,
+            sections: sections || [],
             accentColor: this.nodeColor
         });
 
         this.arrangementRenderer.render(ctx, bounds, telemetry);
+    }
+
+    private _cachedCompositedBuffer: AudioBuffer | null = null;
+    private _lastInputBufferRef: AudioBuffer | null = null;
+    private _lastArrangementFingerprint: string = '';
+
+    override getAudioBuffer(visited?: Set<number>): AudioBuffer | null {
+        if ((this as any).manifestStemBuffer) return (this as any).manifestStemBuffer;
+        if ((this as any)._lastRenderedBuffer) return (this as any)._lastRenderedBuffer;
+
+        const cycleSet = visited || new Set<number>();
+        if (cycleSet.has(this.id)) return null;
+        cycleSet.add(this.id);
+
+        const inputNodes = this.getInputNodes();
+        let inputBuffer: AudioBuffer | null = null;
+        for (const inputNode of inputNodes) {
+            const buf = inputNode?.getAudioBuffer?.(cycleSet) || inputNode?.audioBuffer;
+            if (buf) {
+                inputBuffer = buf;
+                break;
+            }
+        }
+        if (!inputBuffer) return null;
+
+        const getGlobal = (typeof window !== 'undefined') ? (window as any).getGlobalParameter : null;
+        const globalBars = typeof getGlobal === 'function' ? Number(getGlobal('total_bars')) : 4;
+        const globalBpm = typeof getGlobal === 'function' ? Number(getGlobal('bpm')) : 120;
+
+        const totalBars = Number(this.properties?.total_bars) || globalBars || 4;
+        const bpm = Number.isFinite(globalBpm) && globalBpm > 0 ? globalBpm : 120;
+        const sectionPoints = Array.isArray(this.properties?.section_points) ? this.properties.section_points : [];
+        const sectionEnabled = Array.isArray(this.properties?.section_enabled) ? this.properties.section_enabled : undefined;
+
+        const nodeGain = getNodeGainMultiplier(this);
+        const fp = `${totalBars}_${bpm}_${sectionPoints.join(',')}_${nodeGain}`;
+        if (this._cachedCompositedBuffer && this._lastInputBufferRef === inputBuffer && this._lastArrangementFingerprint === fp) {
+            return this._cachedCompositedBuffer;
+        }
+
+        const composited = compositeArrangementBuffer(
+            inputBuffer,
+            sectionPoints,
+            sectionEnabled,
+            totalBars,
+            bpm
+        );
+
+        if (!composited) return null;
+        const finalBuffer = (nodeGain !== 1.0) ? applyGainToBuffer(composited, nodeGain) : composited;
+
+        this._cachedCompositedBuffer = finalBuffer;
+        this._lastInputBufferRef = inputBuffer;
+        this._lastArrangementFingerprint = fp;
+        return finalBuffer;
     }
 }
 

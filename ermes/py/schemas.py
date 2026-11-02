@@ -34,6 +34,8 @@ class AudioNodeModel(BaseModel):
     target_bpm: Optional[float] = None
     key: Optional[str] = None
     start_beat: float = 0.0
+    mix_mode: Optional[str] = "sum"
+    gain: Optional[float] = None
     bpm: float = 120.0
     filename: Optional[str] = None
     project_name: Optional[str] = None

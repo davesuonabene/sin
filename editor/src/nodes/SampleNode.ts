@@ -21,6 +21,7 @@ export class SampleNode extends BaseNode {
     public loadedFilepath = '';
     public isLoadingAudio = false;
     private loadingAudioPromise: Promise<AudioBuffer | null> | null = null;
+    private failedAudioFilepath: string | null = null;
 
     public async ensureAudioLoaded(): Promise<AudioBuffer | null> {
         const filepath = String(this.properties?.filepath || '');
@@ -45,9 +46,11 @@ export class SampleNode extends BaseNode {
                 if (buffer?.duration) {
                     this.properties.duration_seconds = buffer.duration;
                 }
+                this.failedAudioFilepath = null;
                 this.setDirtyCanvas(true, true);
                 return buffer;
             } catch (err) {
+                this.failedAudioFilepath = filepath;
                 console.warn(`Failed to preload audio for SampleNode #${this.id}:`, err);
                 return null;
             } finally {
@@ -169,8 +172,8 @@ export class SampleNode extends BaseNode {
             tab: 'SAMPLE',
             description: 'General is best for most musical samples and manual pitch-down. Vocals preserves formants. Percussion favours drum transients. Repitch always uses tape-style resampling.'
         },
-        { key: 'crop_start', label: 'Start Point', type: 'float', default: 0.0, min: 0, max: 1, step: 0.01, tab: 'SAMPLE' },
-        { key: 'crop_end', label: 'End Point', type: 'float', default: 1.0, min: 0, max: 1, step: 0.01, tab: 'SAMPLE' }
+        { key: 'crop_start', label: 'Start Point', type: 'float', default: 0.0, min: 0, max: 1, step: 0.1, tab: 'SAMPLE' },
+        { key: 'crop_end', label: 'End Point', type: 'float', default: 1.0, min: 0, max: 1, step: 0.1, tab: 'SAMPLE' }
     ];
 
     static defaultColor = "#10b981";
@@ -541,12 +544,13 @@ export class SampleNode extends BaseNode {
         const filepath = String(this.properties?.filepath || '');
         if (filepath !== this.loadedFilepath) {
             this.loadedFilepath = filepath;
+            this.failedAudioFilepath = null;
             this.audioBuffer = null;
             delete (this as any).manifestStemBuffer;
             this.waveformRenderer.setSignal(null);
         }
 
-        if (filepath && !this.audioBuffer && !this.isLoadingAudio) {
+        if (filepath && !this.audioBuffer && !this.isLoadingAudio && this.failedAudioFilepath !== filepath) {
             void this.ensureAudioLoaded();
         }
 
@@ -562,8 +566,19 @@ export class SampleNode extends BaseNode {
         const activeSpan = Math.max(0.01, cropEnd - cropStart);
         const sampleActiveDuration = sampleDur > 0 ? sampleDur * activeSpan : 2.0;
 
+        const stretchMode = String(this.properties?.stretch_mode || 'time_stretch');
         const pitchMultiplier = Math.pow(2, Number(this.properties?.transpose || 0) / 12);
-        const effectivePitchRate = pitchMultiplier > 0 ? pitchMultiplier : 1.0;
+        const targetBpm = Number(this.properties?.target_bpm || (window as any).activeWorkspaceManifest?.bpm || (window as any).getGlobalParameter?.('bpm') || 120);
+        const originalBpm = Number(this.properties?.original_bpm || 0);
+        const stretchFactor = Number(this.properties?.stretch_factor || 1.0) || 1.0;
+        let effectivePitchRate = 1.0;
+        if (stretchMode === 'repitch' || stretchMode === 'varispeed') {
+            effectivePitchRate = pitchMultiplier > 0 ? pitchMultiplier : 1.0;
+        } else if (stretchMode !== 'off' && stretchMode !== 'none') {
+            const bpmRatio = (originalBpm > 0 && targetBpm > 0) ? (targetBpm / originalBpm) : 1.0;
+            effectivePitchRate = (bpmRatio / Math.max(0.05, stretchFactor));
+            if (!(effectivePitchRate > 0)) effectivePitchRate = 1.0;
+        }
 
         // Playhead scrubber: tracks real physical playback through the sample
         let playbackProgress: number | undefined;
@@ -642,7 +657,7 @@ export class SampleNode extends BaseNode {
                         const rawSeq = Array.isArray(seq) && seq.length > 0 ? seq : [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
                         const stepLength = Number(parentSequenceNode.properties?.step_length) || 0.25;
                         const bpm = Number(this.properties?.target_bpm || (window as any).getGlobalParameter?.('bpm') || 120);
-                        const stepDuration = stepLength * 4 * (60 / bpm);
+                        const stepDuration = stepLength * (60 / bpm);
                         const patternDuration = Math.max(0.05, rawSeq.length * stepDuration);
                         const timeInPattern = ((curTime % patternDuration) + patternDuration) % patternDuration;
                         const stepIdx = Math.floor(timeInPattern / stepDuration);
@@ -653,7 +668,8 @@ export class SampleNode extends BaseNode {
                             const stepParams = Array.isArray(parentSequenceNode.properties?.step_parameters)
                                 ? parentSequenceNode.properties.step_parameters[stepIdx]
                                 : null;
-                            const sampleStartRatio = Math.max(0, Math.min(100, Number(stepParams?.sample_start ?? 0))) / 100;
+                            const rawSampleStart = Number(stepParams?.sample_start ?? 0);
+                            const sampleStartRatio = Math.max(0, Math.min(1.0, rawSampleStart > 1.0 ? rawSampleStart / 100 : rawSampleStart));
                             const rawGate = Number(stepParams?.gate_length ?? 1.0);
                             const gateLenRatio = Math.max(0, Math.min(1.0, rawGate > 1.0 ? rawGate / 100 : rawGate));
                             const relPct = Math.max(0, Math.min(1.0, Number(parentSequenceNode.properties?.release ?? 0)));

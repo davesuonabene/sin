@@ -10,14 +10,15 @@ from typer.testing import CliRunner
 from cli import app
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRESETS_DIR = PROJECT_ROOT / "presets" / "drums"
-ALL_PRESETS = [
-    PRESETS_DIR / "drum_lab_trap_bounce.json",
-    PRESETS_DIR / "drum_lab_dilla_lofi.json",
-    PRESETS_DIR / "drum_lab_boom_bap_turnaround.json",
-    PRESETS_DIR / "drum_lab_memphis_phonk.json",
-    PRESETS_DIR / "drum_lab_west_coast_gfunk.json",
+CANONICAL_FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "canonical_graphs" / "drums"
+ALL_CANONICAL_FIXTURES = [
+    CANONICAL_FIXTURES_DIR / "drum_lab_trap_bounce.json",
+    CANONICAL_FIXTURES_DIR / "drum_lab_dilla_lofi.json",
+    CANONICAL_FIXTURES_DIR / "drum_lab_boom_bap_turnaround.json",
+    CANONICAL_FIXTURES_DIR / "drum_lab_memphis_phonk.json",
+    CANONICAL_FIXTURES_DIR / "drum_lab_west_coast_gfunk.json",
 ]
+ALL_PRESETS = ALL_CANONICAL_FIXTURES
 
 
 class TestSinCli(unittest.TestCase):
@@ -167,6 +168,22 @@ class TestSinCli(unittest.TestCase):
             self.assertFalse(metrics["has_clipping"], f"Unexpected clipping detected: {metrics}")
             self.assertFalse(metrics["is_silent"], "Rendered audio is unexpectedly silent")
             self.assertGreater(metrics["duration_seconds"], 20.0)
+
+    def test_workspace_save_bare_name_resolution(self):
+        """CLI resolves workspace saves by bare name in saves/."""
+        # Test compose info with bare name
+        result_info = self.runner.invoke(app, ["compose", "info", "ILOVEIT", "--json"])
+        self.assertEqual(result_info.exit_code, 0)
+        info = json.loads(result_info.stdout)
+        self.assertEqual(info["format"], "workspace-save")
+        self.assertEqual(info["bpm"], 102)
+
+        # Test render with bare name in dry-run mode
+        result_render = self.runner.invoke(app, ["render", "ILOVEIT", "--dry-run", "--json"])
+        self.assertEqual(result_render.exit_code, 0)
+        rendered = json.loads(result_render.stdout)
+        self.assertEqual(rendered["status"], "success")
+        self.assertTrue(rendered["dry_run"])
 
 
 if __name__ == "__main__":

@@ -44,12 +44,24 @@ function getLibraryTypeVisual(item: any): LibraryTypeVisual {
     return LIBRARY_TYPE_VISUALS[type] || LIBRARY_TYPE_VISUALS.audio;
 }
 
-function drawLibraryTypeIcon(canvas: HTMLCanvasElement, visual: LibraryTypeVisual): void {
+const LIBRARY_ICON_CACHE = new Map<string, string>();
+
+function getLibraryTypeIconDataUrl(visual: LibraryTypeVisual, size: number = 16): string {
+    const key = `${visual.icon}:${visual.color}:${size}`;
+    const cached = LIBRARY_ICON_CACHE.get(key);
+    if (cached) return cached;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
     const context = canvas.getContext('2d');
-    if (!context) return;
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    const iconSize = Math.max(10, Math.round(Math.min(canvas.width, canvas.height) * 0.85));
-    drawNeonIcon(context, visual.icon, canvas.width / 2, canvas.height / 2, iconSize, visual.color);
+    if (context) {
+        const iconSize = Math.max(10, Math.round(size * 0.85));
+        drawNeonIcon(context, visual.icon, size / 2, size / 2, iconSize, visual.color);
+    }
+    const dataUrl = canvas.toDataURL();
+    LIBRARY_ICON_CACHE.set(key, dataUrl);
+    return dataUrl;
 }
 
 let libraryPreviewEnabled = true;
@@ -201,9 +213,16 @@ export class LibraryPanel {
         [this.vaultChipsContainer, this.typeChipsContainer, this.tagChipsContainer]
             .forEach(rail => this.enableHorizontalDragScroll(rail));
 
+        let searchDebounceTimer: number | null = null;
         this.searchInput.addEventListener('input', () => {
-            this.renderLimit = LibraryPanel.INITIAL_RENDER_LIMIT;
-            this.renderList();
+            if (searchDebounceTimer !== null) {
+                window.clearTimeout(searchDebounceTimer);
+            }
+            searchDebounceTimer = window.setTimeout(() => {
+                searchDebounceTimer = null;
+                this.renderLimit = LibraryPanel.INITIAL_RENDER_LIMIT;
+                this.renderList();
+            }, 150);
         });
         window.addEventListener('library-metadata-changed', (event: Event) => {
             const { filepath, bpm } = (event as CustomEvent).detail || {};
@@ -756,14 +775,12 @@ export class LibraryPanel {
 
         contentRow.innerHTML = `
             <span class="library-type-icon library-type-icon--small" title="${contentVisual.label}" aria-label="${contentVisual.label}">
-                <canvas width="14" height="14"></canvas>
+                <img src="${getLibraryTypeIconDataUrl(contentVisual, 14)}" width="14" height="14" alt="" />
             </span>
             <span class="stem-name" title="${content.absolute_path || content.relative_path}">${versionedContent.fileVersionDisplayName || content.filename || content.name || content.title}${metaInfo}${externalBadge}</span>
             <span class="stem-duration">${content.duration_seconds ? content.duration_seconds + 's' : ''}</span>
             <button class="td-library-row-fav-btn${isContentFav ? ' active' : ''}" type="button" title="${isContentFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isContentFav ? '★' : '☆'}</button>
         `;
-        const contentIconCanvas = contentRow.querySelector('.library-type-icon canvas') as HTMLCanvasElement | null;
-        if (contentIconCanvas) drawLibraryTypeIcon(contentIconCanvas, contentVisual);
 
         const contentFavBtn = contentRow.querySelector('.td-library-row-fav-btn') as HTMLButtonElement | null;
         if (contentFavBtn) {
@@ -999,7 +1016,7 @@ export class LibraryPanel {
             const iconHtml = isOrganizer
                 ? `<span class="td-library-folder-toggle" aria-hidden="true">${isOrganizerExpanded ? '▾' : '▸'}</span>`
                 : `<span class="library-type-icon" title="${typeVisual.label}" aria-label="${typeVisual.label}">
-                    <canvas width="16" height="16"></canvas>
+                    <img src="${getLibraryTypeIconDataUrl(typeVisual, 16)}" width="16" height="16" alt="" />
                 </span>`;
 
             el.innerHTML = `
@@ -1008,10 +1025,6 @@ export class LibraryPanel {
                 ${multitrackToggle}
                 <button class="td-library-row-fav-btn${isFav ? ' active' : ''}" type="button" title="${isFav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${isFav ? '★' : '☆'}</button>
             `;
-            if (!isOrganizer) {
-                const typeIconCanvas = el.querySelector('.library-type-icon canvas') as HTMLCanvasElement | null;
-                if (typeIconCanvas) drawLibraryTypeIcon(typeIconCanvas, typeVisual);
-            }
 
             const favBtn = el.querySelector('.td-library-row-fav-btn') as HTMLButtonElement | null;
             if (favBtn) {

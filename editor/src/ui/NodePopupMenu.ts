@@ -7,6 +7,11 @@ export interface PopupNodeItem {
     isCallable?: boolean;
 }
 
+export interface NodePopupMenuShowOptions {
+    mode?: 'default' | 'insert';
+    placeholder?: string;
+}
+
 export class NodePopupMenu {
     private menuElement: HTMLDivElement;
     private searchInput: HTMLInputElement;
@@ -16,6 +21,7 @@ export class NodePopupMenu {
     private isVisible: boolean = false;
     private openTime: number = 0;
     private activeTab: "NODES" | "GROUPS" | "PRESETS" | "MODULATORS" | "ADDONS" = "NODES";
+    private mode: 'default' | 'insert' = 'default';
 
     private items: PopupNodeItem[] = [
         // NODES
@@ -162,8 +168,19 @@ export class NodePopupMenu {
             const el = document.createElement('div');
             el.className = 'td-node-popup-item sin-menu-item';
             el.style.setProperty('--menu-row-accent', item.badgeColor);
-            if (!item.isCallable) {
-                el.style.opacity = '0.5';
+
+            const isInsertable = this.mode === 'insert'
+                ? (item.type === "sequence" || item.type === "track" || item.type === "arrangement")
+                : item.isCallable;
+
+            if (!isInsertable) {
+                el.style.opacity = '0.35';
+                el.style.cursor = 'not-allowed';
+                if (this.mode === 'insert' && item.type === 'sample') {
+                    el.title = 'Sample node has no audio input to connect from upstream cable';
+                } else if (this.mode === 'insert') {
+                    el.title = 'Cannot be inserted into an audio cable';
+                }
             }
 
             el.innerHTML = `<span class="item-label">${item.label}</span>`;
@@ -171,7 +188,7 @@ export class NodePopupMenu {
             const selectHandler = (e: Event) => {
                 e.stopPropagation();
                 e.preventDefault();
-                if (item.isCallable && (item.type === "sample" || item.type === "item_pool" || item.type === "sequence" || item.type === "track" || item.type === "arrangement")) {
+                if (isInsertable && (item.type === "sample" || item.type === "item_pool" || item.type === "sequence" || item.type === "track" || item.type === "arrangement")) {
                     if (this.onSelectCallback) {
                         this.onSelectCallback(item.type as any);
                     }
@@ -186,11 +203,19 @@ export class NodePopupMenu {
         });
     }
 
-    show(x: number, y: number, onSelect: (nodeType: "sample" | "item_pool" | "sequence" | "track" | "arrangement") => void) {
+    show(
+        x: number,
+        y: number,
+        onSelect: (nodeType: "sample" | "item_pool" | "sequence" | "track" | "arrangement") => void,
+        options?: NodePopupMenuShowOptions
+    ) {
         this.openTime = Date.now();
         this.onSelectCallback = onSelect;
+        this.mode = options?.mode || 'default';
         this.activeTab = "NODES";
         this.searchInput.value = '';
+        this.searchInput.placeholder = options?.placeholder || (this.mode === 'insert' ? 'Insert OP into cable...' : 'Search OP...');
+        this.menuElement.classList.toggle('is-cable-insert', this.mode === 'insert');
         this.updateTabsStyle();
         this.renderGrid();
 
@@ -220,6 +245,9 @@ export class NodePopupMenu {
 
     hide() {
         this.menuElement.style.display = 'none';
+        this.menuElement.classList.remove('is-cable-insert');
+        this.mode = 'default';
+        this.searchInput.placeholder = 'Search OP...';
         this.isVisible = false;
         this.onSelectCallback = null;
     }

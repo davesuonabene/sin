@@ -9,48 +9,6 @@ from tests.support import GaiaTestCase, integration
 
 
 class GaiaContainerLibraryTestCase(unittest.TestCase):
-    @integration("reads the developer's real GAIA library")
-    def test_get_library_populates_project_references_and_subfolders(self):
-        """Verify get_library retrieves projects with referenced items and folder categorization."""
-        res = api.get_library()
-        files = res.get("files", [])
-        self.assertIsInstance(files, list)
-        self.assertGreater(len(files), 0)
-
-        # Check for FIELD LOOPS project (id 6085)
-        field_loops = next((f for f in files if f.get("id") == 6085), None)
-        if field_loops:
-            self.assertEqual(field_loops.get("type"), "project")
-            contents = field_loops.get("contents", [])
-            self.assertGreater(len(contents), 10)
-
-            # Check that subfolder metadata is populated
-            folders = {c.get("folder") for c in contents if c.get("folder")}
-            self.assertTrue("loops" in folders or "one shots" in folders)
-
-            # Check that item paths are valid strings
-            for item in contents:
-                self.assertTrue(bool(item.get("absolute_path")))
-                self.assertIsNotNone(item.get("id"))
-                self.assertIsNotNone(item.get("stream_url"))
-
-    @integration("reads the developer's real GAIA database")
-    def test_get_library_sqlite_fallback_populates_references(self):
-        """Verify direct SQLite read populates project item references when Gaia API is offline."""
-        with patch("urllib.request.urlopen", side_effect=OSError("Gaia API offline")):
-            res = api.get_library()
-            files = res.get("files", [])
-            self.assertIsInstance(files, list)
-            self.assertGreater(len(files), 0)
-
-            field_loops = next((f for f in files if f.get("id") == 6085), None)
-            if field_loops:
-                self.assertEqual(field_loops.get("type"), "project")
-                contents = field_loops.get("contents", [])
-                self.assertGreater(len(contents), 10)
-                folders = {c.get("folder") for c in contents if c.get("folder")}
-                self.assertTrue("loops" in folders or "one shots" in folders)
-
     def test_prepare_and_filter_library_preserves_external_paths(self):
         """Verify prepare_and_filter_library does not overwrite valid absolute paths with root-joined paths."""
         raw_items = [

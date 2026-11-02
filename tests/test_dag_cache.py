@@ -85,6 +85,59 @@ class TestDagNodeCache(unittest.TestCase):
 
         GLOBAL_DAG_CACHE.clear()
 
+    def test_merkle_parent_fingerprint_invalidates_on_child_change(self):
+        from core.engines import build_node_object
+        from core.dag_cache import GLOBAL_DAG_CACHE
+
+        GLOBAL_DAG_CACHE.clear()
+
+        tree_a = {
+            "id": 100,
+            "node_type": "track",
+            "node_name": "Parent",
+            "children": [
+                {
+                    "id": 101,
+                    "node_type": "sequence",
+                    "node_name": "ChildSeq",
+                    "sequence": [1, 0, 1, 0],
+                    "step_length": 0.25,
+                }
+            ],
+        }
+        tree_b = {
+            "id": 100,
+            "node_type": "track",
+            "node_name": "Parent",
+            "children": [
+                {
+                    "id": 101,
+                    "node_type": "sequence",
+                    "node_name": "ChildSeq",
+                    "sequence": [1, 1, 1, 1],
+                    "step_length": 0.25,
+                }
+            ],
+        }
+
+        obj_a = build_node_object(tree_a)
+        obj_b = build_node_object(tree_b)
+        self.assertNotEqual(obj_a.fingerprint, obj_b.fingerprint)
+        GLOBAL_DAG_CACHE.clear()
+
+    def test_cache_context_isolation(self):
+        audio_preview = np.array([0.2, 0.2], dtype=np.float32)
+        audio_offline = np.array([0.8, 0.8], dtype=np.float32)
+        ctx_preview = ("preview", 44100, 120.0, False, None, 0)
+        ctx_offline = ("offline", 44100, 120.0, False, None, 0)
+
+        self.cache.store("42", "same_fp", audio_preview, context=ctx_preview)
+        self.assertIsNotNone(self.cache.get("42", "same_fp", context=ctx_preview))
+        self.assertIsNone(self.cache.get("42", "same_fp", context=ctx_offline))
+
+        self.cache.store("42", "same_fp", audio_offline, context=ctx_offline)
+        np.testing.assert_array_equal(self.cache.get("42", "same_fp", context=ctx_offline), audio_offline)
+
 
 if __name__ == "__main__":
     unittest.main()

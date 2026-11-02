@@ -212,7 +212,7 @@ test('applyRandomModulation modifies specific sequence step parameters independe
         id: 50,
         properties: {
             step_parameters: Array.from({ length: 16 }, () => ({
-                probability: 100,
+                probability: 1.0,
                 velocity: 1.0,
                 offset: 0.0,
                 subdivisions: 1,
@@ -224,9 +224,9 @@ test('applyRandomModulation modifies specific sequence step parameters independe
         },
         getFields() {
             return [
-                { key: 'probability', label: 'Probability', type: 'int', min: 0, max: 100, step: 1, default: 100 },
-                { key: 'velocity', label: 'Velocity', type: 'float', min: 0, max: 1, step: 0.01, default: 1.0 },
-                { key: 'offset', label: 'Offset', type: 'float', min: -0.5, max: 0.5, step: 0.01, default: 0.0 },
+                { key: 'probability', label: 'Probability', type: 'float', min: 0, max: 1, step: 0.1, default: 1.0 },
+                { key: 'velocity', label: 'Velocity', type: 'float', min: 0, max: 1, step: 0.1, default: 1.0 },
+                { key: 'offset', label: 'Offset', type: 'float', min: -0.5, max: 0.5, step: 0.1, default: 0.0 },
                 { key: 'subdivisions', label: 'Subdivisions', type: 'int', min: 1, max: 16, step: 1, default: 1 }
             ];
         }
@@ -250,7 +250,7 @@ test('applyRandomModulation modifies specific sequence step parameters independe
         paramLabel: 'Step 7 Probability',
         minPercent: -30,
         maxPercent: -10,
-        baseValue: 100,
+        baseValue: 1.0,
         enabled: true
     };
 
@@ -265,7 +265,7 @@ test('applyRandomModulation modifies specific sequence step parameters independe
 
     // Apply with randomFactor = 0.0:
     // dest1 (velocity, span = 1.0, -20% of 1.0 = -0.2 -> 1.0 - 0.2 = 0.8)
-    // dest2 (probability, span = 100, -30% of 100 = -30 -> 100 - 30 = 70)
+    // dest2 (probability, span = 1.0, -30% of 1.0 = -0.3 -> 1.0 - 0.3 = 0.7)
     applyRandomModulation(modifierNode, sequenceNode, {
         randomFactorGenerator: () => 0.0
     });
@@ -276,16 +276,16 @@ test('applyRandomModulation modifies specific sequence step parameters independe
     assert.equal(sequenceNode.properties.step_parameters[0].velocity, 1.0);
     assert.equal(sequenceNode.properties.step_parameters[1].velocity, 1.0);
 
-    // Verify Step 7 probability was modulated to 70
-    assert.equal(sequenceNode.properties.step_parameters[6].probability, 70);
-    // Verify Step 6 & Step 8 probabilities were UNTOUCHED (still 100)
-    assert.equal(sequenceNode.properties.step_parameters[5].probability, 100);
-    assert.equal(sequenceNode.properties.step_parameters[7].probability, 100);
+    // Verify Step 7 probability was modulated to 0.7
+    assert.equal(sequenceNode.properties.step_parameters[6].probability, 0.7);
+    // Verify Step 6 & Step 8 probabilities were UNTOUCHED (still 1.0)
+    assert.equal(sequenceNode.properties.step_parameters[5].probability, 1.0);
+    assert.equal(sequenceNode.properties.step_parameters[7].probability, 1.0);
 
     // Restore base values
     restoreBaseValues(modifierNode, sequenceNode);
     assert.equal(sequenceNode.properties.step_parameters[2].velocity, 1.0);
-    assert.equal(sequenceNode.properties.step_parameters[6].probability, 100);
+    assert.equal(sequenceNode.properties.step_parameters[6].probability, 1.0);
 });
 
 test('isFieldMappableToRandom only allows numeric fields and step parameters', () => {

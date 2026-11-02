@@ -24,8 +24,8 @@ export function startBipolarDrag(
             font-size: 11px;
             font-weight: 700;
             padding: 2px 8px;
-            border-radius: 4px;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
+            border-radius: 2px;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
             display: none;
             transform: translate(-50%, -140%);
             white-space: nowrap;
@@ -410,7 +410,7 @@ export class RandomParamOverlay {
                 if (!badge) {
                     badge = document.createElement('span');
                     badge.className = 'td-random-row-badge';
-                    badge.style.cssText = 'font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: 6px; display: inline-flex; align-items: center; cursor: ew-resize; user-select: none; transition: background 0.15s ease, border-color 0.15s ease;';
+                    badge.style.cssText = 'font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 2px; margin-left: 6px; display: inline-flex; align-items: center; cursor: ew-resize; user-select: none; transition: background 0.15s ease, border-color 0.15s ease;';
                     const label = row.querySelector('.td-param-label');
                     if (label) label.appendChild(badge);
                 }

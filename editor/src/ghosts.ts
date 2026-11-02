@@ -79,7 +79,13 @@ export function unlinkGhostField(node: any, field: string) {
     const fields = getUnlinked(raw);
     fields.add(field);
     setUnlinked(raw, fields);
+    (node as any)._cachedCompositedBuffer = null;
     node.setDirtyCanvas?.(true, true);
+    if (typeof window !== 'undefined' && node.id != null) {
+        window.dispatchEvent(new CustomEvent('node-property-changed', {
+            detail: { nodeId: node.id, key: field, value: cloneValue(raw[field]) }
+        }));
+    }
 }
 
 export function relinkGhostField(node: any, field: string) {
@@ -87,7 +93,13 @@ export function relinkGhostField(node: any, field: string) {
     const fields = getUnlinked(raw);
     if (!fields.delete(field)) return;
     setUnlinked(raw, fields);
+    (node as any)._cachedCompositedBuffer = null;
     node.setDirtyCanvas?.(true, true);
+    if (typeof window !== 'undefined' && node.id != null) {
+        window.dispatchEvent(new CustomEvent('node-property-changed', {
+            detail: { nodeId: node.id, key: field, value: cloneValue(node.properties?.[field]) }
+        }));
+    }
 }
 
 function resolveAtPath(root: any, path: PropertyKey[]): any {

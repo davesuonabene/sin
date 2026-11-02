@@ -5,7 +5,7 @@ import {
     subscribeEngineTelemetry,
     type RuntimeLogEntry,
     type EngineTelemetrySummary
-} from '../runtimeLog';
+} from '../runtimeLog.ts';
 
 function formatTimestamp(timestamp: Date): string {
     return timestamp.toLocaleTimeString([], {
@@ -33,6 +33,11 @@ export class RuntimeLogPanel {
     private hiddenErrorCount = 0;
     private currentEntries: RuntimeLogEntry[] = [];
     private activeFilter: RuntimeLogFilter = 'all';
+    private errorDecayTimer: number | null = null;
+    private errorFadeTimer: number | null = null;
+    private isHoveringErrorEcho = false;
+    static readonly ERROR_DECAY_MS = 6000;
+    static readonly ERROR_FADE_MS = 350;
 
     constructor(parent: HTMLElement) {
         this.toggle = document.createElement('button');
@@ -85,7 +90,21 @@ export class RuntimeLogPanel {
         this.telemetryBuffer = this.panel.querySelector('[data-telemetry="buffer"]') as HTMLElement;
 
         this.toggle.addEventListener('click', () => this.setOpen(Boolean(this.panel.hidden)));
-        this.errorEcho.addEventListener('click', () => this.setOpen(true));
+        this.errorEcho.addEventListener('click', () => {
+            this.dismissErrorEcho();
+            this.setOpen(true);
+        });
+        this.errorEcho.addEventListener('pointerenter', () => {
+            this.isHoveringErrorEcho = true;
+            this.clearErrorDecay();
+            this.errorEcho.classList.remove('is-decaying');
+        });
+        this.errorEcho.addEventListener('pointerleave', () => {
+            this.isHoveringErrorEcho = false;
+            if (!this.errorEcho.hidden && this.panel.hidden) {
+                this.startErrorDecay();
+            }
+        });
         this.panel.querySelector('[data-action="close"]')?.addEventListener('click', () => this.setOpen(false));
         this.panel.querySelector('[data-action="clear"]')?.addEventListener('click', () => clearRuntimeLog());
 
@@ -101,17 +120,20 @@ export class RuntimeLogPanel {
         this.unsubscribe = subscribeRuntimeLog((entries, appendedEntries) => this.render(entries, appendedEntries));
         this.unsubscribeTelemetry = subscribeEngineTelemetry(t => this.renderTelemetry(t));
 
-        (window as any).runtimeLogPanel = this;
+        if (typeof window !== 'undefined') {
+            (window as any).runtimeLogPanel = this;
+        }
         runtimeLog('Editor runtime ready', 'common');
     }
 
     dispose(): void {
+        this.clearErrorDecay();
         this.unsubscribe();
         this.unsubscribeTelemetry();
         this.panel.remove();
         this.toggle.remove();
         this.errorEcho.remove();
-        if ((window as any).runtimeLogPanel === this) {
+        if (typeof window !== 'undefined' && (window as any).runtimeLogPanel === this) {
             delete (window as any).runtimeLogPanel;
         }
     }
@@ -121,11 +143,45 @@ export class RuntimeLogPanel {
         this.toggle.classList.toggle('is-active', open);
         this.toggle.setAttribute('aria-expanded', String(open));
         if (open) {
-            this.hiddenErrorCount = 0;
-            this.errorEcho.hidden = true;
+            this.dismissErrorEcho();
             this.renderFilteredRows();
             this.rows.scrollTop = this.rows.scrollHeight;
         }
+    }
+
+    getErrorEcho(): HTMLButtonElement {
+        return this.errorEcho;
+    }
+
+    private clearErrorDecay(): void {
+        if (this.errorDecayTimer !== null) {
+            clearTimeout(this.errorDecayTimer);
+            this.errorDecayTimer = null;
+        }
+        if (this.errorFadeTimer !== null) {
+            clearTimeout(this.errorFadeTimer);
+            this.errorFadeTimer = null;
+        }
+    }
+
+    private startErrorDecay(): void {
+        this.clearErrorDecay();
+        if (this.isHoveringErrorEcho) return;
+        this.errorDecayTimer = setTimeout(() => {
+            this.errorDecayTimer = null;
+            this.errorEcho.classList.add('is-decaying');
+            this.errorFadeTimer = setTimeout(() => {
+                this.errorFadeTimer = null;
+                this.dismissErrorEcho();
+            }, RuntimeLogPanel.ERROR_FADE_MS) as unknown as number;
+        }, RuntimeLogPanel.ERROR_DECAY_MS) as unknown as number;
+    }
+
+    private dismissErrorEcho(): void {
+        this.clearErrorDecay();
+        this.errorEcho.classList.remove('is-decaying');
+        this.errorEcho.hidden = true;
+        this.hiddenErrorCount = 0;
     }
 
     openWithFilter(filter: RuntimeLogFilter): void {
@@ -166,7 +222,9 @@ export class RuntimeLogPanel {
             this.errorEcho.textContent = this.hiddenErrorCount > 1
                 ? `${latest.message} (+${this.hiddenErrorCount - 1})`
                 : latest.message;
+            this.errorEcho.classList.remove('is-decaying');
             this.errorEcho.hidden = false;
+            this.startErrorDecay();
         }
         if (this.panel.hidden) return;
 

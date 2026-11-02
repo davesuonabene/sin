@@ -9,6 +9,49 @@ export interface WaveformVisualizerOptions {
     handleColor?: string;
 }
 
+function colorWithAlpha(color: string, alpha: number): string {
+    if (!color) return `rgba(5, 150, 105, ${alpha})`;
+    if (color.startsWith('#')) {
+        let c = color.slice(1);
+        if (c.length === 3) c = c.split('').map(x => x + x).join('');
+        const num = parseInt(c, 16);
+        if (!isNaN(num)) {
+            const r = (num >> 16) & 255;
+            const g = (num >> 8) & 255;
+            const b = num & 255;
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+    }
+    if (color.startsWith('rgb(')) {
+        return color.replace('rgb(', 'rgba(').replace(')', `, ${alpha})`);
+    }
+    if (color.startsWith('rgba(')) {
+        return color.replace(/[\d\.]+\)$/, `${alpha})`);
+    }
+    return color;
+}
+
+function getOrCreateOffscreenCanvas(existing: HTMLCanvasElement | null, width: number, height: number): HTMLCanvasElement | null {
+    if (typeof document === 'undefined') return null;
+    const w = Math.max(1, Math.floor(width));
+    const h = Math.max(1, Math.floor(height));
+    if (existing) {
+        if (existing.width !== w || existing.height !== h) {
+            existing.width = w;
+            existing.height = h;
+        }
+        return existing;
+    }
+    try {
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        return c;
+    } catch {
+        return null;
+    }
+}
+
 export class WaveformVisualizer {
     private container: HTMLElement | null = null;
     private wrapperEl: HTMLElement;
@@ -36,6 +79,15 @@ export class WaveformVisualizer {
     private backgroundColor: string = "#f8fafc";
     private overlayColor: string = "rgba(148, 163, 184, 0.28)";
     private handleColor: string = "#0284c7";
+    private maskCanvas: HTMLCanvasElement | null = null;
+    private tintCanvas: HTMLCanvasElement | null = null;
+    private maskFingerprint: string = '';
+
+    public setWaveformColor(color: string) {
+        if (!color || color === this.waveformColor) return;
+        this.waveformColor = color;
+        this.draw();
+    }
 
     // Drag state
     private activeDrag: 'start' | 'end' | 'scroll' | 'box-zoom' | null = null;
@@ -177,6 +229,7 @@ export class WaveformVisualizer {
         this.showLoadingState();
 
         try {
+            this.maskFingerprint = '';
             if (source instanceof AudioBuffer) {
                 this.audioBuffer = source;
             } else {
@@ -202,6 +255,7 @@ export class WaveformVisualizer {
 
                 this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
             }
+            this.maskFingerprint = '';
             this.draw();
         } catch (err) {
             console.error("WaveformVisualizer: Failed to load audio", err);
@@ -377,14 +431,9 @@ export class WaveformVisualizer {
         this.ctx.lineTo(width, centerY);
         this.ctx.stroke();
 
-        // 3. Waveform Peaks for visible slice
+        // 3. Waveform Peaks for visible slice (rendered via cached mask)
         if (this.audioBuffer) {
-            const channels = Array.from(
-                { length: this.audioBuffer.numberOfChannels },
-                (_, channel) => this.audioBuffer!.getChannelData(channel)
-            );
             const totalSamples = this.audioBuffer.length;
-
             const startSample = Math.floor(this.viewStart * totalSamples);
             const endSample = Math.min(totalSamples, Math.ceil(this.viewEnd * totalSamples));
             const visibleSamples = Math.max(1, endSample - startSample);
@@ -396,35 +445,94 @@ export class WaveformVisualizer {
             const samplesPerBar = Math.max(1, Math.floor(visibleSamples / numBars));
             const maxAmplitudeHeight = (mainH / 2) * 0.85;
 
-            const grad = this.ctx.createLinearGradient(0, topMargin, 0, height - bottomMargin);
-            grad.addColorStop(0, '#34d399');
-            grad.addColorStop(0.5, this.waveformColor);
-            grad.addColorStop(1, '#059669');
+            const currentFp = `${totalSamples}_${Math.floor(width)}_${Math.floor(height)}_${this.viewStart}_${this.viewEnd}`;
+            const mask = getOrCreateOffscreenCanvas(this.maskCanvas, width, height);
+            const tint = getOrCreateOffscreenCanvas(this.tintCanvas, width, height);
 
-            this.ctx.fillStyle = grad;
+            if (mask && tint) {
+                this.maskCanvas = mask;
+                this.tintCanvas = tint;
+                const mCtx = mask.getContext('2d');
+                const tCtx = tint.getContext('2d');
 
-            for (let i = 0; i < numBars; i++) {
-                const sIdx = startSample + Math.floor(i * (visibleSamples / numBars));
-                let min = 1.0;
-                let max = -1.0;
-                const sampleStep = Math.max(1, Math.floor(samplesPerBar / 4));
+                if (mCtx && tCtx) {
+                    if (this.maskFingerprint !== currentFp) {
+                        this.maskFingerprint = currentFp;
+                        mCtx.clearRect(0, 0, width, height);
+                        mCtx.fillStyle = '#ffffff';
 
-                for (let j = 0; j < samplesPerBar; j += sampleStep) {
-                    for (const rawData of channels) {
-                        const val = rawData[sIdx + j] || 0;
-                        if (val < min) min = val;
-                        if (val > max) max = val;
+                        const channels = Array.from(
+                            { length: this.audioBuffer.numberOfChannels },
+                            (_, channel) => this.audioBuffer!.getChannelData(channel)
+                        );
+
+                        for (let i = 0; i < numBars; i++) {
+                            const sIdx = startSample + Math.floor(i * (visibleSamples / numBars));
+                            let min = 1.0;
+                            let max = -1.0;
+                            const sampleStep = Math.max(1, Math.floor(samplesPerBar / 4));
+
+                            for (let j = 0; j < samplesPerBar; j += sampleStep) {
+                                for (const rawData of channels) {
+                                    const val = rawData[sIdx + j] || 0;
+                                    if (val < min) min = val;
+                                    if (val > max) max = val;
+                                }
+                            }
+
+                            const amp = Math.max(Math.abs(min), Math.abs(max));
+                            const barHeight = Math.max(2, amp * maxAmplitudeHeight * 2);
+                            const x = i * step;
+
+                            mCtx.fillRect(x, centerY - barHeight / 2, barWidth, barHeight);
+                        }
                     }
+
+                    // Tint the cached mask with the node's waveform color
+                    tCtx.clearRect(0, 0, width, height);
+                    tCtx.drawImage(mask, 0, 0);
+                    tCtx.globalCompositeOperation = 'source-in';
+                    const grad = tCtx.createLinearGradient(0, topMargin, 0, height - bottomMargin);
+                    grad.addColorStop(0, colorWithAlpha(this.waveformColor, 0.85));
+                    grad.addColorStop(0.5, this.waveformColor);
+                    grad.addColorStop(1, colorWithAlpha(this.waveformColor, 0.65));
+                    tCtx.fillStyle = grad;
+                    tCtx.fillRect(0, 0, width, height);
+                    tCtx.globalCompositeOperation = 'source-over';
+
+                    this.ctx.drawImage(tint, 0, 0);
                 }
+            } else {
+                const channels = Array.from(
+                    { length: this.audioBuffer.numberOfChannels },
+                    (_, channel) => this.audioBuffer!.getChannelData(channel)
+                );
+                const grad = this.ctx.createLinearGradient(0, topMargin, 0, height - bottomMargin);
+                grad.addColorStop(0, colorWithAlpha(this.waveformColor, 0.85));
+                grad.addColorStop(0.5, this.waveformColor);
+                grad.addColorStop(1, colorWithAlpha(this.waveformColor, 0.65));
+                this.ctx.fillStyle = grad;
 
-                const amp = Math.max(Math.abs(min), Math.abs(max));
-                const barHeight = Math.max(2, amp * maxAmplitudeHeight * 2);
-                const x = i * step;
-
-                this.ctx.fillRect(x, centerY - barHeight / 2, barWidth, barHeight);
+                for (let i = 0; i < numBars; i++) {
+                    const sIdx = startSample + Math.floor(i * (visibleSamples / numBars));
+                    let min = 1.0;
+                    let max = -1.0;
+                    const sampleStep = Math.max(1, Math.floor(samplesPerBar / 4));
+                    for (let j = 0; j < samplesPerBar; j += sampleStep) {
+                        for (const rawData of channels) {
+                            const val = rawData[sIdx + j] || 0;
+                            if (val < min) min = val;
+                            if (val > max) max = val;
+                        }
+                    }
+                    const amp = Math.max(Math.abs(min), Math.abs(max));
+                    const barHeight = Math.max(2, amp * maxAmplitudeHeight * 2);
+                    const x = i * step;
+                    this.ctx.fillRect(x, centerY - barHeight / 2, barWidth, barHeight);
+                }
             }
         } else {
-            this.ctx.fillStyle = "rgba(16, 185, 129, 0.4)";
+            this.ctx.fillStyle = colorWithAlpha(this.waveformColor, 0.4);
             this.ctx.font = "10px Inter, sans-serif";
             this.ctx.textAlign = "center";
             this.ctx.fillText("No Audio Loaded", width / 2, centerY + 3);

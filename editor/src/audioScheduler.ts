@@ -168,7 +168,7 @@ export class GaplessAudioScheduler {
     connectToAnalyser(analyser: AnalyserNode): void {
         const ctx = this.ensureContext();
         if (this.masterGain) {
-            try { this.masterGain.disconnect(); } catch {}
+            try { this.masterGain.disconnect(); } catch { }
             this.masterGain.connect(analyser);
             analyser.connect(ctx.destination);
         }
@@ -203,7 +203,7 @@ export class GaplessAudioScheduler {
                 item.source.stop();
                 item.source.disconnect();
                 item.gain.disconnect();
-            } catch {}
+            } catch { }
         }
         this.activeSources = [];
         this.lastScheduledBar = -1;
@@ -263,7 +263,8 @@ export class GaplessAudioScheduler {
     getCurrentTime(): number {
         if (!this.isPlaying) return this.pausedTime || 0;
         if (!this.audioCtx) return 0;
-        const elapsed = this.audioCtx.currentTime - this.playbackStartTime;
+        const outputLatency = Number((this.audioCtx as any).outputLatency || (this.audioCtx as any).baseLatency || 0);
+        const elapsed = Math.max(0, (this.audioCtx.currentTime - this.playbackStartTime) - outputLatency);
         const totalDuration = this.totalBars * this.secondsPerBar;
         if (totalDuration <= 0) return 0;
         if (elapsed < 0) return 0;
@@ -493,7 +494,7 @@ export class GaplessAudioScheduler {
                 item.gain.gain.setValueAtTime(item.gain.gain.value, now);
                 item.gain.gain.linearRampToValueAtTime(0.0001, now + 0.015);
                 item.source.stop(now + 0.02);
-            } catch {}
+            } catch { }
         }
         this.activeSources = [];
 
@@ -526,6 +527,8 @@ export class GaplessAudioScheduler {
         // Re-synchronize schedule time if it fell behind actual Web Audio currentTime
         if (this.nextScheduleTime < this.audioCtx.currentTime - 0.05) {
             this.nextScheduleTime = this.audioCtx.currentTime + 0.02;
+            const nextBarToPlay = Math.max(0, (this.lastScheduledBar + 1) % Math.max(1, this.totalBars));
+            this.playbackStartTime = this.nextScheduleTime - (nextBarToPlay * this.secondsPerBar);
         }
 
         let guard = 0;

@@ -2,7 +2,7 @@ import { type BaseNode } from '../../nodes/BaseNode.ts';
 import { type ArrangementNode, type ArrangementSectionStructure } from '../../nodes/ArrangementNode.ts';
 import { ArrangementVisualizer, type ArrangementAnchor } from '../ArrangementVisualizer.ts';
 import { resolveArrangementSourceVisual } from '../arrangementSourceVisual.ts';
-import { registerParameterWheelControl } from '../ParameterWheelMenu.ts';
+import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from '../ParameterWheelMenu.ts';
 
 const QUANT_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'auto', label: 'Continuous' },
@@ -84,13 +84,13 @@ export class ArrangementTimelineSection {
                 <div class="td-param-row" data-field-key="section_probability" data-param-label="Probability">
                     <div class="td-param-label">Probability</div>
                     <div class="td-param-control">
-                        <input class="td-param-input" id="sec-prob-input" type="number" min="0" max="1" step="0.05" value="${probVal}">
+                        <input class="td-param-input" id="sec-prob-input" type="number" min="0" max="1" step="0.1" value="${probVal}">
                     </div>
                 </div>
                 <div class="td-param-row" data-field-key="section_sample_start" data-param-label="Sample Start">
                     <div class="td-param-label">Sample Start</div>
                     <div class="td-param-control">
-                        <input class="td-param-input" id="sec-sample-start-input" type="number" min="0" max="1" step="0.01" value="${startVal}">
+                        <input class="td-param-input" id="sec-sample-start-input" type="number" min="0" max="1" step="0.1" value="${startVal}">
                     </div>
                 </div>
                 <div class="td-param-row" data-field-key="section_quant" data-param-label="Quantize">
@@ -118,40 +118,62 @@ export class ArrangementTimelineSection {
             const anchorSelect = sectionEditor.querySelector('#prop-sec-quant-anchor') as HTMLSelectElement | null;
 
             if (probInput) {
-                registerParameterWheelControl(probInput);
                 const commitProb = () => {
                     const num = Math.max(0, Math.min(1, parseFloat(probInput.value) || 0));
+                    probInput.value = String(num);
                     arrangementNode.updateSectionProbability(index, num);
                     visualizer.setSectionProbability(index, num);
                     windowContext.refreshAudioPreview();
                 };
+                registerParameterWheelControl(probInput, {
+                    isInteger: false,
+                    getValue: () => parseFloat(probInput.value) || 0,
+                    setValue: (val) => {
+                        const next = Math.max(0, Math.min(1, roundStepValue(val)));
+                        probInput.value = String(next);
+                        commitProb();
+                    },
+                });
                 probInput.addEventListener('input', commitProb);
                 probInput.addEventListener('change', commitProb);
                 probInput.addEventListener('wheel', (e) => {
                     e.preventDefault();
+                    if (e.altKey || probInput.disabled) return;
                     const dir = e.deltaY < 0 ? 1 : -1;
+                    const step = getParameterWheelStep(false);
                     const cur = parseFloat(probInput.value) || 0;
-                    const next = Math.max(0, Math.min(1, Math.round((cur + dir * 0.05) * 100) / 100));
+                    const next = Math.max(0, Math.min(1, roundStepValue(cur + dir * step, step)));
                     probInput.value = String(next);
                     commitProb();
                 });
             }
 
             if (sampleStartInput) {
-                registerParameterWheelControl(sampleStartInput);
                 const commitStart = () => {
                     const num = Math.max(0, Math.min(1, parseFloat(sampleStartInput.value) || 0));
+                    sampleStartInput.value = String(num);
                     arrangementNode.updateSectionSampleStart(index, num);
                     visualizer.setSectionSampleStart(index, num);
                     windowContext.refreshAudioPreview();
                 };
+                registerParameterWheelControl(sampleStartInput, {
+                    isInteger: false,
+                    getValue: () => parseFloat(sampleStartInput.value) || 0,
+                    setValue: (val) => {
+                        const next = Math.max(0, Math.min(1, roundStepValue(val)));
+                        sampleStartInput.value = String(next);
+                        commitStart();
+                    },
+                });
                 sampleStartInput.addEventListener('input', commitStart);
                 sampleStartInput.addEventListener('change', commitStart);
                 sampleStartInput.addEventListener('wheel', (e) => {
                     e.preventDefault();
+                    if (e.altKey || sampleStartInput.disabled) return;
                     const dir = e.deltaY < 0 ? 1 : -1;
+                    const step = getParameterWheelStep(false);
                     const cur = parseFloat(sampleStartInput.value) || 0;
-                    const next = Math.max(0, Math.min(1, Math.round((cur + dir * 0.01) * 100) / 100));
+                    const next = Math.max(0, Math.min(1, roundStepValue(cur + dir * step, step)));
                     sampleStartInput.value = String(next);
                     commitStart();
                 });
@@ -173,9 +195,12 @@ export class ArrangementTimelineSection {
             windowContext?.applyOverlays?.();
         };
 
+        const getNodeColor = () => (node as any).nodeColor || (node as any).color || node.properties?.color || '#f59e0b';
+
         visualizer = new ArrangementVisualizer({
             container: visualizerContainer,
             totalBars,
+            nodeColor: getNodeColor(),
             sectionPoints: initialStructure.points,
             sectionProbability: initialStructure.probability,
             sectionSampleStart: initialStructure.sampleStart,
@@ -228,17 +253,29 @@ export class ArrangementTimelineSection {
 
         const onPropChanged = (event: Event) => {
             const detail = (event as CustomEvent).detail;
-            if (detail?.nodeId === node.id && detail?.key === 'total_bars') {
-                syncTotalBarsHeader();
-                visualizer.setTotalBars(totalBars);
-                visualizer.setSectionPoints(arrangementNode.getSectionStructure().points);
-                renderSectionEditor(selectedSection);
+            if (detail?.nodeId === node.id) {
+                if (detail?.key === 'total_bars') {
+                    syncTotalBarsHeader();
+                    visualizer.setTotalBars(totalBars);
+                    visualizer.setSectionPoints(arrangementNode.getSectionStructure().points);
+                    renderSectionEditor(selectedSection);
+                } else if (detail?.key === 'color' || detail?.property === 'color') {
+                    visualizer.setNodeColor(detail.value || getNodeColor());
+                }
+            }
+        };
+        const onNodeRefreshed = (event: Event) => {
+            const detail = (event as CustomEvent).detail;
+            if (detail?.nodeId === node.id) {
+                visualizer.setNodeColor(getNodeColor());
             }
         };
         window.addEventListener('node-property-changed', onPropChanged);
+        window.addEventListener('node-properties-refreshed', onNodeRefreshed);
         const origDestroy = visualizer.destroy.bind(visualizer);
         visualizer.destroy = () => {
             window.removeEventListener('node-property-changed', onPropChanged);
+            window.removeEventListener('node-properties-refreshed', onNodeRefreshed);
             origDestroy();
         };
 

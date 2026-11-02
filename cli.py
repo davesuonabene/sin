@@ -11,11 +11,13 @@ import copy
 import json
 import math
 import os
+import shutil
 import sqlite3
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 import numpy as np
 import soundfile as sf
@@ -46,6 +48,7 @@ from core.qa import analyze_audio_buffer, analyze_audio_file, AudioQAResult
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+SAVES_DIR = PROJECT_ROOT / "saves"
 
 app = typer.Typer(
     help="SIN Terminal CLI — Headless Audio Composition, Rendering & Asset Management",
@@ -56,6 +59,40 @@ library_app = typer.Typer(help="Headless GAIA library asset discovery and verifi
 
 app.add_typer(compose_app, name="compose")
 app.add_typer(library_app, name="library")
+
+
+def resolve_graph_path(source: Optional[Union[str, Path]]) -> Path:
+    """Resolve a graph file path from direct path, bare name, or saves/ directory."""
+    if source is None or str(source).strip() == "":
+        default_stage = SAVES_DIR / ".current-stage.json"
+        if default_stage.is_file():
+            return default_stage
+        typer.secho("Error: No source file specified and saves/.current-stage.json does not exist.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    p = Path(source)
+    if p.is_file():
+        return p
+
+    name = str(source).strip()
+
+    # Try directly under saves/
+    candidate = SAVES_DIR / name
+    if candidate.is_file():
+        return candidate
+
+    # Try with .json under saves/
+    if not name.endswith(".json"):
+        candidate_json = SAVES_DIR / f"{name}.json"
+        if candidate_json.is_file():
+            return candidate_json
+
+    # Try relative to PROJECT_ROOT
+    candidate_root = PROJECT_ROOT / name
+    if candidate_root.is_file():
+        return candidate_root
+
+    return p
 
 
 def _get_gaia_db() -> Optional[Path]:
@@ -104,7 +141,7 @@ def serve(
 def render(
     source: Optional[str] = typer.Argument(
         None,
-        help="Path to sin-graph JSON, workspace preset, or '-' for stdin (defaults to saves/.current-stage.json)",
+        help="Path or name of workspace save (e.g. 'ILOVEIT'), sin-graph JSON, or '-' for stdin (defaults to saves/.current-stage.json)",
     ),
     out: Path = typer.Option(Path("output.wav"), "--out", "-o", help="Output WAV destination path"),
     mode: str = typer.Option("offline", "--mode", "-m", help="Render mode: 'offline' or 'preview'"),
@@ -118,19 +155,12 @@ def render(
     qa: bool = typer.Option(False, "--qa", help="Run automated audio QA verification on output"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON metrics to stdout"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Compile and validate graph without running DSP render"),
+    snapshot: Optional[str] = typer.Option(None, "--snapshot", "-S", help="Path or name of sin-snapshot JSON override"),
 ):
-    """Headless audio DSP rendering of composition graphs or presets."""
+    """Headless audio DSP rendering of composition graphs or workspace saves."""
     start_time = time.perf_counter()
 
     # Resolve input source
-    if source is None or source == "":
-        default_stage = PROJECT_ROOT / "saves" / ".current-stage.json"
-        if default_stage.is_file():
-            source = str(default_stage)
-        else:
-            typer.secho("Error: No source file specified and saves/.current-stage.json does not exist.", fg=typer.colors.RED, err=True)
-            raise typer.Exit(code=1)
-
     if source == "-":
         raw_text = sys.stdin.read()
         try:
@@ -139,15 +169,30 @@ def render(
             typer.secho(f"Error parsing JSON from stdin: {e}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1)
     else:
-        src_path = Path(source)
+        src_path = resolve_graph_path(source)
         if not src_path.is_file():
-            typer.secho(f"Error: Source file not found: {src_path}", fg=typer.colors.RED, err=True)
+            typer.secho(f"Error: Source file not found: {source or src_path}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1)
         try:
             with open(src_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
             typer.secho(f"Error reading JSON from {src_path}: {e}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+
+    # Apply snapshot overrides if provided
+    if snapshot:
+        snap_path = resolve_graph_path(snapshot)
+        if not snap_path.is_file():
+            typer.secho(f"Error: Snapshot file not found: {snapshot}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+        try:
+            with open(snap_path, "r", encoding="utf-8") as snap_file:
+                snap_data = json.load(snap_file)
+            from ermes.py.snapshot import apply_snapshot
+            data = apply_snapshot(data, snap_data)
+        except Exception as e:
+            typer.secho(f"Error applying snapshot: {e}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1)
 
     # Compile graph to AudioNodeModel via ERMES
@@ -256,17 +301,18 @@ def render(
 
 @compose_app.command("validate")
 def compose_validate(
-    path: Path = typer.Argument(..., help="Path to sin-graph JSON document"),
+    path: str = typer.Argument(..., help="Path or name of sin-graph or workspace save JSON document"),
     strict: bool = typer.Option(False, "--strict", help="Fail on warnings and verify referenced audio files exist on disk"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ):
     """Validate canonical sin-graph document topology and parameter constraints."""
-    if not path.is_file():
+    target_path = resolve_graph_path(path)
+    if not target_path.is_file():
         typer.secho(f"Error: File not found: {path}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(target_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         typer.secho(f"Error reading JSON: {e}", fg=typer.colors.RED, err=True)
@@ -290,7 +336,7 @@ def compose_validate(
 
     result = {
         "valid": valid,
-        "path": str(path),
+        "path": str(target_path),
         "errors": errors,
         "warnings": warnings,
         "missing_files": missing_files,
@@ -300,9 +346,9 @@ def compose_validate(
         print(json.dumps(result, indent=2))
     else:
         if valid:
-            typer.secho(f"[OK] Valid sin-graph: {path}", fg=typer.colors.GREEN, bold=True)
+            typer.secho(f"[OK] Valid sin-graph: {target_path}", fg=typer.colors.GREEN, bold=True)
         else:
-            typer.secho(f"[FAIL] Validation failed: {path}", fg=typer.colors.RED, bold=True)
+            typer.secho(f"[FAIL] Validation failed: {target_path}", fg=typer.colors.RED, bold=True)
             for err in errors:
                 typer.echo(f"  - {err}")
         for warning in warnings:
@@ -313,15 +359,16 @@ def compose_validate(
 
 @compose_app.command("info")
 def compose_info(
-    path: Path = typer.Argument(..., help="Path to sin-graph or workspace preset JSON"),
+    path: str = typer.Argument(..., help="Path or name of sin-graph or workspace save JSON"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ):
     """Inspect and summarize nodes, connections, buses, pools, and timings."""
-    if not path.is_file():
+    target_path = resolve_graph_path(path)
+    if not target_path.is_file():
         typer.secho(f"Error: File not found: {path}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(target_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     is_canonical = data.get("format") == "sin-graph"
@@ -353,8 +400,8 @@ def compose_info(
     duration_seconds = (bars * 4.0 * 60.0) / bpm if bpm > 0 else 0.0
 
     info_dict = {
-        "format": "sin-graph" if is_canonical else "workspace-preset",
-        "path": str(path),
+        "format": "sin-graph" if is_canonical else "workspace-save",
+        "path": str(target_path),
         "bpm": bpm,
         "total_bars": bars,
         "key": key,
@@ -369,8 +416,8 @@ def compose_info(
     if json_output:
         print(json.dumps(info_dict, indent=2))
     else:
-        typer.secho(f"Graph Summary: {path.name}", fg=typer.colors.CYAN, bold=True)
-        typer.echo(f"  Format: {'Canonical sin-graph' if is_canonical else 'LiteGraph Workspace Preset'}")
+        typer.secho(f"Graph Summary: {target_path.name}", fg=typer.colors.CYAN, bold=True)
+        typer.echo(f"  Format: {'Canonical sin-graph' if is_canonical else 'LiteGraph Workspace Save'}")
         typer.echo(f"  BPM: {bpm} | Bars: {bars} | Key: {key} | Est. Duration: {duration_seconds:.1f}s")
         typer.echo(f"  Nodes: {len(nodes)} | Connections: {len(conns)} | Output: '{output}'")
         typer.echo("  Node Types:")
@@ -380,16 +427,17 @@ def compose_info(
 
 @compose_app.command("compile")
 def compose_compile(
-    path: Path = typer.Argument(..., help="Path to sin-graph or workspace preset JSON"),
+    path: str = typer.Argument(..., help="Path or name of sin-graph or workspace save JSON"),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Save compiled AudioNodeModel JSON to file"),
     isolate: Optional[str] = typer.Option(None, "--isolate", "-i", help="Isolate subtree starting at node ID"),
 ):
     """Compile graph directly to canonical ERMES AudioNodeModel JSON."""
-    if not path.is_file():
+    target_path = resolve_graph_path(path)
+    if not target_path.is_file():
         typer.secho(f"Error: File not found: {path}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(target_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     try:
@@ -408,16 +456,17 @@ def compose_compile(
 
 @compose_app.command("convert")
 def compose_convert(
-    path: Path = typer.Argument(..., help="Path to source graph JSON"),
+    path: str = typer.Argument(..., help="Path or name of source graph JSON"),
     to: str = typer.Option("workspace", "--to", "-t", help="Target format: 'workspace' or 'canonical'"),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Destination file path"),
 ):
-    """Convert between canonical sin-graph and LiteGraph workspace presets with auto-layout."""
-    if not path.is_file():
+    """Convert between canonical sin-graph and LiteGraph workspace saves with auto-layout."""
+    target_path = resolve_graph_path(path)
+    if not target_path.is_file():
         typer.secho(f"Error: File not found: {path}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(target_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     if to.lower() in ("workspace", "preset", "litegraph"):
@@ -528,15 +577,16 @@ def library_search(
 
 @library_app.command("verify")
 def library_verify(
-    path: Path = typer.Argument(..., help="Path to sin-graph or workspace preset JSON"),
+    path: str = typer.Argument(..., help="Path or name of sin-graph or workspace save JSON"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ):
     """Verify that all asset IDs and locators inside a graph exist on disk."""
-    if not path.is_file():
+    target_path = resolve_graph_path(path)
+    if not target_path.is_file():
         typer.secho(f"Error: File not found: {path}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(target_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     db_path = _get_gaia_db()
@@ -582,7 +632,7 @@ def library_verify(
     is_verified = len(missing_locators) == 0
     report = {
         "verified": is_verified,
-        "path": str(path),
+        "path": str(target_path),
         "total_references": len(checked_locators),
         "missing_references": missing_locators,
     }
@@ -591,9 +641,9 @@ def library_verify(
         print(json.dumps(report, indent=2))
     else:
         if is_verified:
-            typer.secho(f"[OK] All {len(checked_locators)} referenced asset locators verified on disk: {path.name}", fg=typer.colors.GREEN, bold=True)
+            typer.secho(f"[OK] All {len(checked_locators)} referenced asset locators verified on disk: {target_path.name}", fg=typer.colors.GREEN, bold=True)
         else:
-            typer.secho(f"[FAIL] Found {len(missing_locators)} missing asset locators: {path.name}", fg=typer.colors.RED, bold=True)
+            typer.secho(f"[FAIL] Found {len(missing_locators)} missing asset locators: {target_path.name}", fg=typer.colors.RED, bold=True)
             for m in missing_locators[:10]:
                 typer.echo(f"  - [{m.get('id', 'N/A')}] {m.get('path', 'Unknown path')}")
     if not is_verified:

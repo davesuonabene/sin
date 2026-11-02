@@ -103,9 +103,24 @@ def build_node_object(node_data: Any) -> AudioObject:
     node_type = _get_val(node_data, "node_type", "track")
     node_name = _get_val(node_data, "node_name", "AudioNode")
     sample_type = _get_val(node_data, "sample_type", None) or _get_val(node_data, "sample_mode", "loop")
-    original_bpm = _get_val(node_data, "original_bpm", 120.0)
+    original_bpm = _get_val(node_data, "original_bpm", None)
     raw_chain = _get_val(node_data, "chain", None) or []
-    chain_list = [c.dict() if hasattr(c, 'dict') else (c.model_dump() if hasattr(c, 'model_dump') else c) for c in raw_chain]
+    chain_list = [dict(c.dict() if hasattr(c, 'dict') else (c.model_dump() if hasattr(c, 'model_dump') else c)) for c in raw_chain]
+    top_gain_db = _get_val(node_data, "gain", None)
+    if top_gain_db is not None and not chain_list:
+        try:
+            g_db = float(top_gain_db)
+            g_lin = 0.0 if g_db <= -35.9 else float(10.0 ** (g_db / 20.0))
+            chain_list = [{
+                "id": "post_gain_0",
+                "type": "gain",
+                "name": "Post Gain",
+                "enabled": True,
+                "fixed": True,
+                "params": {"gain": g_lin, "gain_db": g_db}
+            }]
+        except (TypeError, ValueError):
+            pass
 
     crop_start = _get_val(node_data, "crop_start", 0.0)
     crop_end = _get_val(node_data, "crop_end", 1.0)
@@ -176,7 +191,9 @@ def build_node_object(node_data: Any) -> AudioObject:
             section_quant=_get_val(node_data, "section_quant", None),
             section_quant_anchor=_get_val(node_data, "section_quant_anchor", None),
             quant=_get_val(node_data, "quant", "auto"),
-            quant_anchor=_get_val(node_data, "quant_anchor", "start")
+            quant_anchor=_get_val(node_data, "quant_anchor", "start"),
+            node_id=node_id,
+            node_type=node_type
         )
     elif node_type == "sample":
         refresh_mode = str(_get_val(node_data, "refresh_mode", "off") or "off").strip().casefold()
@@ -205,7 +222,9 @@ def build_node_object(node_data: Any) -> AudioObject:
                 total_bars=_get_val(node_data, "total_bars", None),
                 key_match_mode=key_match_mode,
                 key_match_algorithm=key_match_algorithm,
-                target_bpm=target_bpm
+                target_bpm=target_bpm,
+                node_id=node_id,
+                node_type="asset_filter"
             )
         else:
             obj = SampleObject(
@@ -224,7 +243,9 @@ def build_node_object(node_data: Any) -> AudioObject:
                 total_bars=_get_val(node_data, "total_bars", None),
                 key_match_mode=key_match_mode,
                 key_match_algorithm=key_match_algorithm,
-                target_bpm=target_bpm
+                target_bpm=target_bpm,
+                node_id=node_id,
+                node_type="sample"
             )
     else:
         obj = AudioObject(
@@ -244,7 +265,9 @@ def build_node_object(node_data: Any) -> AudioObject:
             stretch_algorithm=stretch_algorithm,
             key_match_mode=key_match_mode,
             key_match_algorithm=key_match_algorithm,
-            target_bpm=target_bpm
+            target_bpm=target_bpm,
+            node_id=node_id,
+            node_type=node_type
         )
 
     if node_id is not None:
@@ -252,6 +275,15 @@ def build_node_object(node_data: Any) -> AudioObject:
     obj.node_type = str(node_type or "track")
 
     from core.dag_cache import GLOBAL_DAG_CACHE
+
+    children = _get_val(node_data, "children", []) or []
+    for child_data in children:
+        start_beat = _get_val(child_data, "start_beat", 0.0)
+        child_obj = build_node_object(child_data)
+        obj.add_child(child_obj, start_beat)
+        if obj.node_id is not None and getattr(child_obj, "node_id", None) is not None:
+            GLOBAL_DAG_CACHE.register_edge(parent_id=obj.node_id, child_id=child_obj.node_id)
+
     if isinstance(node_data, dict):
         summary = {k: v for k, v in node_data.items() if k not in ("children", "filename", "audio_data")}
     elif hasattr(node_data, "model_dump"):
@@ -260,12 +292,11 @@ def build_node_object(node_data: Any) -> AudioObject:
         summary = {k: v for k, v in node_data.dict().items() if k not in ("children", "filename", "audio_data")}
     else:
         summary = {"name": node_name, "type": node_type}
+    if obj.children:
+        summary["child_fingerprints"] = [
+            (round(float(sb), 6), getattr(c, "fingerprint", None))
+            for sb, c in obj.children
+        ]
     obj.fingerprint = GLOBAL_DAG_CACHE.compute_fingerprint(summary)
-
-    children = _get_val(node_data, "children", []) or []
-    for child_data in children:
-        start_beat = _get_val(child_data, "start_beat", 0.0)
-        child_obj = build_node_object(child_data)
-        obj.add_child(child_obj, start_beat)
 
     return obj

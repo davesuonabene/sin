@@ -5,6 +5,7 @@
 
 export interface SerializationOptions {
     includeDynamicPools?: boolean;
+    isFrozen?: boolean;
 }
 
 export function serializeNodeSubtree(
@@ -29,7 +30,12 @@ export function serializeNodeSubtree(
         return Number.isFinite(numeric) ? numeric : fallback;
     };
 
-    function buildNodeModel(nodeId: number, parentTotalBars?: number, parentTargetBpm?: number): any {
+    function buildNodeModel(
+        nodeId: number,
+        parentTotalBars?: number,
+        parentTargetBpm?: number,
+        parentNodeType?: string
+    ): any {
         const data = trackNodes.get(nodeId);
         const nodeObj = graph.getNodeById(nodeId);
         if (!data && !nodeObj) return null;
@@ -45,7 +51,7 @@ export function serializeNodeSubtree(
         const assignedModifierId = nodeObj?.properties?.asset_modifier_id ?? data?.asset_modifier_id;
         const assignedModifier = assignedModifierId != null ? graph.getNodeById(assignedModifierId) : null;
         const filepath = assignedModifier?.properties?.output_value || data?.filepath || nodeObj?.properties?.filepath || null;
-        const original_bpm = nodeObj?.properties?.original_bpm ?? data?.original_bpm ?? assignedModifier?.properties?.output_bpm ?? 120;
+        const original_bpm = nodeObj?.properties?.original_bpm ?? data?.original_bpm ?? assignedModifier?.properties?.output_bpm ?? undefined;
         const rawTargetBpm = nodeObj?.properties?.target_bpm ?? data?.target_bpm;
         const configuredBpm = nodeObj?.properties?.bpm ?? data?.bpm;
         const isTargetGlobal = rawTargetBpm == null
@@ -64,11 +70,23 @@ export function serializeNodeSubtree(
         const mix_mode = data?.mix_mode || nodeObj?.properties?.mix_mode || "sum";
 
         const nodeType = data?.type || nodeObj?.properties?.node_type || (nodeObj?.type === "Audio/Sample" ? "sample" : nodeObj?.type === "Audio/Sequence" ? "sequence" : "track");
-        
+
         const sequence = nodeObj?.properties?.sequence ?? data?.sequence ?? (nodeType === "sequence" ? [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] : undefined);
         const rawStepParameters = nodeObj?.properties?.step_parameters ?? data?.step_parameters;
         const stepParameters = Array.isArray(rawStepParameters)
-            ? rawStepParameters.map((step: any) => ({ ...(step || {}) }))
+            ? rawStepParameters.map((step: any) => {
+                const cloned = { ...(step || {}) };
+                if (typeof cloned.sample_start === 'number' && cloned.sample_start > 1) {
+                    cloned.sample_start = cloned.sample_start / 100;
+                }
+                if (typeof cloned.probability === 'number' && cloned.probability > 1) {
+                    cloned.probability = cloned.probability / 100;
+                }
+                if (typeof cloned.gate_length === 'number' && cloned.gate_length > 1) {
+                    cloned.gate_length = cloned.gate_length / 100;
+                }
+                return cloned;
+            })
             : undefined;
         const stepLength = nodeObj?.properties?.step_length ?? data?.step_length ?? (nodeType === "sequence" ? 0.25 : undefined);
         const fadeMs = nodeObj?.properties?.fade_ms ?? data?.fade_ms ?? (nodeType === "sequence" ? 0 : undefined);
@@ -77,8 +95,11 @@ export function serializeNodeSubtree(
             || String(rawTotalBars).toLowerCase() === 'global'
             || Boolean(nodeObj?.properties?.length_inherited);
         const fallbackBars = parentTotalBars ?? resolveGlobalNumber(globalParameters.total_bars, 'total_bars', 4.0);
+        const isSampleLoop = (nodeObj?.properties?.sample_type ?? data?.sample_type ?? 'loop') === 'loop';
         const total_bars = isGlobalOrInherited
-            ? (nodeType === 'sample' && nodeObj?.properties?.sample_type !== 'loop' && data?.sample_type !== 'loop' ? undefined : fallbackBars)
+            ? (nodeType === 'sample'
+                ? ((isSampleLoop && (parentNodeType === undefined || parentNodeType === 'track')) ? fallbackBars : undefined)
+                : fallbackBars)
             : resolveGlobalNumber(rawTotalBars, 'total_bars', fallbackBars);
         const section_points = nodeObj?.properties?.section_points ?? data?.section_points ?? (nodeType === "arrangement" ? [] : undefined);
         const section_enabled = nodeObj?.properties?.section_enabled ?? data?.section_enabled ?? (nodeType === "arrangement" ? [] : undefined);
@@ -100,10 +121,20 @@ export function serializeNodeSubtree(
         let seed = includeDynamicPools
             ? (poolProperties?.seed ?? data?.seed ?? nodeObj?.properties?.seed)
             : (data?.seed ?? nodeObj?.properties?.seed);
+        const isGlobalFrozen = (options.isFrozen !== undefined)
+            ? Boolean(options.isFrozen)
+            : Boolean(
+                (typeof window !== 'undefined' && typeof (window as any).getGlobalFreeze === 'function' ? (window as any).getGlobalFreeze() : false)
+                || graph?.extra?.global_freeze
+                || graph?.frozen
+            );
+        const isNodeFrozen = isGlobalFrozen && (nodeObj?.properties?.freeze_refresh !== false);
         const rawSeedMode = data?.seed_mode ?? nodeObj?.properties?.seed_mode;
-        const seed_mode = typeof rawSeedMode === 'string'
-            ? rawSeedMode
-            : (nodeType === "sequence" ? "moving" : undefined);
+        const seed_mode = isNodeFrozen && nodeType === "sequence"
+            ? "fixed"
+            : (typeof rawSeedMode === 'string'
+                ? rawSeedMode
+                : (nodeType === "sequence" ? "moving" : undefined));
 
         const childrenIds: number[] = data?.children ? [...data.children] : [];
         if (nodeObj && nodeObj.inputs) {
@@ -121,17 +152,29 @@ export function serializeNodeSubtree(
 
         const childModels: any[] = [];
         for (const cid of childrenIds) {
-            const childModel = buildNodeModel(cid, total_bars, resolvedBpm);
+            const childModel = buildNodeModel(cid, total_bars, resolvedBpm, nodeType);
             if (childModel) {
                 childModels.push(childModel);
             }
         }
 
         const rawChain = nodeObj?.properties?.chain || data?.chain || [];
-        const chain = rawChain.map((fx: any) => (typeof fx === 'object' && fx !== null ? {
+        let chain = rawChain.map((fx: any) => (typeof fx === 'object' && fx !== null ? {
             name: fx.name || fx.id || fx.type || 'FX',
             ...fx
         } : fx));
+        const rawTopGain = nodeObj?.properties?.gain ?? data?.gain;
+        if (typeof rawTopGain === 'number' && Number.isFinite(rawTopGain) && chain.length === 0) {
+            const gainLin = rawTopGain <= -35.9 ? 0 : Number(Math.pow(10, rawTopGain / 20).toFixed(6));
+            chain = [{
+                id: 'post_gain_0',
+                type: 'gain',
+                name: 'Post Gain',
+                enabled: true,
+                fixed: true,
+                params: { gain: gainLin, gain_db: rawTopGain },
+            }];
+        }
 
         const modulatorModels: any[] = [];
         for (const [mid, mdata] of modulatorsByParent.get(nodeId) || []) {

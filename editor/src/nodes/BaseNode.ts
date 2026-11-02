@@ -51,6 +51,28 @@ function clonePropertyValue<T>(value: T, seen = new WeakMap<object, any>()): T {
     return copy;
 }
 
+function isPropertyValueEqual(a: any, b: any): boolean {
+    if (Object.is(a, b)) return true;
+    if (a == null || b == null) return a === b;
+    if (typeof a !== 'object' || typeof b !== 'object') return false;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    if (Array.isArray(a)) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) {
+            if (!isPropertyValueEqual(a[i], b[i])) return false;
+        }
+        return true;
+    }
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
+    if (keysA.length !== keysB.length) return false;
+    for (const key of keysA) {
+        if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+        if (!isPropertyValueEqual(a[key], b[key])) return false;
+    }
+    return true;
+}
+
 export abstract class BaseNode extends LGraphNode {
     static readonly visualSize = 44;
     static readonly bodySize: number = BaseNode.visualSize;
@@ -243,6 +265,51 @@ export abstract class BaseNode extends LGraphNode {
     getPropertiesTabs(): string[] { return this.propertiesTabs; }
     getDefaultPropertiesTab(): string { return this.defaultPropertiesTab; }
 
+    getInputNodes(): any[] {
+        const graph = this.graph || ((typeof window !== 'undefined') ? (window as any).editorGraph : null);
+        if (!graph) return [];
+        const originNodes: any[] = [];
+        const addOrigin = (id: number | null | undefined) => {
+            if (id == null) return;
+            const origin = graph.getNodeById?.(id);
+            if (origin && !originNodes.includes(origin)) {
+                originNodes.push(origin);
+            }
+        };
+
+        if (this.inputs) {
+            const links = (graph as any).links || {};
+            for (const input of this.inputs) {
+                if (input && input.link != null) {
+                    const link = links[input.link];
+                    const originId = Array.isArray(link) ? link[1] : link?.origin_id;
+                    addOrigin(originId);
+                }
+            }
+        }
+
+        const allLinks = (graph as any).links;
+        if (allLinks) {
+            for (const key in allLinks) {
+                const link = allLinks[key];
+                if (!link) continue;
+                const targetId = Array.isArray(link) ? link[3] : link?.target_id;
+                if (targetId === this.id) {
+                    const originId = Array.isArray(link) ? link[1] : link?.origin_id;
+                    addOrigin(originId);
+                }
+            }
+        }
+        return originNodes;
+    }
+
+    getAudioBuffer(_visited?: Set<number>): AudioBuffer | null {
+        return (this as any).manifestStemBuffer
+            || (this as any)._lastRenderedBuffer
+            || (this as any).audioBuffer
+            || null;
+    }
+
     getFields(tab?: string): FieldSchema[] {
         const ctor = this.constructor as any;
         const baseFields: FieldSchema[] = ctor.fields || [];
@@ -307,9 +374,22 @@ export abstract class BaseNode extends LGraphNode {
         return schema;
     }
 
+    private _committedPropertySnapshots = new Map<string, any>();
+
     updateProperty(key: string, value: any): void {
         if (!this.properties) this.properties = {};
-        this.properties[key] = clonePropertyValue(value);
+        const previousValue = this.properties[key];
+        const nextValue = clonePropertyValue(value);
+        const hasSnapshot = this._committedPropertySnapshots.has(key);
+        const baselineValue = hasSnapshot ? this._committedPropertySnapshots.get(key) : previousValue;
+        const isObjectOrArray = nextValue !== null && typeof nextValue === 'object';
+        // If no snapshot was recorded yet and the value is an object/array, a caller may have
+        // mutated this.properties[key] in place before calling updateProperty, so do not skip.
+        if ((hasSnapshot || !isObjectOrArray) && isPropertyValueEqual(baselineValue, nextValue)) {
+            return;
+        }
+        this._committedPropertySnapshots.set(key, clonePropertyValue(nextValue));
+        this.properties[key] = nextValue;
 
         if (key === 'node_name' || key === 'name') {
             this.title = String(value);
@@ -319,11 +399,20 @@ export abstract class BaseNode extends LGraphNode {
         const source = getGhostSource(this);
         const propertyField = key === 'name' ? 'node_name' : key;
         if (source && isGhostFieldLinked(this, propertyField)) {
-            source.properties[propertyField] = clonePropertyValue(value);
+            const clonedForSource = clonePropertyValue(value);
+            source.properties[propertyField] = clonedForSource;
+            (source as any)._committedPropertySnapshots?.set?.(propertyField, clonePropertyValue(clonedForSource));
             if (key === 'name' || key === 'node_name') source.title = String(value);
+            (source as any)._cachedCompositedBuffer = null;
             source.setDirtyCanvas?.(true, true);
+            if (typeof window !== 'undefined' && source.id != null) {
+                window.dispatchEvent(new CustomEvent('node-property-changed', {
+                    detail: { nodeId: source.id, key: propertyField, value: clonePropertyValue(clonedForSource) }
+                }));
+            }
         }
 
+        (this as any)._cachedCompositedBuffer = null;
         if (typeof this.computeSize === 'function') {
             this.size = this.computeSize();
         }
@@ -358,8 +447,10 @@ export abstract class BaseNode extends LGraphNode {
     drawCanvas(ctx: CanvasRenderingContext2D, canvas: any): void {
         if ((this.flags as any)?.hidden || (this as any).collapsedDotMode) return;
 
-        this.size = this.computeSize();
-        this.updateButtonLayout();
+        if (!this.size || this.size[0] === 0) {
+            this.size = this.computeSize();
+            this.updateButtonLayout();
+        }
         const isSelected = canvas?.selected_nodes
             ? Boolean(canvas.selected_nodes[this.id] || canvas.selected_nodes[String(this.id)])
             : Boolean(this.is_selected);
@@ -418,25 +509,26 @@ export abstract class BaseNode extends LGraphNode {
             ctx.save();
             ctx.lineWidth = isSelected ? 2 : 1.5;
             ctx.strokeStyle = isMainPreview ? "#f59e0b" : isSelected ? "#38bdf8" : "#22c55e";
-            drawRoundRect(ctx, -2, -2, width + 4, height + 4, 7);
+            drawRoundRect(ctx, -2, -2, width + 4, height + 4, 3);
             ctx.stroke();
             ctx.restore();
         }
 
         // Solid light panel background
         ctx.fillStyle = "#ffffff";
-        drawRoundRect(ctx, 0, 0, width, height, 6);
+        drawRoundRect(ctx, 0, 0, width, height, 2);
         ctx.fill();
 
         // Single peripherical border around everything
-        ctx.strokeStyle = this.nodeColor;
+        ctx.strokeStyle = this.boxcolor || this.nodeColor;
         ctx.lineWidth = isSelected ? 1.5 : 1;
-        drawRoundRect(ctx, 0, 0, width, height, 6);
+        drawRoundRect(ctx, 0, 0, width, height, 2);
         ctx.stroke();
 
         // Mini Neon Icon in header
         const headerHeight = 20;
-        drawNeonIcon(ctx, this.nodeIcon, 12, headerHeight / 2 + 1, 12, this.nodeColor);
+        const iconColor = (this.nodeColor === '#0f172a' && this.boxcolor) ? this.boxcolor : this.nodeColor;
+        drawNeonIcon(ctx, this.nodeIcon, 12, headerHeight / 2 + 1, 12, iconColor);
 
         // Node Title (clean dark slate text on light canvas)
         const nodeName = this.properties?.node_name || this.title || "Node";
@@ -503,6 +595,11 @@ export abstract class BaseNode extends LGraphNode {
         traceNodeShape(ctx, this.nodeShape, offset, offset, size);
         ctx.fillStyle = this.nodeColor;
         ctx.fill();
+        if (this.boxcolor && this.boxcolor !== this.nodeColor) {
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = this.boxcolor;
+            ctx.stroke();
+        }
     }
 
     protected drawIcon(ctx: CanvasRenderingContext2D): void {
@@ -574,7 +671,7 @@ export abstract class BaseNode extends LGraphNode {
         const badgeX = width / 2 - badgeWidth / 2;
         const badgeY = -25;
         ctx.beginPath();
-        if ((ctx as any).roundRect) (ctx as any).roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 5);
+        if ((ctx as any).roundRect) (ctx as any).roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 2);
         else ctx.rect(badgeX, badgeY, badgeWidth, badgeHeight);
         ctx.fillStyle = "rgba(7, 17, 31, 0.94)";
         ctx.fill();

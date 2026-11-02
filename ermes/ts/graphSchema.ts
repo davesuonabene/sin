@@ -485,6 +485,9 @@ function propertiesForLiteGraphNode(
     properties.node_name = name;
     properties.node_type = node.type;
     properties.is_main_preview = node.role === 'master';
+    if (node.role === 'master') {
+        properties.role = 'master';
+    }
 
     const structuredPool = node.assetPool || properties.asset_pool;
     if (structuredPool && isRecord(structuredPool)) {
@@ -536,6 +539,22 @@ function propertiesForLiteGraphNode(
         }
     }
 
+    if (node.type === 'sample' || node.type === 'sequence' || node.type === 'arrangement' || node.type === 'track') {
+        const rawGain = properties.gain;
+        const rawChain = Array.isArray(properties.chain) ? properties.chain : [];
+        if (typeof rawGain === 'number' && Number.isFinite(rawGain) && rawChain.length === 0) {
+            const gainLin = rawGain <= -35.9 ? 0 : Number(Math.pow(10, rawGain / 20).toFixed(6));
+            properties.chain = [{
+                id: 'post_gain_0',
+                type: 'gain',
+                name: 'Post Gain',
+                enabled: true,
+                fixed: true,
+                params: { gain: gainLin, gain_db: rawGain },
+            }];
+        }
+        delete properties.gain;
+    }
     if (node.type === 'disabled') properties.disabled = true;
     if (node.type === 'sequence') {
         if (properties.total_bars === undefined) properties.total_bars = 'global';
@@ -548,11 +567,14 @@ function propertiesForLiteGraphNode(
                     const rawVel = s?.velocity;
                     const vel = rawVel != null ? (rawVel > 1 ? rawVel / 127 : rawVel) : 1;
                     const rawProb = s?.probability;
-                    const prob = rawProb != null ? (rawProb <= 1 ? rawProb * 100 : rawProb) : 100;
+                    const prob = rawProb != null ? (rawProb > 1 ? rawProb / 100 : rawProb) : 1.0;
+                    const rawStart = s?.sample_start;
+                    const sampleStart = rawStart != null ? (rawStart > 1 ? rawStart / 100 : rawStart) : 0.0;
                     return {
                         offset: Number(s?.offset || 0),
                         velocity: Number(vel),
                         probability: Number(prob),
+                        sample_start: Number(sampleStart),
                         subdivisions: Number(s?.subdivisions || 1),
                         subdivision_enabled: Boolean(s?.subdivisions && s.subdivisions > 1),
                     };
@@ -574,6 +596,27 @@ function propertiesForLiteGraphNode(
         properties.node_type = 'random';
         properties.modifier_kind = 'random';
         if (properties.refresh_mode === undefined) properties.refresh_mode = 'global';
+        if ((!Array.isArray(properties.destinations) || properties.destinations.length === 0) && Array.isArray(properties.targets)) {
+            properties.destinations = properties.targets
+                .filter((t: any) => t && typeof t === 'object')
+                .map((t: any, idx: number) => {
+                    const rawField = String(t.paramKey || t.field || '').trim();
+                    const paramKey = rawField.startsWith('step_parameters.') && rawField.split('.').length === 2
+                        ? rawField.split('.')[1]
+                        : rawField;
+                    const defaultBase = paramKey === 'velocity' || paramKey === 'probability' || paramKey === 'gate_length' ? 1 : 0;
+                    return {
+                        id: String(t.id || `dest_${idx}`),
+                        paramKey,
+                        paramLabel: String(t.paramLabel || (paramKey.charAt(0).toUpperCase() + paramKey.slice(1))),
+                        minPercent: Number(t.minPercent ?? t.min ?? 0),
+                        maxPercent: Number(t.maxPercent ?? t.max ?? 0),
+                        baseValue: Number(t.baseValue ?? defaultBase),
+                        enabled: t.enabled !== false,
+                    };
+                });
+            delete properties.targets;
+        }
         if (!Array.isArray(properties.destinations)) properties.destinations = [];
     }
     return properties;

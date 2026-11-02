@@ -95,7 +95,7 @@
           "scope_mode": "full",
           "scope_window": 0,
           "scope_gain": 1,
-          "color": "#10b981",
+          "color": "#059669",
           "icon": "sample",
           "shape": "circle",
           "visual_width": 220,
@@ -106,8 +106,8 @@
           "library_item_id": 2073,
           "duration_seconds": 3.7019274376417233
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
+        "color": "#059669",
+        "bgcolor": "#059669",
         "boxcolor": "#059669",
         "shape": 1
       },
@@ -366,7 +366,7 @@
           "selected_step": 0,
           "seed": 143,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#059669",
           "icon": "sequence",
           "shape": "square",
           "visual_width": 220,
@@ -378,9 +378,9 @@
           "filepath": "C:\\web-projects\\sin\\assets\\vaults\\default-vault\\sequences\\Lo-Fi Kick - Dilla Swing.seq",
           "library_item_id": 7356
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669",
         "shape": 1
       },
       {
@@ -444,7 +444,7 @@
           "node_type": "random",
           "modifier_kind": "random",
           "node_name": "808 Humanizer",
-          "color": "#7e22ce",
+          "color": "#059669",
           "icon": "shuffle",
           "shape": "diamond",
           "refresh_mode": "global",
@@ -509,9 +509,9 @@
           "parentId": 4,
           "target_bpm": 120
         },
-        "color": "#7e22ce",
-        "bgcolor": "#7e22ce",
-        "boxcolor": "#6b21a8",
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669",
         "shape": 1
       },
       {
@@ -702,7 +702,7 @@
           "scope_mode": "full",
           "scope_window": 0,
           "scope_gain": 1,
-          "color": "#10b981",
+          "color": "#0284c7",
           "icon": "sample",
           "shape": "circle",
           "visual_width": 220,
@@ -713,9 +713,9 @@
           "library_item_id": 3546,
           "duration_seconds": 0.2381859410430839
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
         "shape": 1
       },
       {
@@ -973,7 +973,7 @@
           "selected_step": 0,
           "seed": 153,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#0284c7",
           "icon": "sequence",
           "shape": "square",
           "visual_width": 220,
@@ -986,9 +986,9 @@
           "library_item_id": 7354,
           "original_bpm": 130
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
         "shape": 1
       },
       {
@@ -1052,7 +1052,7 @@
           "node_type": "random",
           "modifier_kind": "random",
           "node_name": "Kick Dynamics",
-          "color": "#7e22ce",
+          "color": "#0284c7",
           "icon": "shuffle",
           "shape": "diamond",
           "refresh_mode": "global",
@@ -1117,9 +1117,9 @@
           "parentId": 10,
           "target_bpm": 120
         },
-        "color": "#7e22ce",
-        "bgcolor": "#7e22ce",
-        "boxcolor": "#6b21a8",
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
         "shape": 1
       },
       {
@@ -1212,7 +1212,7 @@
           "scope_mode": "full",
           "scope_window": 0,
           "scope_gain": 1,
-          "color": "#10b981",
+          "color": "#7c3aed",
           "icon": "sample",
           "shape": "circle",
           "visual_width": 220,
@@ -1223,9 +1223,9 @@
           "library_item_id": 3859,
           "duration_seconds": 0.05757369614512472
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed",
         "shape": 1
       },
       {
@@ -1483,7 +1483,7 @@
           "selected_step": 0,
           "seed": 163,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#7c3aed",
           "icon": "sequence",
           "shape": "square",
           "visual_width": 220,
@@ -1496,9 +1496,9 @@
           "library_item_id": 7357,
           "original_bpm": 130
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed",
         "shape": 1
       },
       {
@@ -1562,7 +1562,7 @@
           "node_type": "random",
           "modifier_kind": "random",
           "node_name": "Snare Humanizer",
-          "color": "#7e22ce",
+          "color": "#7c3aed",
           "icon": "shuffle",
           "shape": "diamond",
           "refresh_mode": "global",
@@ -1627,9 +1627,9 @@
           "parentId": 15,
           "target_bpm": 120
         },
-        "color": "#7e22ce",
-        "bgcolor": "#7e22ce",
-        "boxcolor": "#6b21a8",
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed",
         "shape": 1
       },
       {
@@ -1722,7 +1722,7 @@
           "scope_mode": "full",
           "scope_window": 0,
           "scope_gain": 1,
-          "color": "#10b981",
+          "color": "#ea580c",
           "icon": "sample",
           "shape": "circle",
           "visual_width": 220,
@@ -1733,9 +1733,9 @@
           "library_item_id": 3431,
           "duration_seconds": 0.03
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c",
         "shape": 1
       },
       {
@@ -1993,7 +1993,7 @@
           "selected_step": 0,
           "seed": 173,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#ea580c",
           "icon": "sequence",
           "shape": "square",
           "visual_width": 220,
@@ -2006,9 +2006,9 @@
           "library_item_id": 7361,
           "original_bpm": 130
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c",
         "shape": 1
       },
       {
@@ -2072,7 +2072,7 @@
           "node_type": "random",
           "modifier_kind": "random",
           "node_name": "Hat Velocity Wave",
-          "color": "#7e22ce",
+          "color": "#ea580c",
           "icon": "shuffle",
           "shape": "diamond",
           "refresh_mode": "global",
@@ -2137,9 +2137,9 @@
           "parentId": 20,
           "target_bpm": 120
         },
-        "color": "#7e22ce",
-        "bgcolor": "#7e22ce",
-        "boxcolor": "#6b21a8",
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c",
         "shape": 1
       },
       {
@@ -2232,7 +2232,7 @@
           "scope_mode": "full",
           "scope_window": 0,
           "scope_gain": 1,
-          "color": "#10b981",
+          "color": "#db2777",
           "icon": "sample",
           "shape": "circle",
           "visual_width": 220,
@@ -2243,9 +2243,9 @@
           "library_item_id": 3930,
           "duration_seconds": 0.0736281179138322
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777",
         "shape": 1
       },
       {
@@ -2503,7 +2503,7 @@
           "selected_step": 0,
           "seed": 183,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#db2777",
           "icon": "sequence",
           "shape": "square",
           "visual_width": 220,
@@ -2515,8 +2515,8 @@
           "filepath": "C:\\web-projects\\sin\\assets\\vaults\\default-vault\\sequences\\Perc - Ghost Rim and Wood Tap.seq",
           "library_item_id": 7367
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
+        "color": "#db2777",
+        "bgcolor": "#db2777",
         "boxcolor": "#db2777",
         "shape": 1
       },
@@ -2581,7 +2581,7 @@
           "node_type": "random",
           "modifier_kind": "random",
           "node_name": "Ghost Velocity Jitter",
-          "color": "#7e22ce",
+          "color": "#db2777",
           "icon": "shuffle",
           "shape": "diamond",
           "refresh_mode": "global",
@@ -2646,9 +2646,9 @@
           "parentId": 25,
           "target_bpm": 120
         },
-        "color": "#7e22ce",
-        "bgcolor": "#7e22ce",
-        "boxcolor": "#6b21a8",
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777",
         "shape": 1
       },
       {
@@ -2854,7 +2854,7 @@
           "scope_mode": "full",
           "scope_window": 0,
           "scope_gain": 1,
-          "color": "#10b981",
+          "color": "#d97706",
           "icon": "sample",
           "shape": "circle",
           "visual_width": 220,
@@ -2865,9 +2865,9 @@
           "library_item_id": 3791,
           "duration_seconds": 0.3
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706",
         "shape": 1
       },
       {
@@ -3172,7 +3172,7 @@
           "selected_step": 0,
           "seed": 186,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#d97706",
           "icon": "sequence",
           "shape": "square",
           "visual_width": 220,
@@ -3182,9 +3182,9 @@
           "length_source_id": 34,
           "duration_seconds": 6.857142857142857
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706",
         "shape": 1
       },
       {
@@ -3277,7 +3277,7 @@
           "scope_mode": "full",
           "scope_window": 0,
           "scope_gain": 1,
-          "color": "#10b981",
+          "color": "#0891b2",
           "icon": "sample",
           "shape": "circle",
           "visual_width": 220,
@@ -3289,9 +3289,9 @@
           "library_item_id": 7266,
           "duration_seconds": 23.52517006802721
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2",
         "shape": 1
       },
       {
@@ -3596,7 +3596,7 @@
           "selected_step": 0,
           "seed": 188,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#0891b2",
           "icon": "sequence",
           "shape": "square",
           "visual_width": 220,
@@ -3606,9 +3606,9 @@
           "length_source_id": 34,
           "duration_seconds": 6.857142857142857
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2",
         "shape": 1
       },
       {
@@ -3804,7 +3804,7 @@
           "scope_mode": "full",
           "scope_window": 0,
           "scope_gain": 1,
-          "color": "#10b981",
+          "color": "#4f46e5",
           "icon": "sample",
           "shape": "circle",
           "visual_width": 220,
@@ -3816,9 +3816,9 @@
           "library_item_id": 13289,
           "duration_seconds": 27.42859410430839
         },
-        "color": "#10b981",
-        "bgcolor": "#10b981",
-        "boxcolor": "#059669",
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5",
         "shape": 1
       },
       {
@@ -4016,7 +4016,7 @@
           "bpm": "global",
           "target_bpm": 140,
           "total_bars": "global",
-          "color": "#4f46e5",
+          "color": "#0f172a",
           "icon": "mixer",
           "shape": "diamond",
           "visual_width": 220,
@@ -4025,9 +4025,9 @@
           "node_type": "track",
           "duration_seconds": 6.857142857142857
         },
-        "color": "#4f46e5",
-        "bgcolor": "#4f46e5",
-        "boxcolor": "#4338ca",
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b",
         "shape": 1
       },
       {
@@ -4275,7 +4275,7 @@
           "selected_step": 0,
           "seed": 192,
           "seed_mode": "moving",
-          "color": "#ec4899",
+          "color": "#4f46e5",
           "icon": "sequence",
           "shape": "square",
           "visual_width": 220,
@@ -4288,9 +4288,9 @@
           "library_item_id": 4224,
           "original_bpm": 140
         },
-        "color": "#ec4899",
-        "bgcolor": "#ec4899",
-        "boxcolor": "#db2777",
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5",
         "shape": 1
       }
     ],
@@ -4301,7 +4301,8 @@
         0,
         10,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         2,
@@ -4309,7 +4310,8 @@
         0,
         27,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         3,
@@ -4317,7 +4319,8 @@
         0,
         15,
         0,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         4,
@@ -4325,7 +4328,8 @@
         0,
         27,
         1,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         5,
@@ -4333,7 +4337,8 @@
         0,
         20,
         0,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         6,
@@ -4341,7 +4346,8 @@
         0,
         27,
         2,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         7,
@@ -4349,7 +4355,8 @@
         0,
         25,
         0,
-        "audio"
+        "audio",
+        "#db2777"
       ],
       [
         8,
@@ -4357,7 +4364,8 @@
         0,
         27,
         3,
-        "audio"
+        "audio",
+        "#db2777"
       ],
       [
         9,
@@ -4365,7 +4373,8 @@
         0,
         4,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         10,
@@ -4373,7 +4382,8 @@
         0,
         6,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         11,
@@ -4381,7 +4391,8 @@
         0,
         30,
         0,
-        "audio"
+        "audio",
+        "#d97706"
       ],
       [
         12,
@@ -4389,7 +4400,8 @@
         0,
         34,
         0,
-        "audio"
+        "audio",
+        "#d97706"
       ],
       [
         13,
@@ -4397,7 +4409,8 @@
         0,
         33,
         0,
-        "audio"
+        "audio",
+        "#0891b2"
       ],
       [
         14,
@@ -4405,7 +4418,8 @@
         0,
         34,
         1,
-        "audio"
+        "audio",
+        "#0891b2"
       ],
       [
         15,
@@ -4413,7 +4427,8 @@
         0,
         39,
         0,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         16,
@@ -4421,7 +4436,8 @@
         0,
         40,
         0,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         17,
@@ -4429,7 +4445,8 @@
         0,
         41,
         0,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         18,
@@ -4437,7 +4454,8 @@
         0,
         41,
         1,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         19,
@@ -4445,7 +4463,8 @@
         0,
         41,
         2,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         20,
@@ -4453,7 +4472,8 @@
         0,
         41,
         3,
-        "audio"
+        "audio",
+        "#4f46e5"
       ]
     ],
     "groups": [],

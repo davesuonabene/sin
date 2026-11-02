@@ -3,11 +3,57 @@ import { type RenderBox, type SignalTelemetry, type WaveformSignal, type Rendere
 import { extractPeaksFromBuffer } from '../utils/peakExtractor.ts';
 import { drawPlayhead, drawRoundRect } from '../utils/drawingUtils.ts';
 
+function colorWithAlpha(color: string, alpha: number): string {
+    if (!color) return `rgba(5, 150, 105, ${alpha})`;
+    if (color.startsWith('#')) {
+        let c = color.slice(1);
+        if (c.length === 3) c = c.split('').map(x => x + x).join('');
+        const num = parseInt(c, 16);
+        if (!isNaN(num)) {
+            const r = (num >> 16) & 255;
+            const g = (num >> 8) & 255;
+            const b = num & 255;
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+    }
+    if (color.startsWith('rgb(')) {
+        return color.replace('rgb(', 'rgba(').replace(')', `, ${alpha})`);
+    }
+    if (color.startsWith('rgba(')) {
+        return color.replace(/[\d\.]+\)$/, `${alpha})`);
+    }
+    return color;
+}
+
+function getOrCreateOffscreenCanvas(existing: HTMLCanvasElement | null, width: number, height: number): HTMLCanvasElement | null {
+    if (typeof document === 'undefined') return null;
+    const w = Math.max(1, Math.floor(width));
+    const h = Math.max(1, Math.floor(height));
+    if (existing) {
+        if (existing.width !== w || existing.height !== h) {
+            existing.width = w;
+            existing.height = h;
+        }
+        return existing;
+    }
+    try {
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        return c;
+    } catch {
+        return null;
+    }
+}
+
 export class WaveformRenderer extends BaseSignalRenderer {
     private signal: WaveformSignal | null = null;
     private cachedPeaks: Float32Array | null = null;
     private cachedBuffer: AudioBuffer | null = null;
     private cachedWidth = 0;
+    private maskCanvas: HTMLCanvasElement | null = null;
+    private tintCanvas: HTMLCanvasElement | null = null;
+    private maskFingerprint: string = '';
     private sweepHistoryMin = new Float32Array(256);
     private sweepHistoryMax = new Float32Array(256);
     private sweepIndex = 0;
@@ -29,6 +75,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
             this.sweepHistoryMax.fill(0);
             this.sweepIndex = 0;
             this.lastPhase = 0;
+            this.maskFingerprint = '';
         } else if (signal.buffer && signal.buffer !== this.cachedBuffer) {
             this.cachedPeaks = null;
             this.cachedBuffer = signal.buffer;
@@ -36,8 +83,10 @@ export class WaveformRenderer extends BaseSignalRenderer {
             this.sweepHistoryMax.fill(0);
             this.sweepIndex = 0;
             this.lastPhase = 0;
-        } else if (signal.peaks) {
+            this.maskFingerprint = '';
+        } else if (signal.peaks && signal.peaks !== this.cachedPeaks) {
             this.cachedPeaks = signal.peaks;
+            this.maskFingerprint = '';
         }
         this.markDirty();
     }
@@ -93,6 +142,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
         if (signal?.buffer && (!this.cachedPeaks || this.cachedWidth !== Math.floor(width) || this.cachedBuffer !== signal.buffer)) {
             this.cachedWidth = Math.floor(width);
             this.cachedBuffer = signal.buffer;
+            this.maskFingerprint = '';
             const buf = signal.buffer;
             const totalDur = (signal.duration && signal.duration > 0) ? signal.duration : buf.duration;
             const bufferRatio = Math.min(1.0, Math.max(0.01, buf.duration / Math.max(0.01, totalDur)));
@@ -106,8 +156,9 @@ export class WaveformRenderer extends BaseSignalRenderer {
             } else {
                 this.cachedPeaks = extractPeaksFromBuffer(buf, this.cachedWidth);
             }
-        } else if (signal?.peaks && !this.cachedPeaks) {
+        } else if (signal?.peaks && this.cachedPeaks !== signal.peaks) {
             this.cachedPeaks = signal.peaks;
+            this.maskFingerprint = '';
         }
 
         const peaks = this.cachedPeaks;
@@ -135,30 +186,78 @@ export class WaveformRenderer extends BaseSignalRenderer {
             const bufferFrontX = hasBufferConstraint ? x + Math.max(0, Math.min(1, bufferedProgress)) * width : null;
             const isInvalidated = Boolean(signal?.isInvalidated);
 
-            // Waveform columns
-            for (let i = 0; i < columns; i++) {
-                const min = peaks[i * 2];
-                const max = peaks[i * 2 + 1];
-                const top = midY - max * halfHeight;
-                const bottom = midY - min * halfHeight;
-                const colX = x + i * colWidth;
-                const h = Math.max(1, bottom - top);
-                const isPastBufferFront = bufferFrontX != null && colX > bufferFrontX;
+            // Waveform columns (draw truthful audio peaks directly from engine via cached mask)
+            const peakHash = `${peaks.length}_${peaks[0]?.toFixed(2)}_${peaks[Math.floor(columns / 2) * 2]?.toFixed(2)}_${peaks[peaks.length - 1]?.toFixed(2)}`;
+            const bufId = signal?.buffer ? `${signal.buffer.length}_${signal.buffer.duration.toFixed(3)}` : 'nobuf';
+            const currentFp = `${bufId}_${peakHash}_${columns}_${Math.floor(width)}_${Math.floor(height)}_${cropStartNorm}_${cropEndNorm}`;
+            const mask = getOrCreateOffscreenCanvas(this.maskCanvas, width, height);
+            const tint = getOrCreateOffscreenCanvas(this.tintCanvas, width, height);
 
-                if (colX < cropStartX || colX > cropEndX) {
-                    ctx.fillStyle = 'rgba(148, 163, 184, 0.25)';
-                } else if (isPastBufferFront) {
-                    // Unbuffered region in RAM
-                    ctx.fillStyle = 'rgba(203, 213, 225, 0.35)';
-                } else if (isInvalidated) {
-                    // Refilling / refreshing state
-                    ctx.fillStyle = 'rgba(245, 158, 11, 0.6)';
-                } else if (isDimmed) {
-                    ctx.fillStyle = 'rgba(5, 150, 105, 0.25)';
-                } else {
-                    ctx.fillStyle = accent;
+            if (mask && tint) {
+                this.maskCanvas = mask;
+                this.tintCanvas = tint;
+                const mCtx = mask.getContext('2d');
+                const tCtx = tint.getContext('2d');
+
+                if (mCtx && tCtx) {
+                    if (this.maskFingerprint !== currentFp) {
+                        this.maskFingerprint = currentFp;
+                        mCtx.clearRect(0, 0, width, height);
+                        const maskMidY = height * 0.5;
+
+                        for (let i = 0; i < columns; i++) {
+                            const min = peaks[i * 2];
+                            const max = peaks[i * 2 + 1];
+                            const top = maskMidY - max * halfHeight;
+                            const bottom = maskMidY - min * halfHeight;
+                            const colX = i * colWidth;
+                            const h = Math.max(1, bottom - top);
+
+                            if (colX < cropStartNorm * width || colX > cropEndNorm * width) {
+                                mCtx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+                            } else {
+                                mCtx.fillStyle = '#ffffff';
+                            }
+                            mCtx.fillRect(colX, top, Math.max(1, colWidth - 0.5), h);
+                        }
+                    }
+
+                    // Tint the cached mask with accent color
+                    tCtx.clearRect(0, 0, width, height);
+                    tCtx.drawImage(mask, 0, 0);
+                    tCtx.globalCompositeOperation = 'source-in';
+                    if (isInvalidated) {
+                        tCtx.fillStyle = 'rgba(245, 158, 11, 0.6)';
+                    } else if (isDimmed) {
+                        tCtx.fillStyle = colorWithAlpha(accent, 0.25);
+                    } else {
+                        tCtx.fillStyle = accent;
+                    }
+                    tCtx.fillRect(0, 0, width, height);
+                    tCtx.globalCompositeOperation = 'source-over';
+
+                    ctx.drawImage(tint, x, y);
                 }
-                ctx.fillRect(colX, top, Math.max(1, colWidth - 0.5), h);
+            } else {
+                for (let i = 0; i < columns; i++) {
+                    const min = peaks[i * 2];
+                    const max = peaks[i * 2 + 1];
+                    const top = midY - max * halfHeight;
+                    const bottom = midY - min * halfHeight;
+                    const colX = x + i * colWidth;
+                    const h = Math.max(1, bottom - top);
+
+                    if (colX < cropStartX || colX > cropEndX) {
+                        ctx.fillStyle = 'rgba(148, 163, 184, 0.25)';
+                    } else if (isInvalidated) {
+                        ctx.fillStyle = 'rgba(245, 158, 11, 0.6)';
+                    } else if (isDimmed) {
+                        ctx.fillStyle = colorWithAlpha(accent, 0.25);
+                    } else {
+                        ctx.fillStyle = accent;
+                    }
+                    ctx.fillRect(colX, top, Math.max(1, colWidth - 0.5), h);
+                }
             }
 
             // Draw buffer-fill leading front edge
@@ -190,9 +289,30 @@ export class WaveformRenderer extends BaseSignalRenderer {
                     ctx.stroke();
                 }
             }
+        } else if (isPlaying && telemetry?.realtimeScope && telemetry.realtimeScope.length >= 2) {
+            // Live real-time scope sweep during playback when static buffer peaks are not yet extracted
+            const scope = telemetry.realtimeScope;
+            const step = Math.max(1, Math.floor(scope.length / width));
+            const ampScale = (height - 6) * 0.45;
+            ctx.strokeStyle = accent;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            let first = true;
+            for (let i = 0; i < width; i++) {
+                const sampleIdx = Math.min(scope.length - 1, i * step);
+                const val = scope[sampleIdx] || 0;
+                const plotY = midY - val * ampScale;
+                if (first) {
+                    ctx.moveTo(x + i, plotY);
+                    first = false;
+                } else {
+                    ctx.lineTo(x + i, plotY);
+                }
+            }
+            ctx.stroke();
         } else {
             // Idle placeholder line
-            ctx.strokeStyle = isDimmed ? 'rgba(5, 150, 105, 0.15)' : 'rgba(5, 150, 105, 0.35)';
+            ctx.strokeStyle = isDimmed ? colorWithAlpha(accent, 0.15) : colorWithAlpha(accent, 0.35);
             ctx.lineWidth = 1.5;
             ctx.beginPath();
             ctx.moveTo(x + 4, midY);
@@ -452,6 +572,18 @@ export class WaveformRenderer extends BaseSignalRenderer {
                 const { min, max } = this.getPeakFromBuffer(buffer, t1, t2, scopeGain);
                 const top = midY - max * ampScale;
                 const bottom = midY - min * ampScale;
+                const h = Math.max(1.25, bottom - top);
+                ctx.fillStyle = accent;
+                ctx.fillRect(x + c, top, 1.25, h);
+            }
+        } else if (telemetry?.realtimeScope && telemetry.realtimeScope.length >= 2) {
+            const scopeData = telemetry.realtimeScope;
+            const len = scopeData.length;
+            for (let c = 0; c < totalCols; c++) {
+                const idx = Math.min(len - 1, Math.floor((c / totalCols) * len));
+                const amp = Math.max(-1.0, Math.min(1.0, scopeData[idx] * scopeGain));
+                const top = midY - Math.max(0, amp) * ampScale;
+                const bottom = midY - Math.min(0, amp) * ampScale;
                 const h = Math.max(1.25, bottom - top);
                 ctx.fillStyle = accent;
                 ctx.fillRect(x + c, top, 1.25, h);

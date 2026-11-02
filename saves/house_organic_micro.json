@@ -105,11 +105,15 @@
         "properties": {
           "node_name": "Pulse Kick Core",
           "sample_type": "one_shot",
-          "gain": 0.0,
+          "gain": 0,
           "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 1
-        }
+          "asset_modifier_id": 1,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 3,
@@ -185,22 +189,22 @@
               "probability": 93
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -213,22 +217,22 @@
               "probability": 96
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -241,22 +245,22 @@
               "probability": 94
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -269,22 +273,22 @@
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -292,8 +296,12 @@
           ],
           "visualization_enabled": true,
           "node_type": "sequence",
-          "asset_modifier_id": 4
-        }
+          "asset_modifier_id": 4,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 4,
@@ -336,7 +344,7 @@
               "paramLabel": "Humanize Timing",
               "minPercent": -8,
               "maxPercent": 8,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true
             },
             {
@@ -350,8 +358,12 @@
             }
           ],
           "node_type": "random",
-          "parentId": 3
-        }
+          "parentId": 3,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 5,
@@ -420,11 +432,15 @@
         "properties": {
           "node_name": "Pulse Field Bed Layer",
           "sample_type": "loop",
-          "gain": 0.0,
+          "gain": 0,
           "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 5
-        }
+          "asset_modifier_id": 5,
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 7,
@@ -468,7 +484,7 @@
         "title": "Sequence",
         "properties": {
           "node_name": "Pulse Loop Sustained Trigger",
-          "step_length": 1.0,
+          "step_length": 1,
           "play_mode": "trigger",
           "total_bars": 4,
           "seed": 203,
@@ -606,8 +622,12 @@
             }
           ],
           "visualization_enabled": true,
-          "node_type": "sequence"
-        }
+          "node_type": "sequence",
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 8,
@@ -656,10 +676,14 @@
         "title": "Track",
         "properties": {
           "node_name": "Sub Bass Bus",
-          "gain": -2.0,
+          "gain": -2,
           "visualization_enabled": true,
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 9,
@@ -746,11 +770,15 @@
         "properties": {
           "node_name": "Rhythm Snare Main",
           "sample_type": "one_shot",
-          "gain": 0.0,
+          "gain": 0,
           "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 9
-        }
+          "asset_modifier_id": 9,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 11,
@@ -819,29 +847,29 @@
           ],
           "step_parameters": [
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -854,50 +882,50 @@
               "probability": 98
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -910,22 +938,22 @@
               "probability": 91
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -933,8 +961,12 @@
           ],
           "visualization_enabled": true,
           "node_type": "sequence",
-          "asset_modifier_id": 12
-        }
+          "asset_modifier_id": 12,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 12,
@@ -977,7 +1009,7 @@
               "paramLabel": "Pocket Swing Offset",
               "minPercent": -10,
               "maxPercent": 14,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true
             },
             {
@@ -991,8 +1023,12 @@
             }
           ],
           "node_type": "random",
-          "parentId": 11
-        }
+          "parentId": 11,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 13,
@@ -1124,11 +1160,15 @@
         "properties": {
           "node_name": "Rhythm Perc Accent Hit",
           "sample_type": "one_shot",
-          "gain": 0.0,
+          "gain": 0,
           "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 13
-        }
+          "asset_modifier_id": 13,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 15,
@@ -1197,8 +1237,8 @@
           ],
           "step_parameters": [
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1211,29 +1251,29 @@
               "probability": 95
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1246,15 +1286,15 @@
               "probability": 82
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1267,29 +1307,29 @@
               "probability": 92
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1311,8 +1351,12 @@
           ],
           "visualization_enabled": true,
           "node_type": "sequence",
-          "asset_modifier_id": 16
-        }
+          "asset_modifier_id": 16,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 16,
@@ -1355,7 +1399,7 @@
               "paramLabel": "Micro Groove Offsets",
               "minPercent": -15,
               "maxPercent": 15,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true
             },
             {
@@ -1369,8 +1413,12 @@
             }
           ],
           "node_type": "random",
-          "parentId": 15
-        }
+          "parentId": 15,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 17,
@@ -1421,8 +1469,12 @@
           "node_name": "Punch Drum Bus",
           "gain": -2.5,
           "visualization_enabled": true,
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 18,
@@ -1503,11 +1555,15 @@
         "properties": {
           "node_name": "Tops Shaker Layer",
           "sample_type": "one_shot",
-          "gain": 0.0,
+          "gain": 0,
           "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 18
-        }
+          "asset_modifier_id": 18,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 20,
@@ -1576,8 +1632,8 @@
           ],
           "step_parameters": [
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1597,15 +1653,15 @@
               "probability": 87
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1625,15 +1681,15 @@
               "probability": 80
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1653,15 +1709,15 @@
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1681,8 +1737,8 @@
               "probability": 80
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1690,8 +1746,12 @@
           ],
           "visualization_enabled": true,
           "node_type": "sequence",
-          "asset_modifier_id": 21
-        }
+          "asset_modifier_id": 21,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 21,
@@ -1734,7 +1794,7 @@
               "paramLabel": "Loose Shaker Swing",
               "minPercent": -12,
               "maxPercent": 12,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true
             },
             {
@@ -1748,8 +1808,12 @@
             }
           ],
           "node_type": "random",
-          "parentId": 20
-        }
+          "parentId": 20,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 22,
@@ -1821,11 +1885,15 @@
         "properties": {
           "node_name": "Tops Micro Click",
           "sample_type": "one_shot",
-          "gain": 0.0,
+          "gain": 0,
           "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 22
-        }
+          "asset_modifier_id": 22,
+          "color": "#d97706"
+        },
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706"
       },
       {
         "id": 24,
@@ -1901,15 +1969,15 @@
               "probability": 90
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1922,8 +1990,8 @@
               "probability": 77
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1936,15 +2004,15 @@
               "probability": 91
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1957,15 +2025,15 @@
               "probability": 88
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1978,8 +2046,8 @@
               "probability": 76
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1992,8 +2060,8 @@
               "probability": 87
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -2008,8 +2076,12 @@
           ],
           "visualization_enabled": true,
           "node_type": "sequence",
-          "asset_modifier_id": 25
-        }
+          "asset_modifier_id": 25,
+          "color": "#d97706"
+        },
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706"
       },
       {
         "id": 25,
@@ -2052,7 +2124,7 @@
               "paramLabel": "Sub-step Jitter",
               "minPercent": -18,
               "maxPercent": 18,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true
             },
             {
@@ -2066,8 +2138,12 @@
             }
           ],
           "node_type": "random",
-          "parentId": 24
-        }
+          "parentId": 24,
+          "color": "#d97706"
+        },
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706"
       },
       {
         "id": 26,
@@ -2166,11 +2242,15 @@
         "properties": {
           "node_name": "Tops Organic Texture Sparkle",
           "sample_type": "one_shot",
-          "gain": -2.0,
+          "gain": -2,
           "visualization_enabled": true,
           "node_type": "sample",
-          "asset_modifier_id": 26
-        }
+          "asset_modifier_id": 26,
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 28,
@@ -2231,15 +2311,15 @@
           ],
           "step_parameters": [
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -2252,29 +2332,29 @@
               "probability": 85
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -2288,8 +2368,12 @@
             }
           ],
           "visualization_enabled": true,
-          "node_type": "sequence"
-        }
+          "node_type": "sequence",
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 29,
@@ -2345,8 +2429,12 @@
           "node_name": "Tops Air & Perc Bus",
           "gain": -2.5,
           "visualization_enabled": true,
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 30,
@@ -2400,8 +2488,12 @@
           "node_name": "Master Output",
           "gain": -1.5,
           "visualization_enabled": true,
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#0f172a"
+        },
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b"
       }
     ],
     "links": [
@@ -2411,7 +2503,8 @@
         0,
         3,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         2,
@@ -2419,7 +2512,8 @@
         0,
         7,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         3,
@@ -2427,7 +2521,8 @@
         0,
         11,
         0,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         4,
@@ -2435,7 +2530,8 @@
         0,
         15,
         0,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         5,
@@ -2443,7 +2539,8 @@
         0,
         20,
         0,
-        "audio"
+        "audio",
+        "#db2777"
       ],
       [
         6,
@@ -2451,7 +2548,8 @@
         0,
         24,
         0,
-        "audio"
+        "audio",
+        "#d97706"
       ],
       [
         7,
@@ -2459,7 +2557,8 @@
         0,
         28,
         0,
-        "audio"
+        "audio",
+        "#0891b2"
       ],
       [
         8,
@@ -2467,7 +2566,8 @@
         0,
         8,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         9,
@@ -2475,7 +2575,8 @@
         0,
         8,
         1,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         10,
@@ -2483,7 +2584,8 @@
         0,
         17,
         0,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         11,
@@ -2491,7 +2593,8 @@
         0,
         17,
         1,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         12,
@@ -2499,7 +2602,8 @@
         0,
         29,
         0,
-        "audio"
+        "audio",
+        "#db2777"
       ],
       [
         13,
@@ -2507,7 +2611,8 @@
         0,
         29,
         1,
-        "audio"
+        "audio",
+        "#d97706"
       ],
       [
         14,
@@ -2515,7 +2620,8 @@
         0,
         29,
         2,
-        "audio"
+        "audio",
+        "#0891b2"
       ],
       [
         15,
@@ -2523,7 +2629,8 @@
         0,
         30,
         0,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         16,
@@ -2531,7 +2638,8 @@
         0,
         30,
         1,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         17,
@@ -2539,7 +2647,8 @@
         0,
         30,
         2,
-        "audio"
+        "audio",
+        "#4f46e5"
       ]
     ],
     "groups": [],

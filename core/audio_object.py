@@ -149,6 +149,15 @@ class AudioObject(BaseObject):
         """
         self.children.append((float(start_beat), child))
 
+    def _cache_context(self, system: Optional[System] = None, iteration: int = 0, **kwargs: Any) -> tuple:
+        render_mode = str(system.render_mode).lower() if system is not None else "offline"
+        sr = int(system.sample_rate) if system is not None else 44100
+        bpm = round(float(system.bpm), 4) if system is not None else 120.0
+        loop_flag = bool(kwargs.get("loop", True))
+        parent_bars = round(float(kwargs["parent_total_bars"]), 4) if kwargs.get("parent_total_bars") is not None else None
+        eff_iter = int(iteration) if getattr(self, "seed_mode", None) == "moving" else 0
+        return (render_mode, sr, bpm, loop_flag, parent_bars, eff_iter)
+
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
         """
         Recursive DSP render method:
@@ -157,11 +166,12 @@ class AudioObject(BaseObject):
         - If children exist, recursively renders each child, pads with leading zeros based on start_beat,
           and SUMs them into a parent master numpy array.
         """
+        cache_ctx = self._cache_context(system, **kwargs)
         if self.node_id is not None and getattr(self, "fingerprint", None):
-            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint)
+            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint, context=cache_ctx)
             if cached is not None:
                 if system is not None and system.render_mode == "preview":
-                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint)
+                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx)
                     if cached_extra and "manifest_state" in cached_extra:
                         system.restore_manifest_state(cached_extra["manifest_state"])
                 return cached
@@ -199,7 +209,7 @@ class AudioObject(BaseObject):
                     data_to_render = tiled[..., :target_samples]
             leaf_out = self.apply_chain(data_to_render, system)
             if self.node_id is not None and getattr(self, "fingerprint", None):
-                GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, leaf_out)
+                GLOBAL_DAG_CACHE.store(self.node_id, self.fingerprint, leaf_out, context=cache_ctx)
             return leaf_out
 
         if system is None:
@@ -321,7 +331,8 @@ class AudioObject(BaseObject):
                 self.node_id,
                 self.fingerprint,
                 output_buffer,
-                extra={"manifest_state": manifest_state} if manifest_state else None
+                extra={"manifest_state": manifest_state} if manifest_state else None,
+                context=cache_ctx,
             )
         return output_buffer
 
@@ -351,7 +362,9 @@ class SampleObject(AudioObject):
         total_bars: Optional[float] = None,
         key_match_mode: str = "off",
         key_match_algorithm: str = "nearest",
-        target_bpm: Optional[float] = None
+        target_bpm: Optional[float] = None,
+        node_id: Optional[int] = None,
+        node_type: str = "sample"
     ) -> None:
         super().__init__(
             name=name,
@@ -372,15 +385,18 @@ class SampleObject(AudioObject):
             total_bars=total_bars,
             key_match_mode=key_match_mode,
             key_match_algorithm=key_match_algorithm,
-            target_bpm=target_bpm
+            target_bpm=target_bpm,
+            node_id=node_id,
+            node_type=node_type
         )
 
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        cache_ctx = self._cache_context(system, **kwargs)
         if self.node_id is not None and getattr(self, "fingerprint", None):
-            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint)
+            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint, context=cache_ctx)
             if cached is not None:
                 if system is not None and system.render_mode == "preview":
-                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint)
+                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx)
                     if cached_extra and "manifest_state" in cached_extra:
                         system.restore_manifest_state(cached_extra["manifest_state"])
                     if cached_extra and "natural_duration" in cached_extra:
@@ -472,7 +488,8 @@ class SampleObject(AudioObject):
                 extra={
                     "manifest_state": manifest_state,
                     "natural_duration": getattr(self, "_natural_duration", sample_natural_dur),
-                } if manifest_state or hasattr(self, "_natural_duration") else None
+                } if manifest_state or hasattr(self, "_natural_duration") else None,
+                context=cache_ctx,
             )
         return output_buffer
 
@@ -613,10 +630,14 @@ class SequenceObject(AudioObject):
         if raw_gate > 1.0:
             raw_gate = raw_gate / 100.0
 
+        raw_prob = _safe_float(raw.get("probability"), 1.0)
+        if raw_prob > 1.0:
+            raw_prob = raw_prob / 100.0
+
         return {
             "offset": max(-1.0, min(1.0, _safe_float(raw.get("offset"), 0.0))),
             "velocity": max(0.0, min(1.0, _safe_float(raw.get("velocity"), 1.0))),
-            "probability": max(0.0, min(100.0, _safe_float(raw.get("probability"), 100.0))),
+            "probability": max(0.0, min(1.0, raw_prob)),
             "sample_start": max(0.0, min(1.0, raw_start)),
             "gate_length": max(0.0, min(1.0, raw_gate)),
             "subdivision_enabled": subdivisions > 1,
@@ -624,11 +645,12 @@ class SequenceObject(AudioObject):
         }
 
     def render(self, system: Optional[System] = None, iteration: int = 0, **kwargs: Any) -> np.ndarray:
+        cache_ctx = self._cache_context(system, iteration=iteration, **kwargs)
         if self.node_id is not None and getattr(self, "fingerprint", None):
-            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint)
+            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint, context=cache_ctx)
             if cached is not None:
                 if system is not None and system.render_mode == "preview":
-                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint)
+                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx)
                     if cached_extra and "manifest_state" in cached_extra:
                         system.restore_manifest_state(cached_extra["manifest_state"])
                 return cached
@@ -639,15 +661,19 @@ class SequenceObject(AudioObject):
         if not self.children:
             return np.zeros(0, dtype=np.float32)
 
-        # Render the first child (the sample)
+        # Render the first child (the sample) as a single un-tiled trigger cycle
         _, first_child = self.children[0]
         if self.node_id is not None and getattr(first_child, "node_id", None) is not None:
             GLOBAL_DAG_CACHE.register_edge(parent_id=self.node_id, child_id=first_child.node_id)
         is_dynamic = getattr(first_child, "is_dynamic", False)
 
+        child_kwargs = dict(kwargs)
+        child_kwargs["loop"] = False
+        child_kwargs.pop("parent_total_bars", None)
+
         cached_child_audio = None
         if not is_dynamic:
-            cached_child_audio = first_child.render(system, **kwargs)
+            cached_child_audio = first_child.render(system, **child_kwargs)
             if cached_child_audio.shape[-1] == 0 or len(self.sequence) == 0:
                 return np.zeros(0, dtype=np.float32)
 
@@ -690,7 +716,7 @@ class SequenceObject(AudioObject):
             for step_idx, step_val in enumerate(self.sequence):
                 if step_val == 1:
                     params = self._step_parameters(step_idx)
-                    if rng.random() * 100.0 >= params["probability"]:
+                    if rng.random() >= params["probability"]:
                         continue
 
                     repeats = params["subdivisions"]
@@ -706,7 +732,7 @@ class SequenceObject(AudioObject):
                         start_sample = subdivision_boundaries[subdivision_idx]
                         slot_end_sample = subdivision_boundaries[subdivision_idx + 1]
                         slot_samples = max(1, slot_end_sample - start_sample)
-                        audio = first_child.render(system, **kwargs) if is_dynamic else cached_child_audio
+                        audio = first_child.render(system, **child_kwargs) if is_dynamic else cached_child_audio
                         velocity = float(params["velocity"])
 
                         # Apply sample_start (normalized 0.0 to 1.0) before copying/scaling
@@ -842,7 +868,8 @@ class SequenceObject(AudioObject):
                 self.node_id,
                 self.fingerprint,
                 output_buffer,
-                extra={"manifest_state": manifest_state} if manifest_state else None
+                extra={"manifest_state": manifest_state} if manifest_state else None,
+                context=cache_ctx,
             )
         return output_buffer
 
@@ -874,7 +901,9 @@ class ItemPoolObject(AudioObject):
         total_bars: Optional[float] = None,
         key_match_mode: str = "off",
         key_match_algorithm: str = "nearest",
-        target_bpm: Optional[float] = None
+        target_bpm: Optional[float] = None,
+        node_id: Optional[int] = None,
+        node_type: str = "asset_filter"
     ) -> None:
         super().__init__(
             name=name,
@@ -894,7 +923,9 @@ class ItemPoolObject(AudioObject):
             total_bars=total_bars,
             key_match_mode=key_match_mode,
             key_match_algorithm=key_match_algorithm,
-            target_bpm=target_bpm
+            target_bpm=target_bpm,
+            node_id=node_id,
+            node_type=node_type
         )
         self.selected_items = selected_items or []
         self.playback_mode = playback_mode or "Random"
@@ -1126,13 +1157,23 @@ class ItemPoolObject(AudioObject):
 
         output_buffer = self.apply_chain(data_to_render, system)
         if system is not None and self.node_id is not None:
+            existing_entry = system.manifest.get("nodes", {}).get(str(self.node_id), {})
+            pool_paths = list(existing_entry.get("pool_filepaths", []))
+            if filepath not in pool_paths:
+                pool_paths.append(filepath)
+            first_filepath = existing_entry.get("filepath") or filepath
             system.record_node_stem(
                 self.node_id,
                 "sample",
                 self.name,
                 output_buffer,
                 sample_natural_dur,
-                extra={"filepath": filepath, "is_pool": True}
+                extra={
+                    "filepath": first_filepath,
+                    "pool_filepaths": pool_paths,
+                    "is_pool": True,
+                    "is_dynamic_pool": len(pool_paths) > 1 or should_advance,
+                }
             )
         return output_buffer
 
@@ -1165,7 +1206,9 @@ class ArrangementObject(AudioObject):
         section_quant: Optional[List[str]] = None,
         section_quant_anchor: Optional[List[str]] = None,
         quant: Optional[Union[str, float]] = "auto",
-        quant_anchor: str = "start"
+        quant_anchor: str = "start",
+        node_id: Optional[int] = None,
+        node_type: str = "arrangement"
     ) -> None:
         super().__init__(
             name=name,
@@ -1174,7 +1217,9 @@ class ArrangementObject(AudioObject):
             original_bpm=original_bpm,
             chain=chain,
             data=data,
-            sample_type=sample_type
+            sample_type=sample_type,
+            node_id=node_id,
+            node_type=node_type
         )
         self.total_bars = float(total_bars)
         self.seed = seed if seed is not None else random.random()
@@ -1321,6 +1366,16 @@ class ArrangementObject(AudioObject):
         return system.beat_to_samples(4.0)
 
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        cache_ctx = self._cache_context(system, **kwargs)
+        if self.node_id is not None and getattr(self, "fingerprint", None):
+            cached = GLOBAL_DAG_CACHE.get(self.node_id, self.fingerprint, context=cache_ctx)
+            if cached is not None:
+                if system is not None and system.render_mode == "preview":
+                    cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx)
+                    if cached_extra and "manifest_state" in cached_extra:
+                        system.restore_manifest_state(cached_extra["manifest_state"])
+                return cached
+
         if system is None:
             raise ValueError("System instance must be provided to render.")
             
@@ -1503,6 +1558,7 @@ class ArrangementObject(AudioObject):
                 self.node_id,
                 self.fingerprint,
                 output_buffer,
-                extra={"manifest_state": manifest_state} if manifest_state else None
+                extra={"manifest_state": manifest_state} if manifest_state else None,
+                context=cache_ctx,
             )
         return output_buffer

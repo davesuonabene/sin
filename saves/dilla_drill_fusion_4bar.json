@@ -117,8 +117,8 @@
           "key": "C",
           "key_match_mode": "follow",
           "key_match_algorithm": "nearest",
-          "key_match_transpose": 2.0,
-          "transpose": 0.0,
+          "key_match_transpose": 2,
+          "transpose": 0,
           "chain": [
             {
               "id": "pre_gain_900",
@@ -128,7 +128,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.3548,
-                "gain_db": -9.0
+                "gain_db": -9
               }
             },
             {
@@ -138,14 +138,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 1
-        }
+          "asset_modifier_id": 1,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 3,
@@ -192,8 +196,12 @@
           "output_type": "asset_path",
           "accepted_asset_type": "sequence_source",
           "node_type": "asset_filter",
-          "parentId": 4
-        }
+          "parentId": 4,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 4,
@@ -311,42 +319,42 @@
           "step_parameters": [
             {
               "velocity": 0.95,
-              "offset": 0.0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -359,22 +367,22 @@
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -387,44 +395,48 @@
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 3
-        }
+          "asset_modifier_id": 3,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 5,
@@ -466,13 +478,17 @@
               "paramLabel": "Offset",
               "minPercent": -15,
               "maxPercent": 15,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true
             }
           ],
           "node_type": "random",
-          "parentId": 4
-        }
+          "parentId": 4,
+          "color": "#059669"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669"
       },
       {
         "id": 6,
@@ -516,8 +532,12 @@
         "title": "Track",
         "properties": {
           "node_name": "808 Bass Bus",
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 7,
@@ -637,7 +657,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.3548,
-                "gain_db": -9.0
+                "gain_db": -9
               }
             },
             {
@@ -647,14 +667,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 7
-        }
+          "asset_modifier_id": 7,
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 9,
@@ -707,8 +731,12 @@
           "output_type": "asset_path",
           "accepted_asset_type": "sequence_source",
           "node_type": "asset_filter",
-          "parentId": 10
-        }
+          "parentId": 10,
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 10,
@@ -825,43 +853,43 @@
           ],
           "step_parameters": [
             {
-              "velocity": 1.0,
-              "offset": 0.0,
+              "velocity": 1,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -874,22 +902,22 @@
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -902,44 +930,48 @@
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 9
-        }
+          "asset_modifier_id": 9,
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 11,
@@ -972,7 +1004,7 @@
               "paramLabel": "Velocity",
               "minPercent": -8,
               "maxPercent": 5,
-              "baseValue": 1.0,
+              "baseValue": 1,
               "enabled": true
             },
             {
@@ -981,13 +1013,17 @@
               "paramLabel": "Offset",
               "minPercent": -10,
               "maxPercent": 15,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true
             }
           ],
           "node_type": "random",
-          "parentId": 10
-        }
+          "parentId": 10,
+          "color": "#0284c7"
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7"
       },
       {
         "id": 12,
@@ -1107,7 +1143,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.3548,
-                "gain_db": -9.0
+                "gain_db": -9
               }
             },
             {
@@ -1117,14 +1153,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 12
-        }
+          "asset_modifier_id": 12,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 14,
@@ -1177,8 +1217,12 @@
           "output_type": "asset_path",
           "accepted_asset_type": "sequence_source",
           "node_type": "asset_filter",
-          "parentId": 15
-        }
+          "parentId": 15,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 15,
@@ -1295,121 +1339,125 @@
           ],
           "step_parameters": [
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 1.0,
+              "velocity": 1,
               "offset": 0.012,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 14
-        }
+          "asset_modifier_id": 14,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 16,
@@ -1442,7 +1490,7 @@
               "paramLabel": "Velocity",
               "minPercent": -6,
               "maxPercent": 4,
-              "baseValue": 1.0,
+              "baseValue": 1,
               "enabled": true
             },
             {
@@ -1456,8 +1504,12 @@
             }
           ],
           "node_type": "random",
-          "parentId": 15
-        }
+          "parentId": 15,
+          "color": "#7c3aed"
+        },
+        "color": "#7c3aed",
+        "bgcolor": "#7c3aed",
+        "boxcolor": "#7c3aed"
       },
       {
         "id": 17,
@@ -1577,7 +1629,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.2239,
-                "gain_db": -13.0
+                "gain_db": -13
               }
             },
             {
@@ -1587,14 +1639,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 17
-        }
+          "asset_modifier_id": 17,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 19,
@@ -1650,8 +1706,12 @@
           "output_type": "asset_path",
           "accepted_asset_type": "sequence_source",
           "node_type": "asset_filter",
-          "parentId": 20
-        }
+          "parentId": 20,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 20,
@@ -1769,7 +1829,7 @@
           "step_parameters": [
             {
               "velocity": 0.85,
-              "offset": 0.0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1783,7 +1843,7 @@
             },
             {
               "velocity": 0.75,
-              "offset": 0.0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1797,7 +1857,7 @@
             },
             {
               "velocity": 0.85,
-              "offset": 0.0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1811,7 +1871,7 @@
             },
             {
               "velocity": 0.7,
-              "offset": 0.0,
+              "offset": 0,
               "subdivisions": 3,
               "subdivision_enabled": true,
               "probability": 90
@@ -1825,7 +1885,7 @@
             },
             {
               "velocity": 0.88,
-              "offset": 0.0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1839,7 +1899,7 @@
             },
             {
               "velocity": 0.75,
-              "offset": 0.0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1853,7 +1913,7 @@
             },
             {
               "velocity": 0.82,
-              "offset": 0.0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -1881,8 +1941,12 @@
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 19
-        }
+          "asset_modifier_id": 19,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 21,
@@ -1929,8 +1993,12 @@
             }
           ],
           "node_type": "random",
-          "parentId": 20
-        }
+          "parentId": 20,
+          "color": "#ea580c"
+        },
+        "color": "#ea580c",
+        "bgcolor": "#ea580c",
+        "boxcolor": "#ea580c"
       },
       {
         "id": 22,
@@ -2065,7 +2133,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.1995,
-                "gain_db": -14.0
+                "gain_db": -14
               }
             },
             {
@@ -2075,14 +2143,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 22
-        }
+          "asset_modifier_id": 22,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 24,
@@ -2129,8 +2201,12 @@
           "output_type": "asset_path",
           "accepted_asset_type": "sequence_source",
           "node_type": "asset_filter",
-          "parentId": 25
-        }
+          "parentId": 25,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 25,
@@ -2247,50 +2323,50 @@
           ],
           "step_parameters": [
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -2310,36 +2386,36 @@
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
@@ -2352,16 +2428,20 @@
               "probability": 80
             },
             {
-              "velocity": 0.0,
-              "offset": 0.0,
+              "velocity": 0,
+              "offset": 0,
               "subdivisions": 1,
               "subdivision_enabled": false,
               "probability": 100
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 24
-        }
+          "asset_modifier_id": 24,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 26,
@@ -2408,8 +2488,12 @@
             }
           ],
           "node_type": "random",
-          "parentId": 25
-        }
+          "parentId": 25,
+          "color": "#db2777"
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777"
       },
       {
         "id": 27,
@@ -2468,8 +2552,12 @@
         "title": "Track",
         "properties": {
           "node_name": "Punch Drum Bus",
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 28,
@@ -2574,7 +2662,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.1995,
-                "gain_db": -14.0
+                "gain_db": -14
               }
             },
             {
@@ -2584,14 +2672,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 28
-        }
+          "asset_modifier_id": 28,
+          "color": "#d97706"
+        },
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706"
       },
       {
         "id": 30,
@@ -2705,8 +2797,12 @@
             0,
             1
           ],
-          "node_type": "sequence"
-        }
+          "node_type": "sequence",
+          "color": "#d97706"
+        },
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706"
       },
       {
         "id": 31,
@@ -2797,7 +2893,7 @@
               "fixed": true,
               "params": {
                 "gain": 0.1259,
-                "gain_db": -18.0
+                "gain_db": -18
               }
             },
             {
@@ -2807,14 +2903,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 31
-        }
+          "asset_modifier_id": 31,
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 33,
@@ -2928,8 +3028,12 @@
             0,
             0
           ],
-          "node_type": "sequence"
-        }
+          "node_type": "sequence",
+          "color": "#0891b2"
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2"
       },
       {
         "id": 34,
@@ -2978,8 +3082,12 @@
         "title": "Track",
         "properties": {
           "node_name": "Texture & Foley Bus",
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 35,
@@ -3103,8 +3211,8 @@
           "key": "Dm",
           "key_match_mode": "lead",
           "key_match_algorithm": "nearest",
-          "key_match_transpose": 0.0,
-          "transpose": 0.0,
+          "key_match_transpose": 0,
+          "transpose": 0,
           "chain": [
             {
               "id": "pre_gain_1050",
@@ -3124,14 +3232,18 @@
               "enabled": true,
               "fixed": true,
               "params": {
-                "gain": 1.0,
-                "gain_db": 0.0
+                "gain": 1,
+                "gain_db": 0
               }
             }
           ],
           "node_type": "sample",
-          "asset_modifier_id": 35
-        }
+          "asset_modifier_id": 35,
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5"
       },
       {
         "id": 37,
@@ -3235,8 +3347,12 @@
           "output_type": "asset_path",
           "accepted_asset_type": "sequence_source",
           "node_type": "asset_filter",
-          "parentId": 39
-        }
+          "parentId": 39,
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5"
       },
       {
         "id": 38,
@@ -3278,13 +3394,17 @@
               "paramLabel": "Offset",
               "minPercent": -10,
               "maxPercent": 15,
-              "baseValue": 0.0,
+              "baseValue": 0,
               "enabled": true
             }
           ],
           "node_type": "random",
-          "parentId": 39
-        }
+          "parentId": 39,
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5"
       },
       {
         "id": 39,
@@ -3369,14 +3489,14 @@
           ],
           "step_parameters": [
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.9,
               "velocity": 0.95
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.25,
@@ -3384,9 +3504,9 @@
               "velocity": 0.9
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.125,
@@ -3399,9 +3519,9 @@
               "velocity": 0.92
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.5,
@@ -3409,14 +3529,14 @@
               "velocity": 0.95
             },
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.9,
               "velocity": 0.95
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.25,
@@ -3424,9 +3544,9 @@
               "velocity": 0.9
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.625,
@@ -3434,9 +3554,9 @@
               "velocity": 0.9
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.75,
@@ -3449,14 +3569,14 @@
               "velocity": 0.95
             },
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.9,
               "velocity": 0.95
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.25,
@@ -3464,9 +3584,9 @@
               "velocity": 0.9
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.125,
@@ -3479,9 +3599,9 @@
               "velocity": 0.92
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.5,
@@ -3489,14 +3609,14 @@
               "velocity": 0.95
             },
             {
-              "sample_start": 0.0,
+              "sample_start": 0,
               "gate_length": 0.9,
               "velocity": 0.95
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.25,
@@ -3504,9 +3624,9 @@
               "velocity": 0.9
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             },
             {
               "sample_start": 0.75,
@@ -3524,14 +3644,18 @@
               "velocity": 0.95
             },
             {
-              "sample_start": 0.0,
-              "gate_length": 1.0,
-              "velocity": 0.0
+              "sample_start": 0,
+              "gate_length": 1,
+              "velocity": 0
             }
           ],
           "node_type": "sequence",
-          "asset_modifier_id": 37
-        }
+          "asset_modifier_id": 37,
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5"
       },
       {
         "id": 40,
@@ -3575,8 +3699,12 @@
         "title": "Track",
         "properties": {
           "node_name": "Sample Loop Bus",
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#4f46e5"
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4338ca"
       },
       {
         "id": 41,
@@ -3633,8 +3761,12 @@
         "title": "Track",
         "properties": {
           "node_name": "Master Output",
-          "node_type": "track"
-        }
+          "node_type": "track",
+          "color": "#0f172a"
+        },
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b"
       }
     ],
     "links": [
@@ -3644,7 +3776,8 @@
         0,
         10,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         2,
@@ -3652,7 +3785,8 @@
         0,
         27,
         0,
-        "audio"
+        "audio",
+        "#0284c7"
       ],
       [
         3,
@@ -3660,7 +3794,8 @@
         0,
         15,
         0,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         4,
@@ -3668,7 +3803,8 @@
         0,
         27,
         1,
-        "audio"
+        "audio",
+        "#7c3aed"
       ],
       [
         5,
@@ -3676,7 +3812,8 @@
         0,
         20,
         0,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         6,
@@ -3684,7 +3821,8 @@
         0,
         27,
         2,
-        "audio"
+        "audio",
+        "#ea580c"
       ],
       [
         7,
@@ -3692,7 +3830,8 @@
         0,
         25,
         0,
-        "audio"
+        "audio",
+        "#db2777"
       ],
       [
         8,
@@ -3700,7 +3839,8 @@
         0,
         27,
         3,
-        "audio"
+        "audio",
+        "#db2777"
       ],
       [
         9,
@@ -3708,7 +3848,8 @@
         0,
         4,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         10,
@@ -3716,7 +3857,8 @@
         0,
         6,
         0,
-        "audio"
+        "audio",
+        "#059669"
       ],
       [
         11,
@@ -3724,7 +3866,8 @@
         0,
         30,
         0,
-        "audio"
+        "audio",
+        "#d97706"
       ],
       [
         12,
@@ -3732,7 +3875,8 @@
         0,
         34,
         0,
-        "audio"
+        "audio",
+        "#d97706"
       ],
       [
         13,
@@ -3740,7 +3884,8 @@
         0,
         33,
         0,
-        "audio"
+        "audio",
+        "#0891b2"
       ],
       [
         14,
@@ -3748,7 +3893,8 @@
         0,
         34,
         1,
-        "audio"
+        "audio",
+        "#0891b2"
       ],
       [
         15,
@@ -3756,7 +3902,8 @@
         0,
         39,
         0,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         16,
@@ -3764,7 +3911,8 @@
         0,
         40,
         0,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         17,
@@ -3772,7 +3920,8 @@
         0,
         41,
         0,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         18,
@@ -3780,7 +3929,8 @@
         0,
         41,
         1,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         19,
@@ -3788,7 +3938,8 @@
         0,
         41,
         2,
-        "audio"
+        "audio",
+        "#4f46e5"
       ],
       [
         20,
@@ -3796,7 +3947,8 @@
         0,
         41,
         3,
-        "audio"
+        "audio",
+        "#4f46e5"
       ]
     ],
     "groups": [],

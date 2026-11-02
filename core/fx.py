@@ -3,7 +3,13 @@ from typing import List, Dict, Any
 
 
 def apply_gain(audio: np.ndarray, params: Dict[str, Any]) -> np.ndarray:
-    gain = float(params.get("gain", 1.0))
+    if "gain" in params and params["gain"] is not None:
+        gain = float(params["gain"])
+    elif "gain_db" in params and params["gain_db"] is not None:
+        gain_db = float(params["gain_db"])
+        gain = 0.0 if gain_db <= -35.9 else float(10.0 ** (gain_db / 20.0))
+    else:
+        gain = 1.0
     if gain == 1.0:
         return audio
     return (audio * gain).astype(np.float32, copy=False)

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,6 +8,7 @@
     <link rel="stylesheet" href="/static/styles.css?v=64">
     <link rel="stylesheet" href="/static/menu-system.css?v=1">
 </head>
+
 <body>
     <div class="app-shell">
         <main class="main-content">
@@ -15,63 +17,102 @@
                     <nav id="app-menu-bar" class="app-menu-bar" aria-label="Application menu">
                         <div class="app-menu-left">
                             <div class="app-menu-root" data-app-menu="gaia">
-                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">GAIA</button>
-                                <div class="app-menu-panel gaia-menu-panel sin-menu-surface" role="menu" aria-label="GAIA options"></div>
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true"
+                                    aria-expanded="false">GAIA</button>
+                                <div class="app-menu-panel gaia-menu-panel sin-menu-surface" role="menu"
+                                    aria-label="GAIA options"></div>
                             </div>
                             <div class="app-menu-root" data-app-menu="file">
-                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">File</button>
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true"
+                                    aria-expanded="false">File</button>
                                 <div class="app-menu-panel sin-menu-surface" role="menu" aria-label="File menu">
-                                    <button id="file-new-project" class="app-menu-item sin-menu-item" type="button" role="menuitem">New project</button>
-                                    <button id="file-import" class="app-menu-item sin-menu-item" type="button" role="menuitem">Import assets</button>
-                                    <button id="file-refresh" class="app-menu-item sin-menu-item" type="button" role="menuitem">Refresh library</button>
+                                    <button id="file-new-project" class="app-menu-item sin-menu-item" type="button"
+                                        role="menuitem">New project</button>
+                                    <button id="file-import" class="app-menu-item sin-menu-item" type="button"
+                                        role="menuitem">Import assets</button>
+                                    <button id="file-refresh" class="app-menu-item sin-menu-item" type="button"
+                                        role="menuitem">Refresh library</button>
                                     <div class="app-menu-divider sin-menu-divider"></div>
-                                    <button class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled title="Saving is not available yet">Save library…</button>
+                                    <button class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled
+                                        title="Saving is not available yet">Save library…</button>
                                 </div>
                             </div>
                             <div class="app-menu-root" data-app-menu="selection">
-                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Selection</button>
-                                <div class="app-menu-panel selection-menu-panel sin-menu-surface" role="menu" aria-label="Selection menu">
-                                    <div id="move-bar" class="menu-selection-actions" aria-label="Commands for the current selection">
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true"
+                                    aria-expanded="false">Selection</button>
+                                <div class="app-menu-panel selection-menu-panel sin-menu-surface" role="menu"
+                                    aria-label="Selection menu">
+                                    <div id="move-bar" class="menu-selection-actions"
+                                        aria-label="Commands for the current selection">
                                         <span id="move-count" class="selection-count">No selection</span>
-                                        <button id="analyze-selection" class="app-menu-item sin-menu-item" type="button" role="menuitem" title="Analyze selected assets" disabled>Analyze metadata</button>
+                                        <button id="analyze-selection" class="app-menu-item sin-menu-item" type="button"
+                                            role="menuitem" title="Analyze selected assets" disabled>Analyze
+                                            metadata</button>
                                         <div id="selection-move-submenu" class="app-menu-submenu">
-                                            <button id="selection-move-trigger" class="app-menu-item app-menu-submenu-trigger sin-menu-item" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" disabled>
-                                                <span>Move to</span><span class="menu-chevron" aria-hidden="true">▸</span>
+                                            <button id="selection-move-trigger"
+                                                class="app-menu-item app-menu-submenu-trigger sin-menu-item"
+                                                type="button" role="menuitem" aria-haspopup="true" aria-expanded="false"
+                                                disabled>
+                                                <span>Move to</span><span class="menu-chevron"
+                                                    aria-hidden="true">▸</span>
                                             </button>
-                                            <div id="move-target-menu" class="app-menu-panel app-menu-submenu-panel sin-menu-surface" role="menu" aria-label="Move selected assets to vault">
+                                            <div id="move-target-menu"
+                                                class="app-menu-panel app-menu-submenu-panel sin-menu-surface"
+                                                role="menu" aria-label="Move selected assets to vault">
                                                 <div id="move-target-options"></div>
                                             </div>
                                         </div>
                                         <div id="selection-playlist-submenu" class="app-menu-submenu">
-                                            <button id="selection-playlist-trigger" class="app-menu-item app-menu-submenu-trigger sin-menu-item" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" disabled>
-                                                <span>Add to playlist</span><span class="menu-chevron" aria-hidden="true">▸</span>
+                                            <button id="selection-playlist-trigger"
+                                                class="app-menu-item app-menu-submenu-trigger sin-menu-item"
+                                                type="button" role="menuitem" aria-haspopup="true" aria-expanded="false"
+                                                disabled>
+                                                <span>Add to playlist</span><span class="menu-chevron"
+                                                    aria-hidden="true">▸</span>
                                             </button>
-                                            <div id="playlist-target-menu" class="app-menu-panel app-menu-submenu-panel sin-menu-surface" role="menu" aria-label="Add selected assets to playlist">
+                                            <div id="playlist-target-menu"
+                                                class="app-menu-panel app-menu-submenu-panel sin-menu-surface"
+                                                role="menu" aria-label="Add selected assets to playlist">
                                                 <div id="playlist-target-options"></div>
                                             </div>
                                         </div>
-                                        <button id="remove-from-playlist-button" class="app-menu-item sin-menu-item hidden" type="button" role="menuitem">Remove from playlist</button>
-                                        <button id="delete-selection" class="app-menu-item danger-menu-item sin-menu-item" type="button" role="menuitem" title="Delete selected assets" disabled>Delete selected</button>
+                                        <button id="remove-from-playlist-button"
+                                            class="app-menu-item sin-menu-item hidden" type="button"
+                                            role="menuitem">Remove from playlist</button>
+                                        <button id="delete-selection"
+                                            class="app-menu-item danger-menu-item sin-menu-item" type="button"
+                                            role="menuitem" title="Delete selected assets" disabled>Delete
+                                            selected</button>
                                         <div class="app-menu-divider sin-menu-divider"></div>
                                         <span id="selection-type-actions" class="selection-type-actions"></span>
                                     </div>
                                 </div>
                             </div>
                             <div class="app-menu-root" data-app-menu="vault">
-                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Vault</button>
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true"
+                                    aria-expanded="false">Vault</button>
                                 <div class="app-menu-panel sin-menu-surface" role="menu" aria-label="Vault menu">
-                                    <button id="vault-menu-create" class="app-menu-item sin-menu-item" type="button" role="menuitem">Create vault</button>
-                                    <button id="vault-menu-sync" class="app-menu-item sin-menu-item" type="button" role="menuitem">Check folder sync</button>
-                                    <button id="vault-menu-options" class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled>Vault options</button>
-                                    <button id="vault-menu-delete" class="app-menu-item danger-menu-item sin-menu-item" type="button" role="menuitem" disabled>Delete active vault</button>
+                                    <button id="vault-menu-create" class="app-menu-item sin-menu-item" type="button"
+                                        role="menuitem">Create vault</button>
+                                    <button id="vault-menu-sync" class="app-menu-item sin-menu-item" type="button"
+                                        role="menuitem">Check folder sync</button>
+                                    <button id="vault-menu-options" class="app-menu-item sin-menu-item" type="button"
+                                        role="menuitem" disabled>Vault options</button>
+                                    <button id="vault-menu-delete" class="app-menu-item danger-menu-item sin-menu-item"
+                                        type="button" role="menuitem" disabled>Delete active vault</button>
                                 </div>
                             </div>
                             <div class="app-menu-root" data-app-menu="playlists">
-                                <button class="app-menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Playlists</button>
+                                <button class="app-menu-trigger" type="button" aria-haspopup="true"
+                                    aria-expanded="false">Playlists</button>
                                 <div class="app-menu-panel sin-menu-surface" role="menu" aria-label="Playlists menu">
-                                    <button id="playlist-menu-create" class="app-menu-item sin-menu-item" type="button" role="menuitem">New playlist…</button>
-                                    <button id="playlist-menu-rename" class="app-menu-item sin-menu-item" type="button" role="menuitem" disabled>Rename active playlist</button>
-                                    <button id="playlist-menu-delete" class="app-menu-item danger-menu-item sin-menu-item" type="button" role="menuitem" disabled>Delete active playlist</button>
+                                    <button id="playlist-menu-create" class="app-menu-item sin-menu-item" type="button"
+                                        role="menuitem">New playlist…</button>
+                                    <button id="playlist-menu-rename" class="app-menu-item sin-menu-item" type="button"
+                                        role="menuitem" disabled>Rename active playlist</button>
+                                    <button id="playlist-menu-delete"
+                                        class="app-menu-item danger-menu-item sin-menu-item" type="button"
+                                        role="menuitem" disabled>Delete active playlist</button>
                                 </div>
                             </div>
                         </div>
@@ -79,7 +120,10 @@
 
                     <div id="header-toolbar-row" class="header-toolbar-row">
                         <div class="header-toolbar-left">
-                            <button id="sidebar-toggle" class="toolbar-icon-button squared-btn sidebar-toggle-btn" type="button" title="Toggle playlists & vaults panel" aria-label="Toggle playlists and vaults panel" aria-expanded="false" aria-controls="library-sidebar">
+                            <button id="sidebar-toggle" class="toolbar-icon-button squared-btn sidebar-toggle-btn"
+                                type="button" title="Toggle playlists & vaults panel"
+                                aria-label="Toggle playlists and vaults panel" aria-expanded="false"
+                                aria-controls="library-sidebar">
                                 <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
                                     <rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect>
                                     <line x1="9" y1="4" x2="9" y2="20"></line>
@@ -88,11 +132,15 @@
                             <div class="vault-heading">
                                 <div class="vault-title-row">
                                     <div class="vault-picker-wrap">
-                                        <button id="vault-picker" class="vault-picker" type="button" aria-haspopup="listbox" aria-expanded="false">
+                                        <button id="vault-picker" class="vault-picker" type="button"
+                                            aria-haspopup="listbox" aria-expanded="false">
                                             <span id="active-vault-name">Show all</span>
-                                            <svg class="vault-picker-chevron" viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                                            <svg class="vault-picker-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                                                <polyline points="6 9 12 15 18 9"></polyline>
+                                            </svg>
                                         </button>
-                                        <div id="vault-menu" class="vault-menu sin-menu-surface hidden" role="listbox" aria-label="Choose a vault">
+                                        <div id="vault-menu" class="vault-menu sin-menu-surface hidden" role="listbox"
+                                            aria-label="Choose a vault">
                                             <div id="vault-menu-list"></div>
                                         </div>
                                     </div>
@@ -100,29 +148,34 @@
                             </div>
                         </div>
                         <div class="quick-toolbar" aria-label="Quick actions">
-                            <span id="vault-sync-pill" class="vault-sync-link hidden" role="button" tabindex="0" title="Folder sync status" aria-label="Folder sync status">
+                            <span id="vault-sync-pill" class="vault-sync-link hidden" role="button" tabindex="0"
+                                title="Folder sync status" aria-label="Folder sync status">
                                 <span id="vault-sync-pill-text">synced</span>
                             </span>
                             <div class="quick-toolbar-buttons">
-                                <button id="create-project" class="primary toolbar-icon-button squared-btn" type="button" title="Create project" aria-label="Create project">
+                                <button id="create-project" class="primary toolbar-icon-button squared-btn"
+                                    type="button" title="Create project" aria-label="Create project">
                                     <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
                                         <line x1="12" y1="5" x2="12" y2="19"></line>
                                         <line x1="5" y1="12" x2="19" y2="12"></line>
                                     </svg>
                                 </button>
-                                <button id="open-import" class="secondary toolbar-icon-button squared-btn" type="button" title="Import assets" aria-label="Import assets">
+                                <button id="open-import" class="secondary toolbar-icon-button squared-btn" type="button"
+                                    title="Import assets" aria-label="Import assets">
                                     <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
                                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                                         <polyline points="7 10 12 15 17 10"></polyline>
                                         <line x1="12" y1="15" x2="12" y2="3"></line>
                                     </svg>
                                 </button>
-                                <button id="review-sin-proposals" class="secondary toolbar-icon-button squared-btn" type="button" title="Review SIN proposals" aria-label="Review SIN proposals">
+                                <button id="review-sin-proposals" class="secondary toolbar-icon-button squared-btn"
+                                    type="button" title="Review SIN proposals" aria-label="Review SIN proposals">
                                     <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
                                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                                     </svg>
                                 </button>
-                                <button id="refresh" class="secondary toolbar-icon-button squared-btn" type="button" title="Refresh library" aria-label="Refresh library">
+                                <button id="refresh" class="secondary toolbar-icon-button squared-btn" type="button"
+                                    title="Refresh library" aria-label="Refresh library">
                                     <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
                                         <polyline points="23 4 23 10 17 10"></polyline>
                                         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
@@ -133,7 +186,8 @@
                     </div>
                 </header>
 
-                <div id="import-progress-container" class="background-job-strip hidden" role="status" aria-live="polite">
+                <div id="import-progress-container" class="background-job-strip hidden" role="status"
+                    aria-live="polite">
                     <div class="background-job-copy">
                         <span id="import-progress-label" class="background-job-label">Import queued</span>
                         <span id="import-progress-detail" class="background-job-detail">Preparing managed import…</span>
@@ -162,19 +216,24 @@
                         </div>
                     </div>
                     <button id="import-progress-cancel" class="secondary micro-btn" type="button">Cancel</button>
-                    <button id="import-progress-results" class="secondary micro-btn hidden" type="button">Results</button>
-                    <button id="import-progress-dismiss" class="secondary micro-btn hidden" type="button" aria-label="Dismiss import status">×</button>
+                    <button id="import-progress-results" class="secondary micro-btn hidden"
+                        type="button">Results</button>
+                    <button id="import-progress-dismiss" class="secondary micro-btn hidden" type="button"
+                        aria-label="Dismiss import status">×</button>
                 </div>
 
                 <div id="analysis-progress-container" class="analysis-progress-container hidden">
                     <div class="analysis-progress-header">
                         <div class="analysis-progress-titles">
-                            <span id="analysis-progress-label" class="analysis-progress-label">Analyzing metadata...</span>
-                            <span id="analysis-progress-detail" class="analysis-progress-detail">Starting background thread...</span>
+                            <span id="analysis-progress-label" class="analysis-progress-label">Analyzing
+                                metadata...</span>
+                            <span id="analysis-progress-detail" class="analysis-progress-detail">Starting background
+                                thread...</span>
                         </div>
                         <div class="analysis-progress-stats">
                             <span id="analysis-progress-percent" class="analysis-progress-percent">0%</span>
-                            <button id="cancel-analysis-btn" class="secondary micro-btn" type="button" title="Cancel batch analysis">Cancel</button>
+                            <button id="cancel-analysis-btn" class="secondary micro-btn" type="button"
+                                title="Cancel batch analysis">Cancel</button>
                         </div>
                     </div>
                     <div class="analysis-progress-track">
@@ -194,7 +253,8 @@
                         <div class="sidebar-section">
                             <div class="sidebar-section-header">
                                 <span class="sidebar-section-title">Playlists</span>
-                                <button id="sidebar-new-playlist" class="sidebar-action-btn" type="button" title="New playlist" aria-label="New playlist">
+                                <button id="sidebar-new-playlist" class="sidebar-action-btn" type="button"
+                                    title="New playlist" aria-label="New playlist">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <line x1="12" y1="5" x2="12" y2="19"></line>
                                         <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -207,8 +267,12 @@
                     <section class="asset-panel" aria-label="Assets">
                         <div class="asset-list-toolbar">
                             <span id="library-summary" class="summary" aria-live="polite">Loading assets…</span>
-                            <button id="toggle-filters" class="secondary toolbar-icon-button" type="button" title="Hide filters" aria-label="Hide filters" aria-controls="filter-controls" aria-expanded="true">
-                                <svg class="toolbar-filter-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16l-6.2 7v4.7l-3.6 1.8V13z"></path></svg>
+                            <button id="toggle-filters" class="secondary toolbar-icon-button" type="button"
+                                title="Hide filters" aria-label="Hide filters" aria-controls="filter-controls"
+                                aria-expanded="true">
+                                <svg class="toolbar-filter-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M4 6h16l-6.2 7v4.7l-3.6 1.8V13z"></path>
+                                </svg>
                             </button>
                         </div>
                         <div id="library-filters" class="filter-bar" aria-label="Library filters">
@@ -220,7 +284,8 @@
                                     </div>
                                     <label class="search filter-search" for="search-input">
                                         <span aria-hidden="true">⌕</span>
-                                        <input id="search-input" type="search" placeholder="Search items, types, or tags">
+                                        <input id="search-input" type="search"
+                                            placeholder="Search items, types, or tags">
                                     </label>
                                 </div>
                                 <div class="filter-row">
@@ -229,15 +294,18 @@
                                 </div>
                             </div>
                             <div id="filter-status" class="filter-status" aria-live="polite">
-                                <div id="list-header" class="row-header main-row-header" aria-label="Asset columns"></div>
+                                <div id="list-header" class="row-header main-row-header" aria-label="Asset columns">
+                                </div>
                             </div>
                         </div>
                         <div id="asset-list" class="asset-list" role="list"></div>
                         <div id="asset-drop-overlay" class="asset-drop-overlay hidden" aria-hidden="true">
                             <div class="asset-drop-overlay-box">
                                 <span class="asset-drop-overlay-icon" aria-hidden="true">⇩</span>
-                                <div id="asset-drop-overlay-title" class="asset-drop-overlay-title">Drop files or folder here</div>
-                                <div class="asset-drop-overlay-desc">Drop a single file to import and analyze directly, or drop a folder to inspect</div>
+                                <div id="asset-drop-overlay-title" class="asset-drop-overlay-title">Drop files or folder
+                                    here</div>
+                                <div class="asset-drop-overlay-desc">Drop a single file to import and analyze directly,
+                                    or drop a folder to inspect</div>
                             </div>
                         </div>
                     </section>
@@ -257,43 +325,60 @@
                 </div>
                 <div class="media-editor-heading-actions">
                     <div class="media-editor-view-toggle" role="group" aria-label="Editor View">
-                        <button id="view-toggle-player" class="micro-btn active" type="button" title="Waveform Player">𝄜 Player</button>
-                        <button id="view-toggle-graph" class="micro-btn secondary" type="button" title="Interactive Graph">☍ Graph</button>
-                        <button id="view-toggle-split" class="micro-btn secondary" type="button" title="Split View">◫ Split</button>
+                        <button id="view-toggle-player" class="micro-btn active" type="button"
+                            title="Waveform Player">𝄜 Player</button>
+                        <button id="view-toggle-graph" class="micro-btn secondary" type="button"
+                            title="Interactive Graph">☍ Graph</button>
+                        <button id="view-toggle-split" class="micro-btn secondary" type="button" title="Split View">◫
+                            Split</button>
                     </div>
-                    <button id="media-editor-open-sin" class="secondary micro-btn" type="button" title="Open read-only project copy in SIN Node Editor">Open in SIN ↗</button>
-                    <button id="media-editor-save" class="secondary micro-btn" type="button" disabled>Save progress</button>
-                    <button id="media-editor-render" class="primary micro-btn" type="button" disabled>Render main</button>
-                    <button id="media-editor-render-all" class="secondary micro-btn" type="button" disabled>Render all</button>
-                    <button id="media-editor-close" class="secondary icon-button" type="button" aria-label="Close editor">×</button>
+                    <button id="media-editor-open-sin" class="secondary micro-btn" type="button"
+                        title="Open read-only project copy in SIN Node Editor">Open in SIN ↗</button>
+                    <button id="media-editor-save" class="secondary micro-btn" type="button" disabled>Save
+                        progress</button>
+                    <button id="media-editor-render" class="primary micro-btn" type="button" disabled>Render
+                        main</button>
+                    <button id="media-editor-render-all" class="secondary micro-btn" type="button" disabled>Render
+                        all</button>
+                    <button id="media-editor-close" class="secondary icon-button" type="button"
+                        aria-label="Close editor">×</button>
                 </div>
             </div>
             <div id="media-editor-waveform" class="media-editor-waveform" aria-label="Waveform timeline">
                 <div class="media-editor-waveform-main">
                     <div class="media-editor-view-control" aria-label="Waveform view control">
-                        <div id="media-editor-view" class="media-editor-view" role="slider" tabindex="0" aria-label="Waveform view window" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" title="Drag the window to pan; drag either edge to zoom; Shift-drag for fine movement">
+                        <div id="media-editor-view" class="media-editor-view" role="slider" tabindex="0"
+                            aria-label="Waveform view window" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+                            title="Drag the window to pan; drag either edge to zoom; Shift-drag for fine movement">
                             <span id="media-editor-view-window" class="media-editor-view-window"></span>
                         </div>
                     </div>
                     <canvas aria-label="Waveform"></canvas>
-                    <div id="media-editor-waveform-empty" class="media-editor-empty">Open a playable asset to load its waveform.</div>
+                    <div id="media-editor-waveform-empty" class="media-editor-empty">Open a playable asset to load its
+                        waveform.</div>
                     <div id="media-editor-layers" class="media-editor-layers"></div>
                 </div>
                 <div id="media-editor-mixer-rail" class="media-editor-mixer-rail" aria-label="Layer mixer"></div>
             </div>
-            <div id="media-editor-graph-canvas" class="media-editor-graph-canvas hidden" aria-label="Interactive Node Graph"></div>
+            <div id="media-editor-graph-canvas" class="media-editor-graph-canvas hidden"
+                aria-label="Interactive Node Graph"></div>
             <div class="media-editor-toolbar">
                 <div class="media-editor-toolbar-left">
-                    <button id="media-editor-add-cut" class="secondary micro-btn" type="button" disabled>Add cut</button>
+                    <button id="media-editor-add-cut" class="secondary micro-btn" type="button" disabled>Add
+                        cut</button>
                     <span class="media-editor-zoom-controls" aria-label="Waveform zoom">
-                        <button id="media-editor-zoom-out" class="secondary micro-btn" type="button" disabled aria-label="Zoom out">−</button>
+                        <button id="media-editor-zoom-out" class="secondary micro-btn" type="button" disabled
+                            aria-label="Zoom out">−</button>
                         <span id="media-editor-zoom-label" class="media-editor-zoom-label">1×</span>
-                        <button id="media-editor-zoom-in" class="secondary micro-btn" type="button" disabled aria-label="Zoom in">+</button>
-                        <button id="media-editor-zoom-fit" class="secondary micro-btn" type="button" disabled>Fit</button>
+                        <button id="media-editor-zoom-in" class="secondary micro-btn" type="button" disabled
+                            aria-label="Zoom in">+</button>
+                        <button id="media-editor-zoom-fit" class="secondary micro-btn" type="button"
+                            disabled>Fit</button>
                     </span>
                 </div>
                 <div class="media-editor-toolbar-right">
-                    <button id="media-editor-normalize" class="secondary micro-btn" type="button" disabled>Normalize</button>
+                    <button id="media-editor-normalize" class="secondary micro-btn" type="button"
+                        disabled>Normalize</button>
                     <span id="media-editor-status" class="media-editor-status" role="status"></span>
                 </div>
             </div>
@@ -301,16 +386,23 @@
         </section>
         <footer id="media-transport-footer" class="media-transport-footer" aria-label="Media transport">
             <div class="media-target-wrap">
-                <button id="media-target-button" class="media-target-button" type="button" aria-haspopup="listbox" aria-expanded="false" disabled>
-                    <span id="media-target-label">No media selected</span><span class="media-target-chevron" aria-hidden="true">⌃</span>
+                <button id="media-target-button" class="media-target-button" type="button" aria-haspopup="listbox"
+                    aria-expanded="false" disabled>
+                    <span id="media-target-label">No media selected</span><span class="media-target-chevron"
+                        aria-hidden="true">⌃</span>
                 </button>
-                <div id="media-target-menu" class="media-target-menu sin-menu-surface hidden" role="listbox" aria-label="Editor targets"></div>
+                <div id="media-target-menu" class="media-target-menu sin-menu-surface hidden" role="listbox"
+                    aria-label="Editor targets"></div>
             </div>
-            <button id="media-transport-play" class="media-transport-button" type="button" aria-label="Play" title="Play" disabled>▶</button>
-            <button id="media-transport-stop" class="media-transport-button" type="button" aria-label="Stop" title="Stop" disabled>■</button>
+            <button id="media-transport-play" class="media-transport-button" type="button" aria-label="Play"
+                title="Play" disabled>▶</button>
+            <button id="media-transport-stop" class="media-transport-button" type="button" aria-label="Stop"
+                title="Stop" disabled>■</button>
             <span id="media-transport-time" class="media-transport-time">0:00 / 0:00</span>
-            <input id="media-transport-seek" class="media-transport-seek" type="range" min="0" max="0" step="0.001" value="0" aria-label="Playback position" disabled>
-            <button id="media-editor-toggle" class="secondary micro-btn media-editor-toggle-button" type="button" disabled>Open editor</button>
+            <input id="media-transport-seek" class="media-transport-seek" type="range" min="0" max="0" step="0.001"
+                value="0" aria-label="Playback position" disabled>
+            <button id="media-editor-toggle" class="secondary micro-btn media-editor-toggle-button" type="button"
+                disabled>Open editor</button>
         </footer>
     </div>
 
@@ -321,28 +413,36 @@
                     <p id="media-destination-eyebrow" class="eyebrow">Render destination</p>
                     <h2 id="media-destination-title">Save media result</h2>
                 </div>
-                <button id="media-destination-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+                <button id="media-destination-close" class="secondary icon-button dialog-close-button" type="button"
+                    aria-label="Close">×</button>
             </div>
-            <label id="media-destination-format-field" class="media-destination-format" for="media-destination-format">Output format
+            <label id="media-destination-format-field" class="media-destination-format"
+                for="media-destination-format">Output format
                 <select id="media-destination-format" class="sin-select">
                     <option value="wav">WAV</option>
                     <option value="mp3">MP3</option>
                 </select>
             </label>
-            <label id="media-project-choice" class="media-destination-choice"><input name="media-destination-mode" type="radio" value="project" checked> Create a project from the result</label>
+            <label id="media-project-choice" class="media-destination-choice"><input name="media-destination-mode"
+                    type="radio" value="project" checked> Create a project from the result</label>
             <div id="media-project-fields" class="media-project-fields">
                 <label for="media-project-name">Project name</label>
-                <input id="media-project-name" type="text" maxlength="100" required placeholder="e.g. Field recording edits">
+                <input id="media-project-name" type="text" maxlength="100" required
+                    placeholder="e.g. Field recording edits">
                 <label for="media-project-vault">Vault</label>
                 <select id="media-project-vault" class="sin-select" required></select>
-                <label class="media-destination-toggle"><input id="media-project-move" type="checkbox"> Move the original into the project</label>
+                <label class="media-destination-toggle"><input id="media-project-move" type="checkbox"> Move the
+                    original into the project</label>
             </div>
-            <label id="media-existing-project-choice" class="media-destination-choice"><input name="media-destination-mode" type="radio" value="existing_project"> Add to an existing project</label>
+            <label id="media-existing-project-choice" class="media-destination-choice"><input
+                    name="media-destination-mode" type="radio" value="existing_project"> Add to an existing
+                project</label>
             <div id="media-existing-project-fields" class="media-project-fields hidden">
                 <label for="media-existing-project-select">Project</label>
                 <select id="media-existing-project-select" class="sin-select"></select>
             </div>
-            <label id="media-override-choice" class="media-destination-choice"><input name="media-destination-mode" type="radio" value="override"> Override the selected original file</label>
+            <label id="media-override-choice" class="media-destination-choice"><input name="media-destination-mode"
+                    type="radio" value="override"> Override the selected original file</label>
             <p id="media-destination-result" class="result hidden" role="status"></p>
             <div class="dialog-actions">
                 <button id="media-destination-cancel" class="secondary" type="button">Cancel</button>
@@ -358,7 +458,8 @@
                 <h2>Switch media?</h2>
                 <p id="media-switch-summary" class="dialog-subtitle"></p>
             </div>
-            <button id="media-switch-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+            <button id="media-switch-close" class="secondary icon-button dialog-close-button" type="button"
+                aria-label="Close">×</button>
         </div>
         <p class="media-switch-copy">This editor has staged changes. Switching will discard them.</p>
         <div class="dialog-actions">
@@ -374,9 +475,11 @@
                 <h2>Output already exists</h2>
                 <p id="media-render-conflict-summary" class="dialog-subtitle"></p>
             </div>
-            <button id="media-render-conflict-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+            <button id="media-render-conflict-close" class="secondary icon-button dialog-close-button" type="button"
+                aria-label="Close">×</button>
         </div>
-        <p class="media-switch-copy">Override replaces the existing cut file. New version preserves it and appends a sequential suffix such as <code>.2</code>.</p>
+        <p class="media-switch-copy">Override replaces the existing cut file. New version preserves it and appends a
+            sequential suffix such as <code>.2</code>.</p>
         <div class="dialog-actions">
             <button id="media-render-conflict-cancel" class="secondary" type="button">Cancel</button>
             <button id="media-render-conflict-override" class="secondary" type="button">Override</button>
@@ -389,14 +492,18 @@
         <div class="context-divider"></div>
         <button id="copy-entry-menu" class="sin-menu-item" type="button" role="menuitem">Copy</button>
         <button id="paste-entry-menu" class="sin-menu-item" type="button" role="menuitem">Paste</button>
-        <button id="context-go-to-location" class="sin-menu-item" type="button" role="menuitem">Go to file location</button>
-        <button id="context-show-original" class="sin-menu-item hidden" type="button" role="menuitem">Show original file</button>
+        <button id="context-go-to-location" class="sin-menu-item" type="button" role="menuitem">Go to file
+            location</button>
+        <button id="context-show-original" class="sin-menu-item hidden" type="button" role="menuitem">Show original
+            file</button>
         <div class="context-divider"></div>
         <button id="context-new-folder" class="sin-menu-item" type="button" role="menuitem">New folder</button>
-        <button id="context-make-folder-move" class="sin-menu-item" type="button" role="menuitem">Make folder and move</button>
+        <button id="context-make-folder-move" class="sin-menu-item" type="button" role="menuitem">Make folder and
+            move</button>
         <div class="context-divider"></div>
         <button id="analyze-entry" class="sin-menu-item" type="button" role="menuitem">Analyze metadata</button>
-        <button id="delete-entry-menu" type="button" role="menuitem" class="danger-menu-item sin-menu-item">Delete selected</button>
+        <button id="delete-entry-menu" type="button" role="menuitem" class="danger-menu-item sin-menu-item">Delete
+            selected</button>
         <div class="context-divider"></div>
         <div id="context-vault-options" class="context-vault-options"></div>
         <div class="context-divider"></div>
@@ -410,13 +517,16 @@
                     <p id="folder-dialog-eyebrow" class="eyebrow">Library organization</p>
                     <h2 id="folder-dialog-title">Create a folder</h2>
                 </div>
-                <button id="folder-dialog-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+                <button id="folder-dialog-close" class="secondary icon-button dialog-close-button" type="button"
+                    aria-label="Close">×</button>
             </div>
             <div class="dialog-field-row">
                 <label for="folder-name-input">Folder name</label>
-                <input id="folder-name-input" type="text" maxlength="100" required autocomplete="off" placeholder="e.g. Drums, Loops, Cuts">
+                <input id="folder-name-input" type="text" maxlength="100" required autocomplete="off"
+                    placeholder="e.g. Drums, Loops, Cuts">
             </div>
-            <p id="folder-dialog-help" class="help folder-dialog-help">The folder will be created in the active vault.</p>
+            <p id="folder-dialog-help" class="help folder-dialog-help">The folder will be created in the active vault.
+            </p>
             <p id="folder-dialog-result" class="result hidden" role="status"></p>
             <div class="dialog-actions">
                 <button id="folder-dialog-cancel" class="secondary" type="button">Cancel</button>
@@ -432,13 +542,16 @@
                     <p id="playlist-dialog-eyebrow" class="eyebrow">Playlists</p>
                     <h2 id="playlist-dialog-title">New playlist</h2>
                 </div>
-                <button id="playlist-dialog-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+                <button id="playlist-dialog-close" class="secondary icon-button dialog-close-button" type="button"
+                    aria-label="Close">×</button>
             </div>
             <div class="dialog-field-row">
                 <label for="playlist-name-input">Playlist name</label>
-                <input id="playlist-name-input" type="text" maxlength="100" required autocomplete="off" placeholder="e.g. Ambient Sessions, Top Loops">
+                <input id="playlist-name-input" type="text" maxlength="100" required autocomplete="off"
+                    placeholder="e.g. Ambient Sessions, Top Loops">
             </div>
-            <p id="playlist-dialog-help" class="help playlist-dialog-help">Playlists are horizontal collections that can include items and folders from any vault.</p>
+            <p id="playlist-dialog-help" class="help playlist-dialog-help">Playlists are horizontal collections that can
+                include items and folders from any vault.</p>
             <p id="playlist-dialog-result" class="result hidden" role="status"></p>
             <div class="dialog-actions">
                 <button id="playlist-dialog-cancel" class="secondary" type="button">Cancel</button>
@@ -456,7 +569,8 @@
                     <p id="vault-dialog-eyebrow" class="eyebrow">New vault</p>
                     <h2 id="vault-dialog-title">Create a vault</h2>
                 </div>
-                <button id="vault-dialog-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+                <button id="vault-dialog-close" class="secondary icon-button dialog-close-button" type="button"
+                    aria-label="Close">×</button>
             </div>
             <div class="dialog-field-row">
                 <label for="vault-name-input">Vault name</label>
@@ -468,7 +582,8 @@
                     <input id="vault-path-input" type="text" readonly placeholder="Default GAIA asset folder">
                     <button id="vault-path-action" class="secondary" type="button">Choose storage root</button>
                 </div>
-                <p id="vault-path-help" class="help vault-path-help">GAIA will create a storage-key folder for this vault inside the selected root.</p>
+                <p id="vault-path-help" class="help vault-path-help">GAIA will create a storage-key folder for this
+                    vault inside the selected root.</p>
             </div>
             <div class="dialog-field-row">
                 <label for="vault-preview-select">Preview loading</label>
@@ -493,7 +608,8 @@
                     <p class="eyebrow">Folder & Database Sync</p>
                     <h2 id="vault-sync-dialog-title">Reconcile Vault Folders</h2>
                 </div>
-                <button id="vault-sync-dialog-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+                <button id="vault-sync-dialog-close" class="secondary icon-button dialog-close-button" type="button"
+                    aria-label="Close">×</button>
             </div>
             <div id="vault-sync-dialog-content" class="vault-sync-dialog-content">
                 <div id="vault-sync-summary-banner" class="vault-sync-summary-banner">
@@ -549,26 +665,32 @@
                         <label for="vault-select" class="import-inline-label">Vault</label>
                         <select id="vault-select" class="sin-select" required></select>
                         <div id="import-vault-create" class="import-vault-create hidden">
-                            <input id="import-vault-name" type="text" maxlength="100" placeholder="New vault name" autocomplete="off">
-                            <button id="import-vault-create-submit" class="primary compact-control" type="button">Create</button>
-                            <button id="import-vault-create-cancel" class="secondary compact-control" type="button">Cancel</button>
+                            <input id="import-vault-name" type="text" maxlength="100" placeholder="New vault name"
+                                autocomplete="off">
+                            <button id="import-vault-create-submit" class="primary compact-control"
+                                type="button">Create</button>
+                            <button id="import-vault-create-cancel" class="secondary compact-control"
+                                type="button">Cancel</button>
                         </div>
                     </div>
                     <div class="import-header-path">
                         <label for="source-path" class="import-inline-label">Source</label>
                         <div class="source-input">
-                            <input id="source-path" type="text" placeholder="Folder, file, or ZIP path…" autocomplete="off" spellcheck="false">
+                            <input id="source-path" type="text" placeholder="Folder, file, or ZIP path…"
+                                autocomplete="off" spellcheck="false">
                             <button id="choose-source-path" class="secondary" type="button">Choose path</button>
                             <button id="import-submit" class="primary" type="submit">Inspect</button>
                         </div>
                     </div>
                 </div>
                 <div id="import-heading-source" class="import-heading-source hidden"></div>
-                <button id="import-dialog-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+                <button id="import-dialog-close" class="secondary icon-button dialog-close-button" type="button"
+                    aria-label="Close">×</button>
             </div>
             <div id="import-inspect-progress" class="import-inspect-progress hidden" role="status" aria-live="polite">
                 <div class="import-inspect-progress-meta">
-                    <span id="import-inspect-progress-label" class="import-inspect-progress-label">Scanning source folders…</span>
+                    <span id="import-inspect-progress-label" class="import-inspect-progress-label">Scanning source
+                        folders…</span>
                     <span id="import-inspect-progress-pct" class="import-inspect-progress-pct">0%</span>
                 </div>
                 <div class="import-inspect-progress-track">
@@ -579,7 +701,8 @@
             <p id="import-result" class="result hidden" role="status"></p>
             <div id="import-source-step" class="import-source-step">
                 <div class="import-initial-hint">
-                    <p class="help">Select or paste a folder, file, or ZIP path above to inspect assets. You can also drag &amp; drop files here.</p>
+                    <p class="help">Select or paste a folder, file, or ZIP path above to inspect assets. You can also
+                        drag &amp; drop files here.</p>
                 </div>
             </div>
             <section id="import-preview-step" class="import-preview hidden" aria-live="polite"></section>
@@ -591,19 +714,24 @@
             <div>
                 <p class="eyebrow">Local files</p>
                 <h2 id="source-picker-title">Choose an import source</h2>
-                <p id="source-picker-subtitle" class="dialog-subtitle">Select a folder, an individual asset, or a ZIP archive.</p>
+                <p id="source-picker-subtitle" class="dialog-subtitle">Select a folder, an individual asset, or a ZIP
+                    archive.</p>
             </div>
-            <button id="source-picker-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close path selector">×</button>
+            <button id="source-picker-close" class="secondary icon-button dialog-close-button" type="button"
+                aria-label="Close path selector">×</button>
         </div>
         <div class="source-picker-toolbar">
-            <button id="source-picker-up" class="secondary icon-button source-picker-up-btn" type="button" aria-label="Go to parent folder" title="Go to parent folder">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M19 12H5M12 19l-7-7 7-7"/>
+            <button id="source-picker-up" class="secondary icon-button source-picker-up-btn" type="button"
+                aria-label="Go to parent folder" title="Go to parent folder">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M19 12H5M12 19l-7-7 7-7" />
                 </svg>
             </button>
             <form id="source-picker-location-form" class="source-picker-location-form">
                 <span class="source-picker-location-icon" aria-hidden="true">⌘</span>
-                <input id="source-picker-location" type="text" aria-label="Current location" autocomplete="off" spellcheck="false">
+                <input id="source-picker-location" type="text" aria-label="Current location" autocomplete="off"
+                    spellcheck="false">
                 <button class="secondary source-picker-go" type="submit">Go</button>
             </form>
         </div>
@@ -613,12 +741,14 @@
                 <div class="source-picker-list-heading" aria-hidden="true">
                     <span>Name</span><span>Modified</span><span>Size</span>
                 </div>
-                <div id="source-picker-list" class="source-picker-list" role="listbox" aria-label="Files and folders"></div>
+                <div id="source-picker-list" class="source-picker-list" role="listbox" aria-label="Files and folders">
+                </div>
             </section>
         </div>
         <p id="source-picker-result" class="inline-error hidden" role="status"></p>
         <div class="dialog-actions source-picker-actions">
-            <span id="source-picker-selection" class="source-picker-selection">No file selected — the current folder will be used.</span>
+            <span id="source-picker-selection" class="source-picker-selection">No file selected — the current folder
+                will be used.</span>
             <button id="source-picker-cancel" class="secondary" type="button">Cancel</button>
             <button id="source-picker-choose" class="primary" type="button">Choose this folder</button>
         </div>
@@ -630,7 +760,8 @@
                 <p class="eyebrow">Import complete</p>
                 <h2>Assets added to GAIA</h2>
             </div>
-            <button id="import-summary-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+            <button id="import-summary-close" class="secondary icon-button dialog-close-button" type="button"
+                aria-label="Close">×</button>
         </div>
         <div id="import-summary-content"></div>
         <div class="dialog-actions">
@@ -645,7 +776,8 @@
                     <p class="eyebrow">Managed project</p>
                     <h2 id="project-dialog-title">Create a Project</h2>
                 </div>
-                <button id="project-dialog-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+                <button id="project-dialog-close" class="secondary icon-button dialog-close-button" type="button"
+                    aria-label="Close">×</button>
             </div>
             <div class="project-field">
                 <label for="project-name">Project name</label>
@@ -657,7 +789,9 @@
                         <h3 id="project-source-title">Selected files</h3>
                     </div>
                     <div class="project-source-actions">
-                        <button id="project-import-add" class="secondary icon-button project-source-add" type="button" title="Import files into this project" aria-label="Import files into this project">＋</button>
+                        <button id="project-import-add" class="secondary icon-button project-source-add" type="button"
+                            title="Import files into this project"
+                            aria-label="Import files into this project">＋</button>
                         <label class="project-source-toggle" for="project-move-all">
                             <span>Move all</span>
                             <input id="project-move-all" type="checkbox">
@@ -682,12 +816,14 @@
                     <p class="eyebrow">Project links</p>
                     <h2 id="project-files-title">Add files</h2>
                 </div>
-                <button id="project-files-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+                <button id="project-files-close" class="secondary icon-button dialog-close-button" type="button"
+                    aria-label="Close">×</button>
             </div>
             <input id="project-files-id" type="hidden">
             <label for="project-file-paths">File paths</label>
             <textarea id="project-file-paths" rows="6" required placeholder="One file path per line"></textarea>
-            <p class="help">External files are imported into GAIA and linked read-only. Project references and editor state are stored together in one current.json manifest.</p>
+            <p class="help">External files are imported into GAIA and linked read-only. Project references and editor
+                state are stored together in one current.json manifest.</p>
             <button class="primary" type="submit">Add files</button>
             <p id="project-files-result" class="result hidden" role="status"></p>
         </form>
@@ -700,7 +836,8 @@
                 <h2 id="item-placement-title">Copy or reference?</h2>
                 <p id="item-placement-summary" class="dialog-subtitle"></p>
             </div>
-            <button id="item-placement-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+            <button id="item-placement-close" class="secondary icon-button dialog-close-button" type="button"
+                aria-label="Close">×</button>
         </div>
         <div class="item-placement-choices">
             <button id="item-placement-move" class="item-placement-choice" type="button">
@@ -714,7 +851,8 @@
                 <span class="item-placement-icon" aria-hidden="true">↗</span>
                 <span class="item-placement-copy">
                     <strong id="item-placement-ref-label">Reference only</strong>
-                    <small id="item-placement-ref-desc">Keep original files in place. Linked items inherit future updates and versions.</small>
+                    <small id="item-placement-ref-desc">Keep original files in place. Linked items inherit future
+                        updates and versions.</small>
                 </span>
             </button>
         </div>
@@ -731,7 +869,8 @@
                 <h2 id="version-delete-title">Delete file version?</h2>
                 <p id="version-delete-summary" class="dialog-subtitle"></p>
             </div>
-            <button id="version-delete-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close">×</button>
+            <button id="version-delete-close" class="secondary icon-button dialog-close-button" type="button"
+                aria-label="Close">×</button>
         </div>
         <div class="version-delete-choices">
             <button id="version-delete-current" class="version-delete-choice" type="button"></button>
@@ -747,9 +886,11 @@
             <div>
                 <p class="eyebrow">Staged by SIN</p>
                 <h2 id="sin-proposals-title">Metadata proposals</h2>
-                <p class="dialog-subtitle">SIN can use these values locally. Accepting is the point at which GAIA writes the library metadata.</p>
+                <p class="dialog-subtitle">SIN can use these values locally. Accepting is the point at which GAIA writes
+                    the library metadata.</p>
             </div>
-            <button id="sin-proposals-close" class="secondary icon-button dialog-close-button" type="button" aria-label="Close proposals">×</button>
+            <button id="sin-proposals-close" class="secondary icon-button dialog-close-button" type="button"
+                aria-label="Close proposals">×</button>
         </div>
         <div id="sin-proposals-content" class="sin-proposals-content" aria-live="polite"></div>
         <div class="dialog-actions">
@@ -762,4 +903,5 @@
     <script src="/static/import-wizard.js?v=4"></script>
     <script src="/static/app.js?v=91"></script>
 </body>
+
 </html>

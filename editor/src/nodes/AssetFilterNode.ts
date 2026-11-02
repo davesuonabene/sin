@@ -38,7 +38,7 @@ export class AssetFilterNode extends ModulatorNode {
             key: 'refresh_mode',
             label: 'Refresh Mode',
             type: 'radio',
-            default: 'parent',
+            default: 'global',
             options: [
                 { value: 'local', label: 'Local' },
                 { value: 'parent', label: 'Parent' },
@@ -47,7 +47,7 @@ export class AssetFilterNode extends ModulatorNode {
                 { value: 'off', label: 'Off' }
             ],
             tab: 'FILTER',
-            description: 'Local advances on every output request. Parent advances when its direct parent renders. Off keeps the current item.'
+            description: 'Global advances on global recalculate. Local advances on every output request. Parent advances when its direct parent renders. Off keeps the current item.'
         }
     ];
 
