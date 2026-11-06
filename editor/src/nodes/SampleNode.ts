@@ -641,6 +641,8 @@ export class SampleNode extends BaseNode {
             this.selectedSlotIndices = [nextIdx];
         }
 
+        this._liveTriggerIteration = null;
+        this._liveTriggeredFilepath = null;
         this.applySlotToProperties(slots[this.activeSlotIndex]);
         this.updateProperty('active_slot', this.activeSlotIndex);
     }
@@ -1431,6 +1433,9 @@ export class SampleNode extends BaseNode {
 
         let playbackProgress: number | undefined;
         let isTriggered: boolean | undefined;
+        const slots = this.getSlots();
+        const slotCount = Math.max(1, slots.length);
+        let irideActiveSlot = this.activeSlotIndex;
 
         if (isPlaying && telemetry) {
             if (isPreviewTarget) {
@@ -1441,8 +1446,8 @@ export class SampleNode extends BaseNode {
                 playbackProgress = cropStart + progress * activeSpan;
                 isTriggered = true;
             } else {
-                const manifestEvents = ((this as any).manifestEvents as Array<{ time: number; duration: number; filepath?: string; iteration?: number }> | undefined)
-                    || (win?.activeWorkspaceManifest?.nodes?.[String(this.id)]?.events as Array<{ time: number; duration: number; filepath?: string; iteration?: number }> | undefined);
+                const manifestEvents = ((this as any).manifestEvents as Array<{ time: number; duration: number; slot?: number; filepath?: string; iteration?: number }> | undefined)
+                    || (win?.activeWorkspaceManifest?.nodes?.[String(this.id)]?.events as Array<{ time: number; duration: number; slot?: number; filepath?: string; iteration?: number }> | undefined);
                 const totalTrackDur = telemetry.duration > 0
                     ? telemetry.duration
                     : (Number(win?.activeWorkspaceManifest?.total_duration) || (manifestEvents?.length ? manifestEvents[manifestEvents.length - 1].time + manifestEvents[manifestEvents.length - 1].duration : sampleActiveDuration));
@@ -1477,32 +1482,74 @@ export class SampleNode extends BaseNode {
                     let recentEvent = activeEvent;
                     if (!recentEvent) {
                         for (let i = manifestEvents.length - 1; i >= 0; i--) {
-                            if (manifestEvents[i].time <= curTime) {
+                            if (manifestEvents[i].time <= triggerTime) {
                                 recentEvent = manifestEvents[i];
                                 break;
                             }
                         }
                     }
+
+                    // 1. IRIDE canvas reactivity: follow the playing event across all slots
                     if (recentEvent) {
-                        const evtIter = typeof (recentEvent as any).iteration === 'number' ? (recentEvent as any).iteration : null;
-                        const evtFp = typeof (recentEvent as any).filepath === 'string' ? (recentEvent as any).filepath : null;
-                        if (evtIter !== null && (this._liveTriggerIteration !== evtIter || this._liveTriggeredFilepath !== evtFp)) {
-                            this._liveTriggerIteration = evtIter;
-                            this._liveTriggeredFilepath = evtFp;
-                            if (typeof window !== 'undefined' && this.id != null) {
-                                window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
-                                    detail: { nodeId: this.id, liveTelemetry: true }
-                                }));
-                            }
+                        if (typeof (recentEvent as any).slot === 'number') {
+                            irideActiveSlot = ((Math.trunc((recentEvent as any).slot) % slotCount) + slotCount) % slotCount;
                         }
+                        const evtFp = typeof (recentEvent as any).filepath === 'string'
+                            ? (recentEvent as any).filepath
+                            : (slots[irideActiveSlot]?.filepath ? String(slots[irideActiveSlot].filepath) : null);
                         if (evtFp) {
-                            const cachedEvtBuf = getCachedAudioBufferSync(evtFp);
+                            const slotBuf = this.slotBuffers.get(irideActiveSlot);
+                            const cachedEvtBuf = (slotBuf && this.slotLoadedPaths.get(irideActiveSlot) === evtFp)
+                                ? slotBuf
+                                : getCachedAudioBufferSync(evtFp);
                             if (cachedEvtBuf) {
                                 displayBuffer = this.applySampleNodeGain(cachedEvtBuf) || displayBuffer;
                             } else {
                                 void fetchAudioBuffer(evtFp);
                             }
                         }
+                    }
+
+                    // 2. Inspector live telemetry: NEVER switch slots; only update when the active slot itself has a Field Operator
+                    const inspectorSlot = Math.min(Math.max(0, this.activeSlotIndex), slotCount - 1);
+                    const activeSlotQuery = String(slots[inspectorSlot]?.pool_query ?? this.properties?.pool_query ?? '').trim();
+                    const hasActiveSlotPoolOp = isFieldOperatorExpression(activeSlotQuery);
+                    const activeSlotOps = slots[inspectorSlot]?.field_operators || this.properties?.field_operators;
+                    const hasActiveSlotFieldOp = hasActiveSlotPoolOp || Boolean(activeSlotOps && Object.keys(activeSlotOps).length > 0);
+
+                    if (hasActiveSlotFieldOp) {
+                        const matchesInspectorSlot = (e: any): boolean => {
+                            if (typeof e?.slot !== 'number') return true;
+                            const s = ((Math.trunc(e.slot) % slotCount) + slotCount) % slotCount;
+                            return s === inspectorSlot;
+                        };
+                        let inspectorEvent = (activeEvent && matchesInspectorSlot(activeEvent)) ? activeEvent : undefined;
+                        if (!inspectorEvent) {
+                            for (let i = manifestEvents.length - 1; i >= 0; i--) {
+                                if (manifestEvents[i].time <= triggerTime && matchesInspectorSlot(manifestEvents[i])) {
+                                    inspectorEvent = manifestEvents[i];
+                                    break;
+                                }
+                            }
+                        }
+                        if (inspectorEvent) {
+                            const evtIter = typeof (inspectorEvent as any).iteration === 'number' ? (inspectorEvent as any).iteration : null;
+                            const evtFp = (hasActiveSlotPoolOp && typeof (inspectorEvent as any).filepath === 'string')
+                                ? (inspectorEvent as any).filepath
+                                : null;
+                            if (evtIter !== null && (this._liveTriggerIteration !== evtIter || this._liveTriggeredFilepath !== evtFp)) {
+                                this._liveTriggerIteration = evtIter;
+                                this._liveTriggeredFilepath = evtFp;
+                                if (typeof window !== 'undefined' && this.id != null) {
+                                    window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
+                                        detail: { nodeId: this.id, liveTelemetry: true }
+                                    }));
+                                }
+                            }
+                        }
+                    } else if (this._liveTriggerIteration !== null || this._liveTriggeredFilepath !== null) {
+                        this._liveTriggerIteration = null;
+                        this._liveTriggeredFilepath = null;
                     }
 
                     if (activeEvent) {
@@ -1551,7 +1598,6 @@ export class SampleNode extends BaseNode {
             }
         }
 
-        const slots = this.getSlots();
         return {
             buffer: displayBuffer,
             duration: sampleActiveDuration,
@@ -1563,7 +1609,7 @@ export class SampleNode extends BaseNode {
             bufferedProgress: 1.0,
             isInvalidated: false,
             slotCount: slots.length,
-            activeSlot: this.activeSlotIndex
+            activeSlot: irideActiveSlot
         };
     }
 

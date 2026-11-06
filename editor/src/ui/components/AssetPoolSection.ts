@@ -1,6 +1,7 @@
 import { type BaseNode } from '../../nodes/BaseNode.ts';
 import { getAssetDisplayName } from '../libraryFilters.ts';
-import { WidgetFactory } from '../WidgetFactory.ts';
+import { getPoolPermutationOrder } from '../../../../ermes/ts/slotLanguage.ts';
+import { resolveEffectivePoolSeed } from '../../../../ermes/ts/assetResolver.ts';
 import {
     attachLibraryDragData,
     clearActiveLibraryDragData,
@@ -43,29 +44,16 @@ export class AssetPoolSection {
 
         const isSequencePool = isSequencePoolMode(poolNode, ownerNode);
 
-        // Render Pool Seed control using the standard WidgetFactory row
-        const seedField = (poolNode.getFields?.() || []).find((f: any) => f.key === 'seed') || {
-            key: 'seed',
-            label: 'Pool Seed',
-            type: 'seed' as const,
-            default: 42,
-            description: 'Deterministic seed or seed sequence (e.g. "42", "42 108", "rand") for selecting pool items across node slots.'
-        };
-        const seedRow = WidgetFactory.createRow(seedField, poolNode, () => {
-            if (typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('item-pool-preview-refresh', {
-                    detail: { nodeId: poolNode.id }
-                }));
-            }
-        });
-        container.appendChild(seedRow);
-
         const group = document.createElement('div');
         group.className = 'asset-pool-group';
 
-        const items = Array.isArray(poolNode.properties.selected_items)
+        const baseItems = Array.isArray(poolNode.properties.selected_items)
             ? [...poolNode.properties.selected_items]
             : [];
+        const effPoolSeed = resolveEffectivePoolSeed(poolNode, ownerNode);
+        const poolSalt = Number(ownerNode?.id || poolNode?.id || 1);
+        const permOrder = getPoolPermutationOrder(baseItems.length, effPoolSeed, poolSalt);
+        const items = permOrder.map(origIdx => baseItems[origIdx]);
 
         const listEl = document.createElement('div');
         listEl.className = `asset-pool-list ${items.length === 0 ? 'is-empty' : ''}`;
@@ -131,10 +119,14 @@ export class AssetPoolSection {
         };
 
         const deleteIndices = async (indicesToDelete: number[]) => {
-            const delSet = new Set(indicesToDelete);
-            if (delSet.size === 0) return;
+            const origToDelete = new Set(
+                indicesToDelete
+                    .map(dispIdx => permOrder[dispIdx])
+                    .filter((origIdx): origIdx is number => origIdx !== undefined)
+            );
+            if (origToDelete.size === 0) return;
             selectedIndices.clear();
-            await commitItems(items.filter((_, idx) => !delSet.has(idx)));
+            await commitItems(baseItems.filter((_, origIdx) => !origToDelete.has(origIdx)));
         };
 
         const rowElements: HTMLElement[] = [];
@@ -323,7 +315,7 @@ export class AssetPoolSection {
             if (droppedItems.length === 0) return;
 
             const merged = new Map<string, any>();
-            for (const item of items) {
+            for (const item of baseItems) {
                 const key = poolItemKey(item);
                 if (key) merged.set(key, item);
             }

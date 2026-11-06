@@ -24,8 +24,7 @@ export class ArrangementNode extends BaseNode {
                 id: 'ARRANGEMENT',
                 label: 'Arrangement',
                 sections: [
-                    { type: 'arrangement_timeline' },
-                    { type: 'fields', fields: ['seed'] }
+                    { type: 'arrangement_timeline' }
                 ]
             },
             {

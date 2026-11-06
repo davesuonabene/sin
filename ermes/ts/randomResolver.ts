@@ -38,6 +38,73 @@ export interface RandomDestination {
     enabled: boolean;
 }
 
+export function getGlobalSeed(graph?: any): number {
+    const g = graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    const raw = g?.extra?.global_seed;
+    if (raw === undefined || raw === null) return 0;
+    const parsed = Math.floor(Number(raw));
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+export function setGlobalSeed(graph: any, seed: number): number {
+    const normalized = Math.max(0, Math.floor(Number(seed) || 0));
+    if (graph) {
+        if (!graph.extra) graph.extra = {};
+        graph.extra.global_seed = normalized;
+    }
+    return normalized;
+}
+
+export function isGlobalSeedLocked(graph?: any): boolean {
+    const g = graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    return Boolean(g?.extra?.global_seed_locked);
+}
+
+export function setGlobalSeedLocked(graph: any, locked: boolean): boolean {
+    const normalized = Boolean(locked);
+    if (graph) {
+        if (!graph.extra) graph.extra = {};
+        graph.extra.global_seed_locked = normalized;
+    }
+    return normalized;
+}
+
+export function getFieldRefreshEpoch(graph?: any): number {
+    const g = graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    const raw = g?.extra?.field_refresh_epoch;
+    if (raw === undefined || raw === null) return 0;
+    const parsed = Math.floor(Number(raw));
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+export function getEffectiveFieldSeed(graph?: any, node?: any): number {
+    if (node?.properties?.locked_field_seed !== undefined) {
+        return Number(node.properties.locked_field_seed) || 0;
+    }
+    const g = graph || node?.graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    if (g?.extra && (g.extra.global_seed !== undefined || g.extra.field_refresh_epoch !== undefined)) {
+        return getGlobalSeed(g) + getFieldRefreshEpoch(g) * 10007;
+    }
+    const legacySeed = Number(node?.properties?.seed);
+    const base = Number.isFinite(legacySeed) ? legacySeed : 0;
+    const salt = (Number(node?.properties?.seed_salt) || 0) * 9973;
+    return base + salt;
+}
+
+export function resolveEffectiveRandomSeed(modifierNode: any, ownerNode?: any, graph?: any): string | number {
+    if (ownerNode?.properties?.locked_random_seed !== undefined) {
+        return ownerNode.properties.locked_random_seed;
+    }
+    if (modifierNode?.properties?.locked_random_seed !== undefined) {
+        return modifierNode.properties.locked_random_seed;
+    }
+    const g = graph || ownerNode?.graph || modifierNode?.graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    if (g?.extra && typeof g.extra.global_seed === 'number') {
+        return getGlobalSeed(g);
+    }
+    return modifierNode?.properties?.seed ?? 42;
+}
+
 export function getRangeColor(min: number, max: number): { text: string; bg: string; border: string } {
     const spread = Math.max(Math.abs(min), Math.abs(max));
     if (spread <= 15) {
@@ -251,9 +318,10 @@ export function populateOwnerSlotsFromRandom(modifierNode: any, ownerNode: any):
         ? modifierNode.properties.destinations
         : [];
     const slots = ownerNode.properties.slots;
+    const effectiveSeed = resolveEffectiveRandomSeed(modifierNode, ownerNode);
     const seedSalt = Number(modifierNode.properties.seed_salt || ownerNode.properties.seed_salt || 0) * 9973;
     const slotSeeds = resolveModifierSlotSeeds(
-        modifierNode.properties.seed ?? 42,
+        effectiveSeed,
         slots.length,
         Number(ownerNode.id || modifierNode.id || 1) + seedSalt
     );
@@ -381,9 +449,10 @@ export function applyRandomModulation(
         ? modifierNode.properties.destinations
         : [];
 
+    const effectiveSeed = resolveEffectiveRandomSeed(modifierNode, ownerNode);
     const seedSalt = Number(modifierNode.properties.seed_salt || ownerNode.properties?.seed_salt || 0) * 9973;
     const slot0Seed = resolveModifierSlotSeeds(
-        modifierNode.properties.seed ?? 42,
+        effectiveSeed,
         1,
         Number(ownerNode.id || modifierNode.id || 1) + seedSalt
     )[0];
@@ -643,7 +712,10 @@ export async function resolveAssignedRandomModifiers(
                     : modNode?.properties?.freeze_refresh !== false
             );
 
+            const isSeedLocked = isGlobalSeedLocked(graph);
+
             const shouldRefresh = !isFrozen
+                && !isSeedLocked
                 && (modNode.properties?.seed_refresh !== false)
                 && shouldRefreshRandom(
                     refreshMode,
@@ -687,22 +759,73 @@ export async function resolveAssignedRandomModifiers(
 }
 
 /**
- * Rolls all seed fields across the graph whose right-hand Refresh Toggle (`seed_refresh`) is ON,
- * provided Global Freeze (`isGlobalFrozen`) is OFF. Immediately re-evaluates attached Pools and Random modifiers.
+ * Advances the Global Seed (starting at 0 -> 1 -> 2...) or, when Global Seed Lock is ON,
+ * advances only `field_refresh_epoch` so Field Operators re-roll while Asset Pools and Random
+ * Modifiers stay locked at the current Global Seed.
+ * Respects Global Freeze (`isGlobalFrozen`) and per-node `freeze_refresh`.
  */
 export function refreshArmedSeeds(
     graph: any,
     isGlobalFrozen: boolean = false,
     trackNodesMap?: Map<number, any>
 ): boolean {
-    if (isGlobalFrozen || !graph) return false;
+    if (!graph) return false;
     const trackNodes = trackNodesMap || (typeof window !== 'undefined' ? (window as any).trackNodes : undefined);
     const allNodes = ((graph as any)._nodes || (graph as any).nodes || []) as any[];
-    let rolledAny = false;
 
-    // 1. Reset internal trigger counter on every node when refreshing
+    const isNodeFrozen = (node: any): boolean => {
+        if (!isGlobalFrozen) return false;
+        return node?.properties ? node.properties.freeze_refresh !== false : true;
+    };
+
+    if (isGlobalFrozen) {
+        const hasUnfrozenNode = allNodes.some(n => n?.properties && n.properties.freeze_refresh === false);
+        if (!hasUnfrozenNode) return false;
+    }
+
+    let rolledAny = false;
+    const hasGlobalSeedState = Boolean(graph.extra && (
+        graph.extra.global_seed !== undefined
+        || graph.extra.global_seed_locked !== undefined
+        || graph.extra.field_refresh_epoch !== undefined
+    ));
+    const seedLocked = isGlobalSeedLocked(graph);
+
+    if (graph.extra || seedLocked) {
+        if (!graph.extra) graph.extra = {};
+        const prevGlobalSeed = getGlobalSeed(graph);
+        const prevFieldSeed = getEffectiveFieldSeed(graph);
+
+        for (const node of allNodes) {
+            if (!node?.properties) continue;
+            if (isNodeFrozen(node)) {
+                if (node.properties.locked_pool_seed === undefined) {
+                    node.properties.locked_pool_seed = prevGlobalSeed;
+                }
+                if (node.properties.locked_random_seed === undefined) {
+                    node.properties.locked_random_seed = prevGlobalSeed;
+                }
+                if (node.properties.locked_field_seed === undefined) {
+                    node.properties.locked_field_seed = prevFieldSeed;
+                }
+            } else {
+                delete node.properties.locked_pool_seed;
+                delete node.properties.locked_random_seed;
+                delete node.properties.locked_field_seed;
+            }
+        }
+
+        if (!seedLocked) {
+            graph.extra.global_seed = prevGlobalSeed + 1;
+        } else {
+            graph.extra.field_refresh_epoch = getFieldRefreshEpoch(graph) + 1;
+        }
+        rolledAny = true;
+    }
+
+    // 1. Reset internal trigger counter on every non-frozen node when refreshing
     for (const node of allNodes) {
-        if (!node?.properties) continue;
+        if (!node?.properties || isNodeFrozen(node)) continue;
         if (Number(node.properties.trigger_count) !== 0) {
             node.properties.trigger_count = 0;
             rolledAny = true;
@@ -715,75 +838,77 @@ export function refreshArmedSeeds(
         }
     }
 
-    // 2. Roll armed seed controllers and attached modifiers
-    for (const node of allNodes) {
-        if (!node?.properties) continue;
-        if (node.properties.seed === undefined) continue;
-        if (node.properties.seed_refresh === false) continue;
+    // 2. When Global Seed is NOT locked, update armed Pools, Random modifiers, and node seeds
+    if (!seedLocked) {
+        for (const node of allNodes) {
+            if (!node?.properties) continue;
+            if (node.properties.seed === undefined && !hasGlobalSeedState) continue;
+            if (node.properties.seed_refresh === false) continue;
 
-        const isAssetFilter = node.type === 'Audio/AssetFilter'
-            || node.properties.node_type === 'asset_filter'
-            || node.properties.output_type === 'asset_path';
-        const isRandom = node.type === 'Audio/Random'
-            || node.properties.node_type === 'random'
-            || (node.isModifier && node.modifierKind === 'random');
-
-        if (isAssetFilter) {
-            advanceAssetPoolSeed(node, trackNodes);
             const parentId = node.properties.parentId ?? trackNodes?.get(node.id)?.parentId;
             const ownerNode = parentId != null ? (graph.getNodeById?.(parentId) || allNodes.find((n: any) => n?.id === parentId)) : null;
-            if (ownerNode) {
-                if (ownerNode.properties) {
-                    ownerNode.properties.trigger_count = 0;
-                }
-                const isSeqOwner = ownerNode.type === 'Audio/Sequence' || ownerNode.properties?.node_type === 'sequence';
-                if (isSeqOwner) {
-                    node.properties.output_value = '';
-                }
-                populateOwnerSlotsFromPool(node, ownerNode);
-                if (typeof window !== 'undefined') {
-                    window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: ownerNode.id } }));
-                }
-            }
-        } else if (isRandom) {
-            advanceRandomSeed(node, trackNodes);
-            const parentId = node.properties.parentId ?? trackNodes?.get(node.id)?.parentId;
-            const ownerNode = parentId != null ? (graph.getNodeById?.(parentId) || allNodes.find((n: any) => n?.id === parentId)) : null;
-            if (ownerNode) {
-                applyRandomModulation(node, ownerNode);
-            }
-        } else {
-            const rolled = rollSeedExpression(node.properties.seed ?? 42);
-            const numericCandidate = Number(rolled);
-            const nextSeed: string | number = (!rolled.includes(' ') && Number.isFinite(numericCandidate))
-                ? numericCandidate
-                : rolled;
-            node.properties.seed_salt = (Number(node.properties.seed_salt) || 0) + 1;
-            if (typeof node.updateProperty === 'function') {
-                node.updateProperty('seed', nextSeed);
-            } else {
-                node.properties.seed = nextSeed;
-            }
-            if ('_cachedCompositedBuffer' in node) {
-                node._cachedCompositedBuffer = null;
-            }
-            node.setDirtyCanvas?.(true, true);
-            const nodeData = trackNodes?.get(node.id);
-            if (nodeData) {
-                nodeData.seed = nextSeed;
-                nodeData.seed_salt = node.properties.seed_salt;
-            }
-        }
+            if (isNodeFrozen(ownerNode || node)) continue;
 
-        if (typeof window !== 'undefined' && node.id != null) {
-            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
+            const isAssetFilter = node.type === 'Audio/AssetFilter'
+                || node.properties.node_type === 'asset_filter'
+                || node.properties.output_type === 'asset_path';
+            const isRandom = node.type === 'Audio/Random'
+                || node.properties.node_type === 'random'
+                || (node.isModifier && node.modifierKind === 'random');
+
+            if (isAssetFilter) {
+                advanceAssetPoolSeed(node, trackNodes);
+                if (ownerNode) {
+                    if (ownerNode.properties) {
+                        ownerNode.properties.trigger_count = 0;
+                    }
+                    const isSeqOwner = ownerNode.type === 'Audio/Sequence' || ownerNode.properties?.node_type === 'sequence';
+                    if (isSeqOwner) {
+                        node.properties.output_value = '';
+                    }
+                    populateOwnerSlotsFromPool(node, ownerNode);
+                    if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: ownerNode.id } }));
+                    }
+                }
+            } else if (isRandom) {
+                advanceRandomSeed(node, trackNodes);
+                if (ownerNode) {
+                    applyRandomModulation(node, ownerNode);
+                }
+            } else if (node.properties.seed !== undefined) {
+                const rolled = rollSeedExpression(node.properties.seed ?? 42);
+                const numericCandidate = Number(rolled);
+                const nextSeed: string | number = (!rolled.includes(' ') && Number.isFinite(numericCandidate))
+                    ? numericCandidate
+                    : rolled;
+                node.properties.seed_salt = (Number(node.properties.seed_salt) || 0) + 1;
+                if (typeof node.updateProperty === 'function') {
+                    node.updateProperty('seed', nextSeed);
+                } else {
+                    node.properties.seed = nextSeed;
+                }
+                if ('_cachedCompositedBuffer' in node) {
+                    node._cachedCompositedBuffer = null;
+                }
+                node.setDirtyCanvas?.(true, true);
+                const nodeData = trackNodes?.get(node.id);
+                if (nodeData) {
+                    nodeData.seed = nextSeed;
+                    nodeData.seed_salt = node.properties.seed_salt;
+                }
+            }
+
+            if (typeof window !== 'undefined' && node.id != null) {
+                window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
+            }
+            rolledAny = true;
         }
-        rolledAny = true;
     }
 
     // 3. Re-evaluate any node-level Field Operators (parameter operators or pool_query operators) at trigger_count = 0
     for (const node of allNodes) {
-        if (!node?.properties) continue;
+        if (!node?.properties || isNodeFrozen(node)) continue;
         const hasNodeOps = node.properties.field_operators && Object.keys(node.properties.field_operators).length > 0;
         const hasSlotOps = Array.isArray(node.properties.slots) && node.properties.slots.some((s: any) =>
             (s?.field_operators && Object.keys(s.field_operators).length > 0) || isFieldOperatorExpression(s?.pool_query)
@@ -791,12 +916,16 @@ export function refreshArmedSeeds(
         const hasPoolOp = isFieldOperatorExpression(node.properties.pool_query);
         if (!hasNodeOps && !hasSlotOps && !hasPoolOp) continue;
 
-        if (node.properties.seed === undefined && node.properties.seed_refresh !== false) {
+        if (node.properties.seed_refresh !== false) {
             node.properties.seed_salt = (Number(node.properties.seed_salt) || 0) + 1;
         }
         if (typeof node.evaluateAllFieldOperators === 'function') {
             node.evaluateAllFieldOperators(0);
         }
+        if ('_cachedCompositedBuffer' in node) {
+            node._cachedCompositedBuffer = null;
+        }
+        node.setDirtyCanvas?.(true, true);
         if (typeof window !== 'undefined' && node.id != null) {
             window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
         }

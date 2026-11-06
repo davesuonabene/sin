@@ -22,6 +22,8 @@ import { EngineSyncManager } from './ui/EngineSyncManager';
 import { FileExplorerModal } from './ui/FileExplorerModal';
 import {
     createAppShell,
+    HEADER_LOCK_CLOSED_ICON_SVG,
+    HEADER_LOCK_OPEN_ICON_SVG,
     HEADER_PAUSE_ICON_SVG,
     HEADER_PLAY_ICON_SVG,
     HEADER_REFRESH_ICON_SVG,
@@ -48,7 +50,14 @@ import { installSeparatedNodeClipboard } from './nodeClipboard';
 import { clearLibraryCache, fetchLibrary, findLibraryFile, findLibraryFileById, findLibraryFileForPoolLocator, refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from './api';
 import { serializeNodeSubtree } from '../../ermes/ts/serializer';
 import { advanceAssetPoolSeed, normalizeAssetRefreshMode, populateOwnerSlotsFromPool, resolveAssetFilterNode, resolveAssignedAssetFilters } from '../../ermes/ts/assetResolver';
-import { resolveAssignedRandomModifiers, refreshArmedSeeds } from '../../ermes/ts/randomResolver';
+import {
+    getGlobalSeed,
+    setGlobalSeed,
+    isGlobalSeedLocked,
+    setGlobalSeedLocked,
+    resolveAssignedRandomModifiers,
+    refreshArmedSeeds
+} from '../../ermes/ts/randomResolver';
 import { defaultTransportClock } from '../../packages/iride/src/index.ts';
 import { clearAudioBufferCache, fetchAudioBuffer, getSharedAudioContext } from './audioBufferCache';
 import { globalAudioScheduler } from './audioScheduler';
@@ -80,6 +89,8 @@ const {
     exportBtn,
     globalPreviewBtn,
     previewRecalculateBtn,
+    globalSeedInput,
+    globalSeedLockBtn,
     globalFreezeBtn,
     toggleLibraryBtn,
     refreshLibraryBtn,
@@ -202,11 +213,39 @@ function loadGlobalFreezeFromGraph(graphOrPreset: any, targetGraph?: LGraph) {
     const extra = graphOrPreset?.extra || graphOrPreset?.graph?.extra;
     const isFrozen = Boolean(graphOrPreset?.frozen || extra?.global_freeze || extra?.freeze);
     setGlobalFreeze(isFrozen, targetGraph, false);
+    if (targetGraph) {
+        if (!(targetGraph as any).extra) (targetGraph as any).extra = {};
+        if (extra?.global_seed !== undefined) {
+            setGlobalSeed(targetGraph, Number(extra.global_seed));
+        } else if ((targetGraph as any).extra.global_seed === undefined) {
+            setGlobalSeed(targetGraph, 0);
+        }
+        setGlobalSeedLocked(targetGraph, Boolean(extra?.global_seed_locked));
+        syncGlobalSeedControlsUI(targetGraph);
+    }
+}
+
+function syncGlobalSeedControlsUI(graph?: LGraph) {
+    const targetGraph = graph || ((window as any).editorGraph as LGraph);
+    const seedVal = getGlobalSeed(targetGraph);
+    const locked = isGlobalSeedLocked(targetGraph);
+    if (globalSeedInput && document.activeElement !== globalSeedInput) {
+        globalSeedInput.value = String(seedVal);
+    }
+    if (globalSeedLockBtn) {
+        globalSeedLockBtn.setAttribute('aria-pressed', String(locked));
+        globalSeedLockBtn.classList.toggle('active', locked);
+        globalSeedLockBtn.innerHTML = locked ? HEADER_LOCK_CLOSED_ICON_SVG : HEADER_LOCK_OPEN_ICON_SVG;
+        globalSeedLockBtn.title = locked
+            ? 'Global Seed Locked: Refresh only re-rolls field expressions (pools and random mods stay fixed)'
+            : 'Lock Global Seed (keep pool order and random mod values on refresh)';
+    }
 }
 
 (window as any).getGlobalFreeze = () => isGlobalFreezeActive;
 (window as any).setGlobalFreeze = (val: boolean, graph?: LGraph) => setGlobalFreeze(val, graph);
 (window as any).loadGlobalFreezeFromGraph = (data: any, graph?: LGraph) => loadGlobalFreezeFromGraph(data, graph);
+(window as any).syncGlobalSeedControlsUI = (graph?: LGraph) => syncGlobalSeedControlsUI(graph);
 
 function updatePlaybackControls() {
     const isPlaying = globalAudioScheduler.getIsPlaying() || (loopEnabled ? loopSource !== null || !masterPlayer.paused && !masterPlayer.ended : !masterPlayer.paused && !masterPlayer.ended);
@@ -1475,6 +1514,9 @@ newStageBtn.addEventListener('click', () => {
     trackNodes.clear();
     setGlobalParameters(DEFAULT_GLOBAL_PARAMETERS, graph);
     setGlobalFreeze(false, graph, false);
+    setGlobalSeed(graph, 0);
+    setGlobalSeedLocked(graph, false);
+    syncGlobalSeedControlsUI(graph);
     updateGraphNodeCollapsing();
     canvas?.setDirty(true, true);
     fileMenu.open = false;
@@ -1869,6 +1911,83 @@ globalPreviewBtn.addEventListener('click', () => {
     void toggleTransportPlayback();
 });
 
+async function applyGlobalSeedChange(graph: LGraph) {
+    if (!graph) return;
+    syncGlobalSeedControlsUI(graph);
+    const nodeId = activeRamPreviewNodeId ?? resolveMainPreviewNode(graph)?.id;
+
+    if (dspInvalidateTimer) {
+        clearTimeout(dspInvalidateTimer);
+        dspInvalidateTimer = null;
+    }
+    pendingInvalidatedNodes.clear();
+    pendingGlobalParamInvalidation = false;
+
+    try {
+        await fetch('/api/preview/invalidate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node_ids: [] })
+        }).catch(() => { });
+
+        await withGraphEvaluationWindow(async () => {
+            const libraryFiles = await syncGraphSampleMetadataFromLibrary(graph, true, nodeId ?? undefined);
+            await resolveAssignedAssetFilters(graph, undefined as any, {
+                kind: 'preview',
+                globalPreview: false,
+                globalFreeze: isGlobalFreezeActive,
+                libraryFiles
+            });
+            await resolveAssignedRandomModifiers(graph, undefined as any, {
+                kind: 'preview',
+                globalPreview: false,
+                globalFreeze: isGlobalFreezeActive
+            });
+            for (const node of (((graph as any)._nodes || []) as any[])) {
+                if (!node?.properties) continue;
+                if (typeof node.evaluateAllFieldOperators === 'function') {
+                    node.evaluateAllFieldOperators(0);
+                }
+                if (node.id != null) {
+                    window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
+                }
+            }
+        });
+        for (const node of ((graph as any)._nodes || [])) {
+            if (node) {
+                (node as any).isInvalidated = true;
+                (node as any).setDirtyCanvas?.(true, true);
+            }
+        }
+        (window as any).editorCanvas?.setDirty?.(true, true);
+        scheduleStageSave();
+
+        if (nodeId != null) {
+            await previewNode(nodeId, false, false, false);
+        }
+    } catch (err) {
+        const isAbort = (err as any)?.name === 'AbortError' || String(err).toLowerCase().includes('abort');
+        if (!isAbort) {
+            console.error('Global seed change preview error:', err);
+        }
+    }
+}
+
+globalSeedInput?.addEventListener('change', () => {
+    const graph = (window as any).editorGraph as LGraph;
+    if (!graph) return;
+    setGlobalSeed(graph, Number(globalSeedInput.value));
+    void applyGlobalSeedChange(graph);
+});
+
+globalSeedLockBtn?.addEventListener('click', () => {
+    const graph = (window as any).editorGraph as LGraph;
+    if (!graph) return;
+    setGlobalSeedLocked(graph, !isGlobalSeedLocked(graph));
+    syncGlobalSeedControlsUI(graph);
+    scheduleStageSave();
+});
+
 previewRecalculateBtn.addEventListener('click', async () => {
     if (previewRecalculateBtn.disabled) return;
     const graph = (window as any).editorGraph as LGraph;
@@ -1898,16 +2017,22 @@ previewRecalculateBtn.addEventListener('click', async () => {
         }).catch(() => { });
 
         if (graph) {
+            if (!(graph as any).extra) (graph as any).extra = {};
+            if ((graph as any).extra.global_seed === undefined) {
+                (graph as any).extra.global_seed = 0;
+            }
             await withGraphEvaluationWindow(async () => {
                 await syncGraphSampleMetadataFromLibrary(graph, true, nodeId);
                 refreshArmedSeeds(graph, isGlobalFreezeActive, trackNodes);
             });
+            syncGlobalSeedControlsUI(graph);
             for (const node of ((graph as any)._nodes || [])) {
                 if (node) {
                     (node as any).isInvalidated = true;
                     (node as any).setDirtyCanvas?.(true, true);
                 }
             }
+            scheduleStageSave();
         }
 
         await previewNode(nodeId, false, false, false);
@@ -5822,7 +5947,14 @@ async function distributeWorkspaceManifest(graph: LGraph, manifest: any): Promis
             if (hasMultiSlots && typeof gNode.preloadAllSlotBuffers === 'function') {
                 pendingLoads.push(gNode.preloadAllSlotBuffers().catch(() => { }));
             }
-            if (manifestEntry.filepath && gNode.properties && !isDynamicPoolWithPath) {
+            if (Array.isArray(manifestEntry.pool_filepaths)) {
+                for (const poolFp of manifestEntry.pool_filepaths) {
+                    if (typeof poolFp === 'string' && poolFp.trim().length > 0) {
+                        pendingLoads.push(fetchAudioBuffer(poolFp).catch(() => { }));
+                    }
+                }
+            }
+            if (manifestEntry.filepath && gNode.properties && !isDynamicPoolWithPath && !hasMultiSlots) {
                 const currentPath = String(gNode.properties.filepath || '');
                 if (currentPath !== manifestEntry.filepath || !gNode.audioBuffer) {
                     gNode.properties.filepath = manifestEntry.filepath;

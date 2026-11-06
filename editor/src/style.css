@@ -997,6 +997,61 @@ html,
   border-color: #bae6fd;
 }
 
+.global-seed-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+}
+
+.global-seed-input {
+  width: 38px;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 2px;
+  background: #f8fafc;
+  color: #334155;
+  font: 600 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-align: center;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.12s ease, background-color 0.12s ease, color 0.12s ease;
+}
+
+.global-seed-input::-webkit-inner-spin-button,
+.global-seed-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.global-seed-input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.global-seed-input:hover,
+.global-seed-input:focus {
+  border-color: #0284c7;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.header-btn.global-seed-lock-btn {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  color: #64748b;
+  background: transparent;
+  border-color: transparent;
+}
+
+.header-btn.global-seed-lock-btn.active {
+  color: #0284c7;
+  background: #f0f9ff;
+  border-color: #bae6fd;
+}
+
 .header-btn .btn-icon {
   font-size: 14px;
   line-height: 1;

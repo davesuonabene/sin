@@ -2,6 +2,8 @@ export const HEADER_PLAY_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 
 export const HEADER_PAUSE_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>';
 export const HEADER_REFRESH_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>';
 export const HEADER_FREEZE_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="12" y1="2" x2="12" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><path d="m20 16-4-4 4-4"></path><path d="m4 8 4 4-4 4"></path><path d="m16 4-4 4-4-4"></path><path d="m8 20 4-4 4 4"></path></svg>';
+export const HEADER_LOCK_OPEN_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>';
+export const HEADER_LOCK_CLOSED_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
 export const HEADER_SIDEBAR_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect><line x1="9" y1="4" x2="9" y2="20"></line></svg>';
 export const HEADER_INSPECTOR_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6"/><circle cx="14" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>';
 
@@ -79,6 +81,12 @@ export function createAppShell(appElement: HTMLElement) {
                 <button id="preview-recalculate-btn" class="header-btn preview-recalculate-btn icon-header-btn squared-btn" type="button" title="Refresh pools, samples, and modifiers" aria-label="Refresh pools, samples, and modifiers" disabled>
                     ${HEADER_REFRESH_ICON_SVG}
                 </button>
+                <div class="global-seed-control" title="Global Seed (0 = user pool order)">
+                    <input id="global-seed-input" class="global-seed-input" type="number" min="0" step="1" value="0" aria-label="Global Seed" />
+                    <button id="global-seed-lock-btn" class="header-btn global-seed-lock-btn icon-header-btn squared-btn" type="button" title="Global Seed Lock: OFF (Refresh updates Global Seed, pools, random modifiers, and field operators)" aria-label="Lock Global Seed" aria-pressed="false">
+                        ${HEADER_LOCK_OPEN_ICON_SVG}
+                    </button>
+                </div>
                 <button id="global-freeze-btn" class="header-btn global-freeze-btn icon-header-btn squared-btn" type="button" title="Global Freeze: OFF (Flagged nodes refresh on recalculate)" aria-label="Toggle Global Freeze" aria-pressed="false">
                     ${HEADER_FREEZE_ICON_SVG}
                 </button>
@@ -192,6 +200,8 @@ export function createAppShell(appElement: HTMLElement) {
         exportBtn: topHeader.querySelector('#export-btn') as HTMLButtonElement,
         globalPreviewBtn: topHeader.querySelector('#global-preview-btn') as HTMLButtonElement,
         previewRecalculateBtn: topHeader.querySelector('#preview-recalculate-btn') as HTMLButtonElement,
+        globalSeedInput: topHeader.querySelector('#global-seed-input') as HTMLInputElement,
+        globalSeedLockBtn: topHeader.querySelector('#global-seed-lock-btn') as HTMLButtonElement,
         globalFreezeBtn: topHeader.querySelector('#global-freeze-btn') as HTMLButtonElement,
         toggleLibraryBtn: topHeader.querySelector('#toggle-library-btn') as HTMLButtonElement,
         refreshLibraryBtn: topHeader.querySelector('#refresh-library-btn') as HTMLButtonElement | null,

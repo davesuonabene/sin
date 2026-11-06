@@ -30,6 +30,7 @@ class NodeSlotModel(BaseModel):
     pool_query: Optional[str] = None
     filepath: Optional[str] = None
     library_item_id: Optional[Union[int, str]] = None
+    sequence_name: Optional[str] = None
     original_bpm: Optional[float] = None
     key: Optional[str] = None
     duration_seconds: Optional[float] = None
@@ -96,6 +97,9 @@ class AudioNodeModel(BaseModel):
     cycle_seeds: List[int] = []
     section_slots: List[int] = []
     total_bars: Optional[float] = None
+    global_bars: Optional[float] = None
+    global_seed: Optional[Union[str, float, int]] = None
+    field_seed: Optional[Union[str, float, int]] = None
     probability: Optional[float] = None
     section_points: List[float] = []
     section_enabled: List[bool] = []

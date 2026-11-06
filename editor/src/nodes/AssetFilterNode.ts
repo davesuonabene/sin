@@ -17,7 +17,7 @@ export class AssetFilterNode extends ModulatorNode {
                 id: 'FILTER',
                 label: 'Asset Pool',
                 sections: [
-                    { type: 'fields', fields: ['playbackMode', 'seed'] },
+                    { type: 'fields', fields: ['playbackMode'] },
                     { type: 'pool_editor' }
                 ]
             },

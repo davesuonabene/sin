@@ -10,13 +10,27 @@ import {
     rollSeedExpression,
     isFieldOperatorExpression,
     evaluateNumericFieldOperator,
+    getPoolPermutationOrder,
+    permutePoolItems,
+    parseFieldOperatorAST,
+    resolveFieldOperatorLeaf,
 } from '../../ermes/ts/slotLanguage.ts';
 import { SampleNode } from '../src/nodes/SampleNode.ts';
 import { SequenceNode } from '../src/nodes/SequenceNode.ts';
 import { ArrangementNode } from '../src/nodes/ArrangementNode.ts';
+import { TrackNode } from '../src/nodes/TrackNode.ts';
 import { WidgetFactory } from '../src/ui/WidgetFactory.ts';
 import { populateOwnerSlotsFromPool, resolveAssetFilterNode, resolveAssignedAssetFilters, resolvePoolItemByQuery } from '../../ermes/ts/assetResolver.ts';
-import { populateOwnerSlotsFromRandom, refreshArmedSeeds } from '../../ermes/ts/randomResolver.ts';
+import {
+    populateOwnerSlotsFromRandom,
+    refreshArmedSeeds,
+    getGlobalSeed,
+    setGlobalSeed,
+    isGlobalSeedLocked,
+    setGlobalSeedLocked,
+    getEffectiveFieldSeed,
+    applyRandomModulation,
+} from '../../ermes/ts/randomResolver.ts';
 import { serializeNodeSubtree } from '../../ermes/ts/serializer.ts';
 
 test('slotLanguage evaluates step_slots, cycle_seeds, and modulo wrapping deterministically', () => {
@@ -872,4 +886,295 @@ test('SampleNode and SequenceNode preserve list operator expressions across refr
     assert.equal(seq.getTriggerCount(), 0);
     assert.equal(sample.evaluateFieldOperatorForKey('transpose', sample.getFieldOperator('transpose')), 0);
     assert.equal(seq.evaluateFieldOperatorForKey('sample_slot', seq.getFieldOperator('sample_slot')), 0);
+});
+
+test('Global Seed (0, 1, 2...) permutes Asset Pools at seed > 0 while preserving identity order at seed 0, and Global Seed Lock freezes pools/random mods while rolling field operators', () => {
+    const items = [
+        { id: 1, name: 'kick_0.wav', filepath: 'kick_0.wav' },
+        { id: 2, name: 'kick_1.wav', filepath: 'kick_1.wav' },
+        { id: 3, name: 'kick_2.wav', filepath: 'kick_2.wav' },
+        { id: 4, name: 'kick_3.wav', filepath: 'kick_3.wav' },
+        { id: 5, name: 'kick_4.wav', filepath: 'kick_4.wav' },
+    ];
+
+    // Seed 0 -> identity permutation [0, 1, 2, 3, 4]
+    assert.deepEqual(getPoolPermutationOrder(5, 0, 10), [0, 1, 2, 3, 4]);
+    assert.deepEqual(permutePoolItems(items, 0, 10).map(i => i.id), [1, 2, 3, 4, 5]);
+
+    // Seed > 0 -> deterministic non-identity permutation
+    const permSeed1 = getPoolPermutationOrder(5, 1, 10);
+    assert.equal(permSeed1.length, 5);
+    assert.deepEqual([...permSeed1].sort((a, b) => a - b), [0, 1, 2, 3, 4]);
+    assert.deepEqual(getPoolPermutationOrder(5, 1, 10), permSeed1);
+
+    // Setup graph with SampleNode + AssetPool + RandomNode + Field Operator
+    const sample = new SampleNode();
+    sample.id = 501;
+    sample.properties.asset_modifier_id = 502;
+
+    const poolNode: any = {
+        id: 502,
+        type: 'Audio/AssetFilter',
+        properties: {
+            parentId: 501,
+            selected_items: items,
+        },
+        updateProperty(key: string, val: any) {
+            this.properties[key] = val;
+        },
+    };
+
+    const randomNode: any = {
+        id: 503,
+        type: 'Audio/Random',
+        properties: {
+            parentId: 501,
+            destinations: [
+                {
+                    id: 'd1',
+                    paramKey: 'gain',
+                    paramLabel: 'Gain',
+                    minPercent: -50,
+                    maxPercent: 50,
+                    baseValue: 0,
+                    enabled: true,
+                },
+            ],
+        },
+        updateProperty(key: string, val: any) {
+            this.properties[key] = val;
+        },
+    };
+
+    const mockGraph: any = {
+        extra: { global_seed: 0, global_seed_locked: false },
+        _nodes: [sample, poolNode, randomNode],
+        getNodeById: (id: number) => [sample, poolNode, randomNode].find((n: any) => n.id === id) || null,
+        sendActionToCanvas: () => {},
+    };
+    (sample as any).graph = mockGraph;
+    (poolNode as any).graph = mockGraph;
+    (randomNode as any).graph = mockGraph;
+
+    populateOwnerSlotsFromPool(poolNode, sample);
+    applyRandomModulation(randomNode, sample);
+    sample.applyFieldOperator('transpose', '-12..12');
+
+    // At global_seed = 0, slot 0 gets item 0 ('kick_0.wav')
+    assert.equal(getGlobalSeed(mockGraph), 0);
+    assert.equal(sample.properties.filepath, 'kick_0.wav');
+    const gainAtSeed0 = sample.properties.gain;
+
+    // Unlocked Refresh -> advances global_seed from 0 to 1
+    refreshArmedSeeds(mockGraph, false);
+    assert.equal(getGlobalSeed(mockGraph), 1);
+
+    const expectedSeed1FirstItem = permutePoolItems(items, 1, 502)[0];
+    assert.equal(sample.properties.filepath, expectedSeed1FirstItem.filepath);
+    const gainAtSeed1 = sample.properties.gain;
+    assert.notEqual(gainAtSeed1, gainAtSeed0);
+
+    // Lock Global Seed -> Refresh keeps global_seed == 1 (pool order & random mod unchanged),
+    // while advancing field_refresh_epoch so field operators re-roll!
+    setGlobalSeedLocked(mockGraph, true);
+    assert.equal(isGlobalSeedLocked(mockGraph), true);
+    const fieldSeedBeforeLockedRefresh = getEffectiveFieldSeed(mockGraph, sample);
+
+    refreshArmedSeeds(mockGraph, false);
+    assert.equal(getGlobalSeed(mockGraph), 1);
+    assert.equal(sample.properties.filepath, expectedSeed1FirstItem.filepath);
+    assert.equal(sample.properties.gain, gainAtSeed1);
+    const fieldSeedAfterLockedRefresh = getEffectiveFieldSeed(mockGraph, sample);
+    assert.notEqual(fieldSeedAfterLockedRefresh, fieldSeedBeforeLockedRefresh);
+});
+
+test('Bracketed Field Operator grammar evaluates Global (unbracketed), Cycle ([...]), and Sequential Event (<...>) scopes', () => {
+    // 1. Unbracketed "0 1" or "[0][1]" subdivides Ancestor Global Length (globalProgress)
+    const astGlobal = parseFieldOperatorAST('0 1');
+    assert.equal(resolveFieldOperatorLeaf(astGlobal, { globalProgress: 0.1 }).expr, '0');
+    assert.equal(resolveFieldOperatorLeaf(astGlobal, { globalProgress: 0.49 }).expr, '0');
+    assert.equal(resolveFieldOperatorLeaf(astGlobal, { globalProgress: 0.5 }).expr, '1');
+    assert.equal(resolveFieldOperatorLeaf(astGlobal, { globalProgress: 0.9 }).expr, '1');
+
+    const astConcat = parseFieldOperatorAST('[0][1]');
+    assert.equal(resolveFieldOperatorLeaf(astConcat, { globalProgress: 0.25 }).expr, '0');
+    assert.equal(resolveFieldOperatorLeaf(astConcat, { globalProgress: 0.75 }).expr, '1');
+
+    // 2. "[0 1]" subdivides Cycle Length (cycleProgress)
+    const astCycle = parseFieldOperatorAST('[0 1]');
+    assert.equal(resolveFieldOperatorLeaf(astCycle, { globalProgress: 0.9, cycleProgress: 0.2 }).expr, '0');
+    assert.equal(resolveFieldOperatorLeaf(astCycle, { globalProgress: 0.1, cycleProgress: 0.8 }).expr, '1');
+
+    // 3. "<0 random>" alternates fixed '0' and 'random' on every sequential event_idx
+    const astSeq = parseFieldOperatorAST('<0 random>');
+    const leaf0 = resolveFieldOperatorLeaf(astSeq, { eventIdx: 0 });
+    const leaf1 = resolveFieldOperatorLeaf(astSeq, { eventIdx: 1 });
+    const leaf2 = resolveFieldOperatorLeaf(astSeq, { eventIdx: 2 });
+    const leaf3 = resolveFieldOperatorLeaf(astSeq, { eventIdx: 3 });
+    assert.equal(leaf0.expr, '0');
+    assert.equal(leaf1.expr, 'random');
+    assert.equal(leaf2.expr, '0');
+    assert.equal(leaf3.expr, 'random');
+
+    // 4. "random" vs "[random]" vs "<random>" PRNG seed sensitivity
+    const valGlobalA = evaluateNumericFieldOperator('0..1000', {
+        min: 0, max: 1000, step: 1, seed: 42, salt: 1, globalIdx: 0, cycleIdx: 0, eventIdx: 0
+    });
+    const valGlobalSameGlobalDiffCycle = evaluateNumericFieldOperator('0..1000', {
+        min: 0, max: 1000, step: 1, seed: 42, salt: 1, globalIdx: 0, cycleIdx: 3, eventIdx: 7
+    });
+    // Unbracketed random stays constant across all cycles and events within the same globalIdx
+    assert.equal(valGlobalA, valGlobalSameGlobalDiffCycle);
+
+    // "[0..1000]" changes on cycleIdx but stays constant across events within the same cycleIdx
+    const valCycle0Evt0 = evaluateNumericFieldOperator('[0..1000]', {
+        min: 0, max: 1000, step: 1, seed: 42, salt: 1, globalIdx: 0, cycleIdx: 0, eventIdx: 0
+    });
+    const valCycle0Evt5 = evaluateNumericFieldOperator('[0..1000]', {
+        min: 0, max: 1000, step: 1, seed: 42, salt: 1, globalIdx: 0, cycleIdx: 0, eventIdx: 5
+    });
+    const valCycle1Evt0 = evaluateNumericFieldOperator('[0..1000]', {
+        min: 0, max: 1000, step: 1, seed: 42, salt: 1, globalIdx: 0, cycleIdx: 1, eventIdx: 0
+    });
+    assert.equal(valCycle0Evt0, valCycle0Evt5);
+    assert.notEqual(valCycle0Evt0, valCycle1Evt0);
+
+    // "<0..1000>" changes on every eventIdx
+    const valEvt0 = evaluateNumericFieldOperator('<0..1000>', {
+        min: 0, max: 1000, step: 1, seed: 42, salt: 1, globalIdx: 0, cycleIdx: 0, eventIdx: 0
+    });
+    const valEvt1 = evaluateNumericFieldOperator('<0..1000>', {
+        min: 0, max: 1000, step: 1, seed: 42, salt: 1, globalIdx: 0, cycleIdx: 0, eventIdx: 1
+    });
+    assert.notEqual(valEvt0, valEvt1);
+
+    // 5. Windowed sequential "[0 <1 2>]" uses windowEventIdx in the second half of the cycle
+    assert.equal(
+        evaluateNumericFieldOperator('[0 <1 2>]', {
+            min: 0, max: 10, step: 1, seed: 42, salt: 1, cycleProgress: 0.25, eventIdx: 5, windowEventIdx: 0
+        }),
+        0
+    );
+    assert.equal(
+        evaluateNumericFieldOperator('[0 <1 2>]', {
+            min: 0, max: 10, step: 1, seed: 42, salt: 1, cycleProgress: 0.75, eventIdx: 5, windowEventIdx: 0
+        }),
+        1
+    );
+    assert.equal(
+        evaluateNumericFieldOperator('[0 <1 2>]', {
+            min: 0, max: 10, step: 1, seed: 42, salt: 1, cycleProgress: 0.75, eventIdx: 6, windowEventIdx: 1
+        }),
+        2
+    );
+});
+
+test('Multi-Master hierarchy resolves global_bars from first downstream TrackNode during serialization', () => {
+    const sample = new SampleNode();
+    sample.id = 601;
+    sample.outputs = [{ name: 'Out', type: 'audio', links: [1001] }];
+
+    const seq = new SequenceNode();
+    seq.id = 602;
+    seq.inputs = [{ name: 'In', type: 'audio', link: 1001 }];
+    seq.outputs = [{ name: 'Out', type: 'audio', links: [1002] }];
+
+    const subMaster = new TrackNode();
+    subMaster.id = 603;
+    subMaster.properties.total_bars = 4;
+    subMaster.inputs = [{ name: 'In', type: 'audio', link: 1002 }];
+    subMaster.outputs = [{ name: 'Out', type: 'audio', links: [1003] }];
+
+    const mainMaster = new TrackNode();
+    mainMaster.id = 604;
+    mainMaster.properties.total_bars = 16;
+    mainMaster.inputs = [{ name: 'In', type: 'audio', link: 1003 }];
+
+    const mockGraph: any = {
+        extra: { global_seed: 3, global_parameters: { bpm: 120, total_bars: 8, key: 'C' } },
+        _nodes: [sample, seq, subMaster, mainMaster],
+        links: {
+            1001: { id: 1001, origin_id: 601, target_id: 602 },
+            1002: { id: 1002, origin_id: 602, target_id: 603 },
+            1003: { id: 1003, origin_id: 603, target_id: 604 },
+        },
+        getNodeById: (id: number) => [sample, seq, subMaster, mainMaster].find(n => n.id === id) || null,
+        sendActionToCanvas: () => {},
+    };
+
+    const compiledMain = serializeNodeSubtree(mockGraph, 604);
+    assert.equal(compiledMain.total_bars, 16);
+    assert.equal(compiledMain.global_seed, 3);
+
+    const compiledSubMaster = compiledMain.children[0];
+    assert.equal(compiledSubMaster.total_bars, 4);
+    assert.equal(compiledSubMaster.global_bars, 16); // First downstream Master of subMaster is mainMaster (16 bars)
+
+    const compiledSeq = compiledSubMaster.children[0];
+    assert.equal(compiledSeq.total_bars, 4); // Inherited from subMaster (4 bars)
+    assert.equal(compiledSeq.global_bars, 4); // First downstream Master of seq is subMaster (4 bars)
+});
+
+test('Inspector panel never switches slots during playback: IRIDE canvas stays reactive across slots while Inspector only updates when the active slot has a Field Operator', async () => {
+    const sample = new SampleNode();
+    sample.id = 701;
+    await sample.loadDroppedItemsIntoSlots([
+        { id: 1, name: 'kick.wav', filepath: '/vault/kick.wav' },
+        { id: 2, name: 'snare.wav', filepath: '/vault/snare.wav' },
+    ], 'plus');
+    assert.equal(sample.getSlots().length, 2);
+    sample.selectSlot(0);
+    assert.equal(sample.activeSlotIndex, 0);
+
+    (sample as any).manifestEvents = [
+        { time: 0.0, duration: 0.25, slot: 0, filepath: '/vault/kick.wav', iteration: 0 },
+        { time: 0.5, duration: 0.25, slot: 1, filepath: '/vault/snare.wav', iteration: 1 },
+    ];
+
+    // 1. Both slots are fixed (no Field Operator in pool_query):
+    // IRIDE signal reacts to slot 1 at t=0.6s, but Inspector activeSlotIndex stays 0 and _liveTriggeredFilepath stays null
+    const sigAtSlot0 = sample.resolveVisualizationSignal({ isPlaying: true, time: 0.1, duration: 2.0, beat: 0.2 } as any);
+    assert.equal(sigAtSlot0.activeSlot, 0);
+    assert.equal(sample.activeSlotIndex, 0);
+    assert.equal(sample._liveTriggeredFilepath, null);
+
+    const sigAtSlot1 = sample.resolveVisualizationSignal({ isPlaying: true, time: 0.6, duration: 2.0, beat: 1.2 } as any);
+    assert.equal(sigAtSlot1.activeSlot, 1); // IRIDE canvas is reactive to slot 1
+    assert.equal(sample.activeSlotIndex, 0); // Inspector stays on slot 0
+    assert.equal(sample._liveTriggeredFilepath, null); // Fixed slot 0 does not switch filepath in Inspector
+
+    // 2. Now give Slot 0 a Field Operator in pool_query ("[random]"), while Slot 1 remains fixed
+    sample.selectSlot(0);
+    sample.properties.pool_query = '[random]';
+    sample.getSlots()[0].pool_query = '[random]';
+    (sample as any).manifestEvents = [
+        { time: 0.0, duration: 0.25, slot: 0, filepath: '/vault/kick_varA.wav', iteration: 0 },
+        { time: 0.5, duration: 0.25, slot: 1, filepath: '/vault/snare.wav', iteration: 1 },
+        { time: 1.0, duration: 0.25, slot: 0, filepath: '/vault/kick_varB.wav', iteration: 2 },
+    ];
+
+    // At t=0.1s (Slot 0 event): Inspector updates _liveTriggeredFilepath for Slot 0's "[random]" operator
+    sample.resolveVisualizationSignal({ isPlaying: true, time: 0.1, duration: 2.0, beat: 0.2 } as any);
+    assert.equal(sample.activeSlotIndex, 0);
+    assert.equal(sample._liveTriggeredFilepath, '/vault/kick_varA.wav');
+
+    // At t=0.6s (Slot 1 event): IRIDE shows Slot 1, but Inspector (on Slot 0) ignores Slot 1's event and keeps kick_varA.wav
+    const sig2 = sample.resolveVisualizationSignal({ isPlaying: true, time: 0.6, duration: 2.0, beat: 1.2 } as any);
+    assert.equal(sig2.activeSlot, 1);
+    assert.equal(sample.activeSlotIndex, 0);
+    assert.equal(sample._liveTriggeredFilepath, '/vault/kick_varA.wav');
+
+    // At t=1.1s (Slot 0 event with new sample kick_varB.wav): Inspector updates to kick_varB.wav
+    const sig3 = sample.resolveVisualizationSignal({ isPlaying: true, time: 1.1, duration: 2.0, beat: 2.2 } as any);
+    assert.equal(sig3.activeSlot, 0);
+    assert.equal(sample.activeSlotIndex, 0);
+    assert.equal(sample._liveTriggeredFilepath, '/vault/kick_varB.wav');
+
+    // User switches to Slot 1 during playback: _liveTriggeredFilepath clears and stays null since Slot 1 is fixed
+    sample.selectSlot(1);
+    assert.equal(sample.activeSlotIndex, 1);
+    assert.equal(sample._liveTriggeredFilepath, null);
+    sample.resolveVisualizationSignal({ isPlaying: true, time: 1.1, duration: 2.0, beat: 2.2 } as any);
+    assert.equal(sample.activeSlotIndex, 1);
+    assert.equal(sample._liveTriggeredFilepath, null);
 });

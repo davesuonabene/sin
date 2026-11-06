@@ -46,7 +46,7 @@ export class SequenceNode extends BaseNode {
                 label: 'Sequence',
                 sections: [
                     { type: 'sequence_grid' },
-                    { type: 'fields', fields: ['sample_slot', 'total_bars', 'step_length', 'play_mode', 'release', 'fade_ms', 'seed'] }
+                    { type: 'fields', fields: ['sample_slot', 'total_bars', 'step_length', 'play_mode', 'release', 'fade_ms'] }
                 ]
             },
             {
@@ -803,6 +803,9 @@ export class SequenceNode extends BaseNode {
             this.selectedSlotIndices = [nextIdx];
         }
 
+        this._liveTriggerIteration = null;
+        this._liveTriggeredSequenceName = null;
+        this._liveTriggeredSequence = null;
         this.applySlotToProperties(slots[this.activeSlotIndex]);
         this.updateProperty('active_slot', this.activeSlotIndex);
     }
@@ -1017,6 +1020,12 @@ export class SequenceNode extends BaseNode {
     protected override drawDedicatedVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
         const win = (typeof window !== 'undefined') ? (window as any) : undefined;
         const isPlaying = Boolean(telemetry?.isPlaying);
+        const slots = this.getSlots();
+        const slotCount = Math.max(1, slots.length);
+        let irideActiveSlot = this.activeSlotIndex;
+        let irideCycleSeq: number[] | null = null;
+        let irideStepSlotOverride: number | null = null;
+
         if (!isPlaying && (this._liveTriggerIteration !== null || this._liveTriggeredSequenceName !== null || this._liveTriggeredSequence !== null)) {
             this._liveTriggerIteration = null;
             this._liveTriggeredSequenceName = null;
@@ -1029,8 +1038,8 @@ export class SequenceNode extends BaseNode {
         }
 
         if (isPlaying && telemetry) {
-            const manifestEvents = ((this as any).manifestEvents as Array<{ time: number; duration: number; iteration?: number; sequence_name?: string; sequence?: number[] }> | undefined)
-                || (win?.activeWorkspaceManifest?.nodes?.[String(this.id)]?.events as Array<{ time: number; duration: number; iteration?: number; sequence_name?: string; sequence?: number[] }> | undefined);
+            const manifestEvents = ((this as any).manifestEvents as Array<{ time: number; duration: number; slot?: number; iteration?: number; sequence_name?: string; sequence?: number[]; sample_slot_resolved?: number }> | undefined)
+                || (win?.activeWorkspaceManifest?.nodes?.[String(this.id)]?.events as Array<{ time: number; duration: number; slot?: number; iteration?: number; sequence_name?: string; sequence?: number[]; sample_slot_resolved?: number }> | undefined);
             const totalTrackDur = telemetry.duration > 0
                 ? telemetry.duration
                 : Number(win?.activeWorkspaceManifest?.total_duration || 0);
@@ -1044,38 +1053,87 @@ export class SequenceNode extends BaseNode {
                     }
                 }
             }
-            if (activeCycleEvt && typeof activeCycleEvt.iteration === 'number') {
-                const nextIter = activeCycleEvt.iteration;
-                const nextName = activeCycleEvt.sequence_name || null;
-                this._liveTriggeredSequence = Array.isArray(activeCycleEvt.sequence) ? activeCycleEvt.sequence : null;
-                if (this._liveTriggerIteration !== nextIter || this._liveTriggeredSequenceName !== nextName) {
-                    this._liveTriggerIteration = nextIter;
-                    this._liveTriggeredSequenceName = nextName;
-                    if (typeof window !== 'undefined' && this.id != null) {
-                        window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
-                            detail: { nodeId: this.id, liveTelemetry: true }
-                        }));
+
+            // 1. IRIDE canvas reactivity: follow the currently playing cycle event across all slots
+            if (activeCycleEvt) {
+                if (typeof activeCycleEvt.slot === 'number') {
+                    irideActiveSlot = ((Math.trunc(activeCycleEvt.slot) % slotCount) + slotCount) % slotCount;
+                }
+                if (Array.isArray(activeCycleEvt.sequence)) {
+                    irideCycleSeq = activeCycleEvt.sequence;
+                }
+                if (typeof activeCycleEvt.sample_slot_resolved === 'number' && Number.isFinite(activeCycleEvt.sample_slot_resolved)) {
+                    irideStepSlotOverride = activeCycleEvt.sample_slot_resolved;
+                }
+            }
+
+            // 2. Inspector live telemetry: NEVER switch slots; only update when the active slot itself has a Field Operator
+            const inspectorSlot = Math.min(Math.max(0, this.activeSlotIndex), slotCount - 1);
+            const activeSlotQuery = String(slots[inspectorSlot]?.pool_query ?? this.properties?.pool_query ?? '').trim();
+            const hasActiveSlotPoolOp = isFieldOperatorExpression(activeSlotQuery);
+            const sampleSlotExpr = this.getFieldOperator('sample_slot') || String(this.properties?.sample_slot ?? '*');
+            const hasSampleSlotOp = isFieldOperatorExpression(sampleSlotExpr);
+            const activeSlotOps = slots[inspectorSlot]?.field_operators || this.properties?.field_operators;
+            const hasActiveSlotFieldOp = hasActiveSlotPoolOp || hasSampleSlotOp || Boolean(activeSlotOps && Object.keys(activeSlotOps).length > 0);
+
+            if (hasActiveSlotFieldOp) {
+                const matchesInspectorSlot = (e: any): boolean => {
+                    if (typeof e?.slot !== 'number') return true;
+                    const s = ((Math.trunc(e.slot) % slotCount) + slotCount) % slotCount;
+                    return s === inspectorSlot;
+                };
+                let inspectorCycleEvt = (activeCycleEvt && matchesInspectorSlot(activeCycleEvt)) ? activeCycleEvt : undefined;
+                if (!inspectorCycleEvt && manifestEvents && manifestEvents.length > 0) {
+                    for (let i = manifestEvents.length - 1; i >= 0; i--) {
+                        if (manifestEvents[i].time <= curTime && matchesInspectorSlot(manifestEvents[i])) {
+                            inspectorCycleEvt = manifestEvents[i];
+                            break;
+                        }
                     }
                 }
-            } else {
-                const stepLen = Number(this.properties?.step_length) || 0.25;
-                const patternBeats = Math.max(0.25, SequenceNode.stepCount * stepLen);
-                const totalBars = Number(this.properties?.total_bars) || 4;
-                const totalBeats = totalBars * 4;
-                const wrappedBeat = totalBeats > 0 ? ((telemetry.beat % totalBeats) + totalBeats) % totalBeats : telemetry.beat;
-                const cycleIdx = Math.max(0, Math.floor(wrappedBeat / patternBeats));
-                if (this._liveTriggerIteration !== cycleIdx) {
-                    this._liveTriggerIteration = cycleIdx;
-                    if (typeof window !== 'undefined' && this.id != null) {
-                        window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
-                            detail: { nodeId: this.id, liveTelemetry: true }
-                        }));
+                if (inspectorCycleEvt && typeof inspectorCycleEvt.iteration === 'number') {
+                    const nextIter = inspectorCycleEvt.iteration;
+                    const nextName = hasActiveSlotPoolOp ? (inspectorCycleEvt.sequence_name || null) : null;
+                    this._liveTriggeredSequence = (hasActiveSlotPoolOp && Array.isArray(inspectorCycleEvt.sequence))
+                        ? inspectorCycleEvt.sequence
+                        : null;
+                    if (this._liveTriggerIteration !== nextIter || this._liveTriggeredSequenceName !== nextName) {
+                        this._liveTriggerIteration = nextIter;
+                        this._liveTriggeredSequenceName = nextName;
+                        if (typeof window !== 'undefined' && this.id != null) {
+                            window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
+                                detail: { nodeId: this.id, liveTelemetry: true }
+                            }));
+                        }
+                    }
+                } else if (!manifestEvents || manifestEvents.length === 0) {
+                    const stepLen = Number(this.properties?.step_length) || 0.25;
+                    const patternBeats = Math.max(0.25, SequenceNode.stepCount * stepLen);
+                    const totalBars = Number(this.properties?.total_bars) || 4;
+                    const totalBeats = totalBars * 4;
+                    const wrappedBeat = totalBeats > 0 ? ((telemetry.beat % totalBeats) + totalBeats) % totalBeats : telemetry.beat;
+                    const cycleIdx = Math.max(0, Math.floor(wrappedBeat / patternBeats));
+                    if (this._liveTriggerIteration !== cycleIdx) {
+                        this._liveTriggerIteration = cycleIdx;
+                        if (typeof window !== 'undefined' && this.id != null) {
+                            window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
+                                detail: { nodeId: this.id, liveTelemetry: true }
+                            }));
+                        }
                     }
                 }
+            } else if (this._liveTriggerIteration !== null || this._liveTriggeredSequenceName !== null || this._liveTriggeredSequence !== null) {
+                this._liveTriggerIteration = null;
+                this._liveTriggeredSequenceName = null;
+                this._liveTriggeredSequence = null;
             }
         }
 
-        let rawSeq: any[] | null = this._liveTriggeredSequence;
+        let rawSeq: any[] | null = irideCycleSeq || this._liveTriggeredSequence;
+        const activeSlotSeq = slots[irideActiveSlot]?.sequence;
+        if (!rawSeq && Array.isArray(activeSlotSeq) && activeSlotSeq.length > 0) {
+            rawSeq = activeSlotSeq;
+        }
         if (!rawSeq && Array.isArray(this.properties?.sequence) && this.properties.sequence.length > 0) {
             rawSeq = this.properties.sequence;
         }
@@ -1103,7 +1161,9 @@ export class SequenceNode extends BaseNode {
 
         const rawParams = Array.isArray(this.properties?.step_parameters) ? this.properties.step_parameters : [];
         const stepCount = SequenceNode.stepCount;
-        const stepSlots = this.getResolvedStepSlots(stepCount);
+        const stepSlots = irideStepSlotOverride !== null
+            ? Array(stepCount).fill(irideStepSlotOverride)
+            : this.getResolvedStepSlots(stepCount);
         const steps: SequenceStep[] = [];
 
         for (let i = 0; i < stepCount; i++) {
@@ -1137,7 +1197,6 @@ export class SequenceNode extends BaseNode {
             });
         }
 
-        const slots = this.getSlots();
         this.sequenceRenderer.setOptions({
             minified: this.isMinifiedStage
         });
@@ -1147,7 +1206,7 @@ export class SequenceNode extends BaseNode {
             stepLength: Number(this.properties?.step_length) || 0.25,
             accentColor: this.nodeColor || '#ec4899',
             slotCount: slots.length,
-            activeSlot: this.activeSlotIndex
+            activeSlot: irideActiveSlot
         });
 
         this.sequenceRenderer.render(ctx, bounds, telemetry);

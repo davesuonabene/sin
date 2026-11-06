@@ -7,21 +7,23 @@ import { resolvePoolItemByQuery } from '../../../../ermes/ts/assetResolver.ts';
 import { SlotStrip } from './SlotStrip.ts';
 
 function getLoadedAssetBasename(node: BaseNode, poolItems?: any[], poolSeed?: any): string {
-    const liveFp = String(node._liveTriggeredFilepath || '');
-    if (liveFp) return liveFp.split(/[\\/]/).pop() || liveFp;
     const activeIdx = Math.max(0, Number((node as any).activeSlotIndex ?? node.properties?.active_slot ?? 0));
     const q = String(node.properties?.pool_query ?? '').trim();
-    if (isFieldOperatorExpression(q) && Array.isArray(poolItems) && poolItems.length > 0) {
-        const chosen = resolvePoolItemByQuery(
-            poolItems,
-            q,
-            activeIdx,
-            node.properties?.seed ?? poolSeed ?? 42,
-            false,
-            node.getTriggerCount()
-        );
-        const chosenFp = String(chosen?.name || chosen?.absolute_path || chosen?.filepath || '');
-        if (chosenFp) return chosenFp.split(/[\\/]/).pop() || chosenFp;
+    if (isFieldOperatorExpression(q)) {
+        const liveFp = String(node._liveTriggeredFilepath || '');
+        if (liveFp) return liveFp.split(/[\\/]/).pop() || liveFp;
+        if (Array.isArray(poolItems) && poolItems.length > 0) {
+            const chosen = resolvePoolItemByQuery(
+                poolItems,
+                q,
+                activeIdx,
+                node.properties?.seed ?? poolSeed ?? 42,
+                false,
+                node.getTriggerCount()
+            );
+            const chosenFp = String(chosen?.name || chosen?.absolute_path || chosen?.filepath || '');
+            if (chosenFp) return chosenFp.split(/[\\/]/).pop() || chosenFp;
+        }
     }
     const slotFp = Array.isArray(node.properties?.slots) ? String(node.properties.slots[activeIdx]?.filepath || '') : '';
     const filepath = String(node.properties?.filepath || slotFp || '');
@@ -229,13 +231,19 @@ export class WaveformCropSection {
             }
         };
 
-        const syncVisualizerForActiveSlot = () => {
+        const syncVisualizerForActiveSlot = (isLiveTelemetry = false) => {
             if (!visualizer) return;
             const activeSlot = sampleNode.activeSlotIndex ?? 0;
             const slotFp = Array.isArray(node.properties?.slots) ? String(node.properties.slots[activeSlot]?.filepath || '') : '';
-            const fp = String(node._liveTriggeredFilepath || node.properties?.filepath || slotFp || '');
-            const s = Number(node.properties?.crop_start ?? 0);
-            const e = Number(node.properties?.crop_end ?? 1);
+            const hasCalcPool = isFieldOperatorExpression(node.properties?.pool_query);
+            const liveFp = hasCalcPool ? String(node._liveTriggeredFilepath || '') : '';
+            const fp = String(liveFp || node.properties?.filepath || slotFp || '');
+            const s = node.hasFieldOperator?.('crop_start')
+                ? Number(node.evaluateFieldOperatorForKey('crop_start', node.getFieldOperator('crop_start')))
+                : Number(node.properties?.crop_start ?? 0);
+            const e = node.hasFieldOperator?.('crop_end')
+                ? Number(node.evaluateFieldOperatorForKey('crop_end', node.getFieldOperator('crop_end')))
+                : Number(node.properties?.crop_end ?? 1);
             visualizer.setCrop(s, e, true);
             if (!fp) {
                 visualizer.setAudioBufferSync(null);
@@ -252,7 +260,7 @@ export class WaveformCropSection {
                 visualizer.setAudioBufferSync(cachedBuf);
                 const audioDur = visualizer.getDuration();
                 const curDur = Number(node.properties.duration_seconds);
-                if (audioDur > 0 && (!Number.isFinite(curDur) || curDur <= 0 || Math.abs(curDur - audioDur) > 0.05)) {
+                if (!isLiveTelemetry && audioDur > 0 && (!Number.isFinite(curDur) || curDur <= 0 || Math.abs(curDur - audioDur) > 0.05)) {
                     node.updateProperty('duration_seconds', audioDur);
                 }
                 updateTimeLabels(s, e);
@@ -261,7 +269,7 @@ export class WaveformCropSection {
                     if (windowContext?.currentWaveformVisualizer !== visualizer || windowContext?.disposed) return;
                     const audioDur = visualizer?.getDuration() || 0;
                     const curDur = Number(node.properties.duration_seconds);
-                    if (audioDur > 0 && (!Number.isFinite(curDur) || curDur <= 0 || Math.abs(curDur - audioDur) > 0.05)) {
+                    if (!isLiveTelemetry && audioDur > 0 && (!Number.isFinite(curDur) || curDur <= 0 || Math.abs(curDur - audioDur) > 0.05)) {
                         node.updateProperty('duration_seconds', audioDur);
                     }
                     const crop = visualizer!.getCrop();
@@ -368,9 +376,17 @@ export class WaveformCropSection {
         const onNodeRefreshed = (event: Event) => {
             const detail = (event as CustomEvent).detail;
             if (detail?.nodeId === node.id) {
+                const isLive = Boolean(detail?.liveTelemetry);
+                if (isLive) {
+                    const hasCalcPool = isFieldOperatorExpression(node.properties?.pool_query);
+                    const hasCalcCrop = Boolean(node.hasFieldOperator?.('crop_start') || node.hasFieldOperator?.('crop_end'));
+                    if (!hasCalcPool && !hasCalcCrop) {
+                        return;
+                    }
+                }
                 visualizer?.setWaveformColor(getNodeColor());
                 syncSelectorDisplay();
-                syncVisualizerForActiveSlot();
+                syncVisualizerForActiveSlot(isLive);
             }
         };
         window.addEventListener('node-property-changed', onPropChanged);

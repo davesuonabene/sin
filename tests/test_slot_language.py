@@ -16,9 +16,14 @@ from ermes.py.slot_language import (
     resolve_cycle_seeds,
     resolve_modifier_slot_seeds,
     roll_seed_expression,
+    get_pool_permutation_order,
+    permute_pool_items,
+    evaluate_numeric_field_operator,
+    resolve_pool_item_by_query,
 )
 from ermes.py.compiler import compile_canonical_graph_to_audio_node_model
 from core.audio_object import (
+    AudioObject,
     SampleObject,
     SequenceObject,
     ArrangementObject,
@@ -472,6 +477,126 @@ class TestSlotLanguageAndMultiSlotDsp(unittest.TestCase):
             seq_events = system.manifest.get("nodes", {}).get("302", {}).get("events", [])
             self.assertEqual([e.get("iteration") for e in seq_events], [0, 1, 2, 3])
             self.assertEqual([e.get("sample_slot_resolved") for e in seq_events], [0, 0, 0, 1])
+
+    def test_pool_permutation_and_bracketed_field_operators(self):
+        items = [
+            {"id": 1, "name": "kick_0.wav", "filepath": "kick_0.wav"},
+            {"id": 2, "name": "kick_1.wav", "filepath": "kick_1.wav"},
+            {"id": 3, "name": "kick_2.wav", "filepath": "kick_2.wav"},
+            {"id": 4, "name": "kick_3.wav", "filepath": "kick_3.wav"},
+        ]
+
+        # Seed 0 -> identity permutation [0, 1, 2, 3]
+        self.assertEqual(get_pool_permutation_order(4, 0, 10), [0, 1, 2, 3])
+        self.assertEqual([i["id"] for i in permute_pool_items(items, 0, 10)], [1, 2, 3, 4])
+
+        # Seed > 0 -> deterministic permutation
+        perm_seed_1 = get_pool_permutation_order(4, 1, 10)
+        self.assertEqual(sorted(perm_seed_1), [0, 1, 2, 3])
+        self.assertEqual(get_pool_permutation_order(4, 1, 10), perm_seed_1)
+
+        # resolve_pool_item_by_query with pool_seed=1 resolves index 0 to the first item of the permuted pool
+        resolved_0 = resolve_pool_item_by_query(items, "0", slot_index=0, slot_seed=42, pool_seed=1, node_id=10)
+        self.assertEqual(resolved_0["id"], items[perm_seed_1[0]]["id"])
+
+        # Bracketed numeric field operators:
+        # 1. "[0 10]" subdivides cycle_progress
+        self.assertEqual(
+            evaluate_numeric_field_operator("[0 10]", 0.0, 10.0, 1.0, False, 42, 1, 0, cycle_progress=0.25),
+            0.0,
+        )
+        self.assertEqual(
+            evaluate_numeric_field_operator("[0 10]", 0.0, 10.0, 1.0, False, 42, 1, 0, cycle_progress=0.75),
+            10.0,
+        )
+
+        # 2. "<0 1..10>" alternates fixed 0 and random in 1..10 on sequential event_idx
+        self.assertEqual(
+            evaluate_numeric_field_operator("<0 1..10>", 0.0, 10.0, 1.0, False, 42, 1, 0, event_idx=0),
+            0.0,
+        )
+        rnd_evt_1 = evaluate_numeric_field_operator("<0 1..10>", 0.0, 10.0, 1.0, False, 42, 1, 0, event_idx=1)
+        self.assertGreaterEqual(rnd_evt_1, 1.0)
+        self.assertEqual(
+            evaluate_numeric_field_operator("<0 1..10>", 0.0, 10.0, 1.0, False, 42, 1, 0, event_idx=2),
+            0.0,
+        )
+
+    def test_multi_master_hierarchical_trigger_compilation(self):
+        sr = 44100
+        system = System(sample_rate=sr, bpm=120.0, render_mode="preview")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_0 = os.path.join(tmpdir, "slot_0.wav")
+            path_1 = os.path.join(tmpdir, "slot_1.wav")
+            sf.write(path_0, np.full((sr // 10, 1), 0.2, dtype=np.float32), sr)
+            sf.write(path_1, np.full((sr // 10, 1), 0.8, dtype=np.float32), sr)
+
+            sample_obj = SampleObject(
+                filepath=path_0,
+                sample_type="one_shot",
+                slots=[
+                    {"index": 0, "filepath": path_0, "sample_start": 0.0, "sample_end": 1.0},
+                    {"index": 1, "filepath": path_1, "sample_start": 0.0, "sample_end": 1.0},
+                ],
+                node_id=701,
+            )
+
+            # Sequence (1 bar) with "[0 1]" sample_slot:
+            # First half of each 1-bar cycle (beats 0, 1) -> slot 0 (0.2)
+            # Second half of each 1-bar cycle (beats 2, 3) -> slot 1 (0.8)
+            seq_obj = SequenceObject(
+                sequence=[1, 1, 1, 1],
+                step_length=1.0,
+                total_bars=1.0,
+                global_bars=2.0,
+                sample_slot="[0 1]",
+                field_operators={"sample_slot": "[0 1]"},
+                slots=[
+                    {
+                        "index": 0,
+                        "sequence": [1, 1, 1, 1],
+                        "sample_slot": "[0 1]",
+                        "step_length": 1.0,
+                        "field_operators": {"sample_slot": "[0 1]"},
+                    }
+                ],
+                node_id=702,
+            )
+            seq_obj.add_child(sample_obj, 0.0)
+
+            # Sub-Master Track (2 bars)
+            sub_master = AudioObject(
+                node_id=703,
+                node_name="SubMaster",
+                total_bars=2.0,
+                global_bars=4.0,
+            )
+            sub_master.add_child(seq_obj, 0.0)
+
+            # Main Master Track (4 bars) -> renders sub_master (2 bars) across 2 Global Triggers (global_idx = 0, 1)
+            main_master = AudioObject(
+                node_id=704,
+                node_name="MainMaster",
+                total_bars=4.0,
+                global_bars=4.0,
+            )
+            main_master.add_child(sub_master, 0.0)
+
+            rendered = main_master.render(system)
+            flat = rendered.reshape(-1) if rendered.ndim == 1 else np.max(np.abs(rendered), axis=0)
+            beat_samples = int((60.0 / 120.0) * sr)
+            bar_samples = 4 * beat_samples
+
+            # Total length is 4 bars
+            self.assertEqual(flat.shape[0], 4 * bar_samples)
+
+            # In every bar (bars 0, 1, 2, 3), beat 0 uses slot 0 (0.2) and beat 2 uses slot 1 (0.8)
+            for b in range(4):
+                bar_start = b * bar_samples
+                peak_beat_0 = float(np.max(np.abs(flat[bar_start : bar_start + beat_samples // 2])))
+                peak_beat_2 = float(np.max(np.abs(flat[bar_start + 2 * beat_samples : bar_start + 2 * beat_samples + beat_samples // 2])))
+                self.assertAlmostEqual(peak_beat_0, 0.2, places=2)
+                self.assertAlmostEqual(peak_beat_2, 0.8, places=2)
 
 
 if __name__ == "__main__":

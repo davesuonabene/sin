@@ -9,6 +9,12 @@ import {
     resolveSectionSlot,
     resolveStepSlots,
 } from './slotLanguage.ts';
+import {
+    getEffectiveFieldSeed,
+} from './randomResolver.ts';
+import {
+    resolveEffectivePoolSeed,
+} from './assetResolver.ts';
 
 export interface SerializationOptions {
     includeDynamicPools?: boolean;
@@ -52,6 +58,42 @@ export function serializeNodeSubtree(
         const candidate = String(value).toLowerCase() === 'global' ? globalParameters[key] : value;
         const numeric = Number(candidate);
         return Number.isFinite(numeric) ? numeric : fallback;
+    };
+    const workspaceBars = resolveGlobalNumber(globalParameters.total_bars, 'total_bars', 4.0);
+
+    const findDownstreamMasterBars = (startNodeId: number): number | undefined => {
+        const visited = new Set<number>();
+        let currentId: number | undefined = startNodeId;
+        while (currentId != null && !visited.has(currentId)) {
+            visited.add(currentId);
+            let nextParentId: number | undefined = trackNodes.get(currentId)?.parentId;
+            if (nextParentId == null) {
+                const links = (graph as any)?.links;
+                if (links) {
+                    const linkList = Array.isArray(links) ? links : Object.values(links);
+                    for (const link of linkList) {
+                        if (!link) continue;
+                        const orig = Array.isArray(link) ? link[1] : link.origin_id;
+                        const targ = Array.isArray(link) ? link[3] : link.target_id;
+                        if (orig === currentId && targ != null) {
+                            nextParentId = targ;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (nextParentId == null) break;
+            const pData = trackNodes.get(nextParentId);
+            const pObj = graph.getNodeById?.(nextParentId);
+            const pType = pData?.type || pObj?.properties?.node_type || (pObj?.type === 'Audio/Arrangement' ? 'arrangement' : pObj?.type === 'Audio/Track' ? 'track' : '');
+            if (pType === 'track' || pType === 'arrangement') {
+                const rawBars = pObj?.properties?.total_bars ?? pData?.total_bars;
+                const isGlobal = rawBars == null || String(rawBars).toLowerCase() === 'global' || Boolean(pObj?.properties?.length_inherited);
+                return isGlobal ? workspaceBars : resolveGlobalNumber(rawBars, 'total_bars', workspaceBars);
+            }
+            currentId = nextParentId;
+        }
+        return undefined;
     };
 
     function buildNodeModel(
@@ -112,13 +154,15 @@ export function serializeNodeSubtree(
         const isGlobalOrInherited = rawTotalBars == null
             || String(rawTotalBars).toLowerCase() === 'global'
             || Boolean(nodeObj?.properties?.length_inherited);
-        const fallbackBars = parentTotalBars ?? resolveGlobalNumber(globalParameters.total_bars, 'total_bars', 4.0);
+        const ancestorMasterBars = parentTotalBars ?? findDownstreamMasterBars(nodeId);
+        const fallbackBars = ancestorMasterBars ?? workspaceBars;
         const isSampleLoop = (nodeObj?.properties?.sample_type ?? data?.sample_type ?? 'loop') === 'loop';
         const total_bars = isGlobalOrInherited
             ? (nodeType === 'sample'
                 ? ((isSampleLoop && (parentNodeType === undefined || parentNodeType === 'track')) ? fallbackBars : undefined)
                 : fallbackBars)
             : resolveGlobalNumber(rawTotalBars, 'total_bars', fallbackBars);
+        const global_bars = Math.max(Number(total_bars || fallbackBars), Number(ancestorMasterBars ?? workspaceBars));
         const section_points = nodeObj?.properties?.section_points ?? data?.section_points ?? (nodeType === "arrangement" ? [] : undefined);
         const section_enabled = nodeObj?.properties?.section_enabled ?? data?.section_enabled ?? (nodeType === "arrangement" ? [] : undefined);
         const section_probability = nodeObj?.properties?.section_probability ?? data?.section_probability ?? (nodeType === "arrangement" ? [1.0] : undefined);
@@ -134,6 +178,11 @@ export function serializeNodeSubtree(
             ? (poolProperties?.refresh_mode || data?.refresh_mode || nodeObj?.properties?.refresh_mode || "off")
             : "off";
         let seed = poolProperties?.seed ?? data?.seed ?? nodeObj?.properties?.seed;
+        const global_seed = resolveEffectivePoolSeed(assignedModifier, nodeObj, graph);
+        const field_seed = getEffectiveFieldSeed(graph, nodeObj);
+        if (seed === undefined && graph?.extra?.global_seed !== undefined) {
+            seed = field_seed;
+        }
         const isGlobalFrozen = (options.isFrozen !== undefined)
             ? Boolean(options.isFrozen)
             : Boolean(
@@ -280,9 +329,19 @@ export function serializeNodeSubtree(
                     const slotSampleSlot = isActive
                         ? sampleSlotExpr
                         : String(s?.sample_slot ?? sampleSlotExpr);
-                    const slotSeed = isActive ? (seed ?? s?.seed ?? 42) : (s?.seed ?? seed ?? 42);
+                    const slotSeed = isActive ? (seed ?? s?.seed ?? field_seed ?? 42) : (s?.seed ?? seed ?? field_seed ?? 42);
                     const slotCycleSeeds = resolveCycleSeeds(slotSeed, numCycles, Number(nodeId || 1) + idx + seedSalt);
-                    const slotStepSlots = resolveStepSlots(slotSampleSlot, slotSeq.length || 16, upstreamSlotCount, slotCycleSeeds[0], upstreamActiveSlot);
+                    const stepSlotOptions = /[\[\]<>]/.test(slotSampleSlot)
+                        ? { globalIdx: 0, cycleIdx: 0, numCycles, activeSequence: slotSeq }
+                        : undefined;
+                    const slotStepSlots = resolveStepSlots(
+                        slotSampleSlot,
+                        slotSeq.length || 16,
+                        upstreamSlotCount,
+                        slotCycleSeeds[0],
+                        upstreamActiveSlot,
+                        stepSlotOptions
+                    );
                     return {
                         slot: idx,
                         label: s?.label,
@@ -303,8 +362,19 @@ export function serializeNodeSubtree(
                     };
                 });
             } else {
-                const cycleSeeds0 = resolveCycleSeeds(seed ?? 42, numCycles, Number(nodeId || 1) + seedSalt);
-                const stepSlots0 = resolveStepSlots(sampleSlotExpr, seqLen, upstreamSlotCount, cycleSeeds0[0], upstreamActiveSlot);
+                const effSeed0 = seed ?? field_seed ?? 42;
+                const cycleSeeds0 = resolveCycleSeeds(effSeed0, numCycles, Number(nodeId || 1) + seedSalt);
+                const stepSlotOptions0 = /[\[\]<>]/.test(sampleSlotExpr)
+                    ? { globalIdx: 0, cycleIdx: 0, numCycles, activeSequence: Array.isArray(sequence) ? sequence : undefined }
+                    : undefined;
+                const stepSlots0 = resolveStepSlots(
+                    sampleSlotExpr,
+                    seqLen,
+                    upstreamSlotCount,
+                    cycleSeeds0[0],
+                    upstreamActiveSlot,
+                    stepSlotOptions0
+                );
                 slots = [{
                     slot: 0,
                     pool_query: nodeObj?.properties?.pool_query ?? data?.pool_query,
@@ -318,7 +388,7 @@ export function serializeNodeSubtree(
                     step_length: stepLength,
                     release: nodeObj?.properties?.release ?? data?.release,
                     fade_ms: fadeMs,
-                    seed: seed ?? 42,
+                    seed: effSeed0,
                     cycle_seeds: cycleSeeds0,
                     field_operators: nodeObj?.properties?.field_operators ?? data?.field_operators,
                 }];
@@ -385,6 +455,9 @@ export function serializeNodeSubtree(
             release: nodeObj?.properties?.release ?? data?.release ?? (nodeType === "sequence" ? 0 : undefined),
             fade_ms: fadeMs,
             total_bars: total_bars,
+            global_bars: global_bars,
+            global_seed: global_seed,
+            field_seed: field_seed,
             section_points: section_points,
             section_enabled: section_enabled,
             section_probability: section_probability,

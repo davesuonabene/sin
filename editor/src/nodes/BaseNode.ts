@@ -30,6 +30,7 @@ import {
     normalizeNumericSeed,
     wrapSlotIndex,
 } from '../../../ermes/ts/slotLanguage.ts';
+import { getEffectiveFieldSeed } from '../../../ermes/ts/randomResolver.ts';
 
 export const VISUALIZATION_TYPE_LABELS: Record<VisualizationTypeId, string> = {
     loop: 'Loop Waveform',
@@ -531,10 +532,15 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     getEffectiveSeed(): number {
+        const g = (this as any).graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
         const poolNode = this.getAttachedPoolNode?.();
-        const rawSeed = this.properties?.seed ?? poolNode?.properties?.seed ?? 42;
         const salt = Number(this.properties?.seed_salt ?? poolNode?.properties?.seed_salt ?? 0) * 9973;
-        const base = normalizeNumericSeed(rawSeed, 42);
+        if (this.properties?.locked_field_seed !== undefined || (g?.extra && (g.extra.global_seed !== undefined || g.extra.field_refresh_epoch !== undefined))) {
+            const base = getEffectiveFieldSeed(g, this);
+            return hashSeed(base, Number(this.id || 1), salt);
+        }
+        const rawSeed = this.properties?.seed ?? poolNode?.properties?.seed ?? 0;
+        const base = normalizeNumericSeed(rawSeed, 0);
         return hashSeed(base, Number(this.id || 1), salt);
     }
 
@@ -637,13 +643,18 @@ export abstract class BaseNode extends LGraphNode {
 
     evaluateAllFieldOperators(triggerOverride?: number): void {
         const ops = this.properties?.field_operators;
-        if (!ops || typeof ops !== 'object') return;
-        for (const [key, expr] of Object.entries(ops)) {
-            if (key === 'sample_slot' || key === 'pool_query' || key === 'seed') continue;
-            if (typeof expr === 'string' && isFieldOperatorExpression(expr)) {
-                const resolved = this.evaluateFieldOperatorForKey(key, expr, undefined, triggerOverride);
-                this.updateProperty(key, resolved);
+        if (ops && typeof ops === 'object') {
+            for (const [key, expr] of Object.entries(ops)) {
+                if (key === 'sample_slot' || key === 'pool_query' || key === 'seed') continue;
+                if (typeof expr === 'string' && isFieldOperatorExpression(expr)) {
+                    const resolved = this.evaluateFieldOperatorForKey(key, expr, undefined, triggerOverride);
+                    this.updateProperty(key, resolved);
+                }
             }
+        }
+        const poolQuery = String(this.properties?.pool_query ?? '').trim();
+        if (isFieldOperatorExpression(poolQuery) && typeof (this as any).applyPoolQuery === 'function') {
+            (this as any).applyPoolQuery(poolQuery, false);
         }
     }
 

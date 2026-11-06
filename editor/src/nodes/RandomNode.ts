@@ -11,7 +11,6 @@ export class RandomNode extends ModulatorNode {
                 id: 'RANDOM',
                 label: 'Random',
                 sections: [
-                    { type: 'fields', fields: ['seed'] },
                     { type: 'random_panel' }
                 ]
             },

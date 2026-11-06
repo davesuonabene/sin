@@ -81,22 +81,24 @@ export class SequenceGridSection {
         const isPoolOpen = Boolean(node.isPoolViewOpen);
 
         const getLoadedSeqName = (): string => {
-            const liveName = String((node as any)._liveTriggeredSequenceName || '');
-            if (liveName) return liveName.replace(/\.(?:seq|mid|midi)$/i, '');
             const activeIdx = Math.max(0, Number((node as any).activeSlotIndex ?? node.properties?.active_slot ?? 0));
             const q = String(node.properties?.pool_query ?? '').trim();
-            if (isFieldOperatorExpression(q) && poolItems.length > 0) {
-                const chosen = resolvePoolItemByQuery(
-                    poolItems,
-                    q,
-                    activeIdx,
-                    node.properties?.seed ?? assignedModifier?.properties?.seed ?? 42,
-                    false,
-                    node.getTriggerCount()
-                );
-                const chosenName = String(chosen?.name || chosen?.absolute_path || chosen?.filepath || '');
-                if (chosenName) {
-                    return (chosenName.split(/[\\/]/).pop() || chosenName).replace(/\.(?:seq|mid|midi)$/i, '');
+            if (isFieldOperatorExpression(q)) {
+                const liveName = String((node as any)._liveTriggeredSequenceName || '');
+                if (liveName) return liveName.replace(/\.(?:seq|mid|midi)$/i, '');
+                if (poolItems.length > 0) {
+                    const chosen = resolvePoolItemByQuery(
+                        poolItems,
+                        q,
+                        activeIdx,
+                        node.properties?.seed ?? assignedModifier?.properties?.seed ?? 42,
+                        false,
+                        node.getTriggerCount()
+                    );
+                    const chosenName = String(chosen?.name || chosen?.absolute_path || chosen?.filepath || '');
+                    if (chosenName) {
+                        return (chosenName.split(/[\\/]/).pop() || chosenName).replace(/\.(?:seq|mid|midi)$/i, '');
+                    }
                 }
             }
             const slotFp = Array.isArray(node.properties?.slots) ? String(node.properties.slots[activeIdx]?.filepath || '') : '';
@@ -206,6 +208,19 @@ export class SequenceGridSection {
                 syncNameDisplay();
             }
         });
+        const buttons: HTMLButtonElement[] = [];
+        const syncLiveSequenceSteps = () => {
+            const liveSeq = isPoolCalculated() && Array.isArray((node as any)._liveTriggeredSequence)
+                ? ((node as any)._liveTriggeredSequence as number[])
+                : null;
+            buttons.forEach((btn, idx) => {
+                const isOn = liveSeq ? Boolean(liveSeq[idx]) : Boolean(sequence[idx]);
+                btn.classList.toggle('active', isOn);
+                btn.setAttribute('aria-pressed', String(isOn));
+                grid.querySelectorAll<HTMLElement>(`.td-step-value-control[data-step-index="${idx}"]`)
+                    .forEach(control => control.classList.toggle('is-step-off', !isOn));
+            });
+        };
         if (typeof window !== 'undefined') {
             const onSeqRefreshed = (evt: Event) => {
                 if (!nameInput.isConnected) {
@@ -214,7 +229,11 @@ export class SequenceGridSection {
                 }
                 const detail = (evt as CustomEvent)?.detail;
                 if (!detail || detail.nodeId === node.id) {
+                    if (detail?.liveTelemetry && !isPoolCalculated()) {
+                        return;
+                    }
                     syncNameDisplay();
+                    syncLiveSequenceSteps();
                 }
             };
             window.addEventListener('node-properties-refreshed', onSeqRefreshed);
@@ -388,7 +407,6 @@ export class SequenceGridSection {
             }
         });
 
-        const buttons: HTMLButtonElement[] = [];
         sequence.forEach((value: number, index: number) => {
             const button = StepValueControl.createBinary({
                 value: Boolean(value),
@@ -405,6 +423,7 @@ export class SequenceGridSection {
             });
             buttons.push(button);
         });
+        syncLiveSequenceSteps();
 
         const buttonRow = document.createElement('div');
         buttonRow.id = 'sequence-grid';

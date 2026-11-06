@@ -1,41 +1,56 @@
 /**
- * ERMES Dynamic Asset Resolver & Seed Management Engine
- * Manages asset filter pool resolution, seed advancement, and library metadata syncing.
+ * ERMES Dynamic Asset Resolver & Pool Permutation Engine
+ * Manages asset filter pool resolution, Global Seed permutation, and library metadata syncing.
  */
 
 import {
+    type FieldEvalContext,
     type NodeSlot,
+    computeLeafPrngSeed,
+    getPoolPermutationOrder,
     hashSeed,
+    isFieldOperatorExpression,
     isRandomToken,
     isRangeOperatorToken,
     mulberry32,
+    normalizeNumericSeed,
+    permutePoolItems,
+    resolveFieldOperatorLeaf,
     resolveModifierSlotSeeds,
     rollSeedExpression,
-    tokenizeFieldOperator,
     wrapSlotIndex
 } from './slotLanguage.ts';
 
+export { getPoolPermutationOrder, permutePoolItems };
+
 /**
- * Resolves a single item from an asset pool using a selector query or Field Operator:
- * - List / Cycle Operator ("0 0 0 1", "kick_a kick_b"): selects token at `triggerCount % tokens.length`
- *   (strictly driven by `triggerCount`, independent of `slotSeed`)
- * - Range Operator ("0..2", "rand(0, 2)"): deterministic seeded selection in [min, max]
- * - Random ("rand", "random", or ""): deterministic seeded selection for `slotIndex`
- * - Integer index ("0", "1", ...): modulo-wrapped index into `items`
+ * Resolves a single item from an asset pool using a selector query or bracketed Field Operator:
+ * - Supports `poolSeed` permutation: when `evalCtx.poolSeed` is provided (`> 0`), the pool items
+ *   are deterministically reordered (keeping `poolSeed == 0` as the user-defined order).
+ * - Unbracketed Global Scope (`random`, `0 1`, `random random`)
+ * - Cycle Scope `[...]` (`[random]`, `[0 1]`, `[0 random]`, `[random][random]`)
+ * - Sequential Event Scope `<...>` (`<0 1 2>`, `<random>`, `<0 random>`, `[0 <random>]`)
+ * - Integer index ("0", "1", ...): modulo-wrapped index into active (permuted) `items`
  * - String (matching asset name): case-insensitive exact, prefix, or substring match against item name / filename
  */
 export function resolvePoolItemByQuery(
     items: any[],
     query: unknown,
     slotIndex: number = 0,
-    slotSeed: number = 42,
+    slotSeed: number = 0,
     isSequential: boolean = false,
-    triggerCount: number = 0
+    triggerCount: number = 0,
+    evalCtx?: FieldEvalContext & { poolSeed?: unknown; nodeId?: number }
 ): any | null {
     if (!Array.isArray(items) || items.length === 0) return null;
+    const activeItems = evalCtx?.poolSeed !== undefined
+        ? permutePoolItems(items, evalCtx.poolSeed, evalCtx.nodeId ?? 0)
+        : items;
+
     const raw = String(query ?? '').trim();
     const lower = raw.toLowerCase();
-    const triggerIdx = Math.max(0, Math.floor(Number(triggerCount) || 0));
+    const triggerIdx = Math.max(0, Math.floor(Number(evalCtx?.triggerCount ?? triggerCount) || 0));
+    const numericSeed = normalizeNumericSeed(evalCtx?.seed ?? slotSeed, 0);
 
     const extractNames = (item: any) => {
         const name = String(item?.name || '').trim().toLowerCase();
@@ -46,9 +61,9 @@ export function resolvePoolItemByQuery(
         return { name, nameStem, base, baseStem, fpLower: fp.toLowerCase() };
     };
 
-    // If raw is an exact match for a single item name (even if it contains spaces), return it directly
-    if (raw && !isRandomToken(raw) && !isRangeOperatorToken(raw)) {
-        for (const item of items) {
+    // 1. If raw is an exact match for a single item name (even if it contains spaces), return it directly
+    if (raw && !/[,[\]<>]/.test(raw) && !isRandomToken(raw) && !isRangeOperatorToken(raw)) {
+        for (const item of activeItems) {
             const { name, nameStem, base, baseStem } = extractNames(item);
             if (name === lower || nameStem === lower || base === lower || baseStem === lower) {
                 return item;
@@ -56,59 +71,65 @@ export function resolvePoolItemByQuery(
         }
     }
 
-    // Multi-token list operator: select token strictly by `triggerCount` (independent of seed)
-    const tokens = tokenizeFieldOperator(raw);
-    if (tokens.length > 1) {
-        const activeToken = tokens[wrapSlotIndex(triggerIdx, tokens.length)];
-        return resolvePoolItemByQuery(items, activeToken, slotIndex, slotSeed, isSequential, triggerIdx);
-    }
+    // 2. Evaluate AST leaf for bracketed or multi-token Field Operators
+    const mergedCtx: FieldEvalContext = {
+        ...evalCtx,
+        seed: numericSeed,
+        salt: (evalCtx?.salt ?? 0xA55E) + slotIndex,
+        triggerCount: triggerIdx,
+    };
+    const leaf = resolveFieldOperatorLeaf(raw, mergedCtx);
+    const activeToken = leaf ? leaf.token : raw;
+    const activeLower = activeToken.toLowerCase();
 
-    const rangeSpec = isRangeOperatorToken(raw);
-    if (rangeSpec) {
+    const rangeSpec = isRangeOperatorToken(activeToken);
+    if (rangeSpec && leaf) {
         const loIdx = Math.floor(rangeSpec.min);
         const hiIdx = Math.floor(rangeSpec.max);
         const span = Math.max(1, hiIdx - loIdx + 1);
-        const prng = mulberry32(hashSeed(slotSeed, slotIndex + triggerIdx, 0xA55E));
+        const prng = mulberry32(computeLeafPrngSeed(leaf, mergedCtx));
         const chosenIdx = loIdx + Math.floor(prng() * span);
-        return items[wrapSlotIndex(chosenIdx, items.length)] || null;
+        return activeItems[wrapSlotIndex(chosenIdx, activeItems.length)] || null;
     }
 
-    if (!raw || lower === 'rand' || lower === 'random') {
+    if (!activeToken || activeLower === 'rand' || activeLower === 'random') {
         if (isSequential) {
-            const idx = wrapSlotIndex(slotSeed + slotIndex + triggerIdx, items.length);
-            return items[idx] || null;
+            const idx = wrapSlotIndex(numericSeed + slotIndex + triggerIdx, activeItems.length);
+            return activeItems[idx] || null;
         }
-        const prng = mulberry32(hashSeed(slotSeed, slotIndex + triggerIdx, 0xA55E));
-        const idx = Math.floor(prng() * items.length);
-        return items[idx] || null;
+        const prng = leaf
+            ? mulberry32(computeLeafPrngSeed(leaf, mergedCtx))
+            : mulberry32(hashSeed(numericSeed, slotIndex + triggerIdx, 0xA55E));
+        const idx = Math.floor(prng() * activeItems.length);
+        return activeItems[idx] || null;
     }
 
-    if (/^-?\d+$/.test(raw)) {
-        const parsedIdx = parseInt(raw, 10);
-        const idx = wrapSlotIndex(parsedIdx, items.length);
-        return items[idx] || null;
+    if (/^-?\d+$/.test(activeToken)) {
+        const parsedIdx = parseInt(activeToken, 10);
+        const idx = wrapSlotIndex(parsedIdx, activeItems.length);
+        return activeItems[idx] || null;
     }
 
-    // 1. Exact match on name, stem, or filename
-    for (const item of items) {
+    // 3. Exact match on name, stem, or filename
+    for (const item of activeItems) {
         const { name, nameStem, base, baseStem } = extractNames(item);
-        if (name === lower || nameStem === lower || base === lower || baseStem === lower) {
+        if (name === activeLower || nameStem === activeLower || base === activeLower || baseStem === activeLower) {
             return item;
         }
     }
 
-    // 2. Prefix match on name or filename
-    for (const item of items) {
+    // 4. Prefix match on name or filename
+    for (const item of activeItems) {
         const { name, base } = extractNames(item);
-        if ((name && name.startsWith(lower)) || (base && base.startsWith(lower))) {
+        if ((name && name.startsWith(activeLower)) || (base && base.startsWith(activeLower))) {
             return item;
         }
     }
 
-    // 3. Substring match on name, filename, or path
-    for (const item of items) {
+    // 5. Substring match on name, filename, or path
+    for (const item of activeItems) {
         const { name, base, fpLower } = extractNames(item);
-        if ((name && name.includes(lower)) || (base && base.includes(lower)) || (fpLower && fpLower.includes(lower))) {
+        if ((name && name.includes(activeLower)) || (base && base.includes(activeLower)) || (fpLower && fpLower.includes(activeLower))) {
             return item;
         }
     }
@@ -129,13 +150,53 @@ export function parseBpmFromFilename(filename: string): number | null {
     return null;
 }
 
-export function advanceAssetPoolSeed(modifierNode: any, trackNodesMap?: Map<number, any>) {
+/**
+ * Resolves the active Pool Seed for a pool/owner node pair.
+ * When the graph uses `global_seed` (starting at 0), returns `locked_pool_seed ?? global_seed`.
+ * Falls back to `modifierNode.properties.seed` when standalone.
+ */
+export function resolveEffectivePoolSeed(modifierNode?: any, ownerNode?: any, graphOverride?: any): number {
+    if (ownerNode?.properties?.locked_pool_seed !== undefined) {
+        return normalizeNumericSeed(ownerNode.properties.locked_pool_seed, 0);
+    }
+    if (modifierNode?.properties?.locked_pool_seed !== undefined) {
+        return normalizeNumericSeed(modifierNode.properties.locked_pool_seed, 0);
+    }
+    const graph = graphOverride || ownerNode?.graph || modifierNode?.graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+    if (graph?.extra?.global_seed !== undefined) {
+        return normalizeNumericSeed(graph.extra.global_seed, 0);
+    }
+    if (modifierNode?.properties?.global_seed !== undefined) {
+        return normalizeNumericSeed(modifierNode.properties.global_seed, 0);
+    }
+    if (ownerNode?.properties?.global_seed !== undefined) {
+        return normalizeNumericSeed(ownerNode.properties.global_seed, 0);
+    }
+    return normalizeNumericSeed(modifierNode?.properties?.seed ?? ownerNode?.properties?.seed ?? 0, 0);
+}
+
+/**
+ * Returns the pool's `selected_items` ordered according to the current Global Seed (`0` = user-defined order).
+ */
+export function getActiveOrderedPoolItems(modifierNode: any, ownerNode?: any, rawItemsOverride?: any[]): any[] {
+    const rawItems = rawItemsOverride || modifierNode?.properties?.selected_items || ownerNode?.properties?.selected_items || [];
+    if (!Array.isArray(rawItems) || rawItems.length <= 1) return Array.isArray(rawItems) ? [...rawItems] : [];
+    const poolSeed = resolveEffectivePoolSeed(modifierNode, ownerNode);
+    const nodeId = Number(modifierNode?.id || ownerNode?.id || 0);
+    return permutePoolItems(rawItems, poolSeed, nodeId);
+}
+
+export function advanceAssetPoolSeed(modifierNode: any, trackNodesMap?: Map<number, any>, nextGlobalSeed?: number) {
     if (modifierNode?.properties?.seed_refresh === false) {
         return;
     }
     const trackNodes = trackNodesMap || (typeof window !== 'undefined' ? (window as any).trackNodes : undefined);
     if (modifierNode?.properties) {
         modifierNode.properties.seed_salt = (Number(modifierNode.properties.seed_salt) || 0) + 1;
+        if (nextGlobalSeed !== undefined) {
+            modifierNode.properties.global_seed = nextGlobalSeed;
+            modifierNode.properties.locked_pool_seed = nextGlobalSeed;
+        }
     }
     if (modifierNode?.properties?.playbackMode === 'Sequential') {
         const length = Math.max(1, modifierNode.properties.selected_items?.length || 0);
@@ -145,7 +206,11 @@ export function advanceAssetPoolSeed(modifierNode: any, trackNodesMap?: Map<numb
         modifierNode.properties.sequence_index = nextIndex;
         modifierNode.properties.seed = nextIndex;
     } else if (modifierNode?.properties) {
-        modifierNode.properties.seed = rollSeedExpression(modifierNode.properties.seed ?? 42);
+        if (nextGlobalSeed !== undefined && typeof modifierNode.properties.seed === 'number') {
+            modifierNode.properties.seed = nextGlobalSeed;
+        } else {
+            modifierNode.properties.seed = rollSeedExpression(modifierNode.properties.seed ?? 0);
+        }
     }
     const modifierData = trackNodes?.get(modifierNode.id);
     if (modifierData) {
@@ -169,8 +234,12 @@ export function populateOwnerSlotsFromPool(
         || ownerNode.properties?.node_type === 'sequence';
 
     const rawItems = resolvedSelectedItems || modifierNode.properties.selected_items || [];
-    const items = rawItems.filter((item: any) => Boolean(item?.absolute_path || item?.filepath));
-    if (items.length === 0) return;
+    const baseItems = rawItems.filter((item: any) => Boolean(item?.absolute_path || item?.filepath));
+    if (baseItems.length === 0) return;
+
+    const poolSeed = resolveEffectivePoolSeed(modifierNode, ownerNode);
+    const poolNodeId = Number(modifierNode.id || ownerNode.id || 0);
+    const items = permutePoolItems(baseItems, poolSeed, poolNodeId);
 
     if (!Array.isArray(ownerNode.properties.slots) || ownerNode.properties.slots.length === 0) {
         if (typeof ownerNode.getSlots === 'function') {
@@ -214,8 +283,11 @@ export function populateOwnerSlotsFromPool(
         slots.length - 1
     );
     const seedSalt = Number(modifierNode.properties.seed_salt || ownerNode.properties.seed_salt || 0) * 9973;
+    const effectiveFieldSeed = typeof ownerNode.getEffectiveSeed === 'function'
+        ? ownerNode.getEffectiveSeed()
+        : (poolSeed + seedSalt);
     const slotSeeds = resolveModifierSlotSeeds(
-        modifierNode.properties.seed ?? 42,
+        modifierNode.properties.seed ?? poolSeed,
         slots.length,
         Number(ownerNode.id || modifierNode.id || 1) + seedSalt
     );
@@ -228,9 +300,20 @@ export function populateOwnerSlotsFromPool(
         if (hasExistingFixedAsset) {
             continue;
         }
-        const seedForSlot = isSequential ? slotSeeds[0] : slotSeeds[s];
-        const chosen = resolvePoolItemByQuery(items, slotQuery, s, seedForSlot, isSequential, triggerCount)
-            || resolvePoolItemByQuery(items, 'rand', s, seedForSlot, isSequential, triggerCount);
+        const seedForSlot = isFieldOperatorExpression(slotQuery, items)
+            ? effectiveFieldSeed
+            : (isSequential ? slotSeeds[0] : slotSeeds[s]);
+        // When no explicit query is set on slot `s`, default to index `s` of the global-seed-ordered pool
+        // unless legacy explicit string seed was set on modifierNode
+        const hasExplicitLegacySeed = modifierNode.properties.seed !== undefined
+            && modifierNode.properties.global_seed === undefined
+            && (ownerNode?.graph?.extra?.global_seed === undefined);
+        const effectiveQuery = (slotQuery !== undefined && String(slotQuery).trim() !== '')
+            ? slotQuery
+            : (hasExplicitLegacySeed ? 'rand' : String(s));
+
+        const chosen = resolvePoolItemByQuery(items, effectiveQuery, s, seedForSlot, isSequential, triggerCount)
+            || resolvePoolItemByQuery(items, String(s), s, seedForSlot, isSequential, triggerCount);
         if (!chosen) continue;
         const filepath = String(chosen.absolute_path || chosen.filepath || '');
         const bpm = chosen.bpm ?? chosen.original_bpm ?? parseBpmFromFilename(filepath);
@@ -598,8 +681,6 @@ export async function resolveAssignedAssetFilters(
         let modifierId = node?.properties?.asset_modifier_id ?? data?.asset_modifier_id;
         let modifier = modifierId != null ? graph.getNodeById(modifierId) : null;
 
-        // Defensive check: ensure modifier is actually an asset filter.
-        // If missing or pointing to another modifier kind (e.g. random), resolve via parentId attachment.
         const isAssetFilter = (m: any) => m && (
             m.type === 'Audio/AssetFilter' ||
             m.properties?.node_type === 'asset_filter' ||
@@ -625,118 +706,119 @@ export async function resolveAssignedAssetFilters(
         }
 
         if (modifier) {
-                const refreshMode = normalizeAssetRefreshMode(modifier.properties?.refresh_mode);
-                modifier.properties.refresh_mode = refreshMode;
-                const hasResolvedAsset = Boolean(modifier.properties?.output_value);
-                const lockedLocator = refreshMode === 'off' ? modifier.properties?.fixed_item : null;
-                const isFrozen = Boolean(request.globalFreeze) && (
-                    node?.properties
-                        ? node.properties.freeze_refresh !== false
-                        : modifier?.properties?.freeze_refresh !== false
+            const refreshMode = normalizeAssetRefreshMode(modifier.properties?.refresh_mode);
+            modifier.properties.refresh_mode = refreshMode;
+            const hasResolvedAsset = Boolean(modifier.properties?.output_value);
+            const lockedLocator = refreshMode === 'off' ? modifier.properties?.fixed_item : null;
+            const isSeedLocked = Boolean(graph?.extra?.global_seed_locked);
+            const isFrozen = Boolean(request.globalFreeze) && (
+                node?.properties
+                    ? node.properties.freeze_refresh !== false
+                    : modifier?.properties?.freeze_refresh !== false
+            );
+            const shouldRefresh = !isFrozen
+                && !isSeedLocked
+                && (modifier.properties?.seed_refresh !== false)
+                && shouldRefreshAssetPool(
+                    refreshMode,
+                    nodeId,
+                    rootNodeId,
+                    trackNodes,
+                    request
                 );
-                const shouldRefresh = !isFrozen
-                    && (modifier.properties?.seed_refresh !== false)
-                    && shouldRefreshAssetPool(
-                        refreshMode,
-                        nodeId,
-                        rootNodeId,
-                        trackNodes,
-                        request
-                    );
-                if (shouldRefresh) advanceAssetPoolSeed(modifier, trackNodes);
-                if (shouldRefresh || !hasResolvedAsset) {
-                    await resolveAssetFilterNode(
-                        modifier,
-                        node,
-                        shouldRefresh,
-                        lockedLocator,
-                        request.libraryFiles
-                    );
-                } else if (node?.properties) {
-                    const sampleNode = node as any;
-                    let ownerChanged = false;
-                    let modifierChanged = false;
+            if (shouldRefresh) advanceAssetPoolSeed(modifier, trackNodes);
+            if (shouldRefresh || !hasResolvedAsset) {
+                await resolveAssetFilterNode(
+                    modifier,
+                    node,
+                    shouldRefresh,
+                    lockedLocator,
+                    request.libraryFiles
+                );
+            } else if (node?.properties) {
+                const sampleNode = node as any;
+                let ownerChanged = false;
+                let modifierChanged = false;
 
-                    const isSeq = sampleNode.type === 'Audio/Sequence'
-                        || sampleNode.type === 'sequence'
-                        || sampleNode.type === 'Sequence'
-                        || sampleNode.properties?.node_type === 'sequence';
-                    const rawSlots = Array.isArray(sampleNode.properties.slots) ? sampleNode.properties.slots : [];
-                    const hasUnpopulatedSlots = !isSeq && rawSlots.length > 0 && rawSlots.some((s: any) => !s?.filepath);
+                const isSeq = sampleNode.type === 'Audio/Sequence'
+                    || sampleNode.type === 'sequence'
+                    || sampleNode.type === 'Sequence'
+                    || sampleNode.properties?.node_type === 'sequence';
+                const rawSlots = Array.isArray(sampleNode.properties.slots) ? sampleNode.properties.slots : [];
+                const hasUnpopulatedSlots = !isSeq && rawSlots.length > 0 && rawSlots.some((s: any) => !s?.filepath);
 
-                    const activeSlotIdx = Math.max(0, Number(sampleNode.activeSlotIndex ?? sampleNode.properties?.active_slot ?? 0));
-                    const activeSlotFp = rawSlots[activeSlotIdx]?.filepath;
-                    const assetPath = sampleNode.properties?.filepath || activeSlotFp || modifier.properties.output_value;
-                    if (assetPath && !modifier.properties.output_value) {
-                        modifier.properties.output_value = assetPath;
+                const activeSlotIdx = Math.max(0, Number(sampleNode.activeSlotIndex ?? sampleNode.properties?.active_slot ?? 0));
+                const activeSlotFp = rawSlots[activeSlotIdx]?.filepath;
+                const assetPath = sampleNode.properties?.filepath || activeSlotFp || modifier.properties.output_value;
+                if (assetPath && !modifier.properties.output_value) {
+                    modifier.properties.output_value = assetPath;
+                    modifierChanged = true;
+                }
+                const selectedItem = (modifier.properties.selected_items || []).find((item: any) =>
+                    (item.absolute_path || item.filepath) === assetPath
+                );
+                const preferredId = modifier.properties.output_item_id ?? sampleNode.properties?.library_item_id ?? selectedItem?.id;
+                if (preferredId != null && modifier.properties.output_item_id == null) {
+                    modifier.properties.output_item_id = preferredId;
+                    modifierChanged = true;
+                }
+                if (!isSeq && hasUnpopulatedSlots) {
+                    const prevFp = sampleNode.properties.filepath;
+                    const prevId = sampleNode.properties.library_item_id;
+                    populateOwnerSlotsFromPool(modifier, sampleNode);
+                    if (sampleNode.properties.filepath !== prevFp || sampleNode.properties.library_item_id !== prevId) {
+                        ownerChanged = true;
                         modifierChanged = true;
                     }
-                    const selectedItem = (modifier.properties.selected_items || []).find((item: any) =>
-                        (item.absolute_path || item.filepath) === assetPath
-                    );
-                    const preferredId = modifier.properties.output_item_id ?? sampleNode.properties?.library_item_id ?? selectedItem?.id;
-                    if (preferredId != null && modifier.properties.output_item_id == null) {
-                        modifier.properties.output_item_id = preferredId;
-                        modifierChanged = true;
-                    }
-                    if (!isSeq && hasUnpopulatedSlots) {
-                        const prevFp = sampleNode.properties.filepath;
-                        const prevId = sampleNode.properties.library_item_id;
-                        populateOwnerSlotsFromPool(modifier, sampleNode);
-                        if (sampleNode.properties.filepath !== prevFp || sampleNode.properties.library_item_id !== prevId) {
-                            ownerChanged = true;
-                            modifierChanged = true;
+                } else if (rawSlots.length <= 1) {
+                    if (assetPath && sampleNode.properties.filepath !== assetPath) {
+                        sampleNode.updateProperty?.('filepath', assetPath);
+                        if (rawSlots.length === 1) {
+                            rawSlots[0] = {
+                                ...(rawSlots[0] || {}),
+                                slot: 0,
+                                index: 0,
+                                filepath: assetPath,
+                                library_item_id: preferredId ?? rawSlots[0]?.library_item_id,
+                            };
                         }
-                    } else if (rawSlots.length <= 1) {
-                        if (assetPath && sampleNode.properties.filepath !== assetPath) {
-                            sampleNode.updateProperty?.('filepath', assetPath);
-                            if (rawSlots.length === 1) {
-                                rawSlots[0] = {
-                                    ...(rawSlots[0] || {}),
-                                    slot: 0,
-                                    index: 0,
-                                    filepath: assetPath,
-                                    library_item_id: preferredId ?? rawSlots[0]?.library_item_id,
-                                };
-                            }
-                            ownerChanged = true;
-                        }
-                        if (preferredId != null && sampleNode.properties.library_item_id !== preferredId) {
-                            sampleNode.updateProperty?.('library_item_id', preferredId);
-                            ownerChanged = true;
-                        }
-                    }
-                    // When frozen, preserve the node's current BPM and key settings (never overwrite manual edits)
-                    if (sampleNode.properties.original_bpm == null && modifier.properties.output_bpm != null) {
-                        sampleNode.updateProperty?.('original_bpm', modifier.properties.output_bpm);
                         ownerChanged = true;
-                    } else if (sampleNode.properties.original_bpm != null) {
-                        if (modifier.properties.output_bpm !== sampleNode.properties.original_bpm) {
-                            modifier.properties.output_bpm = sampleNode.properties.original_bpm;
-                            modifierChanged = true;
-                        }
-                        if (selectedItem) {
-                            selectedItem.bpm = sampleNode.properties.original_bpm;
-                            selectedItem.original_bpm = sampleNode.properties.original_bpm;
-                        }
                     }
-                    if (!sampleNode.properties.key && modifier.properties.output_key) {
-                        sampleNode.updateProperty?.('key', modifier.properties.output_key);
+                    if (preferredId != null && sampleNode.properties.library_item_id !== preferredId) {
+                        sampleNode.updateProperty?.('library_item_id', preferredId);
                         ownerChanged = true;
-                    } else if (sampleNode.properties.key) {
-                        if (modifier.properties.output_key !== sampleNode.properties.key) {
-                            modifier.properties.output_key = sampleNode.properties.key;
-                            modifierChanged = true;
-                        }
-                        if (selectedItem) selectedItem.key = sampleNode.properties.key;
-                    }
-                    if (modifierChanged) notifyResolvedProperties(modifier);
-                    if (ownerChanged) {
-                        notifyResolvedProperties(node);
-                        notifyArrangementSourceChanged(node);
                     }
                 }
+                if (sampleNode.properties.original_bpm == null && modifier.properties.output_bpm != null) {
+                    sampleNode.updateProperty?.('original_bpm', modifier.properties.output_bpm);
+                    ownerChanged = true;
+                } else if (sampleNode.properties.original_bpm != null) {
+                    if (modifier.properties.output_bpm !== sampleNode.properties.original_bpm) {
+                        modifier.properties.output_bpm = sampleNode.properties.original_bpm;
+                        modifierChanged = true;
+                    }
+                    if (selectedItem) {
+                        selectedItem.bpm = sampleNode.properties.original_bpm;
+                        selectedItem.original_bpm = sampleNode.properties.original_bpm;
+                    }
+                }
+                if (!sampleNode.properties.key && modifier.properties.output_key) {
+                    sampleNode.updateProperty?.('key', modifier.properties.output_key);
+                    ownerChanged = true;
+                } else if (sampleNode.properties.key) {
+                    if (modifier.properties.output_key !== sampleNode.properties.key) {
+                        modifier.properties.output_key = sampleNode.properties.key;
+                        modifierChanged = true;
+                    }
+                    if (selectedItem) selectedItem.key = sampleNode.properties.key;
+                }
+                if (modifierChanged) notifyResolvedProperties(modifier);
+                if (ownerChanged) {
+                    notifyResolvedProperties(node);
+                    notifyArrangementSourceChanged(node);
+                }
             }
+        }
         const adjacentIds: number[] = [...(data?.children || [])];
         for (const input of node?.inputs || []) {
             const link = input.link != null ? (graph as any).links?.[input.link] : null;
