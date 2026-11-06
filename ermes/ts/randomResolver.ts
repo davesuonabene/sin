@@ -14,7 +14,9 @@ import {
 } from './slotLanguage.ts';
 import {
     advanceAssetPoolSeed,
-    populateOwnerSlotsFromPool
+    normalizeAssetRefreshMode,
+    populateOwnerSlotsFromPool,
+    topAncestorId
 } from './assetResolver.ts';
 
 export type RandomRefreshMode = 'local' | 'parent' | 'ancestor' | 'global' | 'off';
@@ -38,8 +40,16 @@ export interface RandomDestination {
     enabled: boolean;
 }
 
+function resolveGraphInstance(graph?: any, ...nodes: any[]): any {
+    if (graph) return graph;
+    for (const n of nodes) {
+        if (n?.graph) return n.graph;
+    }
+    return typeof window !== 'undefined' ? ((window as any).editorGraph || (window as any).graph) : undefined;
+}
+
 export function getGlobalSeed(graph?: any): number {
-    const g = graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    const g = resolveGraphInstance(graph);
     const raw = g?.extra?.global_seed;
     if (raw === undefined || raw === null) return 0;
     const parsed = Math.floor(Number(raw));
@@ -56,7 +66,7 @@ export function setGlobalSeed(graph: any, seed: number): number {
 }
 
 export function isGlobalSeedLocked(graph?: any): boolean {
-    const g = graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    const g = resolveGraphInstance(graph);
     return Boolean(g?.extra?.global_seed_locked);
 }
 
@@ -70,7 +80,7 @@ export function setGlobalSeedLocked(graph: any, locked: boolean): boolean {
 }
 
 export function getFieldRefreshEpoch(graph?: any): number {
-    const g = graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    const g = resolveGraphInstance(graph);
     const raw = g?.extra?.field_refresh_epoch;
     if (raw === undefined || raw === null) return 0;
     const parsed = Math.floor(Number(raw));
@@ -81,7 +91,7 @@ export function getEffectiveFieldSeed(graph?: any, node?: any): number {
     if (node?.properties?.locked_field_seed !== undefined) {
         return Number(node.properties.locked_field_seed) || 0;
     }
-    const g = graph || node?.graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    const g = resolveGraphInstance(graph, node);
     if (g?.extra && (g.extra.global_seed !== undefined || g.extra.field_refresh_epoch !== undefined)) {
         return getGlobalSeed(g) + getFieldRefreshEpoch(g) * 10007;
     }
@@ -98,7 +108,7 @@ export function resolveEffectiveRandomSeed(modifierNode: any, ownerNode?: any, g
     if (modifierNode?.properties?.locked_random_seed !== undefined) {
         return modifierNode.properties.locked_random_seed;
     }
-    const g = graph || ownerNode?.graph || modifierNode?.graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+    const g = resolveGraphInstance(graph, ownerNode, modifierNode);
     if (g?.extra && typeof g.extra.global_seed === 'number') {
         return getGlobalSeed(g);
     }
@@ -119,41 +129,7 @@ export function getRangeColor(min: number, max: number): { text: string; bg: str
     return { text: '#f472b6', bg: 'rgba(236, 72, 153, 0.22)', border: '#ec4899' }; // Heavy (>60%): Magenta
 }
 
-export function normalizeRandomRefreshMode(value: unknown): RandomRefreshMode {
-    switch (String(value || '').toLowerCase()) {
-        case 'local':
-        case 'local_refresh':
-        case 'manual':
-            return 'local';
-        case 'parent':
-        case 'parent_refresh':
-        case 'parent_render':
-            return 'parent';
-        case 'ancestor':
-        case 'ancestor_refresh':
-            return 'ancestor';
-        case 'global':
-        case 'global_refresh':
-            return 'global';
-        case 'off':
-        case 'fixed':
-            return 'off';
-        default:
-            return 'global';
-    }
-}
-
-function topAncestorId(ownerNodeId: number, trackNodes?: Map<number, any>): number {
-    let currentId = ownerNodeId;
-    const visited = new Set<number>();
-    while (!visited.has(currentId)) {
-        visited.add(currentId);
-        const parentId = trackNodes?.get(currentId)?.parentId;
-        if (parentId == null) break;
-        currentId = parentId;
-    }
-    return currentId;
-}
+export const normalizeRandomRefreshMode: (value: unknown) => RandomRefreshMode = normalizeAssetRefreshMode;
 
 export function shouldRefreshRandom(
     modeValue: unknown,
@@ -407,15 +383,19 @@ export function populateOwnerSlotsFromRandom(modifierNode: any, ownerNode: any):
     const activeSlot = slots[activeIdx] || slots[0];
     if (activeSlot && Array.isArray(activeSlot.step_parameters)) {
         const clonedActiveSteps = activeSlot.step_parameters.map((st: any) => ({ ...(st || {}) }));
-        if (typeof ownerNode.updateProperty === 'function') {
-            ownerNode.updateProperty('step_parameters', clonedActiveSteps);
-        } else {
-            ownerNode.properties.step_parameters = clonedActiveSteps;
-        }
-        const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
-        if (cachedNode) {
-            cachedNode.step_parameters = clonedActiveSteps.map((st: any) => ({ ...st }));
-        }
+        commitOwnerStepParameters(ownerNode, clonedActiveSteps);
+    }
+}
+
+function commitOwnerStepParameters(ownerNode: any, nextSteps: any[]): void {
+    if (typeof ownerNode.updateProperty === 'function') {
+        ownerNode.updateProperty('step_parameters', nextSteps);
+    } else if (ownerNode.properties) {
+        ownerNode.properties.step_parameters = nextSteps;
+    }
+    const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
+    if (cachedNode) {
+        cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
     }
 }
 
@@ -493,13 +473,7 @@ export function applyRandomModulation(
                 dest.currentValue = newVal;
                 stepObj[fieldKey] = newVal;
                 if (fieldKey === 'subdivisions') stepObj.subdivision_enabled = newVal > 1;
-                if (typeof ownerNode.updateProperty === 'function') {
-                    ownerNode.updateProperty('step_parameters', nextSteps);
-                } else {
-                    ownerNode.properties.step_parameters = nextSteps;
-                }
-                const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
-                if (cachedNode) cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
+                commitOwnerStepParameters(ownerNode, nextSteps);
                 updatedAny = true;
             }
             continue;
@@ -529,13 +503,7 @@ export function applyRandomModulation(
                     if (fieldKey === 'subdivisions') stepObj.subdivision_enabled = newVal > 1;
                 }
             }
-            if (typeof ownerNode.updateProperty === 'function') {
-                ownerNode.updateProperty('step_parameters', nextSteps);
-            } else {
-                ownerNode.properties.step_parameters = nextSteps;
-            }
-            const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
-            if (cachedNode) cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
+            commitOwnerStepParameters(ownerNode, nextSteps);
             updatedAny = true;
             continue;
         }
@@ -607,15 +575,7 @@ export function restoreBaseValues(modifierNode: any, ownerNode: any): void {
                     stepObj.subdivision_enabled = dest.baseValue > 1;
                 }
                 dest.currentValue = dest.baseValue;
-                if (typeof ownerNode.updateProperty === 'function') {
-                    ownerNode.updateProperty('step_parameters', nextSteps);
-                } else {
-                    ownerNode.properties.step_parameters = nextSteps;
-                }
-                const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
-                if (cachedNode) {
-                    cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
-                }
+                commitOwnerStepParameters(ownerNode, nextSteps);
             }
             continue;
         }
@@ -634,15 +594,7 @@ export function restoreBaseValues(modifierNode: any, ownerNode: any): void {
                         }
                     }
                 }
-                if (typeof ownerNode.updateProperty === 'function') {
-                    ownerNode.updateProperty('step_parameters', nextSteps);
-                } else {
-                    ownerNode.properties.step_parameters = nextSteps;
-                }
-                const cachedNode = (typeof window !== 'undefined' ? (window as any).trackNodes : undefined)?.get(ownerNode.id);
-                if (cachedNode) {
-                    cachedNode.step_parameters = nextSteps.map((s: any) => ({ ...s }));
-                }
+                commitOwnerStepParameters(ownerNode, nextSteps);
             }
             continue;
         }
@@ -857,10 +809,13 @@ export function refreshArmedSeeds(
                 || (node.isModifier && node.modifierKind === 'random');
 
             if (isAssetFilter) {
-                advanceAssetPoolSeed(node, trackNodes);
+                advanceAssetPoolSeed(node, trackNodes, graph?.extra?.global_seed);
                 if (ownerNode) {
                     if (ownerNode.properties) {
                         ownerNode.properties.trigger_count = 0;
+                        if (graph?.extra?.global_seed !== undefined) {
+                            ownerNode.properties.global_seed = graph.extra.global_seed;
+                        }
                     }
                     const isSeqOwner = ownerNode.type === 'Audio/Sequence' || ownerNode.properties?.node_type === 'sequence';
                     if (isSeqOwner) {

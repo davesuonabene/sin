@@ -453,6 +453,28 @@ class AudioObject(BaseObject):
         return self.render(system=system, **kwargs)
 
 
+def _normalize_raw_slot_list(
+    raw_slots: Optional[List[Any]],
+    default_slot: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    if isinstance(raw_slots, list):
+        for idx, item in enumerate(raw_slots):
+            if hasattr(item, "model_dump"):
+                d = item.model_dump()
+            elif hasattr(item, "dict"):
+                d = item.dict()
+            elif isinstance(item, dict):
+                d = dict(item)
+            else:
+                continue
+            d.setdefault("slot", idx)
+            normalized.append(d)
+    if not normalized:
+        normalized.append(default_slot)
+    return normalized
+
+
 def _enrich_selected_items(selected_items: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     """Ensure every pool item dict has `filepath`/`absolute_path` and `name`, looking up `gaia.db` if needed."""
     if not selected_items:
@@ -704,28 +726,16 @@ class SampleObject(AudioObject):
         )
 
     def _normalize_slots(self, raw_slots: Optional[List[Any]]) -> List[Dict[str, Any]]:
-        normalized: List[Dict[str, Any]] = []
-        if isinstance(raw_slots, list):
-            for idx, item in enumerate(raw_slots):
-                if hasattr(item, "model_dump"):
-                    d = item.model_dump()
-                elif hasattr(item, "dict"):
-                    d = item.dict()
-                elif isinstance(item, dict):
-                    d = dict(item)
-                else:
-                    continue
-                d.setdefault("slot", idx)
-                normalized.append(d)
-        if not normalized:
-            normalized.append({
+        return _normalize_raw_slot_list(
+            raw_slots,
+            {
                 "slot": 0,
                 "filepath": self.filepath,
                 "original_bpm": self._original_bpm,
                 "crop_start": self.crop_start,
                 "crop_end": self.crop_end,
-            })
-        return normalized
+            },
+        )
 
     def render_slot(
         self,
@@ -755,7 +765,13 @@ class SampleObject(AudioObject):
         if not has_slot_op:
             cached = self._try_get_cached_render(cache_ctx, system, slot=eff_slot, restore_natural_duration=True)
             if cached is not None:
-                self._last_rendered_filepath = str(slot_cfg.get("filepath") or self.filepath or "")
+                cached_extra = (
+                    GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx, slot=eff_slot)
+                    if self.node_id is not None and getattr(self, "fingerprint", None)
+                    else None
+                )
+                resolved_fp = (cached_extra or {}).get("resolved_filepath") or slot_cfg.get("filepath") or self.filepath or ""
+                self._last_rendered_filepath = str(resolved_fp)
                 self._last_rendered_iteration = trigger_idx
                 return cached
 
@@ -791,13 +807,13 @@ class SampleObject(AudioObject):
                 window_event_idx=0,
                 trigger_count=trigger_idx,
             )
-            if not probe or not probe.get("is_subdivided_window"):
+            if not probe or not probe.get("isSubdividedWindow"):
                 return g_prog, c_prog, event_idx
             slice_key = (
                 global_idx,
                 cycle_idx if probe.get("scope") == "cycle" else 0,
                 probe.get("scope"),
-                probe.get("slice_index"),
+                probe.get("sliceIndex"),
             )
             prev = self._window_slice_state.get(field_key)
             win_idx = (prev[1] + 1) if (prev is not None and prev[0] == slice_key) else 0
@@ -975,7 +991,10 @@ class SampleObject(AudioObject):
                 cache_ctx,
                 system,
                 slot=eff_slot,
-                extra={"natural_duration": getattr(self, "_natural_duration", sample_natural_dur)},
+                extra={
+                    "natural_duration": getattr(self, "_natural_duration", sample_natural_dur),
+                    "resolved_filepath": slot_filepath_str,
+                },
             )
         return output_buffer
 
@@ -1096,21 +1115,9 @@ class SequenceObject(AudioObject):
         )
 
     def _normalize_slots(self, raw_slots: Optional[List[Any]]) -> List[Dict[str, Any]]:
-        normalized: List[Dict[str, Any]] = []
-        if isinstance(raw_slots, list):
-            for idx, item in enumerate(raw_slots):
-                if hasattr(item, "model_dump"):
-                    d = item.model_dump()
-                elif hasattr(item, "dict"):
-                    d = item.dict()
-                elif isinstance(item, dict):
-                    d = dict(item)
-                else:
-                    continue
-                d.setdefault("slot", idx)
-                normalized.append(d)
-        if not normalized:
-            normalized.append({
+        return _normalize_raw_slot_list(
+            raw_slots,
+            {
                 "slot": 0,
                 "sequence": list(self.sequence),
                 "step_parameters": list(self.step_parameters),
@@ -1118,8 +1125,8 @@ class SequenceObject(AudioObject):
                 "step_slots": list(self.step_slots),
                 "seed": self.seed,
                 "cycle_seeds": list(self.cycle_seeds),
-            })
-        return normalized
+            },
+        )
 
     def _apply_step_fade(self, audio: np.ndarray, sample_rate: int, fade_ms: Optional[float] = None) -> np.ndarray:
         """Apply symmetrical linear edge fades to one rendered step trigger."""
@@ -1471,25 +1478,17 @@ class SequenceObject(AudioObject):
                         sample_len = audio.shape[-1]
                         rel_samples = max(1, int(round(sample_len * rel_pct))) if rel_pct > 0.0 else 0
 
-                        if gate_mult < 1.0:
-                            gate_samples = max(1, int(round(sample_len * gate_mult)))
-                            if sample_len > gate_samples:
-                                tail_avail = sample_len - gate_samples
-                                eff_rel = min(tail_avail, rel_samples)
-                                total_len = gate_samples + eff_rel
-                                audio = (audio[..., :total_len] * velocity).astype(np.float32, copy=True)
-                                if eff_rel > 0:
-                                    ramp = np.linspace(1.0, 0.0, eff_rel, dtype=np.float32) if eff_rel > 1 else np.zeros(1, dtype=np.float32)
-                                    audio[..., gate_samples:] *= ramp
-                            else:
-                                audio = (audio * velocity).astype(np.float32, copy=rel_samples > 0)
-                                if rel_samples > 0:
-                                    sustain_len = sample_len - min(sample_len, rel_samples)
-                                    fade_len = sample_len - sustain_len
-                                    ramp = np.linspace(1.0, 0.0, fade_len, dtype=np.float32) if fade_len > 1 else np.zeros(1, dtype=np.float32)
-                                    audio[..., sustain_len:] *= ramp
+                        gate_samples = max(1, int(round(sample_len * gate_mult))) if gate_mult < 1.0 else sample_len
+                        if gate_mult < 1.0 and sample_len > gate_samples:
+                            tail_avail = sample_len - gate_samples
+                            eff_rel = min(tail_avail, rel_samples)
+                            total_len = gate_samples + eff_rel
+                            audio = (audio[..., :total_len] * velocity).astype(np.float32, copy=True)
+                            if eff_rel > 0:
+                                ramp = np.linspace(1.0, 0.0, eff_rel, dtype=np.float32) if eff_rel > 1 else np.zeros(1, dtype=np.float32)
+                                audio[..., gate_samples:] *= ramp
                         else:
-                            # Gate is fully open (1.0). Sample plays through without artificial step truncation.
+                            # Gate is fully open (1.0) or sample is shorter than gate_samples.
                             audio = (audio * velocity).astype(np.float32, copy=rel_samples > 0)
                             if rel_samples > 0:
                                 sustain_len = sample_len - min(sample_len, rel_samples)
@@ -1677,68 +1676,14 @@ class ItemPoolObject(AudioObject):
         panel. This layer must only choose among those exact references.
         """
         self.current_pool = []
-        unresolved_ids: List[int] = []
         for index, item in enumerate(self.selected_items):
             if not isinstance(item, dict):
                 raise ValueError(f"Asset Pool item {index} is not an asset reference")
             if item.get("id") is None:
                 raise ValueError(f"Asset Pool item {index} is missing its GAIA id")
+        enriched = _enrich_selected_items(self.selected_items)
+        for index, item in enumerate(enriched):
             filepath = item.get("absolute_path") or item.get("filepath") or item.get("path")
-            if not filepath:
-                try:
-                    unresolved_ids.append(int(item["id"]))
-                except (TypeError, ValueError):
-                    pass
-
-        resolved_by_id: dict[int, Tuple[str, Optional[float]]] = {}
-        if unresolved_ids:
-            try:
-                import sqlite3
-                import json
-                from pathlib import Path
-                proj_root = Path(__file__).resolve().parents[1]
-                db_candidates = [
-                    Path.cwd() / "gaia.db",
-                    proj_root / "gaia.db",
-                    proj_root / "gaia" / "gaia.db",
-                ]
-                db_path = next((p for p in db_candidates if p.is_file()), None)
-                if db_path:
-                    unique_ids = sorted(set(unresolved_ids))
-                    placeholders = ",".join("?" for _ in unique_ids)
-                    with sqlite3.connect(str(db_path)) as conn:
-                        rows = conn.execute(
-                            f"SELECT id, absolute_path, metadata_json FROM items WHERE id IN ({placeholders})",
-                            unique_ids,
-                        ).fetchall()
-                    for row_id, raw_path, meta_json in rows:
-                        if not raw_path:
-                            continue
-                        cand_path = Path(raw_path)
-                        if not cand_path.is_file() and (proj_root / cand_path).is_file():
-                            cand_path = proj_root / cand_path
-                        bpm_val = None
-                        if meta_json:
-                            try:
-                                bpm_val = (json.loads(meta_json) or {}).get("bpm")
-                            except Exception:
-                                bpm_val = None
-                        resolved_by_id[int(row_id)] = (str(cand_path), bpm_val)
-            except Exception:
-                pass
-
-        for index, item in enumerate(self.selected_items):
-            filepath = item.get("absolute_path") or item.get("filepath") or item.get("path")
-            if not filepath and item.get("id") is not None:
-                try:
-                    resolved = resolved_by_id.get(int(item["id"]))
-                    if resolved:
-                        filepath, resolved_bpm = resolved
-                        if not item.get("bpm") and resolved_bpm is not None:
-                            item["bpm"] = resolved_bpm
-                except (TypeError, ValueError):
-                    pass
-
             if not filepath:
                 raise ValueError(f"Asset Pool item {index} has no resolved asset path")
             self.current_pool.append({

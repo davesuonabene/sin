@@ -218,6 +218,10 @@ def tokenize_field_operator(expr: Any) -> List[str]:
     return [tok for tok in lex_field_operator(expr) if tok not in ("[", "]", "<", ">")]
 
 
+_AST_CACHE_MAX = 256
+_ast_cache: Dict[str, Dict[str, Any]] = {}
+
+
 def parse_field_operator_ast(expr: Any) -> Dict[str, Any]:
     """
     Parses a Field Operator string into a hierarchical AST:
@@ -225,7 +229,17 @@ def parse_field_operator_ast(expr: Any) -> Dict[str, Any]:
     - `[ ... ]` `cycle_group` refreshes each Cycle Trigger and subdivides the Cycle Length (`C`)
     - `< ... >` `event_group` advances sequentially on each active Event Request
     """
-    lexemes = lex_field_operator(expr)
+    if isinstance(expr, dict) and "kind" in expr:
+        if expr["kind"] == "global_group":
+            return expr
+        return {"kind": "global_group", "items": [expr]}
+
+    cache_key = str(expr if expr is not None else "").strip()
+    cached = _ast_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    lexemes = lex_field_operator(cache_key)
     pos = 0
     next_token_index = 0
     next_group_index = 0
@@ -262,7 +276,12 @@ def parse_field_operator_ast(expr: Any) -> Dict[str, Any]:
                 items.append({"kind": "atom", "value": tok, "tokenIndex": t_idx})
         return items
 
-    return {"kind": "global_group", "items": parse_items(None)}
+    ast = {"kind": "global_group", "items": parse_items(None)}
+    if len(_ast_cache) >= _AST_CACHE_MAX:
+        oldest_key = next(iter(_ast_cache))
+        _ast_cache.pop(oldest_key, None)
+    _ast_cache[cache_key] = ast
+    return ast
 
 
 def is_field_operator_expression(expr: Any, pool_items: Optional[List[Any]] = None) -> bool:
@@ -720,6 +739,7 @@ def resolve_step_slots(
             result.append(wrap_slot_index(raw_slot, safe_slot_count))
         return result
 
+    ast = parse_field_operator_ast(raw)
     eff_g_idx = max(0, int(global_idx or 0))
     eff_c_idx = max(0, int(cycle_idx or 0))
     eff_num_cycles = max(1, int(num_cycles or 1))
@@ -733,22 +753,8 @@ def resolve_step_slots(
         c_prog = float(i) / float(count)
         g_prog = (float(eff_c_idx) + c_prog) / float(eff_num_cycles)
 
-        probe_leaf = resolve_field_operator_leaf(
-            raw,
-            global_idx=eff_g_idx,
-            global_progress=g_prog,
-            cycle_idx=eff_c_idx,
-            cycle_progress=c_prog,
-            event_idx=running_event_idx,
-            window_event_idx=running_window_event_idx,
-        )
-        slice_key = f"{probe_leaf['scope']}:{probe_leaf['sliceIndex']}" if probe_leaf else ""
-        if slice_key != last_slice_key:
-            running_window_event_idx = 0
-            last_slice_key = slice_key
-
         leaf = resolve_field_operator_leaf(
-            raw,
+            ast,
             global_idx=eff_g_idx,
             global_progress=g_prog,
             cycle_idx=eff_c_idx,
@@ -756,6 +762,20 @@ def resolve_step_slots(
             event_idx=running_event_idx,
             window_event_idx=running_window_event_idx,
         )
+        slice_key = f"{leaf['scope']}:{leaf['sliceIndex']}" if leaf else ""
+        if slice_key != last_slice_key:
+            last_slice_key = slice_key
+            if running_window_event_idx != 0:
+                running_window_event_idx = 0
+                leaf = resolve_field_operator_leaf(
+                    ast,
+                    global_idx=eff_g_idx,
+                    global_progress=g_prog,
+                    cycle_idx=eff_c_idx,
+                    cycle_progress=c_prog,
+                    event_idx=running_event_idx,
+                    window_event_idx=0,
+                )
         raw_slot = safe_active_slot
         if leaf:
             tok = leaf["token"]
@@ -813,12 +833,16 @@ def resolve_section_slot(
     if slot_value is None or is_default_slot_token(slot_value):
         return safe_active_slot
     raw = str(slot_value).strip()
+    if is_random_token(raw):
+        numeric_seed = normalize_numeric_seed(section_seed, 0)
+        prng = mulberry32(hash_seed(numeric_seed, section_index, 0x5107))
+        return wrap_slot_index(int(math.floor(prng() * safe_slot_count)), safe_slot_count)
     if is_field_operator_expression(raw):
         val = evaluate_numeric_field_operator(
             raw,
             trigger_count=section_index,
             seed=section_seed,
-            salt=0x5107,
+            salt=0x5107 + section_index,
             min_val=0,
             max_val=max(0, safe_slot_count - 1),
             step=1,
@@ -829,10 +853,6 @@ def resolve_section_slot(
             event_idx=section_index,
         )
         return wrap_slot_index(int(round(val)), safe_slot_count)
-    if is_random_token(raw):
-        numeric_seed = normalize_numeric_seed(section_seed, 0)
-        prng = mulberry32(hash_seed(numeric_seed, section_index, 0x5EC7))
-        return wrap_slot_index(int(math.floor(prng() * safe_slot_count)), safe_slot_count)
     return wrap_slot_index(slot_value, safe_slot_count)
 
 

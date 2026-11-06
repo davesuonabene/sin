@@ -94,6 +94,9 @@ export class RandomNode extends ModulatorNode {
             if (ownerNode) {
                 applyRandomModulation(this, ownerNode);
             }
+            if (typeof window !== 'undefined' && parentId != null) {
+                window.dispatchEvent(new CustomEvent('modifier-assignment-changed', { detail: { nodeId: parentId } }));
+            }
         }
     }
 }

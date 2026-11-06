@@ -15,6 +15,8 @@ export class CanvasButton {
     activeTooltip?: string;
     isToggled?: (node: LGraphNode) => boolean;
     getTooltip?: (node: LGraphNode) => string;
+    isPanelOpen?: (node: LGraphNode) => boolean;
+    isSelectedForDeletion?: (node: LGraphNode) => boolean;
     onClick: (e?: MouseEvent) => void;
 
     constructor(
@@ -48,18 +50,15 @@ export class CanvasButton {
     }
 
     draw(ctx: CanvasRenderingContext2D, node: LGraphNode) {
+        const selected = Boolean(this.isSelectedForDeletion?.(node));
+        const panelOpen = Boolean(this.isPanelOpen?.(node));
         const toggled = Boolean(this.isToggled?.(node));
-        let fillColor: string;
-        if (toggled) {
-            fillColor = this.isHovered
-                ? (this.activeHoverColor || this.hoverColor)
-                : (this.activeColor || this.color);
-        } else {
-            fillColor = this.isHovered ? this.hoverColor : this.color;
-        }
 
-        ctx.fillStyle = fillColor;
-        
+        const baseColor = toggled ? (this.activeColor || this.color) : this.color;
+        const hoverColor = toggled ? (this.activeHoverColor || this.hoverColor) : this.hoverColor;
+        const fillColor = selected ? "#db2777" : (this.isHovered ? hoverColor : baseColor);
+        const strokeColor = selected ? "#f472b6" : (panelOpen ? "#c084fc" : null);
+
         // Handle negative x/y as right/bottom offsets
         const finalX = this.x < 0 ? node.size[0] + this.x : this.x;
         const finalY = this.y < 0 ? node.size[1] + this.y : this.y;
@@ -71,18 +70,30 @@ export class CanvasButton {
         } else {
             ctx.rect(finalX, finalY, this.width, this.height);
         }
+        ctx.fillStyle = fillColor;
         ctx.fill();
-        
-        ctx.fillStyle = "white";
+
+        if (strokeColor) {
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = selected ? 2.0 : 1.75;
+            ctx.stroke();
+        }
+
+        ctx.fillStyle = "#ffffff";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         const isCompactText = this.label.length > 1 && this.height <= 14;
         ctx.font = isCompactText ? "700 8.5px Inter, system-ui, sans-serif" : "bold 11px sans-serif";
-        
         ctx.fillText(this.label, finalX + this.width / 2, finalY + this.height / 2 + (isCompactText ? 0.5 : 1));
     }
 
     resolveTooltip(node: LGraphNode): string | undefined {
+        if (this.isSelectedForDeletion?.(node)) {
+            return `${this.label} (Selected): Press Backspace/Delete or right-click Delete to reset`;
+        }
+        if (this.isPanelOpen?.(node)) {
+            return `${this.label} (Panel Open)`;
+        }
         if (this.getTooltip) return this.getTooltip(node);
         if (this.isToggled?.(node) && this.activeTooltip) return this.activeTooltip;
         return this.tooltip;

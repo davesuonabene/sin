@@ -1860,6 +1860,15 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
         }
     }
     if ((e.code === 'Delete' || e.code === 'Backspace' || e.key === 'Delete' || e.key === 'Backspace' || e.keyCode === 46 || e.keyCode === 8) && !isTyping) {
+        const graph = (window as any).editorGraph as LGraph | undefined;
+        const nodes = ((graph as any)?._nodes || []) as any[];
+        const nodeWithSelectedMod = nodes.find(n => n && n.selectedModifierBadge);
+        if (nodeWithSelectedMod && typeof nodeWithSelectedMod.resetModifier === 'function') {
+            e.preventDefault();
+            e.stopPropagation();
+            nodeWithSelectedMod.resetModifier(nodeWithSelectedMod.selectedModifierBadge);
+            return;
+        }
         const focusedSlot = (window as any).__sinFocusedSlot as { nodeId: number | null; slotIndex: number } | undefined;
         if (focusedSlot || activeEl?.closest?.('.td-slot-strip')) {
             const graph = (window as any).editorGraph as LGraph | undefined;
@@ -2360,6 +2369,15 @@ const originalProcessKey = (LiteGraph as any).LGraphCanvas.prototype.processKey;
         return false;
     }
     if (e.keyCode === 46 || e.keyCode === 8 || e.code === 'Delete' || e.code === 'Backspace' || e.key === 'Delete' || e.key === 'Backspace') {
+        const nodes = ((this.graph as any)?._nodes || []) as any[];
+        const nodeWithSelectedMod = nodes.find(n => n && n.selectedModifierBadge);
+        if (nodeWithSelectedMod && typeof nodeWithSelectedMod.resetModifier === 'function') {
+            nodeWithSelectedMod.resetModifier(nodeWithSelectedMod.selectedModifierBadge);
+            this.setDirty(true, true);
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+        }
         if (selectedLinkIds.size > 0) {
             deleteSelectedCables(this.graph);
             e.preventDefault();
@@ -2610,6 +2628,13 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
                 this.deselectAllNodes?.();
                 if (selectedLinkIds.size > 0) {
                     selectedLinkIds.clear();
+                }
+                const allNodes = ((this.graph as any)?._nodes || []) as any[];
+                for (const n of allNodes) {
+                    if (n && n.selectedModifierBadge) {
+                        n.selectedModifierBadge = null;
+                        n.setDirtyCanvas?.(true, true);
+                    }
                 }
                 this.setDirty(true, true);
             } else if (hadDraggingRect && (draggingRectW > 10 || draggingRectH > 10)) {
@@ -3072,6 +3097,14 @@ window.addEventListener('node-property-changed', (event: Event) => {
 });
 
 let activeParamNodeId: number | null = null;
+function setActiveParamNodeId(id: number | null) {
+    activeParamNodeId = id;
+    (window as any).activeParamNodeId = id;
+    if ((window as any).editorCanvas) {
+        (window as any).editorCanvas.setDirty(true, true);
+    }
+}
+(window as any).setActiveParamNodeId = setActiveParamNodeId;
 
 function closeAllParamWindows(exceptNodeId?: number) {
     const dv = (window as any).dockview;
@@ -3417,7 +3450,7 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
     if (panel) {
         if (!isFloatingPanel(panel)) {
             previousDockedPanels.forEach(previous => previous.api.close());
-            activeParamNodeId = node.id;
+            setActiveParamNodeId(node.id);
         }
         panel.api.setActive();
         updateGraphNodeCollapsing();
@@ -3450,7 +3483,7 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
             height: 480
         });
     } else {
-        activeParamNodeId = node.id;
+        setActiveParamNodeId(node.id);
         panel = dv.addPanel({
             id: panelId,
             component: 'properties-panel',
@@ -3506,6 +3539,7 @@ function openTrackParamWindow() {
     const previousDockedPanel = previousDockedPanels[0];
 
     (window as any)._currentlySelectedNode = null;
+    setActiveParamNodeId(null);
 
     if (panel) {
         if (!isFloatingPanel(panel)) {
@@ -3640,15 +3674,16 @@ window.addEventListener('add-asset-filter-to-param', (e: any) => {
         return;
     }
 
+    const forceOpen = Boolean(e.detail?.forceOpen);
     const isOwnerAlreadyOpen = activeParamNodeId === ownerNode.id && dockedPropertyPanels().length > 0;
     if (typeof ownerNode.togglePoolView === 'function') {
-        if (isOwnerAlreadyOpen) {
+        if (isOwnerAlreadyOpen && !forceOpen) {
             ownerNode.togglePoolView();
         } else {
             ownerNode.togglePoolView(true);
         }
     } else if (ownerNode.properties) {
-        ownerNode.properties.pool_view_open = isOwnerAlreadyOpen ? !ownerNode.properties.pool_view_open : true;
+        ownerNode.properties.pool_view_open = (isOwnerAlreadyOpen && !forceOpen) ? !ownerNode.properties.pool_view_open : true;
     }
 
     if (isOwnerAlreadyOpen) {
@@ -3726,7 +3761,7 @@ function addAssetFilterNode(parentId: number, openProperties: boolean = true) {
     return addModulatorNode(parentId, "asset_filter", openProperties);
 }
 
-function addRandomNode(parentId: number, openProperties: boolean = true) {
+function addRandomNode(parentId: number, openProperties: boolean = true, forceOpen: boolean = false) {
     const graph = (window as any).editorGraph as LGraph;
     const parentNode = graph?.getNodeById(parentId);
     const existing = (((graph as any)?._nodes || []) as any[]).find(candidate =>
@@ -3736,7 +3771,7 @@ function addRandomNode(parentId: number, openProperties: boolean = true) {
     );
     if (existing) {
         if (openProperties) {
-            if (activeParamNodeId === existing.id && dockedPropertyPanels().length > 0 && parentNode) {
+            if (!forceOpen && activeParamNodeId === existing.id && dockedPropertyPanels().length > 0 && parentNode) {
                 openParamWindow(parentNode, { forceOpen: true });
             } else {
                 openParamWindow(existing, { forceOpen: true });
@@ -3750,7 +3785,7 @@ function addRandomNode(parentId: number, openProperties: boolean = true) {
 window.addEventListener('add-random-node', (e: any) => {
     const parentId = e.detail?.parentId;
     if (parentId != null) {
-        addRandomNode(parentId, true);
+        addRandomNode(parentId, true, Boolean(e.detail?.forceOpen));
     }
 });
 
@@ -4132,7 +4167,7 @@ function handleNodeRemoved(nodeId: number) {
     }
 
     if (activeParamNodeId === nodeId) {
-        activeParamNodeId = null;
+        setActiveParamNodeId(null);
     }
 
     if (activeRamPreviewNodeId === nodeId) {
@@ -5035,13 +5070,23 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     }
 
                     // Context Menu Override for Nodes & Canvas right-clicks
+                    const showNodeContextMenuForEvent = (node: any, e: MouseEvent) => {
+                        const offset = graphCanvas.convertEventToCanvasOffset(e);
+                        const badge = node.getModifierBadgeAtPos?.(offset[0] - node.pos[0], offset[1] - node.pos[1]) || null;
+                        if (badge) {
+                            node.selectedModifierBadge = badge;
+                            node.setDirtyCanvas?.(true, true);
+                        }
+                        nodeContextMenu.show(e.clientX, e.clientY, node, badge);
+                    };
+
                     graphCanvas.processContextMenu = function (node: any, e: MouseEvent) {
                         if (e) {
                             e.preventDefault?.();
                             e.stopPropagation?.();
                         }
                         if (node) {
-                            nodeContextMenu.show(e.clientX, e.clientY, node);
+                            showNodeContextMenuForEvent(node, e);
                         } else if (hoveredLink) {
                             const targetLink = hoveredLink;
                             const clientX = e ? e.clientX : window.innerWidth / 2;
@@ -5071,7 +5116,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         const offset = graphCanvas.convertEventToCanvasOffset(e);
                         const node = (graphCanvas as any).getNodeOnPos(offset[0], offset[1], (graph as any)._nodes, 0);
                         if (node) {
-                            nodeContextMenu.show(e.clientX, e.clientY, node);
+                            showNodeContextMenuForEvent(node, e);
                         } else if (hoveredLink) {
                             const targetLink = hoveredLink;
                             const clientX = e.clientX;
@@ -5449,7 +5494,7 @@ dockview.onDidRemovePanel((panel: any) => {
     if (panel.id && panel.id.startsWith('properties_')) {
         const nodeId = parseInt(panel.id.replace('properties_', ''), 10);
         if (activeParamNodeId === nodeId) {
-            activeParamNodeId = null;
+            setActiveParamNodeId(null);
         }
         updateGraphNodeCollapsing();
     }

@@ -20,6 +20,7 @@ from ermes.py.slot_language import (
     permute_pool_items,
     evaluate_numeric_field_operator,
     resolve_pool_item_by_query,
+    resolve_section_slot,
 )
 from ermes.py.compiler import compile_canonical_graph_to_audio_node_model
 from core.audio_object import (
@@ -597,6 +598,47 @@ class TestSlotLanguageAndMultiSlotDsp(unittest.TestCase):
                 peak_beat_2 = float(np.max(np.abs(flat[bar_start + 2 * beat_samples : bar_start + 2 * beat_samples + beat_samples // 2])))
                 self.assertAlmostEqual(peak_beat_0, 0.2, places=2)
                 self.assertAlmostEqual(peak_beat_2, 0.8, places=2)
+
+    def test_sample_windowed_event_reset_and_section_slot_parity(self):
+        # 1. Verify resolve_section_slot uses salt 0x5107 (matching TS resolveSectionSlot)
+        expected_slots = [resolve_section_slot("rand", 4, 0, section_seed=42, section_index=i) for i in range(4)]
+        self.assertEqual(expected_slots, [1, 1, 2, 1])
+
+        # 2. Verify SampleObject.render_slot resets window_event_idx when transitioning into a subdivided window "[0 <1 2>]"
+        sr = 44100
+        system = System(sample_rate=sr, bpm=120.0, render_mode="preview")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p0 = os.path.join(tmpdir, "s0.wav")
+            p1 = os.path.join(tmpdir, "s1.wav")
+            p2 = os.path.join(tmpdir, "s2.wav")
+            sf.write(p0, np.full((sr // 10, 1), 0.1, dtype=np.float32), sr)
+            sf.write(p1, np.full((sr // 10, 1), 0.5, dtype=np.float32), sr)
+            sf.write(p2, np.full((sr // 10, 1), 0.9, dtype=np.float32), sr)
+
+            sample_obj = SampleObject(
+                filepath=p0,
+                sample_type="one_shot",
+                pool_query="[0 <1 2>]",
+                selected_items=[
+                    {"id": 1, "name": "s0.wav", "filepath": p0},
+                    {"id": 2, "name": "s1.wav", "filepath": p1},
+                    {"id": 3, "name": "s2.wav", "filepath": p2},
+                ],
+                slots=[{"index": 0, "filepath": p0, "pool_query": "[0 <1 2>]"}],
+                node_id=801,
+            )
+            # First half of cycle (cycle_progress 0.0, 0.2, 0.4 -> 3 events in slice 0 -> all pick index 0 = p0)
+            sample_obj.render_slot(0, system, iteration=0, cycle_idx=0, cycle_progress=0.0, event_idx=0)
+            self.assertEqual(sample_obj._last_rendered_filepath, p0)
+            sample_obj.render_slot(0, system, iteration=1, cycle_idx=0, cycle_progress=0.2, event_idx=1)
+            self.assertEqual(sample_obj._last_rendered_filepath, p0)
+            sample_obj.render_slot(0, system, iteration=2, cycle_idx=0, cycle_progress=0.4, event_idx=2)
+            self.assertEqual(sample_obj._last_rendered_filepath, p0)
+            # Second half of cycle (cycle_progress 0.6 -> first event in slice 1 -> window_event_idx resets to 0 -> picks <1 2>[0] = 1 = p1!)
+            sample_obj.render_slot(0, system, iteration=3, cycle_idx=0, cycle_progress=0.6, event_idx=3)
+            self.assertEqual(sample_obj._last_rendered_filepath, p1)
+            sample_obj.render_slot(0, system, iteration=4, cycle_idx=0, cycle_progress=0.8, event_idx=4)
+            self.assertEqual(sample_obj._last_rendered_filepath, p2)
 
 
 if __name__ == "__main__":

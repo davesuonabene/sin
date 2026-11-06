@@ -46,11 +46,11 @@ export class PropertiesWindow {
                 if (!(this.node as any).isModifier) {
                     RandomParamOverlay.getOrCreateRandomModifier(this.node as any);
                 }
-                const randomModeBtn = this.container.querySelector('#td-random-mode-btn');
-                if (randomModeBtn) {
-                    randomModeBtn.classList.add('active');
-                    const textSpan = randomModeBtn.querySelector('.random-mode-btn-text');
-                    if (textSpan) textSpan.textContent = 'Mapping ON';
+                const randomDiceBtn = this.container.querySelector('#td-random-dice-btn');
+                if (randomDiceBtn) {
+                    randomDiceBtn.classList.add('active');
+                    randomDiceBtn.classList.add('is-active');
+                    randomDiceBtn.setAttribute('title', 'Random Mapping Active (Click to open drag ranges)');
                 }
                 void this.render();
             }
@@ -88,6 +88,35 @@ export class PropertiesWindow {
         window.removeEventListener('arrangement-length-changed', this.arrangementGraphHandler);
         window.removeEventListener('arrangement-source-changed', this.arrangementGraphHandler);
         window.removeEventListener('start-random-mapping', this.startRandomMappingHandler);
+        this.cleanupIfUnedited();
+    }
+
+    private cleanupIfUnedited(): void {
+        const graph = this.node.graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+        const nodeAny = this.node as any;
+        if (nodeAny.isModifier) {
+            const parentNode = graph?.getNodeById?.(this.node.properties?.parentId) as any;
+            const isRnd = this.node.type === 'Audio/Random' || this.node.properties?.node_type === 'random' || this.node.properties?.modifier_kind === 'random';
+            const list = isRnd ? this.node.properties?.destinations : this.node.properties?.selected_items;
+            if (!Array.isArray(list) || list.length === 0) {
+                if (parentNode?.resetModifier) {
+                    parentNode.resetModifier(isRnd ? 'random' : 'pool');
+                } else {
+                    graph?.remove?.(this.node);
+                }
+            }
+            return;
+        }
+        if (nodeAny.properties?.pool_view_open) {
+            nodeAny.properties.pool_view_open = false;
+        }
+        if (nodeAny.getAttachedPoolNode?.() && !nodeAny.isPoolDefinitelyCreated?.() && !nodeAny.isPoolPanelOpen) {
+            nodeAny.resetModifier?.('pool');
+        }
+        if (nodeAny.getAttachedRandomModNode?.() && !nodeAny.isRandomModDefinitelyCreated?.() && !nodeAny.isRandomPanelOpen) {
+            nodeAny.resetModifier?.('random');
+        }
+        nodeAny.setDirtyCanvas?.(true, true);
     }
 
     private getDefaultTab(): string {
@@ -303,6 +332,9 @@ export class PropertiesWindow {
         const isRenderEnabled = this.node.properties?.render_enabled !== false;
         const isFreezeProtected = this.node.properties?.freeze_refresh !== false;
         const isViewerCookEnabled = this.node.properties?.visualization_enabled !== false;
+        const hasRandomMod = typeof (this.node as any).hasAttachedRandomMod === 'function'
+            ? (this.node as any).hasAttachedRandomMod()
+            : Boolean(RandomParamOverlay.getAttachedRandomModifier(this.node as any));
 
         this.container.innerHTML = `
             <div class="td-param-container">
@@ -317,9 +349,8 @@ export class PropertiesWindow {
                             <button type="button" class="close-btn" id="td-viewer-cook-btn" title="Viewer Cook: ${isViewerCookEnabled ? 'ON (Click to shut Iride)' : 'OFF (Click to enable Iride)'}" style="opacity: ${isViewerCookEnabled ? '1' : '0.45'}; color: ${isViewerCookEnabled ? '#38bdf8' : 'inherit'};">👁</button>
                             <button type="button" class="close-btn" id="td-render-toggle-btn" title="Include in Global Render: ${isRenderEnabled ? 'ON' : 'OFF'}" style="opacity: ${isRenderEnabled ? '1' : '0.45'}; color: ${isRenderEnabled ? '#10b981' : 'inherit'}; font-weight: 700;">R</button>
                             <button type="button" class="close-btn" id="td-freeze-toggle-btn" title="Freeze Protection: ${isFreezeProtected ? 'ON' : 'OFF'}" style="opacity: ${isFreezeProtected ? '1' : '0.45'}; color: ${isFreezeProtected ? '#38bdf8' : 'inherit'};">❄</button>
-                            <button type="button" class="random-mode-toggle-btn ${this.isRandomMappingMode ? 'active' : ''}" id="td-random-mode-btn" title="Toggle Live Random Mapping Mode (Locks normal editing, click parameter to map, scroll to edit range)">
-                                <span class="random-mode-dot"></span>
-                                <span class="random-mode-btn-text">${this.isRandomMappingMode ? 'Mapping Active' : 'Map Mode'}</span>
+                            <button type="button" class="close-btn td-random-dice-btn ${hasRandomMod ? 'is-attached' : ''} ${this.isRandomMappingMode ? 'active is-active' : ''}" id="td-random-dice-btn" title="${hasRandomMod ? 'Random Modifier (drag ranges)' : 'Add Random Modifier'}" style="opacity: ${hasRandomMod ? '1' : '0.45'}; color: ${hasRandomMod ? '#a855f7' : 'inherit'};">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display: block;"><rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect><circle cx="8" cy="8" r="1.5" fill="currentColor"></circle><circle cx="16" cy="8" r="1.5" fill="currentColor"></circle><circle cx="12" cy="12" r="1.5" fill="currentColor"></circle><circle cx="8" cy="16" r="1.5" fill="currentColor"></circle><circle cx="16" cy="16" r="1.5" fill="currentColor"></circle></svg>
                             </button>
                         ` : `
                             <button type="button" class="td-param-btn" id="td-parent-node-btn" title="Return to Parent Node" style="padding: 2px 7px; font-size: 10px;">← Node</button>
@@ -374,13 +405,10 @@ export class PropertiesWindow {
             void this.render();
         });
 
-        const randomModeBtn = this.container.querySelector('#td-random-mode-btn');
-        randomModeBtn?.addEventListener('click', () => {
-            this.isRandomMappingMode = !this.isRandomMappingMode;
-            if (this.isRandomMappingMode && !(this.node as any).isModifier) {
-                RandomParamOverlay.getOrCreateRandomModifier(this.node as any);
-            }
-            void this.render();
+        const randomDiceBtn = this.container.querySelector('#td-random-dice-btn');
+        randomDiceBtn?.addEventListener('click', () => {
+            this.isRandomMappingMode = false;
+            window.dispatchEvent(new CustomEvent('add-random-node', { detail: { parentId: this.node.id } }));
         });
 
         this.container.querySelector('#td-parent-node-btn')?.addEventListener('click', () => {
@@ -467,15 +495,11 @@ export class PropertiesWindow {
         const contentContainer = this.container.querySelector('#td-tab-content') as HTMLElement;
         if (!contentContainer) return;
 
-        // Update random mode button state in header if present
-        const randomModeBtn = this.container.querySelector('#td-random-mode-btn');
-        if (randomModeBtn) {
-            randomModeBtn.classList.toggle('active', this.isRandomMappingMode);
-            (randomModeBtn as HTMLElement).style.borderColor = this.isRandomMappingMode ? '#ec4899' : '#334155';
-            (randomModeBtn as HTMLElement).style.background = this.isRandomMappingMode ? '#db2777' : '#1e293b';
-            (randomModeBtn as HTMLElement).style.color = this.isRandomMappingMode ? '#ffffff' : '#f472b6';
-            const textSpan = randomModeBtn.querySelector('.random-mode-btn-text');
-            if (textSpan) textSpan.textContent = this.isRandomMappingMode ? 'Mapping Active' : 'Map Mode';
+        // Update random dice button state in header if present
+        const randomDiceBtn = this.container.querySelector('#td-random-dice-btn');
+        if (randomDiceBtn) {
+            randomDiceBtn.classList.toggle('active', this.isRandomMappingMode);
+            randomDiceBtn.classList.toggle('is-active', this.isRandomMappingMode);
         }
 
         const finish = () => {

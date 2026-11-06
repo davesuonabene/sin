@@ -6319,64 +6319,26 @@ select.sin-select.td-param-select option {
 }
 
 /* Random Destinations & Header Controls */
-.random-mode-toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 19px;
-  padding: 0 6px;
-  background: #f8fafc;
-  border: 1px solid #cbd5e1;
-  border-radius: 2px;
-  color: #475569;
-  font-size: 9.5px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-
-.random-mode-toggle-btn:hover {
-  background: #f1f5f9;
-  border-color: #94a3b8;
-  color: #0f172a;
-}
-
-.random-mode-toggle-btn.is-active {
-  background: #0284c7;
-  border-color: #0284c7;
-  color: #ffffff;
-}
-
-.random-mode-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 1px;
-  background: #94a3b8;
-  display: inline-block;
-}
-
-.random-mode-toggle-btn.is-active .random-mode-dot {
-  background: #ffffff;
-}
-
-.td-random-roll-header-btn {
-  display: inline-flex;
+.td-param-header .td-random-dice-btn {
+  color: #a855f7;
+  display: flex;
   align-items: center;
   justify-content: center;
-  height: 19px;
-  padding: 0 6px;
-  background: #f8fafc;
-  border: 1px solid #cbd5e1;
-  border-radius: 2px;
-  color: #0284c7;
-  font-size: 10px;
-  cursor: pointer;
-  transition: all 0.12s ease;
+  padding: 0;
+  transition: all 0.15s ease;
 }
 
-.td-random-roll-header-btn:hover {
-  background: #e0f2fe;
-  border-color: #0284c7;
+.td-param-header .td-random-dice-btn:hover {
+  background-color: #f3e8ff;
+  color: #7e22ce;
+  opacity: 1 !important;
+}
+
+.td-param-header .td-random-dice-btn.is-active,
+.td-param-header .td-random-dice-btn.active {
+  background-color: #7e22ce;
+  color: #ffffff;
+  opacity: 1 !important;
 }
 
 .random-panel-group {
@@ -6387,46 +6349,6 @@ select.sin-select.td-param-select option {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 2px;
-}
-
-.random-header-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.random-refresh-label {
-  font-size: 9px;
-  font-weight: 700;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.random-mode-btn {
-  padding: 2px 7px;
-  font-size: 9.5px;
-  font-weight: 700;
-  border-radius: 2px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #475569;
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-
-.random-mode-btn:hover {
-  background: #f1f5f9;
-  border-color: #94a3b8;
-  color: #0f172a;
-}
-
-.random-mode-btn.is-active,
-.random-mode-btn.active {
-  background: #0284c7;
-  border-color: #0284c7;
-  color: #ffffff;
 }
 
 .random-dest-row {

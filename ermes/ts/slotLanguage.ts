@@ -329,6 +329,9 @@ export function tokenizeFieldOperator(expr: unknown): string[] {
     return lexFieldOperator(expr).filter(tok => tok !== '[' && tok !== ']' && tok !== '<' && tok !== '>');
 }
 
+const AST_CACHE_MAX = 256;
+const _astCache = new Map<string, Extract<FieldAstNode, { kind: 'global_group' }>>();
+
 /**
  * Parses a Field Operator string into a hierarchical AST:
  * - Outer `global_group` subdivides the Ancestor Global Length (`G`)
@@ -341,7 +344,11 @@ export function parseFieldOperatorAST(expr: unknown): Extract<FieldAstNode, { ki
         if (node.kind === 'global_group') return node;
         return { kind: 'global_group', items: [node] };
     }
-    const lexemes = lexFieldOperator(expr);
+    const cacheKey = String(expr ?? '').trim();
+    const cached = _astCache.get(cacheKey);
+    if (cached) return cached;
+
+    const lexemes = lexFieldOperator(cacheKey);
     let pos = 0;
     let nextTokenIndex = 0;
     let nextGroupIndex = 0;
@@ -381,10 +388,16 @@ export function parseFieldOperatorAST(expr: unknown): Extract<FieldAstNode, { ki
         return items;
     };
 
-    return {
+    const ast: Extract<FieldAstNode, { kind: 'global_group' }> = {
         kind: 'global_group',
         items: parseItems(undefined)
     };
+    if (_astCache.size >= AST_CACHE_MAX) {
+        const oldestKey = _astCache.keys().next().value;
+        if (oldestKey !== undefined) _astCache.delete(oldestKey);
+    }
+    _astCache.set(cacheKey, ast);
+    return ast;
 }
 
 /**
@@ -806,6 +819,7 @@ export function resolveStepSlots(
         return result;
     }
 
+    const ast = parseFieldOperatorAST(raw);
     const result: number[] = [];
     let runningEventIdx = Math.max(0, Math.floor(Number(options?.startEventIdx ?? 0)));
     let runningWindowEventIdx = 0;
@@ -816,8 +830,7 @@ export function resolveStepSlots(
         const cycleProgress = i / count;
         const globalProgress = (cycleIdx + cycleProgress) / numCycles;
 
-        // Probe AST slice to reset window-local event counter on slice transitions
-        const probeLeaf = resolveFieldOperatorLeaf(raw, {
+        let leaf = resolveFieldOperatorLeaf(ast, {
             seed: numericSeed,
             salt: 0x5107,
             globalIdx,
@@ -828,22 +841,23 @@ export function resolveStepSlots(
             windowEventIdx: runningWindowEventIdx,
         });
 
-        const sliceKey = probeLeaf ? `${probeLeaf.scope}:${probeLeaf.sliceIndex}` : '';
+        const sliceKey = leaf ? `${leaf.scope}:${leaf.sliceIndex}` : '';
         if (sliceKey !== lastSliceKey) {
-            runningWindowEventIdx = 0;
             lastSliceKey = sliceKey;
+            if (runningWindowEventIdx !== 0) {
+                runningWindowEventIdx = 0;
+                leaf = resolveFieldOperatorLeaf(ast, {
+                    seed: numericSeed,
+                    salt: 0x5107,
+                    globalIdx,
+                    globalProgress,
+                    cycleIdx,
+                    cycleProgress,
+                    eventIdx: runningEventIdx,
+                    windowEventIdx: 0,
+                });
+            }
         }
-
-        const leaf = resolveFieldOperatorLeaf(raw, {
-            seed: numericSeed,
-            salt: 0x5107,
-            globalIdx,
-            globalProgress,
-            cycleIdx,
-            cycleProgress,
-            eventIdx: runningEventIdx,
-            windowEventIdx: runningWindowEventIdx,
-        });
 
         let rawSlot = safeActiveSlot;
         if (leaf) {
@@ -901,10 +915,15 @@ export function resolveSectionSlot(
         return wrapSlotIndex(safeActiveSlot, safeSlotCount);
     }
     const token = String(slotValue).trim();
+    if (isRandomToken(token)) {
+        const numericSeed = normalizeNumericSeed(sectionSeed, 0);
+        const prng = mulberry32(hashSeed(numericSeed, sectionIndex, 0x5107));
+        return wrapSlotIndex(Math.floor(prng() * safeSlotCount), safeSlotCount);
+    }
     if (isFieldOperatorExpression(token)) {
         const val = evaluateNumericFieldOperator(token, {
             seed: sectionSeed,
-            salt: 0x5107,
+            salt: 0x5107 + sectionIndex,
             globalIdx: 0,
             cycleIdx: sectionIndex,
             eventIdx: sectionIndex,
@@ -916,11 +935,6 @@ export function resolveSectionSlot(
             fallback: safeActiveSlot,
         });
         return wrapSlotIndex(val, safeSlotCount);
-    }
-    if (isRandomToken(token)) {
-        const numericSeed = normalizeNumericSeed(sectionSeed, 0);
-        const prng = mulberry32(hashSeed(numericSeed, sectionIndex, 0x5107));
-        return wrapSlotIndex(Math.floor(prng() * safeSlotCount), safeSlotCount);
     }
     const parsed = Number(token);
     const rawSlot = Number.isFinite(parsed) ? Math.floor(parsed) : safeActiveSlot;

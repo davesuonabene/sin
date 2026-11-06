@@ -14,13 +14,14 @@ import {
     permutePoolItems,
     parseFieldOperatorAST,
     resolveFieldOperatorLeaf,
+    resolveSectionSlot,
 } from '../../ermes/ts/slotLanguage.ts';
 import { SampleNode } from '../src/nodes/SampleNode.ts';
 import { SequenceNode } from '../src/nodes/SequenceNode.ts';
 import { ArrangementNode } from '../src/nodes/ArrangementNode.ts';
 import { TrackNode } from '../src/nodes/TrackNode.ts';
 import { WidgetFactory } from '../src/ui/WidgetFactory.ts';
-import { populateOwnerSlotsFromPool, resolveAssetFilterNode, resolveAssignedAssetFilters, resolvePoolItemByQuery } from '../../ermes/ts/assetResolver.ts';
+import { advanceAssetPoolSeed, populateOwnerSlotsFromPool, resolveAssetFilterNode, resolveAssignedAssetFilters, resolvePoolItemByQuery } from '../../ermes/ts/assetResolver.ts';
 import {
     populateOwnerSlotsFromRandom,
     refreshArmedSeeds,
@@ -1177,4 +1178,36 @@ test('Inspector panel never switches slots during playback: IRIDE canvas stays r
     sample.resolveVisualizationSignal({ isPlaying: true, time: 1.1, duration: 2.0, beat: 2.2 } as any);
     assert.equal(sample.activeSlotIndex, 1);
     assert.equal(sample._liveTriggeredFilepath, null);
+});
+
+test('window.editorGraph fallback and advanceAssetPoolSeed do not lock pool seed on normal refresh', () => {
+    const prevEditorGraph = (globalThis as any).window?.editorGraph;
+    try {
+        (globalThis as any).window = (globalThis as any).window || {};
+        (globalThis as any).window.editorGraph = {
+            extra: { global_seed: 4, global_seed_locked: true, field_refresh_epoch: 2 },
+        };
+        assert.equal(getGlobalSeed(), 4);
+        assert.equal(isGlobalSeedLocked(), true);
+        assert.equal(getEffectiveFieldSeed(), 4 + 2 * 10007);
+
+        const poolNode: any = {
+            id: 801,
+            type: 'Audio/AssetFilter',
+            properties: {
+                selected_items: [
+                    { id: 1, name: 'a.wav', filepath: 'a.wav' },
+                    { id: 2, name: 'b.wav', filepath: 'b.wav' },
+                ],
+            },
+        };
+        advanceAssetPoolSeed(poolNode, undefined, 5);
+        assert.equal(poolNode.properties.global_seed, 5);
+        assert.equal(poolNode.properties.locked_pool_seed, undefined);
+        assert.deepEqual([0, 1, 2, 3].map(i => resolveSectionSlot('rand', 4, 0, 42, i)), [1, 1, 2, 1]);
+    } finally {
+        if ((globalThis as any).window) {
+            (globalThis as any).window.editorGraph = prevEditorGraph;
+        }
+    }
 });

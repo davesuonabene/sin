@@ -49,21 +49,47 @@ export class NodeContextMenu {
         });
     }
 
-    public show(x: number, y: number, node: any) {
+    public show(x: number, y: number, node: any, modifierBadge?: 'pool' | 'random' | null) {
         this.targetNode = node;
         this.openTime = Date.now();
         this.menuElement.innerHTML = '';
 
         const nodeName = node.properties?.node_name || node.title || `Node #${node.id}`;
+        const badgeLabel = modifierBadge === 'pool' ? 'Asset Pool' : (modifierBadge === 'random' ? 'Random Mod' : null);
 
         // Context Header
         const header = document.createElement('div');
         header.className = 'ctx-menu-header';
         header.innerHTML = `
-            <span class="ctx-menu-title">${nodeName}</span>
+            <span class="ctx-menu-title">${badgeLabel ? `${badgeLabel} · ${nodeName}` : nodeName}</span>
             <span class="ctx-menu-id">#${node.id}</span>
         `;
         this.menuElement.appendChild(header);
+
+        if (modifierBadge) {
+            const badgeItems: NodeContextMenuItem[] = [
+                {
+                    id: 'open-modifier',
+                    label: `Open ${badgeLabel}`,
+                    action: (n) => {
+                        if (modifierBadge === 'pool') {
+                            window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', { detail: { nodeId: n.id, forceOpen: true } }));
+                        } else {
+                            window.dispatchEvent(new CustomEvent('add-random-node', { detail: { parentId: n.id, forceOpen: true } }));
+                        }
+                    }
+                },
+                {
+                    id: 'delete-modifier',
+                    label: 'Delete',
+                    danger: true,
+                    action: (n) => n.resetModifier?.(modifierBadge)
+                }
+            ];
+            this.renderItems(badgeItems);
+            this.positionMenu(x, y);
+            return;
+        }
 
         // Color Grid for selected nodes
         const colorsContainer = document.createElement('div');
@@ -256,11 +282,23 @@ export class NodeContextMenu {
             },
             {
                 id: 'random',
-                label: 'Add Random Mod',
+                label: node.isRandomModDefinitelyCreated?.() ? 'Open Random Mod' : 'Add Random Mod',
                 action: (n) => {
-                    window.dispatchEvent(new CustomEvent('add-random-node', { detail: { parentId: n.id } }));
+                    window.dispatchEvent(new CustomEvent('add-random-node', { detail: { parentId: n.id, forceOpen: true } }));
                 }
             },
+            ...(node.isPoolDefinitelyCreated?.() || node.isPoolPanelOpen ? [{
+                id: 'delete-pool',
+                label: 'Delete Asset Pool',
+                danger: true,
+                action: (n: any) => n.resetModifier?.('pool')
+            }] : []),
+            ...(node.isRandomModDefinitelyCreated?.() || node.isRandomPanelOpen ? [{
+                id: 'delete-random',
+                label: 'Delete Random Mod',
+                danger: true,
+                action: (n: any) => n.resetModifier?.('random')
+            }] : []),
             {
                 id: 'create-ghost',
                 label: 'Create Ghost',
@@ -291,9 +329,12 @@ export class NodeContextMenu {
             }
         ];
 
-        items
-            .filter(item => item.id !== 'main-preview' || node.canBeMainPreview?.())
-            .forEach(item => {
+        this.renderItems(items.filter(item => item.id !== 'main-preview' || node.canBeMainPreview?.()));
+        this.positionMenu(x, y);
+    }
+
+    private renderItems(items: NodeContextMenuItem[]) {
+        items.forEach(item => {
             const row = document.createElement('div');
             row.className = `ctx-menu-item sin-menu-item ${item.danger ? 'danger' : ''}`;
             row.textContent = item.label;
@@ -311,8 +352,10 @@ export class NodeContextMenu {
             };
 
             this.menuElement.appendChild(row);
-            });
+        });
+    }
 
+    private positionMenu(x: number, y: number) {
         this.menuElement.style.display = 'flex';
 
         // Viewport position clamping

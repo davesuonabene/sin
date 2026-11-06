@@ -30,7 +30,7 @@ import {
     normalizeNumericSeed,
     wrapSlotIndex,
 } from '../../../ermes/ts/slotLanguage.ts';
-import { getEffectiveFieldSeed } from '../../../ermes/ts/randomResolver.ts';
+import { getEffectiveFieldSeed, restoreBaseValues } from '../../../ermes/ts/randomResolver.ts';
 
 export const VISUALIZATION_TYPE_LABELS: Record<VisualizationTypeId, string> = {
     loop: 'Loop Waveform',
@@ -113,6 +113,7 @@ export abstract class BaseNode extends LGraphNode {
     eyeBtn: CanvasButton;
     poolBtn: CanvasButton;
     randomBtn: CanvasButton;
+    selectedModifierBadge: 'pool' | 'random' | null = null;
 
     static createNode<T extends BaseNode>(this: new () => T, properties?: Record<string, any>): T {
         const instance = new this();
@@ -338,19 +339,81 @@ export abstract class BaseNode extends LGraphNode {
         if (!this.properties) this.properties = {};
         const next = forceState !== undefined ? Boolean(forceState) : !this.isPoolViewOpen;
         this.properties.pool_view_open = next;
+        if (!next && !this.isPoolDefinitelyCreated()) {
+            this.resetModifier('pool');
+        }
         this.setDirtyCanvas(true, true);
         return next;
     }
 
-    hasAttachedRandomMod(): boolean {
-        if (this.isModifier) return false;
+    getAttachedRandomModNode(): any | null {
+        if (this.isModifier) return null;
         const graph = this.graph || ((typeof window !== 'undefined') ? (window as any).editorGraph : null);
         const nodes: any[] = (graph as any)?._nodes || [];
-        return nodes.some(n =>
+        return nodes.find(n =>
             n &&
             (n.type === 'Audio/Random' || n.properties?.node_type === 'random' || n.properties?.modifier_kind === 'random') &&
             n.properties?.parentId === this.id
-        );
+        ) || null;
+    }
+
+    hasAttachedRandomMod(): boolean {
+        return Boolean(this.getAttachedRandomModNode());
+    }
+
+    isPoolDefinitelyCreated(): boolean {
+        const items = this.getAttachedPoolNode()?.properties?.selected_items;
+        return Array.isArray(items) && items.length > 0;
+    }
+
+    isRandomModDefinitelyCreated(): boolean {
+        const dests = this.getAttachedRandomModNode()?.properties?.destinations;
+        return Array.isArray(dests) && dests.length > 0;
+    }
+
+    get isPoolPanelOpen(): boolean {
+        if (!this.isPoolSupported) return false;
+        if (this.isPoolViewOpen) return true;
+        const poolId = this.getAttachedPoolNode()?.id;
+        return poolId != null && (typeof window !== 'undefined') && (window as any).activeParamNodeId === poolId;
+    }
+
+    get isRandomPanelOpen(): boolean {
+        if (this.isModifier) return false;
+        const rndId = this.getAttachedRandomModNode()?.id;
+        return rndId != null && (typeof window !== 'undefined') && (window as any).activeParamNodeId === rndId;
+    }
+
+    resetModifier(modKind: 'pool' | 'random'): void {
+        const graph = this.graph || ((typeof window !== 'undefined') ? (window as any).editorGraph : null);
+        if (this.selectedModifierBadge === modKind) this.selectedModifierBadge = null;
+        if (modKind === 'pool') {
+            const poolNode = this.getAttachedPoolNode();
+            this.updateProperty('asset_modifier_id', null);
+            if (this.properties) this.properties.pool_view_open = false;
+            if (poolNode && graph) graph.remove(poolNode);
+        } else {
+            const rndNode = this.getAttachedRandomModNode();
+            if (rndNode) {
+                restoreBaseValues(rndNode, this);
+                if (graph) graph.remove(rndNode);
+            }
+        }
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('modifier-assignment-changed', { detail: { nodeId: this.id } }));
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
+        }
+        this.setDirtyCanvas(true, true);
+    }
+
+    getModifierBadgeAtPos(localX: number, localY: number): 'pool' | 'random' | null {
+        if (this.flags?.collapsed || (this.flags as any)?.hidden || this.isModifier) return null;
+        for (const btn of this.getVisibleCanvasButtons()) {
+            if (btn.checkHit(localX, localY, this)) {
+                return btn === this.poolBtn ? 'pool' : (btn === this.randomBtn ? 'random' : null);
+            }
+        }
+        return null;
     }
 
     private _distanceStage: 1 | 2 | 3 = 1;
@@ -532,7 +595,7 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     getEffectiveSeed(): number {
-        const g = (this as any).graph || (typeof window !== 'undefined' ? (window as any).graph : undefined);
+        const g = (this as any).graph || (typeof window !== 'undefined' ? ((window as any).editorGraph || (window as any).graph) : undefined);
         const poolNode = this.getAttachedPoolNode?.();
         const salt = Number(this.properties?.seed_salt ?? poolNode?.properties?.seed_salt ?? 0) * 9973;
         if (this.properties?.locked_field_seed !== undefined || (g?.extra && (g.extra.global_seed !== undefined || g.extra.field_refresh_epoch !== undefined))) {
@@ -1405,25 +1468,37 @@ export abstract class BaseNode extends LGraphNode {
             -63, 4, 28, 13, "POOL",
             "rgba(15, 23, 42, 0.72)", "#7e22ce",
             () => {
-                window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', { detail: { nodeId: this.id } }));
+                this.selectedModifierBadge = 'pool';
+                this.setDirtyCanvas(true, true);
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', { detail: { nodeId: this.id, forceOpen: true } }));
+                }
             },
-            "Open Asset Pool",
-            (node: any) => Boolean(node.hasAttachedPool?.()),
+            "Asset Pool",
+            (node: any) => Boolean(node.isPoolDefinitelyCreated?.()),
             "#7e22ce", "#9333ea",
-            "Asset Pool: Active (Click to open)"
+            "Asset Pool: Active"
         );
+        this.poolBtn.isPanelOpen = (node: any) => Boolean(node.isPoolPanelOpen);
+        this.poolBtn.isSelectedForDeletion = (node: any) => node.selectedModifierBadge === 'pool';
 
         this.randomBtn = new CanvasButton(
             -32, 4, 26, 13, "RND",
             "rgba(15, 23, 42, 0.72)", "#7e22ce",
             () => {
-                window.dispatchEvent(new CustomEvent('add-random-node', { detail: { parentId: this.id } }));
+                this.selectedModifierBadge = 'random';
+                this.setDirtyCanvas(true, true);
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('add-random-node', { detail: { parentId: this.id, forceOpen: true } }));
+                }
             },
-            "Open Random Mod",
-            (node: any) => Boolean(node.hasAttachedRandomMod?.()),
+            "Random Mod",
+            (node: any) => Boolean(node.isRandomModDefinitelyCreated?.()),
             "#7e22ce", "#9333ea",
-            "Random Mod: Active (Click to open)"
+            "Random Mod: Active"
         );
+        this.randomBtn.isPanelOpen = (node: any) => Boolean(node.isRandomPanelOpen);
+        this.randomBtn.isSelectedForDeletion = (node: any) => node.selectedModifierBadge === 'random';
 
         this.removeBtn = new CanvasButton(
             48, 54, 16, 16, "×", "#5f1720", "#b91c1c",
@@ -1495,20 +1570,17 @@ export abstract class BaseNode extends LGraphNode {
     /**
      * Returns only the modifier badges rendered in the top-right corner of the node canvas (Pool / Random Mod).
      * At Stage 3 (maximum distance) or when visualization is unsupported, no canvas buttons are shown.
+     * Buttons are visible only when definitely created or when their configuration panel is currently open.
      */
-    getVisibleCanvasButtons(isSelected: boolean = true, isHovered: boolean = false): CanvasButton[] {
+    getVisibleCanvasButtons(_isSelected: boolean = true, _isHovered: boolean = false): CanvasButton[] {
         if (!this.isVisualizationSupported || this._distanceStage === 3) {
             return [];
         }
-        const showAll = this.isVisualizationActive ? isSelected : (isSelected || isHovered);
-        let btns: CanvasButton[];
-        if (!showAll) {
-            btns = [];
-            if (this.isPoolSupported && this.hasAttachedPool()) btns.push(this.poolBtn);
-            if (this.hasAttachedRandomMod()) btns.push(this.randomBtn);
-        } else {
-            btns = [];
-            if (this.isPoolSupported) btns.push(this.poolBtn);
+        const btns: CanvasButton[] = [];
+        if (this.isPoolSupported && (this.isPoolDefinitelyCreated() || this.isPoolPanelOpen)) {
+            btns.push(this.poolBtn);
+        }
+        if (this.isRandomModDefinitelyCreated() || this.isRandomPanelOpen) {
             btns.push(this.randomBtn);
         }
 
@@ -1667,6 +1739,11 @@ export abstract class BaseNode extends LGraphNode {
                     return true;
                 }
             }
+        }
+
+        if (this.selectedModifierBadge != null) {
+            this.selectedModifierBadge = null;
+            this.setDirtyCanvas(true, true);
         }
 
         return false;

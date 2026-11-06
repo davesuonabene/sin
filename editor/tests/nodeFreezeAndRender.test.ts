@@ -449,7 +449,14 @@ test('Distance model, bidirectional node resizing, and top-right Pool / Random m
     assert.equal(sample.isViewerCookEnabled, true);
     assert.equal(sample.isVisualizationActive, true);
     assert.equal(sample.isMinifiedStage, false);
-    assert.equal(sample.getVisibleCanvasButtons(true).length, 2, 'Pool and Random modifier badges are visible in top-right when selected in Stage 1');
+
+    // Unconfigured node with nothing activated has 0 visible canvas buttons even when touched/selected
+    assert.equal(sample.getVisibleCanvasButtons(true).length, 0, 'No badges shown on unattached node when selected');
+
+    // When activated/definitely created, modifier badges appear in top-right
+    sample.isPoolDefinitelyCreated = () => true;
+    sample.isRandomModDefinitelyCreated = () => true;
+    assert.equal(sample.getVisibleCanvasButtons(true).length, 2, 'Pool and Random modifier badges are visible in top-right when activated');
     assert.equal(sample.poolBtn.label, 'POOL');
     assert.equal(sample.randomBtn.label, 'RND');
     assert.equal(sample.poolBtn.x, -63);
@@ -506,6 +513,51 @@ test('Distance model, bidirectional node resizing, and top-right Pool / Random m
     assert.equal(sample.poolBtn.y, 2);
     assert.equal(sample.randomBtn.x, -15);
     assert.equal(sample.randomBtn.y, 2);
+});
+
+test('Pool and RND visualizer lifecycle: panel open border highlight, selected-for-deletion full highlight, no double-click deletion, and resetModifier', () => {
+    const sample = new SampleNode();
+    sample.id = 202;
+
+    // 1. Initially nothing activated -> 0 buttons
+    assert.equal(sample.isPoolDefinitelyCreated(), false);
+    assert.equal(sample.isRandomModDefinitelyCreated(), false);
+    assert.equal(sample.getVisibleCanvasButtons(true).length, 0);
+
+    // 2. Opening but not editing: panel is open -> badge is visible with panelOpen state
+    let mockPoolPanelOpen = true;
+    Object.defineProperty(sample, 'isPoolPanelOpen', { get: () => mockPoolPanelOpen, configurable: true });
+    assert.equal(sample.getVisibleCanvasButtons(true).length, 1, 'Badge visible when panel is open');
+    assert.equal(sample.poolBtn.isPanelOpen?.(sample), true, 'Border highlight enabled when panel open');
+    assert.equal(sample.poolBtn.isSelectedForDeletion?.(sample), false);
+
+    // When panel closes without editing -> badge does NOT stick to visualizer
+    mockPoolPanelOpen = false;
+    assert.equal(sample.getVisibleCanvasButtons(true).length, 0, 'Badge does not stick when panel closes without editing');
+
+    // 3. Definitely created with content -> badge persists
+    sample.isPoolDefinitelyCreated = () => true;
+    assert.equal(sample.getVisibleCanvasButtons(true).length, 1);
+
+    // 4. Selecting and double-clicking badge on visualizer -> selects ("highlight of all") and NEVER deletes on second click
+    sample.poolBtn.onClick();
+    assert.equal(sample.selectedModifierBadge, 'pool');
+    assert.equal(sample.poolBtn.isSelectedForDeletion?.(sample), true, 'Highlight of all enabled when selected for deletion');
+    sample.poolBtn.onClick(); // second click / double-click
+    assert.equal(sample.selectedModifierBadge, 'pool', 'Double-clicking badge keeps it selected and does NOT trigger deletion');
+    assert.equal(sample.getVisibleCanvasButtons(true).length, 1, 'Badge remains present after double-click');
+
+    // 5. Right-click hit testing identifies badge for context menu Delete
+    const badgeX = sample.size[0] + sample.poolBtn.x + 2;
+    const badgeY = sample.poolBtn.y + 2;
+    assert.equal(sample.getModifierBadgeAtPos(badgeX, badgeY), 'pool');
+    assert.equal(sample.getModifierBadgeAtPos(10, 10), null);
+
+    // 6. Resetting modifier (via Backspace/Delete or right-click Delete) -> deletes badge
+    sample.resetModifier('pool');
+    sample.isPoolDefinitelyCreated = () => false;
+    assert.equal(sample.selectedModifierBadge, null);
+    assert.equal(sample.getVisibleCanvasButtons(true).length, 0, 'Badge deleted after reset');
 });
 
 test('Audio nodes report live activity state for minimal perimeter border accents', async () => {

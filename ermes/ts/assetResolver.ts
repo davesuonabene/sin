@@ -162,15 +162,19 @@ export function resolveEffectivePoolSeed(modifierNode?: any, ownerNode?: any, gr
     if (modifierNode?.properties?.locked_pool_seed !== undefined) {
         return normalizeNumericSeed(modifierNode.properties.locked_pool_seed, 0);
     }
-    const graph = graphOverride || ownerNode?.graph || modifierNode?.graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
-    if (graph?.extra?.global_seed !== undefined) {
-        return normalizeNumericSeed(graph.extra.global_seed, 0);
+    const attachedGraph = graphOverride || ownerNode?.graph || modifierNode?.graph;
+    if (attachedGraph?.extra?.global_seed !== undefined) {
+        return normalizeNumericSeed(attachedGraph.extra.global_seed, 0);
     }
     if (modifierNode?.properties?.global_seed !== undefined) {
         return normalizeNumericSeed(modifierNode.properties.global_seed, 0);
     }
     if (ownerNode?.properties?.global_seed !== undefined) {
         return normalizeNumericSeed(ownerNode.properties.global_seed, 0);
+    }
+    const windowGraph = typeof window !== 'undefined' ? ((window as any).editorGraph || (window as any).graph) : null;
+    if (windowGraph?.extra?.global_seed !== undefined) {
+        return normalizeNumericSeed(windowGraph.extra.global_seed, 0);
     }
     return normalizeNumericSeed(modifierNode?.properties?.seed ?? ownerNode?.properties?.seed ?? 0, 0);
 }
@@ -195,7 +199,6 @@ export function advanceAssetPoolSeed(modifierNode: any, trackNodesMap?: Map<numb
         modifierNode.properties.seed_salt = (Number(modifierNode.properties.seed_salt) || 0) + 1;
         if (nextGlobalSeed !== undefined) {
             modifierNode.properties.global_seed = nextGlobalSeed;
-            modifierNode.properties.locked_pool_seed = nextGlobalSeed;
         }
     }
     if (modifierNode?.properties?.playbackMode === 'Sequential') {
@@ -418,7 +421,7 @@ export function normalizeAssetRefreshMode(value: unknown): AssetRefreshMode {
     }
 }
 
-function topAncestorId(ownerNodeId: number, trackNodes?: Map<number, any>): number {
+export function topAncestorId(ownerNodeId: number, trackNodes?: Map<number, any>): number {
     let currentId = ownerNodeId;
     const visited = new Set<number>();
     while (!visited.has(currentId)) {
