@@ -4,25 +4,15 @@ import { TrackNode } from '../src/nodes/TrackNode.ts';
 import { SequenceNode } from '../src/nodes/SequenceNode.ts';
 import { serializeNodeSubtree } from '../../ermes/ts/serializer.ts';
 
-test('TrackNode declares scope parameters in schema and default properties', () => {
+test('TrackNode inherits unified visualization_type and common visualizers from BaseNode', () => {
     const track = new TrackNode();
 
-    // Verify fields exist
-    const scopeModeField = TrackNode.fields.find(f => f.key === 'scope_mode');
-    const scopeWindowField = TrackNode.fields.find(f => f.key === 'scope_window');
-    const scopeGainField = TrackNode.fields.find(f => f.key === 'scope_gain');
-
-    assert.ok(scopeModeField, 'scope_mode field exists');
-    assert.equal(scopeModeField?.type, 'select');
-    assert.ok(scopeWindowField, 'scope_window field exists');
-    assert.equal(scopeWindowField?.type, 'slider');
-    assert.ok(scopeGainField, 'scope_gain field exists');
-    assert.equal(scopeGainField?.type, 'slider');
-
-    // Verify default property initialization
-    assert.equal(track.properties.scope_mode, 'full');
-    assert.equal(track.properties.scope_window, 2.0);
-    assert.equal(track.properties.scope_gain, 1.0);
+    assert.equal(track.properties.visualization_type, 'loop');
+    assert.equal(track.getVisualizationType(), 'loop');
+    assert.deepEqual(
+        track.getSupportedVisualizationOptions().map(o => o.id),
+        ['loop', 'realtime', 'spectrum']
+    );
 });
 
 test('TrackNode getInputNodes resolves incoming connected nodes from graph links', () => {

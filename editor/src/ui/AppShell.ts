@@ -17,28 +17,33 @@ export function createAppShell(appElement: HTMLElement) {
         <div class="header-menu-row">
             <div class="top-header-left">
                 <div class="header-menus">
-                    <details class="header-menu" id="file-menu">
+                    <details class="header-menu" id="file-menu" name="header-menus">
                         <summary>File</summary>
                         <div class="header-menu-popover sin-menu-surface">
-                            <button id="new-stage-btn" class="header-menu-action sin-menu-item">New</button>
+                            <button id="new-stage-btn" class="header-menu-action sin-menu-item" type="button">New</button>
+                            <button id="open-workspace-btn" class="header-menu-action sin-menu-item" type="button">Open...</button>
+                            <div class="header-menu-submenu-item" id="open-recent-menu-item">
+                                <button id="open-recent-trigger-btn" class="header-menu-action header-menu-submenu-trigger sin-menu-item" type="button">
+                                    <span>Open Recent</span>
+                                    <span class="header-menu-submenu-arrow">▶</span>
+                                </button>
+                                <div class="header-submenu-popover sin-menu-surface" id="open-recent-popover">
+                                    <div class="header-menu-hint">No recent workspaces</div>
+                                </div>
+                            </div>
                             <div class="header-menu-separator sin-menu-divider"></div>
-                            <label class="header-menu-label" for="workspace-preset-select">Workspace</label>
-                            <select id="workspace-preset-select" class="header-select workspace-preset-select sin-select" aria-label="Workspace save">
+                            <button id="save-workspace-btn" class="header-menu-action sin-menu-item" type="button">Save</button>
+                            <button id="save-workspace-as-btn" class="header-menu-action sin-menu-item" type="button">Save As...</button>
+                            <div class="header-menu-separator sin-menu-divider"></div>
+                            <button id="export-btn" class="header-menu-action sin-menu-item" type="button">Download selected audio</button>
+                            <select id="workspace-preset-select" class="header-select workspace-preset-select sin-select" aria-label="Workspace save" style="display: none;">
                                 <option value="">No saved workspaces</option>
                             </select>
-                            <div class="header-menu-row">
-                                <button id="save-workspace-as-btn" class="header-btn secondary-tool-btn sin-menu-item">Save workspace as</button>
-                                <button id="save-workspace-btn" class="header-btn secondary-tool-btn sin-menu-item" disabled>Save workspace</button>
-                            </div>
-                            <div class="header-menu-row">
-                                <button id="load-workspace-btn" class="header-btn secondary-tool-btn sin-menu-item" disabled>Load workspace</button>
-                                <button id="delete-workspace-btn" class="header-btn secondary-tool-btn sin-menu-item" disabled>Delete workspace</button>
-                            </div>
-                            <div class="header-menu-separator sin-menu-divider"></div>
-                            <button id="export-btn" class="header-menu-action sin-menu-item">Download selected audio</button>
+                            <button id="load-workspace-btn" style="display: none;" disabled></button>
+                            <button id="delete-workspace-btn" style="display: none;" disabled></button>
                         </div>
                     </details>
-                    <details class="header-menu" id="library-menu">
+                    <details class="header-menu" id="library-menu" name="header-menus">
                         <summary>Library</summary>
                         <div class="header-menu-popover sin-menu-surface">
                             <button id="toggle-library-btn" class="header-menu-action sin-menu-item">Open Library</button>
@@ -47,7 +52,7 @@ export function createAppShell(appElement: HTMLElement) {
                             <div class="header-menu-hint">Library management stays in GAIA.</div>
                         </div>
                     </details>
-                    <details class="header-menu" id="render-menu">
+                    <details class="header-menu" id="render-menu" name="header-menus">
                         <summary>Render</summary>
                         <div class="header-menu-popover sin-menu-surface">
                             <button id="render-flagged-btn" class="header-menu-action sin-menu-item">Render Flagged Nodes</button>
@@ -148,6 +153,29 @@ export function createAppShell(appElement: HTMLElement) {
         if (e.buttons > 0) scheduleFloatingPanelClamp();
     }, { passive: true });
 
+    // Ensure menu dropdowns close when another is opened and on outside click
+    const headerMenus = topHeader.querySelectorAll<HTMLDetailsElement>('details.header-menu');
+    headerMenus.forEach(menu => {
+        menu.addEventListener('toggle', () => {
+            if (menu.open) {
+                headerMenus.forEach(other => {
+                    if (other !== menu && other.open) {
+                        other.open = false;
+                    }
+                });
+            }
+        });
+    });
+
+    document.addEventListener('pointerdown', (e: PointerEvent) => {
+        const target = e.target as HTMLElement | null;
+        if (!target?.closest('details.header-menu')) {
+            headerMenus.forEach(m => {
+                if (m.open) m.open = false;
+            });
+        }
+    });
+
     const floatingToggleLibrary = topHeader.querySelector('#floating-toggle-library') as HTMLButtonElement;
     return {
         topHeader,
@@ -181,7 +209,10 @@ export function createAppShell(appElement: HTMLElement) {
         workspacePresetSelect: topHeader.querySelector('#workspace-preset-select') as HTMLSelectElement,
         saveWorkspaceAsBtn: topHeader.querySelector('#save-workspace-as-btn') as HTMLButtonElement,
         saveWorkspaceBtn: topHeader.querySelector('#save-workspace-btn') as HTMLButtonElement,
-        loadWorkspaceBtn: topHeader.querySelector('#load-workspace-btn') as HTMLButtonElement,
+        loadWorkspaceBtn: (topHeader.querySelector('#open-workspace-btn') || topHeader.querySelector('#load-workspace-btn')) as HTMLButtonElement,
+        openWorkspaceBtn: topHeader.querySelector('#open-workspace-btn') as HTMLButtonElement,
+        openRecentTriggerBtn: topHeader.querySelector('#open-recent-trigger-btn') as HTMLButtonElement,
+        openRecentPopover: topHeader.querySelector('#open-recent-popover') as HTMLDivElement,
         deleteWorkspaceBtn: topHeader.querySelector('#delete-workspace-btn') as HTMLButtonElement,
     };
 }

@@ -9,7 +9,6 @@ import { FxChainSection } from './components/FxChainSection.ts';
 import { AssetPoolSection } from './components/AssetPoolSection.ts';
 import { RandomDestinationsSection } from './components/RandomDestinationsSection.ts';
 import { ExportSection } from './components/ExportSection.ts';
-import { NEON_ICONS, NODE_SHAPES } from '../nodes/NodeVisuals.ts';
 import { APPEARANCE_COLOR_PRESETS } from '../config/appearance.ts';
 
 export class SectionRendererFactory {
@@ -176,113 +175,67 @@ export class SectionRendererFactory {
         group.appendChild(heading);
 
         const currentColor = node.nodeColor;
-        const currentIcon = node.nodeIcon;
-        const currentShape = node.nodeShape;
         const colorPresets = [...APPEARANCE_COLOR_PRESETS];
         if (!colorPresets.some(preset => preset.value.toLowerCase() === currentColor.toLowerCase())) {
             colorPresets.unshift({ value: currentColor, label: `Current (${currentColor})` });
         }
 
-        const createRow = (
-            label: string,
-            key: 'color' | 'icon' | 'shape',
-            currentValue: string,
-            options: Array<{ value: string; label: string }>,
-            currentColorIndicator?: HTMLElement
-        ) => {
-            const row = document.createElement('div');
-            row.className = 'td-appearance-row td-param-row';
+        const row = document.createElement('div');
+        row.className = 'td-appearance-row td-param-row';
 
-            const labelElement = document.createElement('div');
-            labelElement.className = 'td-param-label';
-            labelElement.textContent = label;
-            row.appendChild(labelElement);
+        const labelElement = document.createElement('div');
+        labelElement.className = 'td-param-label';
+        labelElement.textContent = 'Color';
+        row.appendChild(labelElement);
 
-            const control = document.createElement('div');
-            control.className = 'td-param-control td-appearance-control';
-
-            if (currentColorIndicator) control.appendChild(currentColorIndicator);
-
-            const select = document.createElement('select');
-            select.className = 'td-param-select td-appearance-select sin-select';
-            select.setAttribute('aria-label', label);
-            for (const optionConfig of options) {
-                const option = document.createElement('option');
-                option.value = optionConfig.value;
-                option.textContent = optionConfig.label;
-                option.selected = optionConfig.value === currentValue;
-                select.appendChild(option);
-            }
-            select.dataset.appearanceKey = key;
-            control.appendChild(select);
-            row.appendChild(control);
-            group.appendChild(row);
-
-            return select;
-        };
+        const control = document.createElement('div');
+        control.className = 'td-param-control td-appearance-control';
 
         const currentColorIndicator = document.createElement('span');
         currentColorIndicator.className = 'td-appearance-color-preview';
         currentColorIndicator.style.backgroundColor = currentColor;
         currentColorIndicator.setAttribute('aria-hidden', 'true');
+        control.appendChild(currentColorIndicator);
 
-        const colorSelect = createRow(
-            'Color',
-            'color',
-            currentColor,
-            colorPresets,
-            currentColorIndicator
-        );
-        const iconSelect = createRow(
-            'Icon',
-            'icon',
-            currentIcon,
-            NEON_ICONS.map(icon => ({ value: icon.id, label: icon.label }))
-        );
-        const shapeSelect = createRow(
-            'Shape',
-            'shape',
-            currentShape,
-            NODE_SHAPES.map(shape => ({
-                value: shape,
-                label: shape.charAt(0).toUpperCase() + shape.slice(1)
-            }))
-        );
+        const colorSelect = document.createElement('select');
+        colorSelect.className = 'td-param-select td-appearance-select sin-select';
+        colorSelect.setAttribute('aria-label', 'Color');
+        for (const optionConfig of colorPresets) {
+            const option = document.createElement('option');
+            option.value = optionConfig.value;
+            option.textContent = optionConfig.label;
+            option.selected = optionConfig.value === currentColor;
+            colorSelect.appendChild(option);
+        }
+        colorSelect.dataset.appearanceKey = 'color';
+        control.appendChild(colorSelect);
+        row.appendChild(control);
+        group.appendChild(row);
 
-        const previousValueFor = (key: 'color' | 'icon' | 'shape'): string => {
-            if (key === 'color') return node.nodeColor;
-            if (key === 'icon') return node.nodeIcon;
-            return node.nodeShape;
-        };
-
-        const applyAppearance = async (key: 'color' | 'icon' | 'shape', value: string, select: HTMLSelectElement) => {
-            const previousValue = previousValueFor(key);
+        const applyColor = async (value: string) => {
+            const previousValue = node.nodeColor;
             if (value === previousValue) return;
 
-            node.updateProperty(key, value);
-            if (key === 'color') {
-                if (node.properties) node.properties.user_color = true;
-                node.color = value;
-                node.bgcolor = value;
-                currentColorIndicator.style.backgroundColor = value;
-            }
+            node.updateProperty('color', value);
+            if (node.properties) node.properties.user_color = true;
+            node.color = value;
+            node.bgcolor = value;
+            currentColorIndicator.style.backgroundColor = value;
             node.setDirtyCanvas(true, true);
 
             try {
-                await node.onPropertyEdited(key, value, previousValue);
+                await node.onPropertyEdited('color', value, previousValue);
             } catch (error) {
-                node.updateProperty(key, previousValue);
-                select.value = previousValue;
-                if (key === 'color') currentColorIndicator.style.backgroundColor = previousValue;
+                node.updateProperty('color', previousValue);
+                colorSelect.value = previousValue;
+                currentColorIndicator.style.backgroundColor = previousValue;
                 node.setDirtyCanvas(true, true);
-                console.error(`Could not save ${key}`, error);
-                window.alert(error instanceof Error ? error.message : `Could not save ${key}`);
+                console.error('Could not save color', error);
+                window.alert(error instanceof Error ? error.message : 'Could not save color');
             }
         };
 
-        colorSelect.addEventListener('change', () => void applyAppearance('color', colorSelect.value, colorSelect));
-        iconSelect.addEventListener('change', () => void applyAppearance('icon', iconSelect.value, iconSelect));
-        shapeSelect.addEventListener('change', () => void applyAppearance('shape', shapeSelect.value, shapeSelect));
+        colorSelect.addEventListener('change', () => void applyColor(colorSelect.value));
 
         container.appendChild(group);
     }

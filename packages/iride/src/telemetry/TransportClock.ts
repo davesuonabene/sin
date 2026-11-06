@@ -13,6 +13,7 @@ export class TransportClock {
     private bpm = 120;
     private activeNodeIds = new Set<number | string>();
     private realtimeScopeData: Float32Array | null = null;
+    private realtimeSpectrumData: Uint8Array | null = null;
     private readonly listeners = new Set<TelemetryListener>();
 
     setBpm(bpm: number): void {
@@ -27,6 +28,10 @@ export class TransportClock {
 
     setRealtimeScopeData(data: Float32Array | null): void {
         this.realtimeScopeData = data;
+    }
+
+    setRealtimeSpectrumData(data: Uint8Array | null): void {
+        this.realtimeSpectrumData = data;
     }
 
     update(time: number, duration: number, isPlaying: boolean, activeNodeIds?: Set<number | string>): void {
@@ -63,7 +68,8 @@ export class TransportClock {
             step: Math.max(0, step),
             isPlaying: this.isPlaying,
             activeNodeIds: this.activeNodeIds,
-            realtimeScope: this.realtimeScopeData
+            realtimeScope: this.realtimeScopeData,
+            realtimeSpectrum: this.realtimeSpectrumData
         };
     }
 

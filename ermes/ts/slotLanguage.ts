@@ -12,6 +12,8 @@ export interface NodeSlot {
     slot?: number;
     index?: number;
     label?: string;
+    pool_query?: string;
+    sequence_name?: string;
     filepath?: string;
     library_item_id?: number | string | null;
     original_bpm?: number | null;
@@ -30,6 +32,64 @@ export interface NodeSlot {
     step_slots?: number[];
     seed?: string | number;
     cycle_seeds?: number[];
+    field_operators?: Record<string, string>;
+    [key: string]: any;
+}
+
+export interface CopiedNodeSlotPayload {
+    nodeType: string;
+    slot: NodeSlot;
+    copiedAt: number;
+}
+
+const SLOT_CLIPBOARD_STORAGE_KEY = 'sin_node_slot_clipboard_v1';
+let inMemorySlotClipboard: CopiedNodeSlotPayload | null = null;
+
+export function copyNodeSlotToClipboard(nodeType: string, slot: NodeSlot): NodeSlot {
+    const cloned: NodeSlot = JSON.parse(JSON.stringify(slot || {}));
+    const payload: CopiedNodeSlotPayload = {
+        nodeType: String(nodeType || '').toLowerCase(),
+        slot: cloned,
+        copiedAt: Date.now()
+    };
+    inMemorySlotClipboard = payload;
+    try {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(SLOT_CLIPBOARD_STORAGE_KEY, JSON.stringify(payload));
+        }
+    } catch {
+        // Ignore storage quota/access errors
+    }
+    return JSON.parse(JSON.stringify(cloned));
+}
+
+export function getCopiedNodeSlotFromClipboard(expectedNodeType?: string): CopiedNodeSlotPayload | null {
+    let payload: CopiedNodeSlotPayload | null = inMemorySlotClipboard;
+    if (!payload) {
+        try {
+            if (typeof localStorage !== 'undefined') {
+                const raw = localStorage.getItem(SLOT_CLIPBOARD_STORAGE_KEY);
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed && typeof parsed === 'object' && parsed.slot) {
+                        payload = parsed;
+                        inMemorySlotClipboard = parsed;
+                    }
+                }
+            }
+        } catch {
+            // Ignore malformed clipboard
+        }
+    }
+    if (!payload || !payload.slot) return null;
+    if (expectedNodeType && payload.nodeType !== String(expectedNodeType).toLowerCase()) {
+        return null;
+    }
+    return {
+        nodeType: payload.nodeType,
+        slot: JSON.parse(JSON.stringify(payload.slot)),
+        copiedAt: payload.copiedAt
+    };
 }
 
 /**
@@ -103,13 +163,209 @@ export function isRandomToken(token: string): boolean {
     return t === 'rand' || t === 'random';
 }
 
+export function isDefaultSlotToken(token: unknown): boolean {
+    const t = String(token ?? '').trim().toLowerCase();
+    return t === '*' || t === 'default' || t === 'active';
+}
+
+/**
+ * Parses a range operator token such as "-12..12", "0.1..0.9", or "rand(-5, 5)".
+ * Returns `{ min, max }` when matched, or `null` otherwise.
+ */
+export function isRangeOperatorToken(token: unknown): { min: number; max: number } | null {
+    const raw = String(token ?? '').trim();
+    if (!raw) return null;
+
+    const funcMatch = raw.match(/^(?:rand|random)\s*\(\s*(-?\d+(?:\.\d+)?)\s*[,;:]\s*(-?\d+(?:\.\d+)?)\s*\)$/i);
+    if (funcMatch) {
+        const a = parseFloat(funcMatch[1]);
+        const b = parseFloat(funcMatch[2]);
+        if (Number.isFinite(a) && Number.isFinite(b)) {
+            return { min: Math.min(a, b), max: Math.max(a, b) };
+        }
+    }
+
+    const dotMatch = raw.match(/^(-?\d+(?:\.\d+)?)\s*\.\.\s*(-?\d+(?:\.\d+)?)$/);
+    if (dotMatch) {
+        const a = parseFloat(dotMatch[1]);
+        const b = parseFloat(dotMatch[2]);
+        if (Number.isFinite(a) && Number.isFinite(b)) {
+            return { min: Math.min(a, b), max: Math.max(a, b) };
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Tokenizes a Field Operator expression into individual tokens.
+ * Supports:
+ * - Quoted strings ("Kick 01.wav" "Kick 02.wav")
+ * - Function-style tokens with internal commas ("rand(-5, 5)")
+ * - Whitespace- or comma-separated token lists ("0 0 0 1", "kick_a kick_b", "0, 5, -3")
+ */
+export function tokenizeFieldOperator(expr: unknown): string[] {
+    const raw = String(expr ?? '').trim();
+    if (!raw) return [];
+
+    const tokens: string[] = [];
+    const regex = /"([^"]+)"|'([^']+)'|((?:rand|random)\s*\([^)]+\))|[^\s,]+/gi;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(raw)) !== null) {
+        const token = (match[1] ?? match[2] ?? match[3] ?? match[0]).trim();
+        if (token) tokens.push(token);
+    }
+    return tokens;
+}
+
+/**
+ * Returns `true` if `expr` is an active Field Operator (calculated value):
+ * - A random keyword ("rand", "random")
+ * - A range operator ("-12..12", "rand(-5, 5)")
+ * - A multi-token cycle list ("0 0 0 1", "kick_a.wav kick_b.wav", "0 5 -3")
+ * Returns `false` for empty strings, single fixed numbers, or single fixed names.
+ */
+export function isFieldOperatorExpression(expr: unknown): boolean {
+    const raw = String(expr ?? '').trim();
+    if (!raw) return false;
+    const tokens = tokenizeFieldOperator(raw);
+    if (tokens.length === 0) return false;
+    if (tokens.length > 1) return true;
+    const single = tokens[0];
+    return isRandomToken(single) || isRangeOperatorToken(single) !== null;
+}
+
+/**
+ * Formats an array of dropped pool/library items into a clean list operator string
+ * (e.g. `"kick_a.wav kick_b.wav"`) that cycles deterministically by node trigger count.
+ */
+export function formatPoolListExpression(items: any[]): string {
+    if (!Array.isArray(items) || items.length === 0) return '';
+    const formatted = items
+        .map(item => {
+            const fp = String(item?.filepath || item?.absolute_path || '').trim();
+            const base = (fp ? fp.split(/[\\/]/).pop() : '') || String(item?.name || '').trim();
+            if (!base) return '';
+            return /\s/.test(base) ? `"${base.replace(/"/g, '')}"` : base;
+        })
+        .filter(Boolean);
+    return formatted.join(' ');
+}
+
+/**
+ * Evaluates a numeric Field Operator expression (list cycle, `rand`, or range `min..max`)
+ * into a concrete number.
+ * - List selection (`a b c`) is strictly driven by `triggerCount` (independent of `seed`).
+ * - Random/range tokens (`rand`, `min..max`) are driven by `seed` + `triggerCount`.
+ */
+export function evaluateNumericFieldOperator(
+    expr: unknown,
+    options: {
+        triggerCount?: number;
+        seed?: unknown;
+        salt?: number;
+        min?: number;
+        max?: number;
+        step?: number;
+        isInteger?: boolean;
+        fallback?: number;
+    } = {}
+): number {
+    const tokens = tokenizeFieldOperator(expr);
+    const triggerIdx = Math.max(0, Math.floor(Number(options.triggerCount) || 0));
+    const fallback = Number.isFinite(Number(options.fallback)) ? Number(options.fallback) : 0;
+    if (tokens.length === 0) return fallback;
+
+    const token = tokens[wrapSlotIndex(triggerIdx, tokens.length)];
+    const numericSeed = normalizeNumericSeed(options.seed, 42);
+    const salt = options.salt ?? 0xF1E1;
+    let rawVal: number;
+
+    const rangeSpec = isRangeOperatorToken(token);
+    if (rangeSpec) {
+        const prng = mulberry32(hashSeed(numericSeed, triggerIdx, salt));
+        rawVal = rangeSpec.min + prng() * (rangeSpec.max - rangeSpec.min);
+    } else if (isRandomToken(token)) {
+        const lo = Number.isFinite(Number(options.min)) ? Number(options.min) : -1;
+        const hi = Number.isFinite(Number(options.max)) ? Number(options.max) : 1;
+        const prng = mulberry32(hashSeed(numericSeed, triggerIdx, salt));
+        rawVal = Math.min(lo, hi) + prng() * Math.abs(hi - lo);
+    } else {
+        const parsed = parseFloat(token);
+        rawVal = Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    if (options.isInteger) {
+        rawVal = Math.round(rawVal);
+    } else if (options.step !== undefined && options.step > 0) {
+        const step = options.step;
+        const precision = step.toString().includes('.') ? step.toString().split('.')[1].length : 0;
+        rawVal = Number((Math.round(rawVal / step) * step).toFixed(precision));
+    } else {
+        rawVal = Number(rawVal.toFixed(4));
+    }
+
+    if (options.min !== undefined && Number.isFinite(options.min)) {
+        rawVal = Math.max(options.min, rawVal);
+    }
+    if (options.max !== undefined && Number.isFinite(options.max)) {
+        rawVal = Math.min(options.max, rawVal);
+    }
+    return rawVal;
+}
+
+/**
+ * Evaluates a select/radio Field Operator expression against a list of options.
+ * - List selection is driven by `triggerCount` (independent of `seed`).
+ * - `rand` selects an option using `seed`.
+ */
+export function evaluateSelectFieldOperator(
+    expr: unknown,
+    optionsList: Array<string | { value: any; label?: string }>,
+    options: {
+        triggerCount?: number;
+        seed?: unknown;
+        salt?: number;
+        fallback?: any;
+    } = {}
+): any {
+    if (!Array.isArray(optionsList) || optionsList.length === 0) return options.fallback;
+    const normalized = optionsList.map(opt =>
+        typeof opt === 'object' && opt !== null
+            ? { value: String(opt.value), label: String(opt.label ?? opt.value) }
+            : { value: String(opt), label: String(opt) }
+    );
+    const tokens = tokenizeFieldOperator(expr);
+    if (tokens.length === 0) return options.fallback ?? normalized[0].value;
+
+    const triggerIdx = Math.max(0, Math.floor(Number(options.triggerCount) || 0));
+    const token = tokens[wrapSlotIndex(triggerIdx, tokens.length)];
+    const lower = token.toLowerCase();
+
+    if (isRandomToken(token)) {
+        const numericSeed = normalizeNumericSeed(options.seed, 42);
+        const prng = mulberry32(hashSeed(numericSeed, triggerIdx, options.salt ?? 0x5E1E));
+        const idx = Math.floor(prng() * normalized.length);
+        return normalized[idx]?.value ?? options.fallback;
+    }
+
+    const direct = normalized.find(o => o.value.toLowerCase() === lower || o.label.toLowerCase() === lower);
+    if (direct) return direct.value;
+
+    if (/^-?\d+$/.test(token)) {
+        const idx = wrapSlotIndex(parseInt(token, 10), normalized.length);
+        return normalized[idx]?.value ?? options.fallback;
+    }
+
+    const prefix = normalized.find(o => o.value.toLowerCase().startsWith(lower) || o.label.toLowerCase().startsWith(lower));
+    return prefix ? prefix.value : (options.fallback ?? normalized[0].value);
+}
+
 /**
  * Tokenizes a whitespace-separated pseudo-language string (or number).
  */
-export function tokenizeExpression(expr: unknown, defaultToken: string = '0'): string[] {
-    const raw = String(expr ?? '').trim();
-    if (!raw) return [defaultToken];
-    const tokens = raw.split(/[\s,]+/).filter(Boolean);
+export function tokenizeExpression(expr: unknown, defaultToken: string = '*'): string[] {
+    const tokens = tokenizeFieldOperator(expr);
     return tokens.length > 0 ? tokens : [defaultToken];
 }
 
@@ -178,34 +434,66 @@ export function resolveModifierSlotSeeds(
 }
 
 /**
- * Resolves a `sample_slot` pseudo-language expression (e.g. "0", "0 1", "0 0 1 rand")
+ * Resolves a `sample_slot` pseudo-language expression (e.g. "*", "0", "0 1", "* 1", "0 0 1 rand")
  * across `stepCount` steps (e.g. 16), wrapping all resolved indices modulo `upstreamSlotCount`.
+ * The special token "*" listens to the upstream node's default/active slot (`upstreamActiveSlot`).
  */
 export function resolveStepSlots(
     slotExpr: unknown,
     stepCount: number,
     upstreamSlotCount: number,
-    cycleSeed: number = 42
+    cycleSeed: number = 42,
+    upstreamActiveSlot: number = 0
 ): number[] {
     const count = Math.max(1, Math.floor(Number(stepCount) || 16));
     const safeSlotCount = Math.max(1, Math.floor(Number(upstreamSlotCount) || 1));
-    const tokens = tokenizeExpression(slotExpr, '0');
+    const safeActiveSlot = Math.max(0, Math.floor(Number(upstreamActiveSlot) || 0));
+    const tokens = tokenizeExpression(slotExpr, '*');
     const numericSeed = normalizeNumericSeed(cycleSeed, 42);
     const result: number[] = [];
 
     for (let i = 0; i < count; i++) {
         const token = tokens[i % tokens.length];
         let rawSlot = 0;
-        if (isRandomToken(token)) {
+        if (isDefaultSlotToken(token)) {
+            rawSlot = safeActiveSlot;
+        } else if (isRandomToken(token)) {
             const prng = mulberry32(hashSeed(numericSeed, i, 0x5107));
             rawSlot = Math.floor(prng() * safeSlotCount);
         } else {
             const parsed = parseInt(token, 10);
-            rawSlot = Number.isFinite(parsed) ? parsed : 0;
+            rawSlot = Number.isFinite(parsed) ? parsed : safeActiveSlot;
         }
         result.push(wrapSlotIndex(rawSlot, safeSlotCount));
     }
     return result;
+}
+
+/**
+ * Resolves a single section slot selector (e.g. "*", 0, 1, "rand") against the connected
+ * upstream node's slot count and active slot index.
+ */
+export function resolveSectionSlot(
+    slotValue: unknown,
+    upstreamSlotCount: number,
+    upstreamActiveSlot: number = 0,
+    sectionSeed: unknown = 42,
+    sectionIndex: number = 0
+): number {
+    const safeSlotCount = Math.max(1, Math.floor(Number(upstreamSlotCount) || 1));
+    const safeActiveSlot = Math.max(0, Math.floor(Number(upstreamActiveSlot) || 0));
+    if (slotValue == null || isDefaultSlotToken(slotValue) || String(slotValue).trim() === '') {
+        return wrapSlotIndex(safeActiveSlot, safeSlotCount);
+    }
+    const token = String(slotValue).trim();
+    if (isRandomToken(token)) {
+        const numericSeed = normalizeNumericSeed(sectionSeed, 42);
+        const prng = mulberry32(hashSeed(numericSeed, sectionIndex, 0x5107));
+        return wrapSlotIndex(Math.floor(prng() * safeSlotCount), safeSlotCount);
+    }
+    const parsed = Number(token);
+    const rawSlot = Number.isFinite(parsed) ? Math.floor(parsed) : safeActiveSlot;
+    return wrapSlotIndex(rawSlot, safeSlotCount);
 }
 
 /**

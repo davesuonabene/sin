@@ -2,7 +2,6 @@ import { LiteGraph } from 'litegraph.js';
 import { ModulatorNode } from './ModulatorNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
-import { type NodeShape } from './NodeVisuals.ts';
 import { type RandomDestination, applyRandomModulation } from '../../../ermes/ts/randomResolver.ts';
 
 export class RandomNode extends ModulatorNode {
@@ -41,7 +40,6 @@ export class RandomNode extends ModulatorNode {
 
     static defaultColor = "#7e22ce";
     static defaultIcon = "shuffle";
-    static defaultShape: NodeShape = "diamond";
     static badgeLabel = "RND";
     static nodeType = "random";
     static defaultTab = "RANDOM";
@@ -60,7 +58,6 @@ export class RandomNode extends ModulatorNode {
             node_name: "Random",
             color: "#7e22ce",
             icon: "shuffle",
-            shape: "diamond",
             refresh_mode: "global",
             seed: 42,
             seed_refresh: true,

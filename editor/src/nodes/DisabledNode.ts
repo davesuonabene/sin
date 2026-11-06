@@ -1,6 +1,6 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode } from './BaseNode';
-import { type NodePanelSchema } from '../fields/NodePanelSchema';
+import { BaseNode } from './BaseNode.ts';
+import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 
 /** A no-op placeholder used when a saved workspace contains an unavailable node. */
 export class DisabledNode extends BaseNode {
@@ -18,7 +18,6 @@ export class DisabledNode extends BaseNode {
     };
     static defaultColor = "#64748b";
     static defaultIcon = "warning";
-    static defaultShape = "square" as const;
     static badgeLabel = "DIS";
     static nodeType = "disabled";
     static defaultTab = "COMMON";
@@ -35,8 +34,7 @@ export class DisabledNode extends BaseNode {
             ...(this.properties || {}),
             disabled: true,
             disabled_reason: "This node could not be loaded.",
-            icon: "warning",
-            shape: "square"
+            icon: "warning"
         };
     }
 

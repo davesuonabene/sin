@@ -107,7 +107,6 @@ export interface SequenceCompositorOptions {
 export interface ArrangementCompositorOptions {
     sectionSlots?: number[];
     sectionProbability?: number[];
-    sectionSampleStart?: number[];
     sectionQuant?: string[];
     sectionQuantAnchor?: string[];
     seed?: number;
@@ -156,7 +155,7 @@ export function compositeSequenceBuffer(
     const cycleSeeds = options?.cycleSeeds && options.cycleSeeds.length > 0
         ? options.cycleSeeds
         : [options?.seed ?? 42];
-    const isMono = (options?.playMode || 'gate') === 'gate';
+    const isMono = !options?.playMode || options.playMode === 'gate' || options.playMode.toLowerCase() === 'mono';
     const releasePct = Math.max(0, Math.min(1, Number(options?.release ?? 0)));
     const fadeSamples = Math.max(0, Math.floor((Number(options?.fadeMs ?? 0) / 1000) * sr));
 
@@ -230,45 +229,51 @@ export function compositeSequenceBuffer(
                 const subStartSec = baseStartTimeSec + (sub * subDurationSec);
                 if (subStartSec >= totalDuration) break;
 
-                let trimLeadingSamples = 0;
-                let startSample = Math.floor(subStartSec * sr);
-                if (startSample < 0) {
-                    trimLeadingSamples = -startSample;
-                    startSample = 0;
-                }
-                if (startSample >= totalSamples || trimLeadingSamples >= remainingSample) continue;
+                const startSample = Math.max(0, Math.floor(subStartSec * sr));
+                if (startSample >= totalSamples) continue;
 
-                const availSample = remainingSample - trimLeadingSamples;
-                const gateSamples = (gateLength >= 1.0 && subdivs === 1 && releasePct === 0)
+                const availSample = remainingSample;
+                const gateSamples = (gateLength >= 1.0 && releasePct === 0)
                     ? availSample
-                    : Math.max(0, Math.floor(subDurationSec * gateLength * sr) - trimLeadingSamples);
+                    : Math.max(1, Math.floor(availSample * gateLength));
 
                 hits.push({
                     startSample,
                     sampleBuffer: stepBuffer,
-                    srcBase: sampleStartOffset + trimLeadingSamples,
+                    srcBase: sampleStartOffset,
                     availSample,
-                    gateSamples: gateSamples > 0 ? Math.min(availSample, gateSamples) : availSample,
+                    gateSamples,
                     effGain: vel * gain
                 });
             }
         }
     }
 
+    hits.sort((a, b) => a.startSample - b.startSample);
+
     for (let hIdx = 0; hIdx < hits.length; hIdx++) {
         const hit = hits[hIdx];
-        const nextHitStart = (isMono && hIdx + 1 < hits.length)
-            ? hits[hIdx + 1].startSample
-            : totalSamples;
+        let nextHitStart = totalSamples;
+        if (isMono) {
+            for (let nextIdx = hIdx + 1; nextIdx < hits.length; nextIdx++) {
+                if (hits[nextIdx].startSample > hit.startSample) {
+                    nextHitStart = hits[nextIdx].startSample;
+                    break;
+                }
+            }
+        }
 
         const tailAvail = Math.max(0, hit.availSample - hit.gateSamples);
-        const relSamples = releasePct > 0 ? Math.floor(tailAvail * releasePct) : 0;
+        const relSamples = (releasePct > 0 && tailAvail > 0) ? Math.floor(tailAvail * releasePct) : 0;
         let playSamples = Math.min(hit.availSample, hit.gateSamples + relSamples);
-        if (isMono) {
-            playSamples = Math.min(playSamples, Math.max(0, nextHitStart - hit.startSample));
+        if (isMono && nextHitStart > hit.startSample) {
+            playSamples = Math.min(playSamples, nextHitStart - hit.startSample);
         }
         const copySamples = Math.min(playSamples, totalSamples - hit.startSample);
         if (copySamples <= 0) continue;
+
+        const isCutByNextHit = isMono && nextHitStart < (hit.startSample + hit.gateSamples + relSamples);
+        const effectiveFadeSamples = fadeSamples > 0 ? fadeSamples : (isCutByNextHit ? Math.min(64, Math.floor(copySamples / 2)) : 0);
 
         for (let ch = 0; ch < numChannels; ch++) {
             const src = hit.sampleBuffer.numberOfChannels > ch
@@ -281,11 +286,11 @@ export function compositeSequenceBuffer(
                     const relPos = (s - hit.gateSamples) / relSamples;
                     env *= Math.max(0, 1 - relPos);
                 }
-                if (fadeSamples > 0) {
-                    if (s < fadeSamples) {
-                        env *= s / fadeSamples;
-                    } else if (copySamples - 1 - s < fadeSamples) {
-                        env *= (copySamples - 1 - s) / fadeSamples;
+                if (effectiveFadeSamples > 0) {
+                    if (s < effectiveFadeSamples) {
+                        env *= s / effectiveFadeSamples;
+                    } else if (copySamples - 1 - s < effectiveFadeSamples) {
+                        env *= (copySamples - 1 - s) / effectiveFadeSamples;
                     }
                 }
                 dst[hit.startSample + s] += src[hit.srcBase + s] * env;
@@ -328,7 +333,6 @@ export function compositeArrangementBuffer(
 
     const sectionSlots = options?.sectionSlots;
     const sectionProbability = options?.sectionProbability;
-    const sectionSampleStart = options?.sectionSampleStart;
     const baseSeed = options?.seed ?? 42;
 
     // Place section blocks according to points (even when sectionPoints is empty, there is 1 section [0..resolvedBars])
@@ -362,20 +366,17 @@ export function compositeArrangementBuffer(
         const isContinuous = quantStr === 'auto' || quantStr === 'continuous';
         const anchor = (options?.sectionQuantAnchor?.[i] === 'end') ? 'end' : 'start';
 
-        const rawSampleStart = sectionSampleStart ? Number(sectionSampleStart[i] ?? 0) : 0;
-        const sampleStartOffset = Math.floor(Math.max(0, Math.min(1, rawSampleStart)) * inputLen);
-
         if (isContinuous) {
-            // Continuous: the incoming audio loops onto itself regardless of start point
+            // Continuous: the incoming audio loops onto itself
             for (let ch = 0; ch < numChannels; ch++) {
                 const src = secBuffer.numberOfChannels > ch ? secBuffer.getChannelData(ch) : secBuffer.getChannelData(0);
                 const dst = output.getChannelData(ch);
                 for (let s = 0; s < sectionSamples; s++) {
-                    dst[startSample + s] += src[(sampleStartOffset + s) % inputLen];
+                    dst[startSample + s] += src[s % inputLen];
                 }
             }
         } else {
-            // Non-continuous quant: playback starts at start offset and stops when reaching the end of the sample
+            // Non-continuous quant: playback stops when reaching the end of the sample
             let quantSamples: number | null = null;
             if (quantStr === 'bar') {
                 quantSamples = Math.floor(secondsPerBar * sr);
@@ -409,7 +410,7 @@ export function compositeArrangementBuffer(
                 subIteration++;
 
                 if (playCell) {
-                    const remainingSample = Math.max(0, inputLen - sampleStartOffset);
+                    const remainingSample = inputLen;
                     if (remainingSample > 0) {
                         const eventStart = anchor === 'start' ? cellStart : cellEnd - remainingSample;
                         const eventEnd = eventStart + remainingSample;
@@ -417,7 +418,7 @@ export function compositeArrangementBuffer(
                         const writeEnd = Math.min(endSample, cellEnd, eventEnd);
 
                         if (writeStart < writeEnd) {
-                            const srcBase = sampleStartOffset + (writeStart - eventStart);
+                            const srcBase = writeStart - eventStart;
                             const copyLen = writeEnd - writeStart;
                             for (let ch = 0; ch < numChannels; ch++) {
                                 const src = secBuffer.numberOfChannels > ch ? secBuffer.getChannelData(ch) : secBuffer.getChannelData(0);

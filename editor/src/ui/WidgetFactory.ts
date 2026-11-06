@@ -4,6 +4,7 @@ import { fetchLibrary } from '../api.ts';
 import { groupFileVersions } from '../libraryVersioning.ts';
 import { RadioGroup } from './components/RadioGroup.ts';
 import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from './ParameterWheelMenu.ts';
+import { isFieldOperatorExpression } from '../../../ermes/ts/slotLanguage.ts';
 
 function formatDb(db: number): string {
     if (db <= -35.9) return "-inf dB";
@@ -48,6 +49,27 @@ export class WidgetFactory {
     private static mayEditField<T = any>(node: BaseNode, field: FieldSchema<T>, value: T): boolean {
         const previousValue = this.getFieldValue(node, field);
         return node.preparePropertyEdit(field.key, value, previousValue) !== false;
+    }
+
+    static isFieldCalculated(node: BaseNode, key: string): boolean {
+        if (node.hasFieldOperator?.(key)) return true;
+        if (key === 'sample_slot' || key === 'seed') {
+            if (isFieldOperatorExpression(node.properties?.[key])) return true;
+        }
+        const graph = (node as any).graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+        const allNodes = (graph?._nodes || graph?.nodes || []) as any[];
+        for (const candidate of allNodes) {
+            const isRandom = candidate?.type === 'Audio/Random'
+                || candidate?.properties?.node_type === 'random'
+                || (candidate?.isModifier && candidate?.modifierKind === 'random');
+            if (isRandom && candidate?.properties?.parentId === node.id) {
+                const dests = Array.isArray(candidate.properties?.destinations) ? candidate.properties.destinations : [];
+                if (dests.some((d: any) => d?.enabled && d?.paramKey === key)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     static createRow(
@@ -267,24 +289,87 @@ export class WidgetFactory {
         range.step = String(field.step ?? (field.type === 'int' ? 1 : 0.1));
 
         const valDisplay = document.createElement('span');
+        valDisplay.className = 'td-slider-val';
         valDisplay.style.fontSize = '10px';
         valDisplay.style.fontWeight = '600';
         valDisplay.style.minWidth = '36px';
         valDisplay.style.textAlign = 'right';
-        valDisplay.textContent = `${currentVal}${field.unit || ''}`;
+        valDisplay.style.cursor = 'text';
+        valDisplay.title = 'Click to type value or Field Operator (rand, min..max, list)';
+
+        const syncSliderDisplay = () => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            const latest = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
+            range.value = String(latest);
+            valDisplay.textContent = isMixed ? '' : `${latest}${field.unit || ''}`;
+            valDisplay.classList.toggle('is-pool-computed', !isMixed && this.isFieldCalculated(node, field.key));
+        };
+        syncSliderDisplay();
 
         const update = (newVal: number) => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
             const previousValue = this.getFieldValue(node, field);
-            if (Object.is(previousValue, newVal)) return;
+            node.clearFieldOperator?.(field.key);
+            if (!isMixed && Object.is(previousValue, newVal)) {
+                syncSliderDisplay();
+                return;
+            }
             if (!this.mayEditField(node, field, newVal)) {
                 range.value = String(previousValue ?? field.default ?? 0);
                 return;
             }
             const updated = this.setFieldValue(node, field, newVal);
-            range.value = String(updated);
-            valDisplay.textContent = `${updated}${field.unit || ''}`;
+            syncSliderDisplay();
             onChange(field.key, updated, previousValue);
         };
+
+        valDisplay.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const editInput = document.createElement('input');
+            editInput.type = 'text';
+            editInput.className = 'td-param-input';
+            editInput.style.width = '54px';
+            editInput.value = node.hasFieldOperator?.(field.key)
+                ? node.getFieldOperator(field.key)
+                : String(this.getFieldValue(node, field) ?? field.default ?? 0);
+            valDisplay.replaceWith(editInput);
+            editInput.focus();
+            editInput.select();
+
+            let done = false;
+            const finishEdit = (cancel = false) => {
+                if (done) return;
+                done = true;
+                if (!cancel) {
+                    const rawStr = editInput.value.trim();
+                    const previousValue = this.getFieldValue(node, field);
+                    if (isFieldOperatorExpression(rawStr)) {
+                        node.resetTriggerCount?.();
+                        const evaluated = node.applyFieldOperator(field.key, rawStr, field);
+                        const updated = this.setFieldValue(node, field, evaluated);
+                        node.setFieldOperator(field.key, rawStr);
+                        onChange(field.key, updated, previousValue);
+                    } else if (rawStr !== '') {
+                        const parsed = parseFloat(rawStr);
+                        if (Number.isFinite(parsed)) {
+                            update(parsed);
+                        }
+                    }
+                }
+                editInput.replaceWith(valDisplay);
+                syncSliderDisplay();
+            };
+            editInput.addEventListener('keydown', (evt) => {
+                if (evt.key === 'Enter') {
+                    evt.preventDefault();
+                    finishEdit(false);
+                } else if (evt.key === 'Escape') {
+                    evt.preventDefault();
+                    finishEdit(true);
+                }
+            });
+            editInput.addEventListener('blur', () => finishEdit(false));
+        });
 
         const resolveWheelStep = (): number => {
             return getParameterWheelStep(field.type === 'int');
@@ -321,19 +406,131 @@ export class WidgetFactory {
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'td-param-input';
-        input.value = String(this.getFieldValue(node, field) ?? '');
         if (field.placeholder) input.placeholder = field.placeholder;
 
-        input.addEventListener('change', () => {
+        const syncDisplay = () => {
+            if (typeof document !== 'undefined' && document.activeElement === input) return;
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            if (isMixed) {
+                input.value = '';
+                input.classList.remove('is-pool-computed');
+                return;
+            }
+            const currentVal = String(this.getFieldValue(node, field) ?? '');
+            const opExpr = node.getFieldOperator?.(field.key) || (field.key === 'sample_slot' ? currentVal : '');
+            if (field.key === 'sample_slot' && isFieldOperatorExpression(opExpr)) {
+                const resolvedSlot = node.evaluateFieldOperatorForKey('sample_slot', opExpr, field);
+                input.value = String(resolvedSlot);
+                input.classList.add('is-pool-computed');
+                return;
+            }
+            input.value = currentVal;
+            input.classList.toggle('is-pool-computed', this.isFieldCalculated(node, field.key));
+        };
+        syncDisplay();
+
+        let committedOnEnter = false;
+        const commit = () => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            const rawStr = input.value.trim();
+            if (isMixed && rawStr === '') {
+                syncDisplay();
+                return;
+            }
             const previousValue = this.getFieldValue(node, field);
-            if (Object.is(previousValue, input.value)) return;
+
+            if (field.key === 'sample_slot') {
+                const nextExpr = rawStr || '*';
+                if (!this.mayEditField(node, field, nextExpr)) {
+                    syncDisplay();
+                    return;
+                }
+                const updated = this.setFieldValue(node, field, nextExpr);
+                if (isFieldOperatorExpression(nextExpr)) {
+                    node.setFieldOperator('sample_slot', nextExpr);
+                    node.resetTriggerCount?.();
+                } else {
+                    node.clearFieldOperator?.('sample_slot');
+                }
+                syncDisplay();
+                if (isMixed || !Object.is(previousValue, nextExpr)) {
+                    onChange(field.key, updated, previousValue);
+                }
+                return;
+            }
+
+            if (isFieldOperatorExpression(rawStr)) {
+                node.resetTriggerCount?.();
+                const evaluated = node.applyFieldOperator(field.key, rawStr, field);
+                const updated = this.setFieldValue(node, field, evaluated);
+                node.setFieldOperator(field.key, rawStr);
+                syncDisplay();
+                onChange(field.key, updated, previousValue);
+                return;
+            }
+
+            node.clearFieldOperator?.(field.key);
+            if (!isMixed && Object.is(previousValue, input.value)) {
+                syncDisplay();
+                return;
+            }
             if (!this.mayEditField(node, field, input.value)) {
-                input.value = String(previousValue ?? '');
+                syncDisplay();
                 return;
             }
             const updated = this.setFieldValue(node, field, input.value);
+            syncDisplay();
             onChange(field.key, updated, previousValue);
+        };
+
+        input.addEventListener('focus', () => {
+            committedOnEnter = false;
+            if (field.key === 'sample_slot') {
+                const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+                const opExpr = node.getFieldOperator?.('sample_slot');
+                input.value = isMixed ? '' : String((opExpr || this.getFieldValue(node, field)) ?? '*');
+            } else if (node.hasFieldOperator?.(field.key)) {
+                input.value = node.getFieldOperator(field.key);
+            }
+            input.classList.remove('is-pool-computed');
+            input.select();
         });
+
+        input.addEventListener('blur', () => {
+            if (!committedOnEnter) {
+                commit();
+            } else {
+                syncDisplay();
+            }
+        });
+
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                committedOnEnter = true;
+                commit();
+                input.blur();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                committedOnEnter = true;
+                input.blur();
+                syncDisplay();
+            }
+        });
+
+        if (typeof window !== 'undefined') {
+            const onRefreshed = (evt: Event) => {
+                if (!input.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefreshed);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncDisplay();
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onRefreshed);
+        }
 
         return input;
     }
@@ -412,25 +609,66 @@ export class WidgetFactory {
         onChange: (key: string, val: any, previousValue: any) => void
     ): HTMLInputElement {
         const input = document.createElement('input');
-        input.type = 'number';
+        input.type = 'text';
+        input.inputMode = 'decimal';
         input.className = 'td-param-input';
-        input.value = String(this.getFieldValue(node, field) ?? 0);
+        input.title = field.description
+            ? `${field.description} · Supports Field Operators (rand, min..max, or space-separated list)`
+            : 'Supports Field Operators (rand, min..max, or space-separated list)';
 
-        if (field.min !== undefined) input.min = String(field.min);
-        if (field.max !== undefined) input.max = String(field.max);
-        input.step = String(field.step ?? (field.type === 'int' ? 1 : 0.1));
+        const syncDisplay = () => {
+            if (typeof document !== 'undefined' && document.activeElement === input) return;
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            if (isMixed) {
+                input.value = '';
+                input.classList.remove('is-pool-computed');
+                return;
+            }
+            const opExpr = node.getFieldOperator?.(field.key);
+            const displayVal = opExpr
+                ? node.evaluateFieldOperatorForKey(field.key, opExpr, field)
+                : (this.getFieldValue(node, field) ?? 0);
+            input.value = String(displayVal);
+            input.classList.toggle('is-pool-computed', this.isFieldCalculated(node, field.key));
+        };
+        syncDisplay();
 
+        let committedOnEnter = false;
         const commit = () => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            const rawStr = input.value.trim();
+            if (rawStr === '') {
+                if (isMixed) return;
+                syncDisplay();
+                return;
+            }
             const previousValue = this.getFieldValue(node, field);
-            const raw = field.type === 'int' ? parseInt(input.value, 10) : parseFloat(input.value);
-            if (Object.is(previousValue, raw)) return;
+            if (isFieldOperatorExpression(rawStr)) {
+                node.resetTriggerCount?.();
+                const evaluated = node.applyFieldOperator(field.key, rawStr, field);
+                const updated = this.setFieldValue(node, field, evaluated);
+                node.setFieldOperator(field.key, rawStr);
+                syncDisplay();
+                onChange(field.key, updated, previousValue);
+                return;
+            }
+            node.clearFieldOperator?.(field.key);
+            const raw = field.type === 'int' ? parseInt(rawStr, 10) : parseFloat(rawStr);
+            if (!Number.isFinite(raw)) {
+                syncDisplay();
+                return;
+            }
+            if (!isMixed && Object.is(previousValue, raw)) {
+                syncDisplay();
+                return;
+            }
             if (!this.mayEditField(node, field, raw)) {
-                input.value = String(previousValue);
+                syncDisplay();
                 return;
             }
             const updated = this.setFieldValue(node, field, raw);
-            input.value = String(updated);
-            if (!Object.is(updated, previousValue)) {
+            syncDisplay();
+            if (isMixed || !Object.is(updated, previousValue)) {
                 onChange(field.key, updated, previousValue);
             }
         };
@@ -439,28 +677,60 @@ export class WidgetFactory {
         input.addEventListener('input', () => {
             clearTimeout(numDebounceTimer);
             numDebounceTimer = setTimeout(() => {
-                const raw = field.type === 'int' ? parseInt(input.value, 10) : parseFloat(input.value);
+                const rawStr = input.value.trim();
+                if (rawStr === '' || isFieldOperatorExpression(rawStr) || !/^-?\d*\.?\d+$/.test(rawStr)) return;
+                const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+                const raw = field.type === 'int' ? parseInt(rawStr, 10) : parseFloat(rawStr);
                 const previousValue = this.getFieldValue(node, field);
-                if (Object.is(previousValue, raw)) return;
+                if (!isMixed && Object.is(previousValue, raw)) return;
                 if (Number.isFinite(raw) && this.mayEditField(node, field, raw)) {
+                    node.clearFieldOperator?.(field.key);
                     const updated = this.setFieldValue(node, field, raw);
-                    if (!Object.is(updated, previousValue)) {
+                    if (isMixed || !Object.is(updated, previousValue)) {
                         onChange(field.key, updated, previousValue);
                     }
                 }
             }, 100);
         });
 
+        input.addEventListener('focus', () => {
+            committedOnEnter = false;
+            if (node.hasFieldOperator?.(field.key)) {
+                input.value = node.getFieldOperator(field.key);
+            }
+            input.classList.remove('is-pool-computed');
+            input.select();
+        });
+
+        input.addEventListener('blur', () => {
+            clearTimeout(numDebounceTimer);
+            if (!committedOnEnter) {
+                commit();
+            } else {
+                syncDisplay();
+            }
+        });
+
         input.addEventListener('change', () => {
             clearTimeout(numDebounceTimer);
-            commit();
+            if (!committedOnEnter) {
+                commit();
+            }
         });
         input.addEventListener('keydown', event => {
-            if (event.key !== 'Enter') return;
-            event.preventDefault();
-            clearTimeout(numDebounceTimer);
-            commit();
-            input.blur();
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                committedOnEnter = true;
+                clearTimeout(numDebounceTimer);
+                commit();
+                input.blur();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                committedOnEnter = true;
+                clearTimeout(numDebounceTimer);
+                input.blur();
+                syncDisplay();
+            }
         });
 
         const resolveWheelStep = (): number => {
@@ -469,12 +739,14 @@ export class WidgetFactory {
 
         const applyDirectValue = (nextValue: number) => {
             const previousValue = this.getFieldValue(node, field);
+            node.clearFieldOperator?.(field.key);
             if (!this.mayEditField(node, field, nextValue)) {
-                input.value = String(previousValue);
+                syncDisplay();
                 return;
             }
             const updated = this.setFieldValue(node, field, nextValue);
             input.value = String(updated);
+            syncDisplay();
             if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
         };
 
@@ -492,6 +764,21 @@ export class WidgetFactory {
             const nextValue = roundStepValue(currentValue + direction * step, step);
             applyDirectValue(nextValue);
         }, { passive: false });
+
+        if (typeof window !== 'undefined') {
+            const onRefreshed = (evt: Event) => {
+                if (!input.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefreshed);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncDisplay();
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onRefreshed);
+        }
+
         return input;
     }
 
@@ -512,11 +799,9 @@ export class WidgetFactory {
         scope.setAttribute('aria-pressed', 'false');
 
         const input = document.createElement('input');
-        input.type = 'number';
+        input.type = 'text';
+        input.inputMode = 'decimal';
         input.className = 'td-param-input';
-        if (field.min !== undefined) input.min = String(field.min);
-        if (field.max !== undefined) input.max = String(field.max);
-        input.step = String(field.step ?? 0.1);
 
         const getGlobalValue = () => {
             const graph = (window as any).editorGraph;
@@ -548,14 +833,29 @@ export class WidgetFactory {
         };
         let lastLocalValue: number | null = null;
         const refresh = () => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            if (isMixed) {
+                scope.classList.remove('active');
+                scope.setAttribute('aria-pressed', 'false');
+                input.disabled = false;
+                if (typeof document === 'undefined' || document.activeElement !== input) {
+                    input.value = '';
+                }
+                input.classList.remove('is-pool-computed');
+                input.title = 'Multiple values selected';
+                return;
+            }
             const current = this.getFieldValue(node, field);
             const isGlobal = String(current).toLowerCase() === 'global';
             if (!isGlobal && Number.isFinite(Number(current))) lastLocalValue = Number(current);
             scope.classList.toggle('active', isGlobal);
             scope.setAttribute('aria-pressed', String(isGlobal));
             input.disabled = isGlobal;
-            input.value = String(isGlobal ? getGlobalValue() : current);
-            input.title = isGlobal ? `Inherited from global ${field.label.toLowerCase()}` : 'Custom local value';
+            if (typeof document === 'undefined' || document.activeElement !== input) {
+                input.value = String(isGlobal ? getGlobalValue() : current);
+                input.classList.toggle('is-pool-computed', !isGlobal && this.isFieldCalculated(node, field.key));
+            }
+            input.title = isGlobal ? `Inherited from global ${field.label.toLowerCase()}` : 'Custom local value · Supports Field Operators';
         };
 
         const onGlobalParamChange = () => {
@@ -563,19 +863,41 @@ export class WidgetFactory {
                 window.removeEventListener('global-parameters-changed', onGlobalParamChange);
                 return;
             }
+            if (node.hasMixedSlotValues?.(field.key)) return;
             const current = this.getFieldValue(node, field);
             if (String(current).toLowerCase() === 'global') {
                 input.value = String(getGlobalValue());
             }
         };
         window.addEventListener('global-parameters-changed', onGlobalParamChange);
+        let committedOnEnter = false;
         const commit = () => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            const rawStr = input.value.trim();
+            if (rawStr === '' && isMixed) return;
             const previousValue = this.getFieldValue(node, field);
-            const raw = parseFloat(input.value);
-            if (Object.is(previousValue, raw)) return;
+            if (isFieldOperatorExpression(rawStr)) {
+                node.resetTriggerCount?.();
+                const evaluated = node.applyFieldOperator(field.key, rawStr, field);
+                const updated = this.setFieldValue(node, field, evaluated);
+                node.setFieldOperator(field.key, rawStr);
+                refresh();
+                onChange(field.key, updated, previousValue);
+                return;
+            }
+            node.clearFieldOperator?.(field.key);
+            const raw = parseFloat(rawStr);
+            if (!Number.isFinite(raw)) {
+                refresh();
+                return;
+            }
+            if (!isMixed && Object.is(previousValue, raw)) {
+                refresh();
+                return;
+            }
             const updated = this.setFieldValue(node, field, raw);
             refresh();
-            if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+            if (isMixed || !Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
         };
 
         scope.addEventListener('click', () => {
@@ -585,19 +907,47 @@ export class WidgetFactory {
                 ? (lastLocalValue ?? getGlobalValue())
                 : 'global';
             if (Object.is(previousValue, nextValue)) return;
+            node.clearFieldOperator?.(field.key);
             const updated = this.setFieldValue(node, field, nextValue);
             refresh();
             if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
         });
-        input.addEventListener('change', commit);
+        input.addEventListener('focus', () => {
+            committedOnEnter = false;
+            if (node.hasFieldOperator?.(field.key)) {
+                input.value = node.getFieldOperator(field.key);
+            }
+            input.classList.remove('is-pool-computed');
+            input.select();
+        });
+        input.addEventListener('blur', () => {
+            if (!committedOnEnter) {
+                commit();
+            } else {
+                refresh();
+            }
+        });
+        input.addEventListener('change', () => {
+            if (!committedOnEnter) {
+                commit();
+            }
+        });
         input.addEventListener('keydown', event => {
-            if (event.key !== 'Enter') return;
-            event.preventDefault();
-            commit();
-            input.blur();
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                committedOnEnter = true;
+                commit();
+                input.blur();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                committedOnEnter = true;
+                input.blur();
+                refresh();
+            }
         });
         const applyGlobalNumberValue = (nextVal: number) => {
             if (input.disabled) return;
+            node.clearFieldOperator?.(field.key);
             const previousValue = this.getFieldValue(node, field);
             if (Object.is(previousValue, nextVal)) return;
             const updated = this.setFieldValue(node, field, nextVal);
@@ -640,7 +990,17 @@ export class WidgetFactory {
         const select = document.createElement('select');
         select.className = 'td-param-select sin-select';
 
+        const isMixedInit = node.hasMixedSlotValues?.(field.key) ?? false;
         const currentValue = this.getFieldValue(node, field);
+
+        if (isMixedInit) {
+            const blankOpt = document.createElement('option');
+            blankOpt.value = '';
+            blankOpt.textContent = '';
+            blankOpt.selected = true;
+            blankOpt.disabled = true;
+            select.appendChild(blankOpt);
+        }
 
         const options = field.options || [];
         for (const opt of options) {
@@ -652,15 +1012,16 @@ export class WidgetFactory {
                 optionEl.value = String(opt);
                 optionEl.textContent = String(opt);
             }
-            if (String(optionEl.value) === String(currentValue)) {
+            if (!isMixedInit && String(optionEl.value) === String(currentValue)) {
                 optionEl.selected = true;
             }
             select.appendChild(optionEl);
         }
 
         select.addEventListener('change', () => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
             const previousValue = this.getFieldValue(node, field);
-            if (Object.is(previousValue, select.value)) return;
+            if (!isMixed && Object.is(previousValue, select.value)) return;
             const updated = this.setFieldValue(node, field, select.value);
             onChange(field.key, updated, previousValue);
         });
@@ -673,16 +1034,18 @@ export class WidgetFactory {
         node: BaseNode,
         onChange: (key: string, val: any, previousValue: any) => void
     ): HTMLElement {
+        const isMixedInit = node.hasMixedSlotValues?.(field.key) ?? false;
         return RadioGroup.create({
             name: `${field.key}-${node.id}`,
-            value: String(this.getFieldValue(node, field)),
+            value: isMixedInit ? '' : String(this.getFieldValue(node, field)),
             options: (field.options || []).map(option => typeof option === 'object'
                 ? { value: String(option.value), label: option.label }
                 : { value: String(option), label: String(option) }),
             ariaLabel: field.label,
             onChange: value => {
+                const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
                 const previousValue = this.getFieldValue(node, field);
-                if (Object.is(previousValue, value)) return;
+                if (!isMixed && Object.is(previousValue, value)) return;
                 const updated = this.setFieldValue(node, field, value);
                 onChange(field.key, updated, previousValue);
             }
@@ -729,15 +1092,80 @@ export class WidgetFactory {
         const updateUI = (db: number) => {
             activeDb = Math.max(-36.0, Math.min(12.0, db));
             labelText.innerText = formatDb(activeDb);
+            const isCalc = this.isFieldCalculated(node, field.key);
+            container.classList.toggle('is-pool-computed', isCalc);
+            labelText.classList.toggle('is-pool-computed', isCalc);
         };
+        updateUI(currentDb);
 
         let isDragging = false;
+        let hasDragged = false;
         let startX = 0;
         let startDb = 0;
 
+        const openDirectInput = () => {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = node.hasFieldOperator?.(field.key)
+                ? node.getFieldOperator(field.key)
+                : activeDb.toFixed(1);
+            input.className = 'td-float-direct-input';
+
+            container.innerHTML = '';
+            container.appendChild(input);
+            input.focus();
+            input.select();
+
+            let committed = false;
+            const commitInput = () => {
+                if (committed) return;
+                committed = true;
+                const rawStr = input.value.trim();
+                const previousValue = this.getFieldValue(node, field);
+                if (isFieldOperatorExpression(rawStr)) {
+                    node.resetTriggerCount?.();
+                    const evaluated = node.applyFieldOperator(field.key, rawStr, field);
+                    const updated = Number(this.setFieldValue(node, field, evaluated));
+                    node.setFieldOperator(field.key, rawStr);
+                    updateUI(updated);
+                    onChange(field.key, updated, previousValue);
+                } else {
+                    const parsed = parseFloat(rawStr);
+                    if (!isNaN(parsed)) {
+                        node.clearFieldOperator?.(field.key);
+                        if (!Object.is(previousValue, parsed)) {
+                            updateUI(parsed);
+                            const updated = this.setFieldValue(node, field, activeDb);
+                            onChange(field.key, updated, previousValue);
+                        } else {
+                            updateUI(activeDb);
+                        }
+                    }
+                }
+                container.innerHTML = '';
+                container.appendChild(labelText);
+                updateUI(activeDb);
+            };
+
+            input.addEventListener('keydown', (evt) => {
+                if (evt.key === 'Enter') {
+                    evt.preventDefault();
+                    commitInput();
+                } else if (evt.key === 'Escape') {
+                    committed = true;
+                    container.innerHTML = '';
+                    container.appendChild(labelText);
+                    updateUI(activeDb);
+                }
+            });
+
+            input.addEventListener('blur', commitInput);
+        };
+
         container.addEventListener('pointerdown', (e: PointerEvent) => {
-            if (e.button !== 0) return;
+            if (e.button !== 0 || e.target !== container && e.target !== labelText) return;
             isDragging = true;
+            hasDragged = false;
             startX = e.clientX;
             startDb = activeDb;
             try { container.setPointerCapture(e.pointerId); } catch (_) {}
@@ -748,6 +1176,9 @@ export class WidgetFactory {
         container.addEventListener('pointermove', (e: PointerEvent) => {
             if (!isDragging) return;
             const dx = e.clientX - startX;
+            if (!hasDragged && Math.abs(dx) < 3) return;
+            hasDragged = true;
+            node.clearFieldOperator?.(field.key);
             const deltaDb = dx * 0.15;
             const newDb = Math.round((startDb + deltaDb) * 10) / 10;
             if (newDb === activeDb) return;
@@ -764,6 +1195,9 @@ export class WidgetFactory {
                 isDragging = false;
                 container.classList.remove('dragging');
                 try { container.releasePointerCapture(e.pointerId); } catch (_) {}
+                if (!hasDragged && node.hasFieldOperator?.(field.key)) {
+                    openDirectInput();
+                }
             }
         };
 
@@ -771,6 +1205,7 @@ export class WidgetFactory {
         container.addEventListener('pointercancel', stopDrag);
 
         const applyDbValue = (nextDb: number) => {
+            node.clearFieldOperator?.(field.key);
             const previousValue = this.getFieldValue(node, field);
             updateUI(nextDb);
             const updated = this.setFieldValue(node, field, activeDb);
@@ -793,49 +1228,22 @@ export class WidgetFactory {
 
         container.addEventListener('dblclick', (e) => {
             e.stopPropagation();
-            const input = document.createElement('input');
-            input.type = 'number';
-            input.step = '0.1';
-            input.min = '-36';
-            input.max = '12';
-            input.value = activeDb.toFixed(1);
-            input.className = 'td-float-direct-input';
-
-            container.innerHTML = '';
-            container.appendChild(input);
-            input.focus();
-            input.select();
-
-            let committed = false;
-            const commitInput = () => {
-                if (committed) return;
-                committed = true;
-                const parsed = parseFloat(input.value);
-                if (!isNaN(parsed)) {
-                    const previousValue = this.getFieldValue(node, field);
-                    if (!Object.is(previousValue, parsed)) {
-                        updateUI(parsed);
-                        const updated = this.setFieldValue(node, field, activeDb);
-                        onChange(field.key, updated, previousValue);
-                    }
-                }
-                container.innerHTML = '';
-                container.appendChild(labelText);
-                labelText.innerText = formatDb(activeDb);
-            };
-
-            input.addEventListener('keydown', (evt) => {
-                if (evt.key === 'Enter') {
-                    commitInput();
-                } else if (evt.key === 'Escape') {
-                    committed = true;
-                    container.innerHTML = '';
-                    container.appendChild(labelText);
-                }
-            });
-
-            input.addEventListener('blur', commitInput);
+            openDirectInput();
         });
+
+        if (typeof window !== 'undefined') {
+            const onRefreshed = (evt: Event) => {
+                if (!container.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefreshed);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    updateUI(Number(this.getFieldValue(node, field) ?? 0.0));
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onRefreshed);
+        }
 
         return container;
     }
@@ -858,7 +1266,19 @@ export class WidgetFactory {
         input.style.flex = '1';
         input.placeholder = '42, 42 108, or rand';
         input.title = 'Seed expression: single integer ("42"), sequence ("42 108"), or "rand"';
-        input.value = String(this.getFieldValue(node, field) ?? '42');
+        const syncSeedDisplay = () => {
+            if (typeof document !== 'undefined' && document.activeElement === input) return;
+            const currentVal = String(this.getFieldValue(node, field) ?? '42');
+            if (isFieldOperatorExpression(currentVal)) {
+                const resolvedSeed = node.evaluateFieldOperatorForKey(field.key, currentVal, field);
+                input.value = String(resolvedSeed);
+                input.classList.add('is-pool-computed');
+                return;
+            }
+            input.value = currentVal;
+            input.classList.toggle('is-pool-computed', this.isFieldCalculated(node, field.key));
+        };
+        syncSeedDisplay();
 
         const refreshKey = `${field.key}_refresh`;
         const isArmed = (): boolean => node.properties?.[refreshKey] !== false;
@@ -887,27 +1307,62 @@ export class WidgetFactory {
         };
         syncToggleUI();
 
+        let committedOnEnter = false;
         const commitValue = (rawVal: string | number) => {
             const trimmed = String(rawVal ?? '').trim() || '42';
+            const previousValue = this.getFieldValue(node, field);
+            if (isFieldOperatorExpression(trimmed)) {
+                node.resetTriggerCount?.();
+                node.setFieldOperator(field.key, trimmed);
+                const updated = this.setFieldValue(node, field, trimmed as any);
+                syncSeedDisplay();
+                onChange(field.key, updated, previousValue);
+                return;
+            }
+            node.clearFieldOperator?.(field.key);
             const asNum = Number(trimmed);
             const normalized: string | number = (!trimmed.includes(' ') && Number.isFinite(asNum))
                 ? Math.round(asNum)
                 : trimmed;
-            const previousValue = this.getFieldValue(node, field);
-            if (Object.is(previousValue, normalized)) return;
+            if (Object.is(previousValue, normalized)) {
+                syncSeedDisplay();
+                return;
+            }
             const updated = this.setFieldValue(node, field, normalized);
-            input.value = String(updated);
+            syncSeedDisplay();
             onChange(field.key, updated, previousValue);
         };
 
+        input.addEventListener('focus', () => {
+            committedOnEnter = false;
+            const currentVal = String(this.getFieldValue(node, field) ?? '42');
+            input.value = node.hasFieldOperator?.(field.key) ? node.getFieldOperator(field.key) : currentVal;
+            input.classList.remove('is-pool-computed');
+            input.select();
+        });
+        input.addEventListener('blur', () => {
+            if (!committedOnEnter) {
+                commitValue(input.value);
+            } else {
+                syncSeedDisplay();
+            }
+        });
         input.addEventListener('change', () => {
-            commitValue(input.value);
+            if (!committedOnEnter) {
+                commitValue(input.value);
+            }
         });
         input.addEventListener('keydown', (event) => {
             if (event.key === 'Enter') {
                 event.preventDefault();
+                committedOnEnter = true;
                 commitValue(input.value);
                 input.blur();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                committedOnEnter = true;
+                input.blur();
+                syncSeedDisplay();
             }
         });
         input.addEventListener('wheel', event => {
@@ -935,10 +1390,7 @@ export class WidgetFactory {
             }
             const detail = (evt as CustomEvent)?.detail;
             if (!detail || detail.nodeId === node.id) {
-                const latest = this.getFieldValue(node, field);
-                if (latest !== undefined && document.activeElement !== input) {
-                    input.value = String(latest);
-                }
+                syncSeedDisplay();
                 syncToggleUI();
             }
         };

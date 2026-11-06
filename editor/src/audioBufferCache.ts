@@ -1,4 +1,5 @@
 const audioBufferCache = new Map<string, Promise<AudioBuffer | null>>();
+const resolvedAudioBuffers = new Map<string, AudioBuffer>();
 let sharedAudioContext: AudioContext | null = null;
 
 export function getSharedAudioContext(): AudioContext | null {
@@ -23,8 +24,16 @@ export async function ensureSharedAudioContextReady(): Promise<AudioContext | nu
     return ctx;
 }
 
+export function getCachedAudioBufferSync(filepath: string): AudioBuffer | null {
+    if (!filepath) return null;
+    return resolvedAudioBuffers.get(filepath) ?? null;
+}
+
 export async function fetchAudioBuffer(filepath: string): Promise<AudioBuffer | null> {
     if (!filepath) return null;
+    if (resolvedAudioBuffers.has(filepath)) {
+        return resolvedAudioBuffers.get(filepath)!;
+    }
     if (audioBufferCache.has(filepath)) {
         return audioBufferCache.get(filepath)!;
     }
@@ -42,7 +51,11 @@ export async function fetchAudioBuffer(filepath: string): Promise<AudioBuffer | 
             const response = await fetch(url);
             if (!response.ok) return null;
             const arrayBuffer = await response.arrayBuffer();
-            return await ctx.decodeAudioData(arrayBuffer);
+            const decoded = await ctx.decodeAudioData(arrayBuffer);
+            if (decoded) {
+                resolvedAudioBuffers.set(filepath, decoded);
+            }
+            return decoded;
         } catch (error) {
             console.warn(`[audioBufferCache] Failed to decode audio for ${filepath}:`, error);
             return null;
@@ -54,9 +67,11 @@ export async function fetchAudioBuffer(filepath: string): Promise<AudioBuffer | 
 }
 
 export function cacheAudioBuffer(key: string, buffer: AudioBuffer): void {
+    resolvedAudioBuffers.set(key, buffer);
     audioBufferCache.set(key, Promise.resolve(buffer));
 }
 
 export function clearAudioBufferCache(): void {
+    resolvedAudioBuffers.clear();
     audioBufferCache.clear();
 }

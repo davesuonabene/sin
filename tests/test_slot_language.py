@@ -290,6 +290,189 @@ class TestSlotLanguageAndMultiSlotDsp(unittest.TestCase):
             self.assertEqual(manifest_entry.get("filepath"), path_a)
             self.assertTrue(manifest_entry.get("is_dynamic_pool"))
 
+    def test_default_output_mode_and_wildcard_star_listener(self):
+        sr = 44100
+        system = System(sample_rate=sr, bpm=120.0, render_mode="preview")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_a = os.path.join(tmpdir, "slot_a.wav")
+            path_b = os.path.join(tmpdir, "slot_b.wav")
+            sf.write(path_a, np.full((sr // 4, 1), 0.2, dtype=np.float32), sr)
+            sf.write(path_b, np.full((sr // 4, 1), 0.8, dtype=np.float32), sr)
+
+            sample_obj = SampleObject(
+                filepath=path_a,
+                sample_type="one_shot",
+                active_slot=1,
+                slots=[
+                    {"index": 0, "filepath": path_a, "sample_start": 0.0, "sample_end": 1.0},
+                    {"index": 1, "filepath": path_b, "sample_start": 0.0, "sample_end": 1.0},
+                ],
+                node_id=101,
+            )
+            # Default render() on SampleObject outputs active_slot (1 -> 0.8 amplitude)
+            direct_sample = sample_obj.render(system)
+            self.assertGreater(float(np.max(np.abs(direct_sample))), 0.5)
+
+            # SequenceObject with default sample_slot="*" listens to sample_obj.active_slot (1)
+            # and its own active_slot=1 outputs slot 1 when rendered directly or under a Track/Master
+            seq_obj = SequenceObject(
+                sequence=[1, 0, 0, 0],
+                step_length=1.0,
+                total_bars=1.0,
+                active_slot=1,
+                sample_slot="*",
+                slots=[
+                    {"index": 0, "sequence": [0, 0, 0, 0], "sample_slot": "*", "step_length": 1.0},
+                    {"index": 1, "sequence": [1, 0, 0, 0], "sample_slot": "*", "step_length": 1.0},
+                ],
+                node_id=102,
+            )
+            seq_obj.add_child(sample_obj, 0.0)
+            direct_seq = seq_obj.render(system)
+            self.assertGreater(float(np.max(np.abs(direct_seq))), 0.5)
+
+            # ArrangementObject with default section_slots=["*"] listens to seq_obj.active_slot (1)
+            arr_obj = ArrangementObject(
+                total_bars=1.0,
+                section_points=[],
+                section_slots=["*"],
+                node_id=103,
+            )
+            arr_obj.add_child(seq_obj, 0.0)
+            arr_rendered = arr_obj.render(system)
+            self.assertGreater(float(np.max(np.abs(arr_rendered))), 0.5)
+
+    def test_sample_list_operator_cycles_per_sequence_step_trigger(self):
+        sr = 44100
+        system = System(sample_rate=sr, bpm=120.0, render_mode="preview")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_0 = os.path.join(tmpdir, "sample_0.wav")
+            path_1 = os.path.join(tmpdir, "sample_1.wav")
+            sf.write(path_0, np.full((sr // 10, 1), 0.2, dtype=np.float32), sr)
+            sf.write(path_1, np.full((sr // 10, 1), 0.8, dtype=np.float32), sr)
+
+            sample_obj = SampleObject(
+                filepath=path_0,
+                sample_type="one_shot",
+                pool_query="0 0 1",
+                selected_items=[
+                    {"id": 1, "name": "sample_0.wav", "filepath": path_0},
+                    {"id": 2, "name": "sample_1.wav", "filepath": path_1},
+                ],
+                slots=[
+                    {"index": 0, "filepath": path_0, "pool_query": "0 0 1"},
+                ],
+                node_id=201,
+            )
+
+            # 4 active step hits at beats 0, 1, 2, 3 -> iteration = 0, 1, 2, 3
+            seq_obj = SequenceObject(
+                sequence=[1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+                step_length=0.25,
+                total_bars=1.0,
+                sample_slot="*",
+                node_id=202,
+            )
+            seq_obj.add_child(sample_obj, 0.0)
+
+            rendered = seq_obj.render(system)
+            flat = rendered.reshape(-1) if rendered.ndim == 1 else np.max(np.abs(rendered), axis=0)
+            beat_samples = int((60.0 / 120.0) * sr)
+
+            peak_hit_0 = float(np.max(np.abs(flat[0:beat_samples // 2])))
+            peak_hit_1 = float(np.max(np.abs(flat[beat_samples:beat_samples + beat_samples // 2])))
+            peak_hit_2 = float(np.max(np.abs(flat[2 * beat_samples:2 * beat_samples + beat_samples // 2])))
+            peak_hit_3 = float(np.max(np.abs(flat[3 * beat_samples:3 * beat_samples + beat_samples // 2])))
+
+            # "0 0 1" across 4 triggers -> [0, 0, 1, 0] -> [0.2, 0.2, 0.8, 0.2]
+            self.assertAlmostEqual(peak_hit_0, 0.2, places=2)
+            self.assertAlmostEqual(peak_hit_1, 0.2, places=2)
+            self.assertAlmostEqual(peak_hit_2, 0.8, places=2)
+            self.assertAlmostEqual(peak_hit_3, 0.2, places=2)
+
+            sample_events = system.manifest.get("nodes", {}).get("201", {}).get("events", [])
+            self.assertEqual([e.get("iteration") for e in sample_events], [0, 1, 2, 3])
+            self.assertEqual([e.get("filepath") for e in sample_events], [path_0, path_0, path_1, path_0])
+
+    def test_sequence_list_operator_cycles_per_sequence_cycle(self):
+        import json
+        sr = 44100
+        system = System(sample_rate=sr, bpm=120.0, render_mode="preview")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_0 = os.path.join(tmpdir, "slot_0.wav")
+            path_1 = os.path.join(tmpdir, "slot_1.wav")
+            sf.write(path_0, np.full((sr // 10, 1), 0.2, dtype=np.float32), sr)
+            sf.write(path_1, np.full((sr // 10, 1), 0.8, dtype=np.float32), sr)
+
+            seq_file_0 = os.path.join(tmpdir, "seq_0.seq")
+            seq_file_1 = os.path.join(tmpdir, "seq_1.seq")
+            with open(seq_file_0, "w", encoding="utf-8") as f:
+                json.dump({"sequence": [1, 0, 0, 0]}, f)
+            with open(seq_file_1, "w", encoding="utf-8") as f:
+                json.dump({"sequence": [1, 0, 1, 0]}, f)
+
+            sample_obj = SampleObject(
+                filepath=path_0,
+                sample_type="one_shot",
+                slots=[
+                    {"index": 0, "filepath": path_0, "sample_start": 0.0, "sample_end": 1.0},
+                    {"index": 1, "filepath": path_1, "sample_start": 0.0, "sample_end": 1.0},
+                ],
+                node_id=301,
+            )
+
+            # 4 sequence cycles (1 bar each across total_bars=4.0)
+            # Both pool_query ("0 0 0 1") and sample_slot ("0 0 0 1") cycle per sequence cycle!
+            seq_obj = SequenceObject(
+                sequence=[1, 0, 0, 0],
+                step_length=1.0,
+                total_bars=4.0,
+                sample_slot="0 0 0 1",
+                pool_query="0 0 0 1",
+                selected_items=[
+                    {"id": 10, "name": "seq_0.seq", "filepath": seq_file_0},
+                    {"id": 20, "name": "seq_1.seq", "filepath": seq_file_1},
+                ],
+                field_operators={"sample_slot": "0 0 0 1"},
+                slots=[
+                    {
+                        "index": 0,
+                        "sequence": [1, 0, 0, 0],
+                        "sample_slot": "0 0 0 1",
+                        "step_length": 1.0,
+                        "pool_query": "0 0 0 1",
+                        "field_operators": {"sample_slot": "0 0 0 1"},
+                    }
+                ],
+                node_id=302,
+            )
+            seq_obj.add_child(sample_obj, 0.0)
+
+            rendered = seq_obj.render(system)
+            flat = rendered.reshape(-1) if rendered.ndim == 1 else np.max(np.abs(rendered), axis=0)
+            bar_samples = int(4 * (60.0 / 120.0) * sr)
+
+            peak_bar_0 = float(np.max(np.abs(flat[0:bar_samples // 4])))
+            peak_bar_1 = float(np.max(np.abs(flat[bar_samples:bar_samples + bar_samples // 4])))
+            peak_bar_2 = float(np.max(np.abs(flat[2 * bar_samples:2 * bar_samples + bar_samples // 4])))
+            peak_bar_3 = float(np.max(np.abs(flat[3 * bar_samples:3 * bar_samples + bar_samples // 4])))
+
+            # Bars 0, 1, 2 use sample slot 0 (0.2); Bar 3 uses sample slot 1 (0.8)
+            self.assertAlmostEqual(peak_bar_0, 0.2, places=2)
+            self.assertAlmostEqual(peak_bar_1, 0.2, places=2)
+            self.assertAlmostEqual(peak_bar_2, 0.2, places=2)
+            self.assertAlmostEqual(peak_bar_3, 0.8, places=2)
+
+            # Bar 3 also loaded seq_1.seq ([1, 0, 1, 0]), so beat 2 of Bar 3 has a hit while beat 2 of Bar 0 is silent
+            peak_bar_0_beat_2 = float(np.max(np.abs(flat[bar_samples // 2:bar_samples // 2 + bar_samples // 4])))
+            peak_bar_3_beat_2 = float(np.max(np.abs(flat[3 * bar_samples + bar_samples // 2:3 * bar_samples + bar_samples // 2 + bar_samples // 4])))
+            self.assertAlmostEqual(peak_bar_0_beat_2, 0.0, places=2)
+            self.assertAlmostEqual(peak_bar_3_beat_2, 0.8, places=2)
+
+            seq_events = system.manifest.get("nodes", {}).get("302", {}).get("events", [])
+            self.assertEqual([e.get("iteration") for e in seq_events], [0, 1, 2, 3])
+            self.assertEqual([e.get("sample_slot_resolved") for e in seq_events], [0, 0, 0, 1])
+
 
 if __name__ == "__main__":
     unittest.main()

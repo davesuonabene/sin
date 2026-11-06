@@ -2,12 +2,11 @@ import { LiteGraph } from 'litegraph.js';
 import { BaseNode } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
-import { WaveformRenderer, type RenderBox, type SignalTelemetry } from '../../../packages/iride/src/index.ts';
+import { type SignalTelemetry, type VisualizationTypeId } from '../../../packages/iride/src/index.ts';
 import { globalAudioScheduler } from '../audioScheduler.ts';
 import { mixAudioBuffers, getNodeGainMultiplier, applyGainToBuffer } from '../audioCompositor.ts';
 
 export class TrackNode extends BaseNode {
-    private waveformRenderer = new WaveformRenderer({ accentColor: '#4f46e5' });
     private audioBuffer: AudioBuffer | null = null;
     private _cachedMixedInput: AudioBuffer | null = null;
     private _lastMixedSources: AudioBuffer[] = [];
@@ -34,8 +33,7 @@ export class TrackNode extends BaseNode {
                 label: 'Common',
                 sections: [
                     { type: 'appearance' },
-                    { type: 'info_table' },
-                    { type: 'fields', fields: ['scope_mode', 'scope_window', 'scope_gain'] }
+                    { type: 'info_table' }
                 ]
             }
         ]
@@ -45,19 +43,17 @@ export class TrackNode extends BaseNode {
         { key: 'node_name', label: 'Name', type: 'string', default: 'Master Track', tab: 'COMMON' },
         { key: 'mix_mode', label: 'Mix Mode', type: 'select', default: 'sum', options: [{ value: 'sum', label: 'Sum' }, { value: 'first', label: 'First' }, { value: 'last', label: 'Last' }], tab: 'TRACK' },
         { key: 'bpm', label: 'Engine BPM', type: 'global_float', default: 'global', min: 20, max: 300, unit: 'BPM', tab: 'TRACK' },
-        { key: 'total_bars', label: 'Total Bars', type: 'global_float', default: 'global', min: 0.25, max: 128, step: 0.25, unit: 'bars', tab: 'TRACK' },
-        { key: 'scope_mode', label: 'Scope Mode', type: 'select', default: 'full', options: [{ value: 'full', label: 'Full Waveform' }, { value: 'drawn', label: 'Drawn Sweep' }, { value: 'scrolled', label: 'Scrolled Window' }], tab: 'COMMON' },
-        { key: 'scope_window', label: 'Scope Window', type: 'slider', default: 2.0, min: 0.25, max: 8.0, step: 0.25, unit: 's', tab: 'COMMON' },
-        { key: 'scope_gain', label: 'Scope Gain', type: 'slider', default: 1.0, min: 0.1, max: 4.0, step: 0.1, tab: 'COMMON' }
+        { key: 'total_bars', label: 'Total Bars', type: 'global_float', default: 'global', min: 0.25, max: 128, step: 0.25, unit: 'bars', tab: 'TRACK' }
     ];
 
     static defaultColor = "#4f46e5";
     static defaultIcon = "mixer";
-    static defaultShape = "diamond" as const;
     static badgeLabel = "TRACK";
     static nodeType = "track";
     static defaultTab = "TRACK";
     static tabs = ["TRACK", "CHAIN", "COMMON"];
+    static override defaultVisualizationType: VisualizationTypeId = 'loop';
+    static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['loop', 'realtime', 'spectrum'];
 
     constructor() {
         super();
@@ -76,12 +72,9 @@ export class TrackNode extends BaseNode {
             bpm: "global",
             target_bpm: 120,
             total_bars: "global",
-            scope_mode: "full",
-            scope_window: 2.0,
-            scope_gain: 1.0,
+            visualization_type: "loop",
             color: "#4f46e5",
-            icon: "mixer",
-            shape: "diamond"
+            icon: "mixer"
         };
 
         this.addInput("Input", "audio");
@@ -134,18 +127,6 @@ export class TrackNode extends BaseNode {
             || null;
     }
 
-    private resolveInputTotalBars(): number | null {
-        const inputs = this.getInputNodes();
-        let maxBars = 0;
-        for (const inputNode of inputs) {
-            const bars = Number(inputNode?.properties?.total_bars);
-            if (Number.isFinite(bars) && bars > maxBars) {
-                maxBars = bars;
-            }
-        }
-        return maxBars > 0 ? maxBars : null;
-    }
-
     override updateProperty(key: string, value: any): void {
         if (key === 'chain' || key === 'gain') {
             this._cachedMixedInput = null;
@@ -168,98 +149,6 @@ export class TrackNode extends BaseNode {
             this.properties.target_bpm = parameters.bpm;
         }
         this.setDirtyCanvas?.(true, true);
-    }
-
-    override drawVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
-        const activePreviewId = (window as any).activeRamPreviewNodeId;
-        const isMainPreview = Boolean(this.properties?.is_main_preview)
-            || this.properties?.role === 'master'
-            || this.properties?.node_name === 'Master Track'
-            || this.title === 'Master Track'
-            || this.properties?.node_name === 'Master Output'
-            || this.title === 'Master Output'
-            || (typeof (window as any).isMainPreviewNode === 'function' && (window as any).isMainPreviewNode(this.id));
-        const isPreviewTarget = this.id === activePreviewId
-            || (activePreviewId == null && isMainPreview);
-
-        const getGlobal = (window as any).getGlobalParameter;
-        const globalBars = typeof getGlobal === 'function' ? Number(getGlobal('total_bars')) : 4;
-        const globalBpm = typeof getGlobal === 'function' ? Number(getGlobal('bpm')) : 120;
-
-        const inputBars = this.resolveInputTotalBars();
-        const totalBarsSetting = this.properties?.total_bars;
-        const totalBars = (totalBarsSetting === 'global' || !Number.isFinite(Number(totalBarsSetting)))
-            ? (inputBars ?? (Number.isFinite(globalBars) && globalBars > 0 ? globalBars : 4))
-            : Math.max(0.25, Number(totalBarsSetting));
-
-        const bpmSetting = this.properties?.bpm;
-        const resolvedBpm = (bpmSetting === 'global' || !Number.isFinite(Number(bpmSetting)))
-            ? (Number(this.properties?.target_bpm) || (Number.isFinite(globalBpm) && globalBpm > 0 ? globalBpm : 120))
-            : Math.max(20, Number(bpmSetting));
-
-        const autoTrackWindow = totalBars * 4 * (60 / resolvedBpm);
-
-        const isInvalidated = Boolean((this as any).isInvalidated);
-        const schedulerBuf = (isPreviewTarget && !isInvalidated) ? globalAudioScheduler.getFullAudioBuffer() : undefined;
-        const masterBuf = (!isInvalidated && (isPreviewTarget || (activePreviewId == null && isMainPreview)))
-            ? ((window as any).activeRamPreviewBuffer as AudioBuffer | undefined)
-            : undefined;
-        if (isPreviewTarget && !isInvalidated && (schedulerBuf || masterBuf)) {
-            (this as any)._lastRenderedBuffer = schedulerBuf || masterBuf;
-        }
-
-        const manifestStem = (this as any).manifestStemBuffer as AudioBuffer | undefined;
-        const lastRenderedBuf = (this as any)._lastRenderedBuffer as AudioBuffer | undefined;
-        const inputBuf = this.resolveInputBuffer();
-
-        // Signal flow is the source of truth: active preview buffer -> stem buffer -> last rendered master buffer -> incoming input signal
-        const displayBuffer = isPreviewTarget
-            ? (schedulerBuf || masterBuf || manifestStem || lastRenderedBuf || this.audioBuffer || inputBuf)
-            : (manifestStem || lastRenderedBuf || (isMainPreview && activePreviewId == null && !isInvalidated ? masterBuf : undefined) || this.audioBuffer || inputBuf);
-
-        const explicitProgress = (this as any).bufferedProgress;
-        const schedulerProgress = isPreviewTarget ? globalAudioScheduler.getBufferedProgress() : 0;
-        const bufferedProgress = explicitProgress != null
-            ? explicitProgress
-            : (schedulerProgress > 0 ? schedulerProgress : 1.0);
-
-        const bufferDuration = (this as any).manifestStemDuration || displayBuffer?.duration || 0;
-        const expectedDuration = bufferDuration > autoTrackWindow
-            ? bufferDuration
-            : (autoTrackWindow > 0 ? autoTrackWindow : (telemetry?.duration || bufferDuration || 0));
-
-        let playbackProgress: number | undefined;
-        if (telemetry && telemetry.isPlaying && expectedDuration > 0) {
-            const curTime = ((telemetry.time % expectedDuration) + expectedDuration) % expectedDuration;
-            playbackProgress = curTime / expectedDuration;
-        }
-
-        const scopeMode = (this.properties?.scope_mode as 'full' | 'drawn' | 'scrolled') || 'full';
-        const scopeWindow = Number(this.properties?.scope_window) || 2.0;
-        const scopeGain = Number(this.properties?.scope_gain) || 1.0;
-
-        const isMaster = isMainPreview || this.properties?.role === 'master' || this.title === 'Master Track' || this.title === 'Master Output';
-        const accent = (isMaster && (!this.properties?.user_color || this.nodeColor === '#0f172a'))
-            ? (this.boxcolor || '#f59e0b')
-            : (this.nodeColor || this.boxcolor || '#4f46e5');
-
-        this.waveformRenderer.setOptions({
-            scopeMode,
-            scopeWindow,
-            scopeGain,
-            accentColor: accent,
-            minified: this.isMinifiedStage
-        });
-        this.waveformRenderer.setSignal({
-            buffer: displayBuffer,
-            duration: expectedDuration,
-            accentColor: accent,
-            bufferedProgress,
-            isInvalidated,
-            playbackProgress
-        });
-
-        this.waveformRenderer.render(ctx, bounds, telemetry);
     }
 
     override getLiveActivityState(telemetry?: SignalTelemetry): { isTriggered: boolean; progress?: number } {

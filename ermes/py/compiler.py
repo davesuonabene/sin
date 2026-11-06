@@ -16,6 +16,7 @@ from ermes.py.slot_language import (
     mulberry32,
     resolve_cycle_seeds,
     resolve_modifier_slot_seeds,
+    resolve_section_slot,
     resolve_step_slots,
     wrap_slot_index,
 )
@@ -382,8 +383,11 @@ def _apply_seeded_random_to_single_dict(
             for sp in step_params:
                 if not isinstance(sp, dict):
                     continue
-                default_v = 1.0 if pkey == "velocity" else (100.0 if pkey == "probability" else (1.0 if pkey == "subdivisions" else 0.0))
+                default_v = 1.0 if pkey in ("velocity", "gate_length", "subdivisions") else (100.0 if pkey == "probability" else 0.0)
                 base_v = float(sp.get(pkey, dest.get("baseValue", default_v)))
+                if pkey in ("velocity", "gate_length", "probability", "subdivisions") and base_v <= 0.0:
+                    fallback_base = float(dest.get("baseValue", default_v) or default_v)
+                    base_v = fallback_base if fallback_base > 0.0 else default_v
                 new_v = _eval_rel(base_v, min_pct, max_pct, pkey)
                 if pkey == "subdivisions":
                     new_int = max(1, int(round(new_v)))
@@ -429,6 +433,8 @@ def _resolve_node_slots_and_selectors(
 ) -> Tuple[List[NodeSlotModel], str, List[int], List[int], List[int]]:
     """Normalizes node `slots` and resolves connected-path slot selectors (`sample_slot`, `step_slots`, `cycle_seeds`, `section_slots`)."""
     upstream_slot_count = max(1, len(children[0].slots) if children and children[0].slots else 1)
+    upstream_active_slot = max(0, int(getattr(children[0], "active_slot", 0) or 0)) if children else 0
+    active_slot_idx = max(0, int(props.get("active_slot", 0) or 0))
     raw_slots = props.get("slots") if isinstance(props.get("slots"), list) else []
     slots: List[NodeSlotModel] = []
 
@@ -445,10 +451,10 @@ def _resolve_node_slots_and_selectors(
                 slots.append(NodeSlotModel(
                     slot=idx,
                     label=s.get("label"),
-                    filepath=s.get("filepath") if s.get("filepath") is not None else (filepath if idx == 0 else None),
-                    library_item_id=s.get("library_item_id") if s.get("library_item_id") is not None else (props.get("library_item_id") if idx == 0 else None),
-                    original_bpm=s.get("original_bpm") if s.get("original_bpm") is not None else (original_bpm if idx == 0 else None),
-                    key=s.get("key") if s.get("key") is not None else (key if idx == 0 else None),
+                    filepath=s.get("filepath") if s.get("filepath") is not None else (filepath if idx == active_slot_idx else None),
+                    library_item_id=s.get("library_item_id") if s.get("library_item_id") is not None else (props.get("library_item_id") if idx == active_slot_idx else None),
+                    original_bpm=s.get("original_bpm") if s.get("original_bpm") is not None else (original_bpm if idx == active_slot_idx else None),
+                    key=s.get("key") if s.get("key") is not None else (key if idx == active_slot_idx else None),
                     duration_seconds=s.get("duration_seconds"),
                     crop_start=float(s.get("crop_start", crop_start)),
                     crop_end=float(s.get("crop_end", crop_end)),
@@ -467,7 +473,7 @@ def _resolve_node_slots_and_selectors(
         sequence = props.get("sequence") or [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
         step_parameters = props.get("step_parameters")
         step_length = float(props.get("step_length") or 0.25)
-        sample_slot_expr = str(props.get("sample_slot") if props.get("sample_slot") is not None else "0")
+        sample_slot_expr = str(props.get("sample_slot") if props.get("sample_slot") is not None else "*")
         seed_val = props.get("seed") if props.get("seed") is not None else 42
         seq_len = len(sequence) if isinstance(sequence, list) and len(sequence) > 0 else 16
         pattern_beats = max(0.25, seq_len * step_length)
@@ -483,7 +489,7 @@ def _resolve_node_slots_and_selectors(
                 slot_sample_slot = str(s.get("sample_slot") if s.get("sample_slot") is not None else sample_slot_expr)
                 slot_seed = s.get("seed") if s.get("seed") is not None else seed_val
                 slot_cycle_seeds = resolve_cycle_seeds(slot_seed, num_cycles, node_id_salt + idx)
-                slot_step_slots = resolve_step_slots(slot_sample_slot, len(slot_seq) or 16, upstream_slot_count, slot_cycle_seeds[0])
+                slot_step_slots = resolve_step_slots(slot_sample_slot, len(slot_seq) or 16, upstream_slot_count, slot_cycle_seeds[0], upstream_active_slot)
                 slots.append(NodeSlotModel(
                     slot=idx,
                     label=s.get("label"),
@@ -496,7 +502,7 @@ def _resolve_node_slots_and_selectors(
                 ))
         if not slots:
             cycle_seeds_0 = resolve_cycle_seeds(seed_val, num_cycles, node_id_salt)
-            step_slots_0 = resolve_step_slots(sample_slot_expr, seq_len, upstream_slot_count, cycle_seeds_0[0])
+            step_slots_0 = resolve_step_slots(sample_slot_expr, seq_len, upstream_slot_count, cycle_seeds_0[0], upstream_active_slot)
             slots.append(NodeSlotModel(
                 slot=0,
                 sequence=list(sequence),
@@ -507,13 +513,14 @@ def _resolve_node_slots_and_selectors(
                 cycle_seeds=cycle_seeds_0,
             ))
 
-    sample_slot_out = str(props.get("sample_slot") if props.get("sample_slot") is not None else "0")
-    step_slots_out = list(slots[0].step_slots or []) if ntype == "sequence" and slots else []
+    clamped_active = min(active_slot_idx, len(slots) - 1) if slots else 0
+    sample_slot_out = str(props.get("sample_slot") if props.get("sample_slot") is not None else "*")
+    step_slots_out = list(slots[clamped_active].step_slots or []) if ntype == "sequence" and slots else []
     section_points = props.get("section_points") if isinstance(props.get("section_points"), list) else []
     num_sections = len(section_points) + 1
 
     if ntype == "sequence" and slots:
-        cycle_seeds_out = list(slots[0].cycle_seeds or [])
+        cycle_seeds_out = list(slots[clamped_active].cycle_seeds or [])
     elif ntype == "arrangement":
         cycle_seeds_out = resolve_cycle_seeds(props.get("seed") if props.get("seed") is not None else 42, num_sections, node_id_salt)
     else:
@@ -521,7 +528,16 @@ def _resolve_node_slots_and_selectors(
 
     raw_section_slots = props.get("section_slots") if isinstance(props.get("section_slots"), list) else []
     section_slots_out = (
-        [wrap_slot_index(raw_section_slots[i] if i < len(raw_section_slots) else 0, upstream_slot_count) for i in range(num_sections)]
+        [
+            resolve_section_slot(
+                raw_section_slots[i] if i < len(raw_section_slots) else "*",
+                upstream_slot_count,
+                upstream_active_slot,
+                cycle_seeds_out[i] if i < len(cycle_seeds_out) else (props.get("seed") if props.get("seed") is not None else 42),
+                i,
+            )
+            for i in range(num_sections)
+        ]
         if ntype == "arrangement"
         else []
     )
@@ -838,6 +854,7 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             seed_mode=props.get("seed_mode", "moving"),
             refresh_mode=props.get("refresh_mode", "off"),
             slots=slots,
+            active_slot=max(0, int(props.get("active_slot", 0) or 0)),
             sample_slot=sample_slot_val,
             step_slots=step_slots_val,
             cycle_seeds=cycle_seeds_val,
@@ -847,7 +864,6 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             section_points=props.get("section_points", []),
             section_enabled=props.get("section_enabled", []),
             section_probability=props.get("section_probability", []),
-            section_sample_start=props.get("section_sample_start", []),
             section_quant=props.get("section_quant", []),
             section_quant_anchor=props.get("section_quant_anchor", []),
             quant=props.get("quant", "auto"),
@@ -1022,6 +1038,7 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             seed_mode=props.get("seed_mode", "moving"),
             refresh_mode=props.get("refresh_mode", "off"),
             slots=slots,
+            active_slot=max(0, int(props.get("active_slot", 0) or 0)),
             sample_slot=sample_slot_val,
             step_slots=step_slots_val,
             cycle_seeds=cycle_seeds_val,
@@ -1031,7 +1048,6 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             section_points=props.get("section_points", []),
             section_enabled=props.get("section_enabled", []),
             section_probability=props.get("section_probability", []),
-            section_sample_start=props.get("section_sample_start", []),
             section_quant=props.get("section_quant", []),
             section_quant_anchor=props.get("section_quant_anchor", []),
             quant=props.get("quant", "auto"),

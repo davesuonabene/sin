@@ -253,7 +253,7 @@ class TestGraphRendering(AudioFixtureTestCase):
             sample_type="one_shot",
             stretch_mode="off",
         )
-        # 1. Gate length reduces duration: gate_length=0.4 multiplier on 25-sample step = 10 samples
+        # 1. Gate length reduces duration: gate_length=0.4 multiplier on 100-sample sample = 40 samples
         gated_seq = SequenceObject(
             sequence=[1, 0, 0, 0],
             step_length=0.25,
@@ -262,8 +262,8 @@ class TestGraphRendering(AudioFixtureTestCase):
         )
         gated_seq.add_child(long_sample, 0.0)
         gated_out = gated_seq.render(system)
-        self.assertTrue(np.all(gated_out[:10] == 1.0))
-        self.assertTrue(np.all(gated_out[10:] == 0.0))
+        self.assertTrue(np.all(gated_out[:40] == 1.0))
+        self.assertTrue(np.all(gated_out[40:] == 0.0))
 
         # 2. Sample start offset: starts from 0.5 (50%) into a ramp sample
         ramp_sample = AudioObject(
@@ -314,8 +314,8 @@ class TestGraphRendering(AudioFixtureTestCase):
         self.assertTrue(np.all(rel_out[100:] == 0.0))
 
         # Short gated step followed by release:
-        # Step is 25 samples with gate_length=0.4 (10 samples sustain) + release=0.2 (20 samples fade out)
-        # Total active duration = 10 + 20 = 30 samples
+        # Sample is 100 samples with gate_length=0.4 (40 samples sustain) + release=0.2 (20 samples fade out)
+        # Total active duration = 40 + 20 = 60 samples
         gated_rel_seq = SequenceObject(
             sequence=[1, 0, 0, 0],
             step_length=0.25,
@@ -325,10 +325,10 @@ class TestGraphRendering(AudioFixtureTestCase):
         )
         gated_rel_seq.add_child(long_sample, 0.0)
         gated_rel_out = gated_rel_seq.render(system)
-        self.assertTrue(np.all(gated_rel_out[:10] == 1.0))
-        self.assertAlmostEqual(gated_rel_out[10], 1.0, places=4)
-        self.assertAlmostEqual(gated_rel_out[29], 0.0, places=4)
-        self.assertTrue(np.all(gated_rel_out[30:] == 0.0))
+        self.assertTrue(np.all(gated_rel_out[:40] == 1.0))
+        self.assertAlmostEqual(gated_rel_out[40], 1.0, places=4)
+        self.assertAlmostEqual(gated_rel_out[59], 0.0, places=4)
+        self.assertTrue(np.all(gated_rel_out[60:] == 0.0))
 
         # Short sample fitting inside gate (20 samples < 25-sample gate):
         # Releases over its last 50% (10 samples sustain, 10 samples fade)
@@ -372,6 +372,34 @@ class TestGraphRendering(AudioFixtureTestCase):
         # Multivoice allows step 0 release to overlap with step 1 (value = 2.0)
         self.assertEqual(mono_out[25], np.float32(1.0))
         self.assertEqual(multi_out[25], np.float32(2.0))
+
+        # Gate length 0.9 reflects 90% of real sample length (90 samples), exceeding 25-sample step:
+        gate_09_seq = SequenceObject(
+            sequence=[1, 0, 0, 0],
+            step_length=0.25,
+            step_parameters=[{"gate_length": 0.9}],
+            release=0.0,
+        )
+        gate_09_seq.add_child(long_sample, 0.0)
+        gate_09_out = gate_09_seq.render(system)
+        self.assertEqual(gate_09_out.shape[-1], 100)
+        self.assertTrue(np.all(gate_09_out[:90] == 1.0))
+        self.assertTrue(np.all(gate_09_out[90:] == 0.0))
+
+        # In mono mode, gate_length 0.9 is cut off when note 1 enters:
+        gate_09_mono = SequenceObject(
+            sequence=[1, 1, 0, 0],
+            step_length=0.25,
+            play_mode="gate",  # mono
+            step_parameters=[{"gate_length": 0.9}, {"gate_length": 0.9}],
+            release=0.0,
+        )
+        gate_09_mono.add_child(long_sample, 0.0)
+        gate_09_mono_out = gate_09_mono.render(system)
+        self.assertEqual(gate_09_mono_out.shape[-1], 115)  # 25 + 90
+        self.assertEqual(gate_09_mono_out[24], np.float32(1.0))
+        self.assertEqual(gate_09_mono_out[25], np.float32(1.0))  # step 1, not 2.0
+        self.assertTrue(np.all(gate_09_mono_out[25:115] == 1.0))
 
         stereo_sample = AudioObject(
             audio_data=np.ones((2, 20), dtype=np.float32),
@@ -576,7 +604,7 @@ class TestGraphRendering(AudioFixtureTestCase):
     def test_arrangement_sections_quantization_and_timeline(self):
         system = System(bpm=120.0, sample_rate=100)
         ramp = AudioObject(
-            audio_data=np.arange(100, dtype=np.float32),
+            audio_data=np.arange(50, dtype=np.float32),
             sample_type="one_shot",
             stretch_mode="off",
         )
@@ -584,7 +612,6 @@ class TestGraphRendering(AudioFixtureTestCase):
             total_bars=2.0,
             section_points=[1.0],
             section_probability=[1.0, 1.0],
-            section_sample_start=[0.0, 0.5],
             section_quant=["none", "0.5"],
             section_quant_anchor=["start", "end"],
             seed=1,
@@ -592,12 +619,12 @@ class TestGraphRendering(AudioFixtureTestCase):
         arrangement.add_child(ramp, 0.0)
         output = arrangement.render(system)
         self.assertEqual(output.shape[-1], 400)
-        np.testing.assert_array_equal(output[:100], np.arange(100, dtype=np.float32))
-        self.assertTrue(np.all(output[100:200] == 0.0))
+        np.testing.assert_array_equal(output[:50], np.arange(50, dtype=np.float32))
+        self.assertTrue(np.all(output[50:200] == 0.0))
         self.assertTrue(np.all(output[200:250] == 0.0))
-        np.testing.assert_array_equal(output[250:300], np.arange(50, 100, dtype=np.float32))
+        np.testing.assert_array_equal(output[250:300], np.arange(50, dtype=np.float32))
         self.assertTrue(np.all(output[300:350] == 0.0))
-        np.testing.assert_array_equal(output[350:400], np.arange(50, 100, dtype=np.float32))
+        np.testing.assert_array_equal(output[350:400], np.arange(50, dtype=np.float32))
 
         probability_zero = ArrangementObject(
             total_bars=2.0,
@@ -646,31 +673,29 @@ class TestGraphRendering(AudioFixtureTestCase):
         self.assertTrue(np.all(full_output[400:500] == 1.0))
         self.assertTrue(np.all(full_output[600:700] == 1.0))
 
-    def test_arrangement_start_offset_continuous_vs_quantized(self):
+    def test_arrangement_continuous_vs_quantized(self):
         system = System(bpm=120.0, sample_rate=100)
-        # 1 bar = 200 samples at bpm 120, sr 100
-        loop = AudioObject(
-            audio_data=np.arange(200, dtype=np.float32),
-            sample_type="loop",
+        # 50-sample one-shot inside a 1-bar (200 samples) arrangement
+        clip = AudioObject(
+            audio_data=np.arange(50, dtype=np.float32),
+            sample_type="one_shot",
             stretch_mode="off",
-            total_bars=1.0,
         )
 
-        # 1. Continuous quantize: loop wraps onto itself starting from Start Offset
+        # 1. Continuous quantize: clip loops onto itself across the section
         continuous_arr = ArrangementObject(
             total_bars=1.0,
             section_points=[],
             section_probability=[1.0],
-            section_sample_start=[0.25],  # 25% offset = sample index 50
             section_quant=["auto"],
         )
-        continuous_arr.add_child(loop, 0.0)
+        continuous_arr.add_child(clip, 0.0)
         cont_output = continuous_arr.render(system)
         self.assertEqual(cont_output.shape[-1], 200)
-        # First 150 samples should be loop[50..200]
-        np.testing.assert_array_equal(cont_output[:150], np.arange(50, 200, dtype=np.float32))
-        # Next 50 samples should loop onto itself: loop[0..50]
-        np.testing.assert_array_equal(cont_output[150:], np.arange(0, 50, dtype=np.float32))
+        np.testing.assert_array_equal(cont_output[:50], np.arange(50, dtype=np.float32))
+        np.testing.assert_array_equal(cont_output[50:100], np.arange(50, dtype=np.float32))
+        np.testing.assert_array_equal(cont_output[100:150], np.arange(50, dtype=np.float32))
+        np.testing.assert_array_equal(cont_output[150:200], np.arange(50, dtype=np.float32))
 
         # 2. Non-continuous quantize: playback stops when reaching the end of the sample
         # 0.5 bar = 100 samples per quant cell
@@ -678,18 +703,17 @@ class TestGraphRendering(AudioFixtureTestCase):
             total_bars=1.0,
             section_points=[],
             section_probability=[1.0],
-            section_sample_start=[0.75],  # 75% offset = sample index 150 (50 samples left)
             section_quant=["0.5"],
             section_quant_anchor=["start"],
         )
-        quant_arr.add_child(loop, 0.0)
+        quant_arr.add_child(clip, 0.0)
         quant_output = quant_arr.render(system)
         self.assertEqual(quant_output.shape[-1], 200)
-        # Cell 1 (0..100): plays 50 samples [150..200], then stops (silence for samples 50..100)
-        np.testing.assert_array_equal(quant_output[:50], np.arange(150, 200, dtype=np.float32))
+        # Cell 1 (0..100): plays 50 samples [0..50], then stops (silence for samples 50..100)
+        np.testing.assert_array_equal(quant_output[:50], np.arange(50, dtype=np.float32))
         self.assertTrue(np.all(quant_output[50:100] == 0.0))
-        # Cell 2 (100..200): retriggers at 100, plays [150..200], then stops (silence for 150..200)
-        np.testing.assert_array_equal(quant_output[100:150], np.arange(150, 200, dtype=np.float32))
+        # Cell 2 (100..200): retriggers at 100, plays [0..50], then stops (silence for 150..200)
+        np.testing.assert_array_equal(quant_output[100:150], np.arange(50, dtype=np.float32))
         self.assertTrue(np.all(quant_output[150:200] == 0.0))
 
     def test_arrangement_replicates_child_manifest_events_across_repetitions(self):

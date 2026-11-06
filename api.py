@@ -770,7 +770,12 @@ def list_workspace_presets():
     )
     return {
         "workspaces": [
-            {"name": path.stem, "updated_at": path.stat().st_mtime}
+            {
+                "name": path.stem,
+                "filename": path.name,
+                "updated_at": path.stat().st_mtime,
+                "size": path.stat().st_size,
+            }
             for path in files
         ]
     }

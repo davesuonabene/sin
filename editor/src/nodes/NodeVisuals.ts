@@ -1,4 +1,4 @@
-export type NodeShape = 'circle' | 'triangle' | 'pentagon' | 'square' | 'diamond';
+export type NodeShape = 'source' | 'through' | 'sink' | 'isolated';
 
 export type NeonIcon =
     | 'mixer'
@@ -13,8 +13,6 @@ export type NeonIcon =
     | 'wave'
     | 'target'
     | 'spark';
-
-export const NODE_SHAPES: NodeShape[] = ['circle', 'triangle', 'pentagon', 'square', 'diamond'];
 
 export const NEON_ICONS: Array<{ id: NeonIcon; label: string }> = [
     { id: 'sample', label: 'Sample' },
@@ -52,12 +50,14 @@ export function normalizeNeonIcon(value: unknown, fallback: NeonIcon = 'mixer'):
     return legacyIcons[icon] || fallback;
 }
 
-export function normalizeNodeShape(value: unknown, fallback: NodeShape = 'square'): NodeShape {
-    const shape = String(value || '').toLowerCase();
-    if (shape === 'triang') return 'triangle';
-    if (shape === 'pentag') return 'pentagon';
-    if (shape === 'rotated-square' || shape === 'rotated_square') return 'diamond';
-    return NODE_SHAPES.includes(shape as NodeShape) ? shape as NodeShape : fallback;
+function resolveBorderRadii(shape: NodeShape, width: number, height: number): { leftR: number; rightR: number } {
+    const maxR = Math.max(0, Math.min(width / 2, height / 2));
+    const rFlat = Math.min(4, maxR);
+    const rCurve = Math.abs(width - height) < 0.001 ? maxR : Math.min(22, Math.round(height * 0.32), maxR);
+    return {
+        leftR: (shape === 'source' || shape === 'isolated') ? rCurve : rFlat,
+        rightR: (shape === 'sink' || shape === 'isolated') ? rCurve : rFlat
+    };
 }
 
 export function traceNodeShape(
@@ -65,47 +65,26 @@ export function traceNodeShape(
     shape: NodeShape,
     x: number,
     y: number,
-    size: number
+    width: number,
+    height: number = width
 ): void {
-    const cx = x + size / 2;
-    const cy = y + size / 2;
-    const inset = shape === 'diamond' ? size * 0.04 : 0;
-    const radius = size / 2 - inset;
-
+    const { leftR, rightR } = resolveBorderRadii(shape, width, height);
     ctx.beginPath();
-    if (shape === 'circle') {
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        return;
-    }
-    if (shape === 'square') {
-        ctx.rect(x, y, size, size);
-        return;
-    }
-
-    const sides = shape === 'triangle' ? 3 : shape === 'pentagon' ? 5 : 4;
-    const startAngle = shape === 'diamond' ? -Math.PI / 2 : -Math.PI / 2;
-    for (let index = 0; index < sides; index += 1) {
-        const angle = startAngle + index * Math.PI * 2 / sides;
-        const px = cx + Math.cos(angle) * radius;
-        const py = cy + Math.sin(angle) * radius;
-        if (index === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-    }
+    ctx.moveTo(x + leftR, y);
+    ctx.lineTo(x + width - rightR, y);
+    ctx.arcTo(x + width, y, x + width, y + rightR, rightR);
+    ctx.lineTo(x + width, y + height - rightR);
+    ctx.arcTo(x + width, y + height, x + width - rightR, y + height, rightR);
+    ctx.lineTo(x + leftR, y + height);
+    ctx.arcTo(x, y + height, x, y + height - leftR, leftR);
+    ctx.lineTo(x, y + leftR);
+    ctx.arcTo(x, y, x + leftR, y, leftR);
     ctx.closePath();
 }
 
-export function getNodeShapePerimeter(shape: NodeShape, size: number): number {
-    const inset = shape === 'diamond' ? size * 0.04 : 0;
-    const radius = size / 2 - inset;
-    if (shape === 'circle') {
-        return 2 * Math.PI * radius;
-    }
-    if (shape === 'square') {
-        return 4 * size;
-    }
-    const sides = shape === 'triangle' ? 3 : shape === 'pentagon' ? 5 : 4;
-    const sideLen = 2 * radius * Math.sin(Math.PI / sides);
-    return sides * sideLen;
+export function getNodeShapePerimeter(shape: NodeShape, width: number, height: number = width): number {
+    const { leftR, rightR } = resolveBorderRadii(shape, width, height);
+    return 2 * (width + height) - (4 - Math.PI) * (leftR + rightR);
 }
 
 export function drawPerimeterProgressAccent(
@@ -121,28 +100,15 @@ export function drawPerimeterProgressAccent(
     const clamped = Math.max(0, Math.min(1, progress));
     if (clamped <= 0.001) return;
 
-    const cx = x + size / 2;
-    const cy = y + size / 2;
-    const inset = shape === 'diamond' ? size * 0.04 : 0;
-    const radius = size / 2 - inset;
-
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    if (shape === 'circle') {
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamped);
-        ctx.stroke();
-        ctx.restore();
-        return;
-    }
-
-    const perimeter = getNodeShapePerimeter(shape, size);
+    const perimeter = getNodeShapePerimeter(shape, size, size);
     ctx.setLineDash?.([perimeter * clamped, perimeter]);
-    traceNodeShape(ctx, shape, x, y, size);
+    traceNodeShape(ctx, shape, x, y, size, size);
     ctx.stroke();
     ctx.setLineDash?.([]);
     ctx.restore();

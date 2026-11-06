@@ -19,6 +19,7 @@ import { isLibraryPreviewEnabled, LibraryPanel, setLibraryPreviewEnabled } from 
 import { MasterWaveform } from './ui/MasterWaveform';
 import { RuntimeLogPanel } from './ui/RuntimeLogPanel';
 import { EngineSyncManager } from './ui/EngineSyncManager';
+import { FileExplorerModal } from './ui/FileExplorerModal';
 import {
     createAppShell,
     HEADER_PAUSE_ICON_SVG,
@@ -98,6 +99,9 @@ const {
     saveWorkspaceAsBtn,
     saveWorkspaceBtn,
     loadWorkspaceBtn,
+    openWorkspaceBtn,
+    openRecentTriggerBtn,
+    openRecentPopover,
     deleteWorkspaceBtn,
 } = createAppShell(appElement);
 
@@ -444,6 +448,7 @@ let telemetryAnimationFrame: number | null = null;
 let masterAudioAnalyser: AnalyserNode | null = null;
 let mediaElementSourceAttached = false;
 const scopeDataBuffer = new Float32Array(128);
+const spectrumDataBuffer = new Uint8Array(128);
 
 function getOrCreateMasterAnalyser(ctx?: AudioContext | null): AnalyserNode | null {
     if (masterAudioAnalyser) return masterAudioAnalyser;
@@ -516,7 +521,9 @@ function tickPlaybackTelemetry() {
         curTime = globalAudioScheduler.getCurrentTime();
         dur = globalAudioScheduler.getTotalDuration();
         globalAudioScheduler.getFloatTimeDomainData(scopeDataBuffer);
+        globalAudioScheduler.getByteFrequencyData(spectrumDataBuffer);
         defaultTransportClock.setRealtimeScopeData(scopeDataBuffer);
+        defaultTransportClock.setRealtimeSpectrumData(spectrumDataBuffer);
     } else {
         dur = loopEnabled && loopBuffer?.duration ? loopBuffer.duration : (Number.isFinite(masterPlayer.duration) ? masterPlayer.duration : 0);
         curTime = getSmoothPlaybackTime(dur);
@@ -527,9 +534,12 @@ function tickPlaybackTelemetry() {
 
         if (isPlaying && masterAudioAnalyser) {
             masterAudioAnalyser.getFloatTimeDomainData(scopeDataBuffer);
+            masterAudioAnalyser.getByteFrequencyData(spectrumDataBuffer);
             defaultTransportClock.setRealtimeScopeData(scopeDataBuffer);
+            defaultTransportClock.setRealtimeSpectrumData(spectrumDataBuffer);
         } else {
             defaultTransportClock.setRealtimeScopeData(null);
+            defaultTransportClock.setRealtimeSpectrumData(null);
         }
     }
 
@@ -904,8 +914,8 @@ function rebuildTrackNodesFromGraph(graph: LGraph) {
             filepath: p.filepath || '',
             sample_type: p.sample_type,
             original_bpm: p.sample_type === 'one_shot' ? (p.original_bpm || null) : (p.original_bpm || 120),
-            target_bpm: p.target_bpm || p.bpm || 120,
-            bpm: p.bpm || p.target_bpm || 120,
+            target_bpm: (type === 'sequence' || type === 'arrangement') ? 'global' : (p.target_bpm ?? p.bpm ?? 'global'),
+            bpm: (type === 'sequence' || type === 'arrangement') ? 'global' : (p.bpm ?? p.target_bpm ?? 'global'),
             key: p.key || '',
             start_beat: p.start_beat || 0,
             mix_mode: p.mix_mode || 'sum',
@@ -920,7 +930,6 @@ function rebuildTrackNodesFromGraph(graph: LGraph) {
             total_bars: p.total_bars ?? (type === 'track' || type === 'arrangement' ? 4 : (type === 'sequence' ? 'global' : undefined)),
             section_points: p.section_points,
             section_probability: p.section_probability,
-            section_sample_start: p.section_sample_start,
             section_quant: p.section_quant,
             section_quant_anchor: p.section_quant_anchor,
             duration_seconds: p.duration_seconds,
@@ -1062,11 +1071,15 @@ async function syncGraphSampleMetadataFromLibrary(
             || node?.properties?.node_type === 'asset_filter'
             || node?.properties?.output_type === 'asset_path';
         if (isAssetPool) {
-            if (includeDynamicAssets) references.push(...(node.properties?.selected_items || []));
+            const items = Array.isArray(node.properties?.selected_items) ? node.properties.selected_items : [];
+            const needsHydration = items.some((item: any) => !item?.filepath && !item?.absolute_path);
+            if (includeDynamicAssets || needsHydration) references.push(...items);
             continue;
         }
-        if (!includeDynamicAssets && node?.properties?.asset_modifier_id != null && !node?.properties?.filepath) continue;
-        const filepath = String(node?.properties?.filepath || '');
+        const activeIdx = Math.max(0, Number(node?.activeSlotIndex ?? node?.properties?.active_slot ?? 0));
+        const activeSlotFp = Array.isArray(node?.properties?.slots) ? node.properties.slots[activeIdx]?.filepath : '';
+        if (!includeDynamicAssets && node?.properties?.asset_modifier_id != null && !node?.properties?.filepath && !activeSlotFp) continue;
+        const filepath = String(node?.properties?.filepath || activeSlotFp || '');
         const id = node?.properties?.library_item_id;
         if (id != null || filepath) references.push({ id, absolute_path: filepath });
         if (Array.isArray(node?.properties?.slots)) {
@@ -1085,10 +1098,11 @@ async function syncGraphSampleMetadataFromLibrary(
         const isAssetPool = node?.type === 'Audio/AssetFilter'
             || node?.properties?.node_type === 'asset_filter'
             || node?.properties?.output_type === 'asset_path';
-        if (!includeDynamicAssets && isAssetPool) continue;
         const items = Array.isArray(node?.properties?.selected_items)
             ? node.properties.selected_items
             : [];
+        const needsHydration = items.some((item: any) => !item?.filepath && !item?.absolute_path);
+        if (!includeDynamicAssets && isAssetPool && !needsHydration) continue;
         const outputId = node?.properties?.output_item_id;
         const outputPath = String(node?.properties?.output_value || '');
         // Collection contents may share a parent ID. Preserve the exact saved
@@ -1108,7 +1122,9 @@ async function syncGraphSampleMetadataFromLibrary(
     }
 
     await Promise.all(nodes.map(node => {
-        if (!includeDynamicAssets && node?.properties?.asset_modifier_id != null && !node?.properties?.filepath) {
+        const activeIdx = Math.max(0, Number(node?.activeSlotIndex ?? node?.properties?.active_slot ?? 0));
+        const activeSlotFp = Array.isArray(node?.properties?.slots) ? node.properties.slots[activeIdx]?.filepath : '';
+        if (!includeDynamicAssets && node?.properties?.asset_modifier_id != null && !node?.properties?.filepath && !activeSlotFp) {
             return Promise.resolve(false);
         }
         const sync = node?.syncMetadataFromLibrary;
@@ -1117,7 +1133,7 @@ async function syncGraphSampleMetadataFromLibrary(
         const modifier = modifierId != null ? graph.getNodeById(modifierId) : null;
         const hasSlots = Array.isArray(node.properties?.slots) && node.properties.slots.length >= 1;
         const assetPath = hasSlots
-            ? (node.properties?.filepath || modifier?.properties?.output_value || '')
+            ? (node.properties?.filepath || activeSlotFp || modifier?.properties?.output_value || '')
             : (modifier?.properties?.output_value || node.properties?.filepath || '');
         const selectedItem = (modifier?.properties?.selected_items || []).find((item: any) =>
             (item.absolute_path || item.filepath) === assetPath
@@ -1220,11 +1236,13 @@ async function preloadSubtreeAssets(graph: LGraph, rootNodeId?: number): Promise
     (window as any).editorCanvas?.setDirty?.(true, true);
 }
 
+let currentWorkspaceName: string | null = null;
+
 function setWorkspaceControlsEnabled() {
     const hasSelection = Boolean(workspacePresetSelect.value);
-    saveWorkspaceBtn.disabled = !hasSelection;
-    loadWorkspaceBtn.disabled = !hasSelection;
-    deleteWorkspaceBtn.disabled = !hasSelection;
+    saveWorkspaceBtn.disabled = false;
+    if (loadWorkspaceBtn) loadWorkspaceBtn.disabled = false;
+    if (deleteWorkspaceBtn) deleteWorkspaceBtn.disabled = !hasSelection;
 }
 
 async function refreshWorkspacePresets(selectedName?: string) {
@@ -1232,30 +1250,78 @@ async function refreshWorkspacePresets(selectedName?: string) {
         const response = await fetch('/api/workspaces');
         if (!response.ok) throw new Error(`Could not list workspaces (${response.status})`);
         const data = await response.json();
-        const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
+        const workspaces: Array<{ name: string; filename?: string; updated_at?: number; size?: number }> =
+            Array.isArray(data.workspaces) ? data.workspaces : [];
         workspacePresetSelect.innerHTML = '';
+        if (openRecentPopover) openRecentPopover.innerHTML = '';
+
         if (workspaces.length === 0) {
             workspacePresetSelect.append(new Option('No saved workspaces', ''));
+            if (openRecentPopover) {
+                const hint = document.createElement('div');
+                hint.className = 'header-menu-hint';
+                hint.textContent = 'No recent workspaces';
+                openRecentPopover.appendChild(hint);
+            }
         } else {
             for (const workspace of workspaces) {
                 workspacePresetSelect.append(new Option(workspace.name, workspace.name));
             }
             const nextValue = selectedName && workspaces.some((workspace: any) => workspace.name === selectedName)
-                ? selectedName : workspaces[0].name;
+                ? selectedName : (currentWorkspaceName && workspaces.some(w => w.name === currentWorkspaceName) ? currentWorkspaceName : workspaces[0].name);
             workspacePresetSelect.value = nextValue;
+
+            if (openRecentPopover) {
+                const recentList = workspaces.slice(0, 10);
+                for (const w of recentList) {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'header-menu-action sin-menu-item open-recent-item';
+                    btn.textContent = w.name;
+                    btn.title = w.name;
+                    btn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        fileMenu.open = false;
+                        await loadWorkspacePreset(w.name);
+                    });
+                    openRecentPopover.appendChild(btn);
+                }
+
+                const sep = document.createElement('div');
+                sep.className = 'header-menu-separator sin-menu-divider';
+                openRecentPopover.appendChild(sep);
+
+                const moreBtn = document.createElement('button');
+                moreBtn.type = 'button';
+                moreBtn.className = 'header-menu-action sin-menu-item';
+                moreBtn.style.color = '#64748b';
+                moreBtn.textContent = 'More workspaces…';
+                moreBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    fileMenu.open = false;
+                    openWorkspaceExplorer();
+                });
+                openRecentPopover.appendChild(moreBtn);
+            }
         }
     } catch (error) {
         console.error('Could not list workspace presets', error);
         workspacePresetSelect.innerHTML = '';
         workspacePresetSelect.append(new Option('Workspace saves unavailable', ''));
+        if (openRecentPopover) {
+            openRecentPopover.innerHTML = '<div class="header-menu-hint">Workspace saves unavailable</div>';
+        }
     }
     setWorkspaceControlsEnabled();
 }
 
 function serializeWorkspaceGraph(graph: LGraph) {
+    for (const node of (((graph as any)._nodes || []) as any[])) {
+        node?.syncActiveSlotFromProperties?.();
+    }
     writeGlobalParametersToGraph(graph);
     writeGlobalFreezeToGraph(graph);
-    return stripResolvedPoolState(graph.serialize(), isGlobalFreezeActive);
+    return stripResolvedPoolState(JSON.parse(JSON.stringify(graph.serialize())), isGlobalFreezeActive);
 }
 
 function createWorkspacePreset(graph: LGraph) {
@@ -1281,9 +1347,13 @@ async function saveWorkspacePreset(name: string) {
             const data = await response.json().catch(() => ({}));
             throw new Error(data.detail || `Could not save workspace (${response.status})`);
         }
+        currentWorkspaceName = name;
         await refreshWorkspacePresets(name);
         fileMenu.open = false;
         setWorkspaceButtonMessage(saveWorkspaceBtn, 'Saved', 'Save');
+        window.dispatchEvent(new CustomEvent('project-name-changed', {
+            detail: { projectName: name }
+        }));
     } catch (error) {
         console.error('Could not save workspace preset', error);
         setWorkspaceButtonMessage(saveWorkspaceBtn, 'Save failed', 'Save');
@@ -1291,6 +1361,7 @@ async function saveWorkspacePreset(name: string) {
 }
 
 export function getCurrentProjectName(): string {
+    if (currentWorkspaceName?.trim()) return currentWorkspaceName.trim();
     const selected = workspacePresetSelect?.value?.trim();
     if (selected) return selected;
     const graph = (window as any).editorGraph as LGraph;
@@ -1367,15 +1438,17 @@ async function loadWorkspacePreset(name: string) {
         cancelScheduledStageSave();
         if (stageSaveInFlight && stageSaveCompletion) await stageSaveCompletion;
         await saveCurrentStage();
+        currentWorkspaceName = name;
+        await refreshWorkspacePresets(name);
         fileMenu.open = false;
-        setWorkspaceButtonMessage(loadWorkspaceBtn, 'Loaded', 'Load');
+        setWorkspaceButtonMessage(saveWorkspaceBtn, 'Saved', 'Save');
         window.dispatchEvent(new CustomEvent('project-name-changed', {
             detail: { projectName: getCurrentProjectName() }
         }));
     } catch (error) {
         stageHydrating = false;
         console.error('Could not load workspace preset', error);
-        setWorkspaceButtonMessage(loadWorkspaceBtn, 'Load failed', 'Load');
+        setWorkspaceButtonMessage(saveWorkspaceBtn, 'Load failed', 'Save');
     }
 }
 
@@ -1405,37 +1478,107 @@ newStageBtn.addEventListener('click', () => {
     updateGraphNodeCollapsing();
     canvas?.setDirty(true, true);
     fileMenu.open = false;
+    currentWorkspaceName = null;
+    window.dispatchEvent(new CustomEvent('project-name-changed', {
+        detail: { projectName: 'project' }
+    }));
     // A blank stage is a deliberate new document, even if no previous stage
     // exists (or it was already blank), so force a fresh persisted snapshot.
     lastSavedStageFingerprint = null;
     scheduleStageSave(0);
 });
 
-saveWorkspaceAsBtn.addEventListener('click', async () => {
-    const name = window.prompt('Save workspace as:');
+async function handleSaveWorkspace() {
+    const targetName = currentWorkspaceName?.trim() || workspacePresetSelect?.value?.trim();
+    if (targetName) {
+        await saveWorkspacePreset(targetName);
+    } else {
+        await handleSaveWorkspaceAs();
+    }
+}
+
+async function handleSaveWorkspaceAs() {
+    const current = currentWorkspaceName || '';
+    const name = window.prompt('Save workspace as:', current);
     if (!name?.trim()) return;
     await saveWorkspacePreset(name.trim());
-});
+}
 
-saveWorkspaceBtn.addEventListener('click', async () => {
-    if (workspacePresetSelect.value) await saveWorkspacePreset(workspacePresetSelect.value);
-});
+function openWorkspaceExplorer() {
+    FileExplorerModal.show({
+        onSelect: async (name: string) => {
+            await loadWorkspacePreset(name);
+        },
+        onDelete: async (name: string) => {
+            await fetch(`/api/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            if (currentWorkspaceName === name) {
+                currentWorkspaceName = null;
+            }
+            await refreshWorkspacePresets();
+        },
+        onImportJson: async (presetData: any, filename: string) => {
+            await importWorkspacePresetObject(presetData, filename);
+        }
+    });
+}
 
-loadWorkspaceBtn.addEventListener('click', async () => {
-    const selected = workspacePresetSelect.value?.trim();
-    if (selected) {
-        await loadWorkspacePreset(selected);
+async function importWorkspacePresetObject(presetData: any, filename: string) {
+    const graph = (window as any).editorGraph as LGraph;
+    if (!graph || !presetData) return;
+    const cleanName = filename.replace(/\.json$/i, '').trim() || 'imported_workspace';
+    try {
+        const payload = presetData.preset ? presetData.preset : presetData;
+        if (!payload.graph) {
+            alert('File does not contain a valid graph structure.');
+            return;
+        }
+        await fetch('/api/workspaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: cleanName, preset: payload })
+        });
+        await loadWorkspacePreset(cleanName);
+    } catch (err) {
+        console.error('Failed to import workspace preset', err);
+        alert('Could not import workspace: ' + err);
     }
+}
+
+saveWorkspaceAsBtn.addEventListener('click', () => {
+    void handleSaveWorkspaceAs();
+});
+
+saveWorkspaceBtn.addEventListener('click', () => {
+    void handleSaveWorkspace();
+});
+
+loadWorkspaceBtn.addEventListener('click', () => {
+    fileMenu.open = false;
+    openWorkspaceExplorer();
+});
+
+openWorkspaceBtn?.addEventListener('click', () => {
+    fileMenu.open = false;
+    openWorkspaceExplorer();
+});
+
+openRecentTriggerBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const menuItem = topHeader.querySelector('#open-recent-menu-item');
+    menuItem?.classList.toggle('is-open');
 });
 
 deleteWorkspaceBtn.addEventListener('click', async () => {
-    const name = workspacePresetSelect.value;
+    const name = currentWorkspaceName || workspacePresetSelect.value;
     if (!name || !window.confirm(`Delete workspace "${name}"?`)) return;
     try {
         const response = await fetch(`/api/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE' });
         if (!response.ok) {
             const data = await response.json().catch(() => ({}));
             throw new Error(data.detail || `Could not delete workspace (${response.status})`);
+        }
+        if (currentWorkspaceName === name) {
+            currentWorkspaceName = null;
         }
         await refreshWorkspacePresets();
         fileMenu.open = false;
@@ -1634,6 +1777,28 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
     if (isTyping) {
         return;
     }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const keyLower = e.key.toLowerCase();
+        if (keyLower === 'c' || keyLower === 'v') {
+            const focusedSlot = (window as any).__sinFocusedSlot as { nodeId: number | null; slotIndex: number } | undefined;
+            const inInspector = Boolean(activeEl?.closest?.('.td-param-container') || activeEl?.closest?.('.td-slot-strip'));
+            if (focusedSlot || inInspector) {
+                const graph = (window as any).editorGraph as LGraph | undefined;
+                const targetNodeId = focusedSlot?.nodeId ?? activeParamNodeId;
+                const targetNode = targetNodeId != null ? (graph?.getNodeById?.(targetNodeId) as any) : null;
+                if (targetNode && typeof targetNode.copySlot === 'function' && typeof targetNode.pasteSlot === 'function') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (keyLower === 'c') {
+                        targetNode.copySlot(targetNode.activeSlotIndex);
+                    } else {
+                        targetNode.pasteSlot(targetNode.activeSlotIndex);
+                    }
+                    return;
+                }
+            }
+        }
+    }
     if (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27) {
         const graphCanvas = (window as any).editorCanvas as LGraphCanvas | undefined;
         let changed = false;
@@ -1653,6 +1818,19 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
         }
     }
     if ((e.code === 'Delete' || e.code === 'Backspace' || e.key === 'Delete' || e.key === 'Backspace' || e.keyCode === 46 || e.keyCode === 8) && !isTyping) {
+        const focusedSlot = (window as any).__sinFocusedSlot as { nodeId: number | null; slotIndex: number } | undefined;
+        if (focusedSlot || activeEl?.closest?.('.td-slot-strip')) {
+            const graph = (window as any).editorGraph as LGraph | undefined;
+            const targetNodeId = focusedSlot?.nodeId ?? activeParamNodeId;
+            const targetNode = targetNodeId != null ? (graph?.getNodeById?.(targetNodeId) as any) : null;
+            if (targetNode && typeof targetNode.removeSlot === 'function' && typeof targetNode.getSlots === 'function' && targetNode.getSlots().length > 1) {
+                e.preventDefault();
+                e.stopPropagation();
+                targetNode.removeSlot(targetNode.activeSlotIndex);
+                window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: targetNode.id } }));
+                return;
+            }
+        }
         if (deleteSelectedCables()) {
             e.preventDefault();
             e.stopPropagation();
@@ -1665,6 +1843,16 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
         }
         e.preventDefault();
         void toggleTransportPlayback();
+        return;
+    }
+    if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        e.preventDefault();
+        void handleSaveWorkspace();
+        return;
+    }
+    if ((e.key === 'o' || e.key === 'O') && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        e.preventDefault();
+        openWorkspaceExplorer();
         return;
     }
     if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -2082,6 +2270,7 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
     lastMouseDownPos = [e.clientX, e.clientY];
     lastMouseDownHitNode = hitNode;
     lastMouseDownWasEmptyBackground = Boolean(emptyCanvasDrag);
+    (window as any).__sinFocusedSlot = null;
 
     // If clicking a node or background without shift/ctrl, deselect cables
     if (e.button === 0 && !e.shiftKey && !e.ctrlKey && !hoveredLink) {
@@ -2506,7 +2695,7 @@ export interface TrackNodeData {
     filepath: string;
     sample_type?: string;
     original_bpm: number;
-    target_bpm?: number;
+    target_bpm?: number | 'global';
     key?: string;
     start_beat: number;
     bpm?: number | 'global';
@@ -2533,7 +2722,6 @@ export interface TrackNodeData {
     total_bars?: number | 'global';
     section_points?: number[];
     section_probability?: number[];
-    section_sample_start?: number[];
     section_quant?: string[];
     section_quant_anchor?: string[];
     duration_seconds?: number;
@@ -2809,7 +2997,9 @@ function syncBpmInheritance(graph?: LGraph) {
 
             const configuredTarget = nodeObj?.properties?.target_bpm ?? data.target_bpm;
             const configuredBpm = nodeObj?.properties?.bpm ?? data.bpm;
-            const isGlobal = configuredTarget === 'global'
+            const alwaysInheritsBpm = data.type === 'sequence' || data.type === 'arrangement';
+            const isGlobal = alwaysInheritsBpm
+                || configuredTarget === 'global'
                 || (configuredTarget == null && (configuredBpm === 'global' || configuredBpm == null));
 
             const resolvedBpm = isGlobal
@@ -2825,8 +3015,9 @@ function syncBpmInheritance(graph?: LGraph) {
                     data.bpm = 'global';
                     changed = true;
                 }
-                if (nodeObj?.properties && (nodeObj.properties.target_bpm === undefined || nodeObj.properties.target_bpm === null)) {
+                if (nodeObj?.properties && (alwaysInheritsBpm || nodeObj.properties.target_bpm === undefined || nodeObj.properties.target_bpm === null)) {
                     nodeObj.properties.target_bpm = 'global';
+                    if (alwaysInheritsBpm) nodeObj.properties.bpm = 'global';
                 }
             } else {
                 if (data.bpm !== resolvedBpm) {
@@ -3109,6 +3300,10 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
         return;
     }
 
+    if (!options?.forceOpen && dockedPropertyPanels().length === 0) {
+        return;
+    }
+
     const width = 380;
     const graphPanel = dv.getGroupPanel('graph_panel');
 
@@ -3240,7 +3435,7 @@ function togglePropertiesPanel() {
         if (selected) node = selected;
     }
     if (node) {
-        openParamWindow(node);
+        openParamWindow(node, { forceOpen: true });
     } else {
         openTrackParamWindow();
     }
@@ -3287,6 +3482,7 @@ window.addEventListener('open-node-properties', (e: any) => {
 
 window.addEventListener('add-asset-filter-to-param', (e: any) => {
     const nodeId = e.detail?.nodeId;
+    const silent = Boolean(e.detail?.silent);
     const graph = (window as any).editorGraph as LGraph;
     const ownerNode = nodeId != null ? (graph?.getNodeById(nodeId) as any) : null;
     const ownerType = ownerNode?.getNodeType?.() || ownerNode?.properties?.node_type;
@@ -3308,14 +3504,32 @@ window.addEventListener('add-asset-filter-to-param', (e: any) => {
     if (acceptedType === 'sequence_source') {
         (modifierNode as any).updateProperty('node_name', 'MIDI / Sequence Pool');
     }
+    const hadAssignedModifier = ownerNode.properties.asset_modifier_id === modifierNode.id;
     ownerNode.properties.asset_modifier_id = modifierNode.id;
     const ownerData = trackNodes.get(nodeId);
     if (ownerData) ownerData.asset_modifier_id = modifierNode.id;
-    window.dispatchEvent(new CustomEvent('modifier-assignment-changed', { detail: { nodeId } }));
-    if (activeParamNodeId === modifierNode.id && dockedPropertyPanels().length > 0) {
-        openParamWindow(ownerNode, { forceOpen: true });
+    if (silent) {
+        if (!hadAssignedModifier) {
+            window.dispatchEvent(new CustomEvent('modifier-assignment-changed', { detail: { nodeId } }));
+        }
+        return;
+    }
+
+    const isOwnerAlreadyOpen = activeParamNodeId === ownerNode.id && dockedPropertyPanels().length > 0;
+    if (typeof ownerNode.togglePoolView === 'function') {
+        if (isOwnerAlreadyOpen) {
+            ownerNode.togglePoolView();
+        } else {
+            ownerNode.togglePoolView(true);
+        }
+    } else if (ownerNode.properties) {
+        ownerNode.properties.pool_view_open = isOwnerAlreadyOpen ? !ownerNode.properties.pool_view_open : true;
+    }
+
+    if (isOwnerAlreadyOpen) {
+        window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: ownerNode.id } }));
     } else {
-        openParamWindow(modifierNode, { forceOpen: true });
+        openParamWindow(ownerNode, { forceOpen: true });
     }
 });
 
@@ -3330,12 +3544,6 @@ window.addEventListener('item-pool-preview-refresh', async (e: any) => {
         ? poolNode.properties.selected_items
         : [];
     if (selectedItems.length === 0) return;
-
-    // Determine the representative item: either currently output or first in selected items
-    const activeItem = poolNode.properties?.output_value
-        ? selectedItems.find((it: any) => (it.filepath || it.absolute_path) === poolNode.properties.output_value) || selectedItems[0]
-        : selectedItems[0];
-    if (!activeItem) return;
 
     // Find any nodes associated with this pool (either via asset_modifier_id or parentId)
     const files = await resolveLibraryAssets(selectedItems);
@@ -3368,6 +3576,12 @@ window.addEventListener('item-pool-preview-refresh', async (e: any) => {
                 detail: { nodeId: node.id }
             }));
         } else if (nodeKind === 'sequence') {
+            populateOwnerSlotsFromPool(poolNode, node, selectedItems);
+            const targetPath = poolNode.properties?.output_value;
+            const activeItem = (targetPath
+                ? selectedItems.find((it: any) => (it.filepath || it.absolute_path) === targetPath)
+                : null) || selectedItems[0];
+            if (!activeItem) continue;
             const dragItem: LibraryDragItem = {
                 id: activeItem.id,
                 name: activeItem.name,
@@ -3616,7 +3830,6 @@ function addChildNode(
         childNode.properties.total_bars = 4.0;
         childNode.properties.section_points = [];
         childNode.properties.section_probability = [1.0];
-        childNode.properties.section_sample_start = [0.0];
         childNode.properties.section_quant = ["none"];
         childNode.properties.section_quant_anchor = ["start"];
     } else if (nodeType === "track") {
@@ -3702,7 +3915,6 @@ function addChildNode(
         total_bars: nodeType === "arrangement" ? 4.0 : nodeType === 'track' ? 'global' : undefined,
         section_points: nodeType === "arrangement" ? [] : undefined,
         section_probability: nodeType === "arrangement" ? [1.0] : undefined,
-        section_sample_start: nodeType === "arrangement" ? [0.0] : undefined,
         section_quant: nodeType === "arrangement" ? ["auto"] : undefined,
         section_quant_anchor: nodeType === "arrangement" ? ["start"] : undefined,
         parentId: parentId,
@@ -3854,7 +4066,7 @@ function addRootNode(
 
     const origBpm = extractedBpm || 120;
     const keyStr = extractedKey || "";
-    const targetBpm = origBpm;
+    const targetBpm = (nodeType === 'sample' && extractedBpm) ? origBpm : 'global';
 
     rootNode.properties.original_bpm = origBpm;
     rootNode.properties.target_bpm = nodeType === 'track' ? globalParameters.bpm : targetBpm;
@@ -3870,7 +4082,6 @@ function addRootNode(
         rootNode.properties.total_bars = 4.0;
         rootNode.properties.section_points = [];
         rootNode.properties.section_probability = [1.0];
-        rootNode.properties.section_sample_start = [0.0];
         rootNode.properties.section_quant = ["none"];
         rootNode.properties.section_quant_anchor = ["start"];
     } else if (nodeType === "track") {
@@ -3924,7 +4135,6 @@ function addRootNode(
         total_bars: nodeType === "arrangement" ? 4.0 : nodeType === 'track' ? 'global' : undefined,
         section_points: nodeType === "arrangement" ? [] : undefined,
         section_probability: nodeType === "arrangement" ? [1.0] : undefined,
-        section_sample_start: nodeType === "arrangement" ? [0.0] : undefined,
         section_quant: nodeType === "arrangement" ? ["none"] : undefined,
         section_quant_anchor: nodeType === "arrangement" ? ["start"] : undefined,
         parentId: null,
@@ -4123,6 +4333,7 @@ async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
 
     if (typeof node.updateProperty === 'function') {
         node.updateProperty('node_name', nodeName);
+        node.updateProperty('sequence_name', nodeName);
         node.updateProperty('filepath', item.filepath);
         if (item.id != null) node.updateProperty('library_item_id', item.id);
         node.updateProperty('sequence', [...parsed.sequence]);
@@ -4135,6 +4346,7 @@ async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
     } else {
         Object.assign(node.properties, {
             node_name: nodeName,
+            sequence_name: nodeName,
             node_type: "sequence",
             filepath: item.filepath,
             library_item_id: item.id ?? node.properties.library_item_id,
@@ -4949,8 +5161,11 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     };
 
                     graphCanvas.onNodeSelected = function (node: any) {
+                        (window as any)._currentlySelectedNode = node;
                         updateGraphNodeCollapsing();
-                        openParamWindow(node);
+                        if (dockedPropertyPanels().length > 0) {
+                            openParamWindow(node);
+                        }
                     };
 
                     graphCanvas.onNodeDeselected = function () {
@@ -5725,9 +5940,10 @@ function previewNode(
     return previewWorker;
 }
 
-const NON_DSP_PROPERTIES = new Set([
+export const NON_DSP_PROPERTIES = new Set([
     'render_enabled',
     'visualization_enabled',
+    'visualization_type',
     'visual_width',
     'visual_height',
     'collapsed_step_modifiers',
@@ -5748,7 +5964,6 @@ const NON_DSP_PROPERTIES = new Set([
     'tags',
     'favorite',
     'duration_seconds',
-    'active_slot',
     'library_item_id',
     'key_proposal',
     'original_bpm_proposal',
@@ -5842,7 +6057,10 @@ window.addEventListener('node-property-changed', (e: any) => {
     EngineSyncManager.getInstance().setState('dirty_pending');
     pendingInvalidatedNodes.add(changedNodeId);
 
-    if (!isPointerManipulatingParam) {
+    if (propertyKey === 'active_slot') {
+        isPointerManipulatingParam = false;
+        scheduleSettledParameterUpdate(50);
+    } else if (!isPointerManipulatingParam) {
         scheduleSettledParameterUpdate(300);
     }
 });

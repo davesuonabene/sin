@@ -75,29 +75,22 @@ export class ArrangementTimelineSection {
             const formattedLen = Math.abs(len - Math.round(len)) < 0.001 ? String(Math.round(len)) : len.toFixed(1);
 
             const probVal = structure.probability[index] ?? 1.0;
-            const startVal = structure.sampleStart[index] ?? 0.0;
             const currentQuant = structure.quant[index] || 'auto';
             const currentAnchor = structure.quantAnchor[index] || 'start';
-            const slotVal = structure.slots?.[index] ?? 0;
+            const slotVal = structure.slots?.[index] ?? '*';
 
             sectionEditor.innerHTML = `
                 <div class="arrangement-section-heading">Section ${index + 1} (${formattedLen} bars, [${start}..${end}])</div>
                 <div class="td-param-row" data-field-key="section_slots" data-param-label="Slot">
                     <div class="td-param-label">Slot</div>
                     <div class="td-param-control">
-                        <input class="td-param-input" id="sec-slot-input" type="number" min="0" max="64" step="1" value="${slotVal}">
+                        <input class="td-param-input" id="sec-slot-input" type="text" placeholder="*" value="${slotVal}">
                     </div>
                 </div>
                 <div class="td-param-row" data-field-key="section_probability" data-param-label="Probability">
                     <div class="td-param-label">Probability</div>
                     <div class="td-param-control">
                         <input class="td-param-input" id="sec-prob-input" type="number" min="0" max="1" step="0.1" value="${probVal}">
-                    </div>
-                </div>
-                <div class="td-param-row" data-field-key="section_sample_start" data-param-label="Start Offset">
-                    <div class="td-param-label">Start Offset</div>
-                    <div class="td-param-control">
-                        <input class="td-param-input" id="sec-sample-start-input" type="number" min="0" max="1" step="0.1" value="${startVal}">
                     </div>
                 </div>
                 <div class="td-param-row" data-field-key="section_quant" data-param-label="Quantize">
@@ -121,19 +114,34 @@ export class ArrangementTimelineSection {
 
             const slotInput = sectionEditor.querySelector('#sec-slot-input') as HTMLInputElement | null;
             const probInput = sectionEditor.querySelector('#sec-prob-input') as HTMLInputElement | null;
-            const sampleStartInput = sectionEditor.querySelector('#sec-sample-start-input') as HTMLInputElement | null;
             const quantSelect = sectionEditor.querySelector('#prop-sec-quant') as HTMLSelectElement | null;
             const anchorSelect = sectionEditor.querySelector('#prop-sec-quant-anchor') as HTMLSelectElement | null;
 
             if (slotInput) {
-                const commitSlot = () => {
-                    const num = Math.max(0, Math.floor(parseInt(slotInput.value, 10) || 0));
-                    slotInput.value = String(num);
-                    arrangementNode.updateSectionSlot(index, num);
+                const parseSlotVal = (raw: string): number | string => {
+                    const trimmed = raw.trim();
+                    if (!trimmed || trimmed === '*' || trimmed.toLowerCase() === 'default' || trimmed.toLowerCase() === 'active') {
+                        return '*';
+                    }
+                    if (trimmed.toLowerCase() === 'rand' || trimmed.toLowerCase() === 'random') {
+                        return 'rand';
+                    }
+                    const parsed = parseInt(trimmed, 10);
+                    if (Number.isFinite(parsed)) {
+                        return Math.max(0, Math.floor(parsed));
+                    }
+                    return '*';
+                };
+                const commitSlot = (normalizeInput: boolean) => {
+                    const nextVal = parseSlotVal(slotInput.value);
+                    if (normalizeInput) {
+                        slotInput.value = String(nextVal);
+                    }
+                    arrangementNode.updateSectionSlot(index, nextVal);
                     windowContext.refreshAudioPreview();
                 };
-                slotInput.addEventListener('input', commitSlot);
-                slotInput.addEventListener('change', commitSlot);
+                slotInput.addEventListener('input', () => commitSlot(false));
+                slotInput.addEventListener('change', () => commitSlot(true));
             }
 
             if (probInput) {
@@ -167,37 +175,6 @@ export class ArrangementTimelineSection {
                 });
             }
 
-            if (sampleStartInput) {
-                const commitStart = () => {
-                    const num = Math.max(0, Math.min(1, parseFloat(sampleStartInput.value) || 0));
-                    sampleStartInput.value = String(num);
-                    arrangementNode.updateSectionSampleStart(index, num);
-                    visualizer.setSectionSampleStart(index, num);
-                    windowContext.refreshAudioPreview();
-                };
-                registerParameterWheelControl(sampleStartInput, {
-                    isInteger: false,
-                    getValue: () => parseFloat(sampleStartInput.value) || 0,
-                    setValue: (val) => {
-                        const next = Math.max(0, Math.min(1, roundStepValue(val)));
-                        sampleStartInput.value = String(next);
-                        commitStart();
-                    },
-                });
-                sampleStartInput.addEventListener('input', commitStart);
-                sampleStartInput.addEventListener('change', commitStart);
-                sampleStartInput.addEventListener('wheel', (e) => {
-                    e.preventDefault();
-                    if (e.altKey || sampleStartInput.disabled) return;
-                    const dir = e.deltaY < 0 ? 1 : -1;
-                    const step = getParameterWheelStep(false);
-                    const cur = parseFloat(sampleStartInput.value) || 0;
-                    const next = Math.max(0, Math.min(1, roundStepValue(cur + dir * step, step)));
-                    sampleStartInput.value = String(next);
-                    commitStart();
-                });
-            }
-
             quantSelect?.addEventListener('change', () => {
                 arrangementNode.updateSectionQuant(index, quantSelect.value);
                 visualizer.setSectionQuant(index, quantSelect.value);
@@ -222,7 +199,6 @@ export class ArrangementTimelineSection {
             nodeColor: getNodeColor(),
             sectionPoints: initialStructure.points,
             sectionProbability: initialStructure.probability,
-            sectionSampleStart: initialStructure.sampleStart,
             sectionQuant: initialStructure.quant,
             sectionQuantAnchor: initialStructure.quantAnchor,
             selectedSection,
@@ -231,11 +207,10 @@ export class ArrangementTimelineSection {
                 selectedSection = index;
                 renderSectionEditor(selectedSection);
             },
-            onSectionStructureChange: (points, probability, sampleStart, quant, quantAnchor) => {
+            onSectionStructureChange: (points, probability, quant, quantAnchor) => {
                 const structure: ArrangementSectionStructure = {
                     points,
                     probability: probability || [],
-                    sampleStart: sampleStart || [],
                     quant: quant || [],
                     quantAnchor: quantAnchor || []
                 };

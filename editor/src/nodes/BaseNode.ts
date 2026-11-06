@@ -7,16 +7,38 @@ import {
     drawNeonIcon,
     drawPerimeterProgressAccent,
     normalizeNeonIcon,
-    normalizeNodeShape,
     traceNodeShape,
     type NodeShape
 } from './NodeVisuals.ts';
 import {
     defaultTransportClock,
+    WaveformRenderer,
+    OscilloscopeRenderer,
+    SpectrumRenderer,
     type RenderBox,
     type SignalTelemetry,
-    drawRoundRect
+    type WaveformSignal,
+    type VisualizationTypeId,
+    type VisualizationTypeOption
 } from '../../../packages/iride/src/index.ts';
+import { globalAudioScheduler } from '../audioScheduler.ts';
+import {
+    evaluateNumericFieldOperator,
+    evaluateSelectFieldOperator,
+    hashSeed,
+    isFieldOperatorExpression,
+    normalizeNumericSeed,
+    wrapSlotIndex,
+} from '../../../ermes/ts/slotLanguage.ts';
+
+export const VISUALIZATION_TYPE_LABELS: Record<VisualizationTypeId, string> = {
+    loop: 'Loop Waveform',
+    realtime: 'Real Time Scope',
+    spectrum: 'Spectrum Real Time',
+    sample: 'Sample with Handles',
+    sequence: 'Sequence Grid',
+    arrangement: 'Arrangement Timeline'
+};
 
 /** Default attenuation applied before processing newly-created sample nodes. */
 export const DEFAULT_SAMPLE_INPUT_GAIN_DB = -6;
@@ -101,11 +123,38 @@ export abstract class BaseNode extends LGraphNode {
 
     static defaultColor = "#4f46e5";
     static defaultIcon = "mixer";
-    static defaultShape: NodeShape = "square";
+    static defaultShape: NodeShape = "through";
     static badgeLabel = "NODE";
     static nodeType = "track";
     static defaultTab = "PARAMS";
     static tabs = ["TRACK", "CHAIN", "EXPORT", "COMMON"];
+    static defaultVisualizationType: VisualizationTypeId = 'loop';
+    static supportedVisualizationTypes: readonly VisualizationTypeId[] = ['loop', 'realtime', 'spectrum'];
+
+    private _sharedWaveformRenderer?: WaveformRenderer;
+    private _sharedOscilloscopeRenderer?: OscilloscopeRenderer;
+    private _sharedSpectrumRenderer?: SpectrumRenderer;
+
+    protected get sharedWaveformRenderer(): WaveformRenderer {
+        if (!this._sharedWaveformRenderer) {
+            this._sharedWaveformRenderer = new WaveformRenderer({ accentColor: this.nodeColor });
+        }
+        return this._sharedWaveformRenderer;
+    }
+
+    protected get sharedOscilloscopeRenderer(): OscilloscopeRenderer {
+        if (!this._sharedOscilloscopeRenderer) {
+            this._sharedOscilloscopeRenderer = new OscilloscopeRenderer({ accentColor: this.nodeColor });
+        }
+        return this._sharedOscilloscopeRenderer;
+    }
+
+    protected get sharedSpectrumRenderer(): SpectrumRenderer {
+        if (!this._sharedSpectrumRenderer) {
+            this._sharedSpectrumRenderer = new SpectrumRenderer({ accentColor: this.nodeColor });
+        }
+        return this._sharedSpectrumRenderer;
+    }
 
     static exportFields: FieldSchema[] = [
         {
@@ -168,17 +217,31 @@ export abstract class BaseNode extends LGraphNode {
             return "warning";
         }
         const ctor = this.constructor as typeof BaseNode;
-        return normalizeNeonIcon(this.properties?.icon, normalizeNeonIcon(ctor.defaultIcon));
+        return normalizeNeonIcon(ctor.defaultIcon);
+    }
+
+    calculateFlowShape(): NodeShape {
+        if (this.isModifier || this.type === 'Audio/Disabled' || this.properties?.disabled) {
+            return 'isolated';
+        }
+        const isMaster = Boolean(this.properties?.is_main_preview)
+            || this.properties?.role === 'master'
+            || this.properties?.node_name === 'Master Output'
+            || this.title === 'Master Output';
+        const hasInputs = Boolean(this.inputs?.length);
+        const hasOutputs = Boolean(this.outputs?.length) && !isMaster;
+        if (hasInputs && hasOutputs) return 'through';
+        if (hasOutputs) return 'source';
+        if (hasInputs) return 'sink';
+        return 'isolated';
     }
 
     get nodeShape(): NodeShape {
-        const ctor = this.constructor as typeof BaseNode;
-        return normalizeNodeShape(this.properties?.shape, ctor.defaultShape || "square");
+        return this.calculateFlowShape();
     }
 
     get nodeBodySize(): number {
-        const ctor = this.constructor as typeof BaseNode;
-        return Math.max(1, Math.min(BaseNode.visualSize, ctor.bodySize || BaseNode.visualSize));
+        return BaseNode.visualSize;
     }
 
     get badgeLabel(): string {
@@ -241,20 +304,41 @@ export abstract class BaseNode extends LGraphNode {
         return t === 'Audio/Sample' || t === 'Audio/Sequence' || nt === 'sample' || nt === 'sequence';
     }
 
-    hasAttachedPool(): boolean {
-        if (!this.isPoolSupported) return false;
+    getAttachedPoolNode(): any | null {
+        if (!this.isPoolSupported) return null;
         const graph = this.graph || ((typeof window !== 'undefined') ? (window as any).editorGraph : null);
-        if (this.properties?.asset_modifier_id != null) {
-            if (!graph) return true;
-            const mod = graph.getNodeById?.(this.properties.asset_modifier_id);
-            if (mod) return true;
+        if (this.properties?.asset_modifier_id != null && graph?.getNodeById) {
+            const mod = graph.getNodeById(this.properties.asset_modifier_id);
+            if (mod) return mod;
         }
         const nodes: any[] = (graph as any)?._nodes || [];
-        return nodes.some(n =>
+        return nodes.find(n =>
             n &&
             (n.type === 'Audio/AssetFilter' || n.properties?.node_type === 'asset_filter') &&
             n.properties?.parentId === this.id
-        );
+        ) || null;
+    }
+
+    hasAttachedPool(): boolean {
+        if (!this.isPoolSupported) return false;
+        const graph = this.graph || ((typeof window !== 'undefined') ? (window as any).editorGraph : null);
+        if (this.properties?.asset_modifier_id != null && !graph) {
+            return true;
+        }
+        return Boolean(this.getAttachedPoolNode());
+    }
+
+    get isPoolViewOpen(): boolean {
+        return Boolean(this.isPoolSupported && this.properties?.pool_view_open);
+    }
+
+    togglePoolView(forceState?: boolean): boolean {
+        if (!this.isPoolSupported) return false;
+        if (!this.properties) this.properties = {};
+        const next = forceState !== undefined ? Boolean(forceState) : !this.isPoolViewOpen;
+        this.properties.pool_view_open = next;
+        this.setDirtyCanvas(true, true);
+        return next;
     }
 
     hasAttachedRandomMod(): boolean {
@@ -363,7 +447,7 @@ export abstract class BaseNode extends LGraphNode {
     // Backwards compatibility & polymorphic node hooks
     getDefaultColor(): string { return (this.constructor as typeof BaseNode).defaultColor; }
     getDefaultIcon(): string { return (this.constructor as typeof BaseNode).defaultIcon; }
-    getDefaultShape(): NodeShape { return (this.constructor as typeof BaseNode).defaultShape; }
+    getDefaultShape(): NodeShape { return this.calculateFlowShape(); }
     getBodySize(): number { return this.nodeBodySize; }
     getNodeType(): string { return this.nodeType; }
     getNodeBadgeLabel(): string { return this.badgeLabel; }
@@ -432,16 +516,179 @@ export abstract class BaseNode extends LGraphNode {
         return combined;
     }
 
+    hasMixedSlotValues(_key: string): boolean {
+        return false;
+    }
+
+    public _liveTriggerIteration: number | null = null;
+    public _liveTriggeredFilepath: string | null = null;
+
+    getTriggerCount(): number {
+        if (this._liveTriggerIteration !== null && Number.isFinite(this._liveTriggerIteration)) {
+            return Math.max(0, Math.floor(this._liveTriggerIteration));
+        }
+        return Math.max(0, Math.floor(Number(this.properties?.trigger_count) || 0));
+    }
+
+    getEffectiveSeed(): number {
+        const poolNode = this.getAttachedPoolNode?.();
+        const rawSeed = this.properties?.seed ?? poolNode?.properties?.seed ?? 42;
+        const salt = Number(this.properties?.seed_salt ?? poolNode?.properties?.seed_salt ?? 0) * 9973;
+        const base = normalizeNumericSeed(rawSeed, 42);
+        return hashSeed(base, Number(this.id || 1), salt);
+    }
+
+    getFieldOperator(key: string): string {
+        const ops = this.properties?.field_operators;
+        if (ops && typeof ops === 'object') {
+            const expr = String(ops[key] ?? '').trim();
+            if (isFieldOperatorExpression(expr)) return expr;
+        }
+        if (key === 'pool_query' || key === 'sample_slot' || key === 'seed') {
+            const raw = String(this.properties?.[key] ?? '').trim();
+            return isFieldOperatorExpression(raw) ? raw : '';
+        }
+        return '';
+    }
+
+    hasFieldOperator(key: string): boolean {
+        return Boolean(this.getFieldOperator(key));
+    }
+
+    setFieldOperator(key: string, expr: string): void {
+        if (!this.properties) this.properties = {};
+        if (!this.properties.field_operators || typeof this.properties.field_operators !== 'object') {
+            this.properties.field_operators = {};
+        }
+        const trimmed = String(expr ?? '').trim();
+        if (isFieldOperatorExpression(trimmed)) {
+            this.properties.field_operators[key] = trimmed;
+        } else {
+            delete this.properties.field_operators[key];
+        }
+    }
+
+    clearFieldOperator(key: string): void {
+        this.setFieldOperator(key, '');
+    }
+
+    evaluateFieldOperatorForKey(key: string, expr: string, field?: FieldSchema, triggerOverride?: number): any {
+        const schema = field || this.getFields().find(f => f.key === key);
+        const triggerCount = triggerOverride !== undefined ? triggerOverride : this.getTriggerCount();
+        const seed = this.getEffectiveSeed();
+        const salt = normalizeNumericSeed(key, 0xF1E1);
+
+        if (key === 'sample_slot') {
+            const inputNodes = this.getInputNodes?.() || [];
+            const upstreamSlots = Math.max(
+                1,
+                Array.isArray(inputNodes[0]?.properties?.slots) ? inputNodes[0].properties.slots.length : 1
+            );
+            const rawSlot = evaluateNumericFieldOperator(expr, {
+                triggerCount,
+                seed,
+                salt: 43,
+                min: 0,
+                max: Math.max(0, upstreamSlots - 1),
+                step: 1,
+                isInteger: true,
+                fallback: 0,
+            });
+            return wrapSlotIndex(rawSlot, upstreamSlots);
+        }
+
+        if (schema?.type === 'select' || schema?.type === 'radio') {
+            return evaluateSelectFieldOperator(expr, schema.options || [], {
+                triggerCount,
+                seed,
+                salt,
+                fallback: schema.default,
+            });
+        }
+
+        const isDb = schema?.type === 'db' || key === 'gain';
+        return evaluateNumericFieldOperator(expr, {
+            triggerCount,
+            seed,
+            salt,
+            min: schema?.min ?? (isDb ? -36 : undefined),
+            max: schema?.max ?? (isDb ? 12 : undefined),
+            step: schema?.step ?? (schema?.type === 'int' ? 1 : 0.1),
+            isInteger: schema?.type === 'int',
+            fallback: typeof schema?.default === 'number' ? schema.default : 0,
+        });
+    }
+
+    applyFieldOperator(key: string, expr: string, field?: FieldSchema): any {
+        const trimmed = String(expr ?? '').trim();
+        if (!isFieldOperatorExpression(trimmed)) {
+            this.clearFieldOperator(key);
+            return undefined;
+        }
+        this.setFieldOperator(key, trimmed);
+        const resolved = this.evaluateFieldOperatorForKey(key, trimmed, field);
+        if (key === 'sample_slot' || key === 'pool_query' || key === 'seed') {
+            this.updateProperty(key, trimmed);
+        } else {
+            this.updateProperty(key, resolved);
+        }
+        return resolved;
+    }
+
+    evaluateAllFieldOperators(triggerOverride?: number): void {
+        const ops = this.properties?.field_operators;
+        if (!ops || typeof ops !== 'object') return;
+        for (const [key, expr] of Object.entries(ops)) {
+            if (key === 'sample_slot' || key === 'pool_query' || key === 'seed') continue;
+            if (typeof expr === 'string' && isFieldOperatorExpression(expr)) {
+                const resolved = this.evaluateFieldOperatorForKey(key, expr, undefined, triggerOverride);
+                this.updateProperty(key, resolved);
+            }
+        }
+    }
+
+    resetTriggerCount(): void {
+        if (!this.properties) this.properties = {};
+        this._liveTriggerIteration = null;
+        this._liveTriggeredFilepath = null;
+        this.properties.trigger_count = 0;
+        this.evaluateAllFieldOperators(0);
+    }
+
+    advanceTriggerCount(step: number = 1): number {
+        if (!this.properties) this.properties = {};
+        const current = Math.max(0, Math.floor(Number(this.properties?.trigger_count) || 0));
+        const next = Math.max(0, current + step);
+        this.properties.trigger_count = next;
+        this.evaluateAllFieldOperators(next);
+        return next;
+    }
+
     getPanelSchema(): NodePanelSchema {
         const ctor = this.constructor as any;
         let schema: NodePanelSchema;
 
         if (ctor.panelSchema) {
             schema = {
-                tabs: ctor.panelSchema.tabs.map((t: any) => ({
-                    ...t,
-                    sections: [...t.sections]
-                }))
+                tabs: ctor.panelSchema.tabs.map((t: any) => {
+                    const isPrimaryVisualizerTab = this.isPoolSupported && t.id === this.defaultPropertiesTab;
+                    if (isPrimaryVisualizerTab && this.isPoolViewOpen) {
+                        const visualizerSections = t.sections.filter((s: any) =>
+                            s.type === 'waveform_crop' || s.type === 'sequence_grid'
+                        );
+                        return {
+                            ...t,
+                            sections: [
+                                ...visualizerSections,
+                                { type: 'pool_editor' }
+                            ]
+                        };
+                    }
+                    return {
+                        ...t,
+                        sections: [...t.sections]
+                    };
+                })
             };
         } else {
             const tabs = ctor.tabs || ["TRACK", "CHAIN", "EXPORT", "COMMON"];
@@ -486,6 +733,12 @@ export abstract class BaseNode extends LGraphNode {
 
     private _committedPropertySnapshots = new Map<string, any>();
 
+    public resetPropertySnapshots(): void {
+        this._committedPropertySnapshots.clear();
+    }
+
+    protected onBeforePropertyChanged?(key: string, value: any): void;
+
     updateProperty(key: string, value: any): void {
         if (!this.properties) this.properties = {};
         const previousValue = this.properties[key];
@@ -500,6 +753,7 @@ export abstract class BaseNode extends LGraphNode {
         }
         this._committedPropertySnapshots.set(key, clonePropertyValue(nextValue));
         this.properties[key] = nextValue;
+        this.onBeforePropertyChanged?.(key, nextValue);
 
         if (key === 'node_name' || key === 'name') {
             this.title = String(value);
@@ -579,10 +833,13 @@ export abstract class BaseNode extends LGraphNode {
             if (!this.isModifier) {
                 this.drawSlots(ctx);
             }
+            const shape = this.nodeShape;
+            const padLeft = (shape === 'source' || shape === 'isolated') ? 14 : 8;
+            const padRight = (shape === 'sink' || shape === 'isolated') ? 14 : 8;
             const viewport: RenderBox = {
-                x: 6,
+                x: padLeft,
                 y: 23,
-                width: this.size[0] - 12,
+                width: Math.max(16, this.size[0] - padLeft - padRight),
                 height: Math.max(16, this.size[1] - 29)
             };
             this.drawVisualization(ctx, viewport, telemetry);
@@ -610,8 +867,200 @@ export abstract class BaseNode extends LGraphNode {
         }
     }
 
-    drawVisualization(_ctx: CanvasRenderingContext2D, _bounds: RenderBox, _telemetry?: SignalTelemetry): void {
-        // Subclasses override to invoke their IRIDE renderer
+    get defaultVisualizationType(): VisualizationTypeId {
+        const ctor = this.constructor as typeof BaseNode;
+        return ctor.defaultVisualizationType || 'loop';
+    }
+
+    get supportedVisualizationTypes(): readonly VisualizationTypeId[] {
+        const ctor = this.constructor as typeof BaseNode;
+        return ctor.supportedVisualizationTypes || ['loop', 'realtime', 'spectrum'];
+    }
+
+    getSupportedVisualizationOptions(): VisualizationTypeOption[] {
+        return this.supportedVisualizationTypes.map(id => ({
+            id,
+            label: VISUALIZATION_TYPE_LABELS[id] || id
+        }));
+    }
+
+    getVisualizationType(): VisualizationTypeId {
+        const raw = String(this.properties?.visualization_type || '').toLowerCase() as VisualizationTypeId;
+        const supported = this.supportedVisualizationTypes;
+        if (raw && supported.includes(raw)) {
+            return raw;
+        }
+        if (this.properties?.scope_mode === 'drawn' && supported.includes('realtime')) {
+            return 'realtime';
+        }
+        return this.defaultVisualizationType;
+    }
+
+    setVisualizationType(type: VisualizationTypeId | string): void {
+        if (!this.isVisualizationSupported) return;
+        const normalized = String(type || '').toLowerCase() as VisualizationTypeId;
+        const nextType = this.supportedVisualizationTypes.includes(normalized)
+            ? normalized
+            : this.defaultVisualizationType;
+        this.updateProperty('visualization_type', nextType);
+        if (!this.isViewerCookEnabled && this._distanceStage !== 3) {
+            this.updateProperty('visualization_enabled', true);
+            this.resizable = this.isVisualizationActive;
+            this.updateButtonLayout();
+            this.size = this.computeSize();
+        }
+        this.setDirtyCanvas(true, true);
+        if (typeof window !== 'undefined') {
+            (window as any).editorCanvas?.setDirty?.(true, true);
+            window.dispatchEvent(new CustomEvent('node-visualization-changed', {
+                detail: { nodeId: this.id, visualizationType: nextType }
+            }));
+        }
+    }
+
+    protected resolveInputTotalBars(): number | null {
+        const inputs = this.getInputNodes();
+        let maxBars = 0;
+        for (const inputNode of inputs) {
+            const bars = Number(inputNode?.properties?.total_bars);
+            if (Number.isFinite(bars) && bars > maxBars) {
+                maxBars = bars;
+            }
+        }
+        return maxBars > 0 ? maxBars : null;
+    }
+
+    resolveVisualizationSignal(telemetry?: SignalTelemetry): WaveformSignal {
+        const win = (typeof window !== 'undefined') ? (window as any) : undefined;
+        const activePreviewId = win?.activeRamPreviewNodeId;
+        const isMainPreview = Boolean(this.properties?.is_main_preview)
+            || this.properties?.role === 'master'
+            || this.properties?.node_name === 'Master Track'
+            || this.title === 'Master Track'
+            || this.properties?.node_name === 'Master Output'
+            || this.title === 'Master Output'
+            || (typeof win?.isMainPreviewNode === 'function' && win.isMainPreviewNode(this.id));
+        const isPreviewTarget = this.id === activePreviewId
+            || (activePreviewId == null && isMainPreview);
+
+        const getGlobal = win?.getGlobalParameter;
+        const globalBars = typeof getGlobal === 'function' ? Number(getGlobal('total_bars')) : 4;
+        const globalBpm = typeof getGlobal === 'function' ? Number(getGlobal('bpm')) : 120;
+
+        const inputBars = this.resolveInputTotalBars();
+        const totalBarsSetting = this.properties?.total_bars;
+        const totalBars = (totalBarsSetting === 'global' || !Number.isFinite(Number(totalBarsSetting)))
+            ? (inputBars ?? (Number.isFinite(globalBars) && globalBars > 0 ? globalBars : 4))
+            : Math.max(0.25, Number(totalBarsSetting));
+
+        const bpmSetting = this.properties?.bpm;
+        const resolvedBpm = (bpmSetting === 'global' || !Number.isFinite(Number(bpmSetting)))
+            ? (Number(this.properties?.target_bpm) || (Number.isFinite(globalBpm) && globalBpm > 0 ? globalBpm : 120))
+            : Math.max(20, Number(bpmSetting));
+
+        const autoTrackWindow = totalBars * 4 * (60 / resolvedBpm);
+
+        const isInvalidated = Boolean((this as any).isInvalidated);
+        const schedulerBuf = (isPreviewTarget && !isInvalidated) ? globalAudioScheduler.getFullAudioBuffer() : undefined;
+        const masterBuf = (!isInvalidated && (isPreviewTarget || (activePreviewId == null && isMainPreview)))
+            ? (win?.activeRamPreviewBuffer as AudioBuffer | undefined)
+            : undefined;
+        if (isPreviewTarget && !isInvalidated && (schedulerBuf || masterBuf)) {
+            (this as any)._lastRenderedBuffer = schedulerBuf || masterBuf;
+        }
+
+        const manifestStem = (this as any).manifestStemBuffer as AudioBuffer | undefined;
+        const lastRenderedBuf = (this as any)._lastRenderedBuffer as AudioBuffer | undefined;
+        const nodeBuf = this.getAudioBuffer() || undefined;
+
+        const displayBuffer = isPreviewTarget
+            ? (schedulerBuf || masterBuf || manifestStem || lastRenderedBuf || nodeBuf)
+            : (manifestStem || lastRenderedBuf || (isMainPreview && activePreviewId == null && !isInvalidated ? masterBuf : undefined) || nodeBuf);
+
+        const explicitProgress = (this as any).bufferedProgress;
+        const schedulerProgress = isPreviewTarget ? globalAudioScheduler.getBufferedProgress() : 0;
+        const bufferedProgress = explicitProgress != null
+            ? explicitProgress
+            : (schedulerProgress > 0 ? schedulerProgress : 1.0);
+
+        const bufferDuration = (this as any).manifestStemDuration || displayBuffer?.duration || 0;
+        const expectedDuration = bufferDuration > 0
+            ? bufferDuration
+            : (autoTrackWindow > 0 ? autoTrackWindow : (telemetry?.duration || 0));
+
+        let playbackProgress: number | undefined;
+        if (telemetry && telemetry.isPlaying && expectedDuration > 0) {
+            const curTime = ((telemetry.time % expectedDuration) + expectedDuration) % expectedDuration;
+            playbackProgress = curTime / expectedDuration;
+        }
+
+        const isMaster = isMainPreview || this.properties?.role === 'master' || this.title === 'Master Track' || this.title === 'Master Output';
+        const accent = (isMaster && (!this.properties?.user_color || this.nodeColor === '#0f172a'))
+            ? (this.boxcolor || '#f59e0b')
+            : (this.nodeColor || this.boxcolor || '#4f46e5');
+
+        const slots = typeof (this as any).getSlots === 'function' ? (this as any).getSlots() : undefined;
+        const activeSlot = typeof (this as any).activeSlotIndex === 'number' ? (this as any).activeSlotIndex : undefined;
+
+        return {
+            buffer: displayBuffer,
+            duration: expectedDuration,
+            accentColor: accent,
+            bufferedProgress,
+            isInvalidated,
+            playbackProgress,
+            slotCount: Array.isArray(slots) ? slots.length : undefined,
+            activeSlot
+        };
+    }
+
+    drawVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
+        const vizType = this.getVisualizationType();
+        if (vizType === 'realtime') {
+            const signal = this.resolveVisualizationSignal(telemetry);
+            const scopeGain = Number(this.properties?.scope_gain) || 1.0;
+            this.sharedOscilloscopeRenderer.setOptions({
+                accentColor: signal.accentColor,
+                minified: this.isMinifiedStage,
+                scopeGain
+            });
+            this.sharedOscilloscopeRenderer.setSignal(signal);
+            this.sharedOscilloscopeRenderer.render(ctx, bounds, telemetry);
+            return;
+        }
+        if (vizType === 'spectrum') {
+            const signal = this.resolveVisualizationSignal(telemetry);
+            const scopeGain = Number(this.properties?.scope_gain) || 1.0;
+            this.sharedSpectrumRenderer.setOptions({
+                accentColor: signal.accentColor,
+                minified: this.isMinifiedStage,
+                scopeGain
+            });
+            this.sharedSpectrumRenderer.setSignal(signal);
+            this.sharedSpectrumRenderer.render(ctx, bounds, telemetry);
+            return;
+        }
+        if (vizType === 'loop') {
+            const signal = this.resolveVisualizationSignal(telemetry);
+            this.sharedWaveformRenderer.setOptions({
+                accentColor: signal.accentColor,
+                minified: this.isMinifiedStage
+            });
+            this.sharedWaveformRenderer.setSignal(signal);
+            this.sharedWaveformRenderer.render(ctx, bounds, telemetry);
+            return;
+        }
+        this.drawDedicatedVisualization(ctx, bounds, telemetry);
+    }
+
+    protected drawDedicatedVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
+        const signal = this.resolveVisualizationSignal(telemetry);
+        this.sharedWaveformRenderer.setOptions({
+            accentColor: signal.accentColor,
+            minified: this.isMinifiedStage
+        });
+        this.sharedWaveformRenderer.setSignal(signal);
+        this.sharedWaveformRenderer.render(ctx, bounds, telemetry);
     }
 
     protected truncateTextToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
@@ -642,6 +1091,7 @@ export abstract class BaseNode extends LGraphNode {
         isMainPreview: boolean
     ): void {
         const [width, height] = this.size;
+        const shape = this.nodeShape;
 
         // Selection / hover / main-preview outer ring
         if (isMainPreview || isSelected || isLibraryDropTarget || isHovered) {
@@ -654,20 +1104,20 @@ export abstract class BaseNode extends LGraphNode {
                     : isLibraryDropTarget
                         ? "#22c55e"
                         : "rgba(148, 163, 184, 0.55)";
-            drawRoundRect(ctx, -2, -2, width + 4, height + 4, 3);
+            traceNodeShape(ctx, shape, -2, -2, width + 4, height + 4);
             ctx.stroke();
             ctx.restore();
         }
 
         // Solid light panel background
         ctx.fillStyle = "#ffffff";
-        drawRoundRect(ctx, 0, 0, width, height, 3);
+        traceNodeShape(ctx, shape, 0, 0, width, height);
         ctx.fill();
 
         // Single peripheral border around everything
         ctx.strokeStyle = this.boxcolor || this.nodeColor;
         ctx.lineWidth = isSelected ? 1.5 : 1;
-        drawRoundRect(ctx, 0, 0, width, height, 3);
+        traceNodeShape(ctx, shape, 0, 0, width, height);
         ctx.stroke();
 
         // Node Title (clean dark slate text with no header background or icon, dynamically truncated before buttons)
@@ -677,12 +1127,13 @@ export abstract class BaseNode extends LGraphNode {
         ctx.fillStyle = "#0f172a";
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
+        const titleX = (shape === 'source' || shape === 'isolated') ? 14 : 8;
         const visibleBtns = this.getVisibleCanvasButtons(isSelected, isHovered);
         const leftmostBtnX = visibleBtns.reduce((minX, btn) => (btn.x < 0 ? Math.min(minX, btn.x) : minX), 0);
         const reservedRight = leftmostBtnX < 0 ? Math.abs(leftmostBtnX) + 4 : 8;
-        const maxTitleWidth = Math.max(24, width - 8 - reservedRight);
+        const maxTitleWidth = Math.max(24, width - titleX - reservedRight);
         const displayTitle = this.truncateTextToWidth(ctx, nodeName, maxTitleWidth);
-        ctx.fillText(displayTitle, 8, headerHeight / 2 + 0.5);
+        ctx.fillText(displayTitle, titleX, headerHeight / 2 + 0.5);
 
         // Subtle resize grip at bottom-right corner when selected
         if (isSelected && this.isVisualizationActive) {
@@ -704,23 +1155,22 @@ export abstract class BaseNode extends LGraphNode {
         isLibraryDropTarget: boolean,
         isMainPreview: boolean
     ): void {
-        const size = this.nodeBodySize;
-        const offset = (BaseNode.visualSize - size) / 2;
+        const size = BaseNode.visualSize;
         if (isMainPreview) {
-            traceNodeShape(ctx, this.nodeShape, offset - 4, offset - 4, size + 8);
+            traceNodeShape(ctx, this.nodeShape, -4, -4, size + 8);
             ctx.lineWidth = 2;
             ctx.strokeStyle = "#f59e0b";
             ctx.stroke();
         }
         if (isSelected) {
-            traceNodeShape(ctx, this.nodeShape, offset - 3, offset - 3, size + 6);
+            traceNodeShape(ctx, this.nodeShape, -3, -3, size + 6);
             ctx.fillStyle = "rgba(56, 189, 248, 0.14)";
             ctx.fill();
             ctx.lineWidth = 2;
             ctx.strokeStyle = "#38bdf8";
             ctx.stroke();
         } else if (isHovered || isLibraryDropTarget) {
-            traceNodeShape(ctx, this.nodeShape, offset - 2.5, offset - 2.5, size + 5);
+            traceNodeShape(ctx, this.nodeShape, -2.5, -2.5, size + 5);
             ctx.lineWidth = isLibraryDropTarget ? 2.25 : 1.5;
             ctx.strokeStyle = isLibraryDropTarget ? "#22c55e" : (this.isModifier ? "rgba(126, 34, 206, 0.45)" : "rgba(148, 163, 184, 0.65)");
             ctx.stroke();
@@ -728,8 +1178,7 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     protected drawBody(ctx: CanvasRenderingContext2D, telemetry?: SignalTelemetry): void {
-        const size = this.nodeBodySize;
-        const offset = (BaseNode.visualSize - size) / 2;
+        const size = BaseNode.visualSize;
         const activity = this.getLiveActivityState(telemetry);
         const shouldDim = Boolean(telemetry?.isPlaying && !activity.isTriggered);
 
@@ -737,7 +1186,7 @@ export abstract class BaseNode extends LGraphNode {
         if (shouldDim) {
             ctx.globalAlpha = 0.72;
         }
-        traceNodeShape(ctx, this.nodeShape, offset, offset, size);
+        traceNodeShape(ctx, this.nodeShape, 0, 0, size);
         ctx.fillStyle = this.nodeColor;
         ctx.fill();
         if (this.boxcolor && this.boxcolor !== this.nodeColor) {
@@ -759,14 +1208,13 @@ export abstract class BaseNode extends LGraphNode {
         _isSelected: boolean,
         _isMainPreview: boolean
     ): void {
-        const size = this.nodeBodySize;
-        const offset = (BaseNode.visualSize - size) / 2;
+        const size = BaseNode.visualSize;
 
         // 1. Invalidated cache: minimal dashed amber perimeter
         if ((this as any).isInvalidated) {
             ctx.save();
             ctx.setLineDash?.([3, 3]);
-            traceNodeShape(ctx, this.nodeShape, offset - 1.5, offset - 1.5, size + 3);
+            traceNodeShape(ctx, this.nodeShape, -1.5, -1.5, size + 3);
             ctx.strokeStyle = "#f59e0b";
             ctx.lineWidth = 1.75;
             ctx.stroke();
@@ -777,16 +1225,7 @@ export abstract class BaseNode extends LGraphNode {
         // 2. Progressive RAM buffer fill: perimeter cyan progress arc
         const bufProg = (this as any).bufferedProgress;
         if (typeof bufProg === 'number' && bufProg > 0 && bufProg < 0.999) {
-            drawPerimeterProgressAccent(
-                ctx,
-                this.nodeShape,
-                offset - 2,
-                offset - 2,
-                size + 4,
-                bufProg,
-                "#38bdf8",
-                2
-            );
+            drawPerimeterProgressAccent(ctx, this.nodeShape, -2, -2, size + 4, bufProg, "#38bdf8", 2);
         }
 
         // 3. Live playback trigger & playhead progress: vivid perimeter border accent
@@ -794,16 +1233,7 @@ export abstract class BaseNode extends LGraphNode {
             const activity = this.getLiveActivityState(telemetry);
             if (activity.isTriggered) {
                 const progress = typeof activity.progress === 'number' ? Math.max(0.08, activity.progress) : 1.0;
-                drawPerimeterProgressAccent(
-                    ctx,
-                    this.nodeShape,
-                    offset - 2,
-                    offset - 2,
-                    size + 4,
-                    progress,
-                    "#38bdf8",
-                    2.5
-                );
+                drawPerimeterProgressAccent(ctx, this.nodeShape, -2, -2, size + 4, progress, "#38bdf8", 2.5);
             }
         }
     }
@@ -827,8 +1257,9 @@ export abstract class BaseNode extends LGraphNode {
             ctx.fillStyle = "#f8fafc";
             ctx.fill();
         };
-        if (this.inputs?.length) drawSlot(0);
-        if (this.outputs?.length) drawSlot(width);
+        const shape = this.nodeShape;
+        if (this.inputs?.length && (shape === 'through' || shape === 'sink')) drawSlot(0);
+        if (this.outputs?.length && (shape === 'through' || shape === 'source')) drawSlot(width);
     }
 
     protected drawBadges(ctx: CanvasRenderingContext2D, isMainPreview: boolean): void {
@@ -1008,6 +1439,7 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     onConfigure(_info: any): void {
+        this.resetPropertySnapshots();
         if (this.properties.visualization_enabled === undefined && this.isVisualizationSupported) {
             this.properties.visualization_enabled = true;
         }
@@ -1235,7 +1667,9 @@ export abstract class BaseNode extends LGraphNode {
                 this.normalizeInputs();
             });
         }
-        window.dispatchEvent(new CustomEvent('graph-connections-changed'));
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('graph-connections-changed'));
+        }
     }
 
     normalizeInputs() {

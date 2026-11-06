@@ -15,7 +15,6 @@ export interface ArrangementVisualizerOptions {
     totalBars: number;
     sectionPoints: number[];
     sectionProbability?: number[];
-    sectionSampleStart?: number[];
     sectionQuant?: string[];
     sectionQuantAnchor?: ArrangementAnchor[];
     selectedSection: number;
@@ -25,7 +24,6 @@ export interface ArrangementVisualizerOptions {
     onSectionStructureChange: (
         points: number[],
         probability?: number[],
-        sampleStart?: number[],
         quant?: string[],
         anchor?: ArrangementAnchor[]
     ) => void;
@@ -108,7 +106,6 @@ export class ArrangementVisualizer {
             ...options,
             sectionPoints: [...options.sectionPoints],
             sectionProbability: [...(options.sectionProbability || [])],
-            sectionSampleStart: [...(options.sectionSampleStart || [])],
             sectionQuant: [...(options.sectionQuant || [])],
             sectionQuantAnchor: [...(options.sectionQuantAnchor || [])]
         };
@@ -184,12 +181,6 @@ export class ArrangementVisualizer {
     setSectionProbability(index: number, probability: number): void {
         if (!this.options.sectionProbability) this.options.sectionProbability = [];
         this.options.sectionProbability[index] = Math.max(0, Math.min(1, Number(probability) || 0));
-        this.draw();
-    }
-
-    setSectionSampleStart(index: number, sampleStart: number): void {
-        if (!this.options.sectionSampleStart) this.options.sectionSampleStart = [];
-        this.options.sectionSampleStart[index] = Math.max(0, Math.min(1, Number(sampleStart) || 0));
         this.draw();
     }
 
@@ -286,7 +277,7 @@ export class ArrangementVisualizer {
             this.didDragCut = false;
             try {
                 this.canvas.setPointerCapture(event.pointerId);
-            } catch {}
+            } catch { }
             event.preventDefault();
             this.draw();
         }
@@ -371,7 +362,7 @@ export class ArrangementVisualizer {
         if (this.draggingCutIndex !== null) {
             try {
                 this.canvas.releasePointerCapture(event.pointerId);
-            } catch {}
+            } catch { }
             const wasDragged = this.didDragCut;
             this.draggingCutIndex = null;
 
@@ -380,7 +371,6 @@ export class ArrangementVisualizer {
                 this.options.onSectionStructureChange?.(
                     this.options.sectionPoints,
                     this.options.sectionProbability,
-                    this.options.sectionSampleStart,
                     this.options.sectionQuant,
                     this.options.sectionQuantAnchor
                 );

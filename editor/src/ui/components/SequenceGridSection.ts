@@ -2,6 +2,9 @@ import { type FieldSchema } from '../../fields/FieldSchema.ts';
 import { type BaseNode } from '../../nodes/BaseNode.ts';
 import { StepValueControl } from './StepValueControl.ts';
 import { type SequenceDocument } from '../../nodes/SequenceNode.ts';
+import { getDroppedSequenceItems, hasSequenceDragPayload } from '../dragPayload.ts';
+import { isFieldOperatorExpression } from '../../../../ermes/ts/slotLanguage.ts';
+import { resolvePoolItemByQuery } from '../../../../ermes/ts/assetResolver.ts';
 import { SlotStrip } from './SlotStrip.ts';
 
 type StepParameters = Record<string, number | boolean> & {
@@ -9,37 +12,6 @@ type StepParameters = Record<string, number | boolean> & {
 };
 
 const STEP_COUNT = 16;
-
-interface DroppedSequenceItem {
-    id?: number | string;
-    itemType?: string;
-    filepath: string;
-    name?: string;
-    bpm?: number | null;
-    key?: string | null;
-}
-
-function getDroppedSequenceItem(dataTransfer: DataTransfer): DroppedSequenceItem | null {
-    const raw = dataTransfer.getData('application/x-gaia-library-item')
-        || dataTransfer.getData('text/plain');
-    if (!raw) return null;
-    try {
-        const payload = JSON.parse(raw);
-        const items = payload?.type === 'library-items' && Array.isArray(payload.items)
-            ? payload.items
-            : payload?.type === 'library-item' ? [payload] : [];
-        return items.find((item: any) => {
-            const path = String(item?.filepath || '').toLowerCase();
-            return item?.itemType === 'midi'
-                || item?.itemType === 'sequence'
-                || path.endsWith('.mid')
-                || path.endsWith('.midi')
-                || path.endsWith('.seq');
-        }) || null;
-    } catch {
-        return null;
-    }
-}
 
 export class SequenceGridSection {
     static async render(
@@ -100,35 +72,164 @@ export class SequenceGridSection {
         const header = document.createElement('div');
         header.className = 'td-seq-asset-row';
 
+        const assignedModifier = typeof node.getAttachedPoolNode === 'function'
+            ? node.getAttachedPoolNode()
+            : null;
+        const poolItems = Array.isArray(assignedModifier?.properties?.selected_items)
+            ? assignedModifier.properties.selected_items
+            : [];
+        const isPoolOpen = Boolean(node.isPoolViewOpen);
+
+        const getLoadedSeqName = (): string => {
+            const liveName = String((node as any)._liveTriggeredSequenceName || '');
+            if (liveName) return liveName.replace(/\.(?:seq|mid|midi)$/i, '');
+            const activeIdx = Math.max(0, Number((node as any).activeSlotIndex ?? node.properties?.active_slot ?? 0));
+            const q = String(node.properties?.pool_query ?? '').trim();
+            if (isFieldOperatorExpression(q) && poolItems.length > 0) {
+                const chosen = resolvePoolItemByQuery(
+                    poolItems,
+                    q,
+                    activeIdx,
+                    node.properties?.seed ?? assignedModifier?.properties?.seed ?? 42,
+                    false,
+                    node.getTriggerCount()
+                );
+                const chosenName = String(chosen?.name || chosen?.absolute_path || chosen?.filepath || '');
+                if (chosenName) {
+                    return (chosenName.split(/[\\/]/).pop() || chosenName).replace(/\.(?:seq|mid|midi)$/i, '');
+                }
+            }
+            const slotFp = Array.isArray(node.properties?.slots) ? String(node.properties.slots[activeIdx]?.filepath || '') : '';
+            const fp = String(node.properties?.filepath || slotFp || '');
+            const fpName = fp ? (fp.split(/[\\/]/).pop() || '').replace(/\.(?:seq|mid|midi)$/i, '') : '';
+            return String(
+                fpName
+                || node.properties?.node_name
+                || node.properties?.sequence_name
+                || node.title
+                || 'Sequence'
+            );
+        };
+
+        const isPoolCalculated = (): boolean => {
+            return isFieldOperatorExpression(node.properties?.pool_query);
+        };
+
+        const getEditableExpression = (): string => {
+            const mixedName = node.hasMixedSlotValues?.('sequence_name') ?? false;
+            const mixedQuery = node.hasMixedSlotValues?.('pool_query') ?? false;
+            if (mixedName && mixedQuery) return '';
+            const q = String(node.properties?.pool_query ?? '').trim();
+            if (isFieldOperatorExpression(q)) return q;
+            return getLoadedSeqName();
+        };
+
         const nameInput = document.createElement('input');
         nameInput.type = 'text';
-        nameInput.className = 'td-seq-name-input';
-        nameInput.value = String(node.properties.node_name || node.title || 'Sequence');
-        nameInput.placeholder = 'Sequence name';
-        nameInput.setAttribute('aria-label', 'Sequence name');
+        nameInput.className = 'td-seq-name-input td-pool-selector-input';
+        nameInput.placeholder = (assignedModifier || isPoolOpen)
+            ? 'Pool: name, index (0..), or rand'
+            : 'Sequence name';
+        nameInput.title = (assignedModifier || isPoolOpen)
+            ? 'Click to view/edit pool expression (name, index 0.., or "rand") · Drop sequence/MIDI to load'
+            : 'Sequence name · Drop sequence/MIDI to load';
+        nameInput.setAttribute('aria-label', 'Sequence name or pool query');
         nameInput.maxLength = 64;
-        const commitName = () => {
-            const name = nameInput.value.trim() || 'Sequence';
-            nameInput.value = name;
-            node.updateProperty('node_name', name);
+
+        const syncNameDisplay = () => {
+            if (document.activeElement === nameInput) return;
+            const mixedName = (node.hasMixedSlotValues?.('sequence_name') ?? false) || (node.hasMixedSlotValues?.('filepath') ?? false);
+            if (mixedName) {
+                nameInput.value = '';
+                nameInput.classList.remove('is-pool-computed');
+                return;
+            }
+            nameInput.value = getLoadedSeqName();
+            nameInput.classList.toggle('is-pool-computed', isPoolCalculated());
         };
-        nameInput.addEventListener('change', commitName);
-        nameInput.addEventListener('keydown', event => {
-            if (event.key !== 'Enter') return;
-            event.preventDefault();
-            commitName();
-            nameInput.blur();
+        syncNameDisplay();
+
+        let expressionBeforeFocus = '';
+        let committedOnEnter = false;
+
+        const commitName = async () => {
+            const raw = nameInput.value.trim();
+            if (raw === expressionBeforeFocus && !node.hasMixedSlotValues?.('pool_query')) {
+                syncNameDisplay();
+                return;
+            }
+            const seqWithPool = node as BaseNode & { applyPoolQuery?: (q: string) => Promise<boolean> };
+            const hasPoolItems = (assignedModifier && poolItems.length > 0) || (Array.isArray(node.properties?.selected_items) && node.properties.selected_items.length > 0);
+            if (hasPoolItems && typeof seqWithPool.applyPoolQuery === 'function') {
+                if (isFieldOperatorExpression(raw)) {
+                    node.resetTriggerCount?.();
+                }
+                const matched = await seqWithPool.applyPoolQuery(raw);
+                if (matched) {
+                    windowContext?.refreshAudioPreview?.();
+                    await windowContext?.renderTabContent?.();
+                    return;
+                }
+            }
+            if (raw) {
+                node.updateProperty('sequence_name', raw);
+                node.updateProperty('node_name', raw);
+            }
+            syncNameDisplay();
+        };
+
+        nameInput.addEventListener('focus', () => {
+            committedOnEnter = false;
+            expressionBeforeFocus = getEditableExpression();
+            nameInput.value = expressionBeforeFocus;
+            nameInput.classList.remove('is-pool-computed');
+            nameInput.select();
         });
+        nameInput.addEventListener('blur', () => {
+            if (!committedOnEnter) {
+                void commitName();
+            } else {
+                syncNameDisplay();
+            }
+        });
+        nameInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                committedOnEnter = true;
+                void commitName().then(() => {
+                    nameInput.blur();
+                });
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                committedOnEnter = true;
+                nameInput.blur();
+                syncNameDisplay();
+            }
+        });
+        if (typeof window !== 'undefined') {
+            const onSeqRefreshed = (evt: Event) => {
+                if (!nameInput.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onSeqRefreshed);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncNameDisplay();
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onSeqRefreshed);
+        }
 
         const poolButton = document.createElement('button');
         poolButton.type = 'button';
-        poolButton.className = 'waveform-asset-button td-seq-header-button';
-        poolButton.textContent = '+';
-        poolButton.title = node.properties?.asset_modifier_id != null ? 'Open MIDI / Sequence Pool' : 'Add MIDI / Sequence Pool';
+        poolButton.className = `waveform-asset-button td-seq-header-button waveform-pool-button ${assignedModifier ? 'is-assigned' : ''} ${isPoolOpen ? 'is-active' : ''}`;
+        poolButton.textContent = poolItems.length > 0 ? `POOL · ${poolItems.length}` : 'POOL';
+        poolButton.title = isPoolOpen ? 'Show Sequence Parameters' : 'Toggle MIDI / Sequence Pool';
         poolButton.setAttribute('aria-label', poolButton.title);
+        poolButton.setAttribute('aria-pressed', String(isPoolOpen));
         poolButton.addEventListener('click', () => {
             window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
-                detail: { nodeId: node.id }
+                detail: { nodeId: node.id, toggleInline: true }
             }));
         });
 
@@ -144,7 +245,7 @@ export class SequenceGridSection {
         saveStatus.setAttribute('role', 'status');
 
         saveButton.addEventListener('click', async () => {
-            commitName();
+            await commitName();
             const sequenceNode = node as BaseNode & { toSequenceDocument?: () => SequenceDocument };
             if (typeof sequenceNode.toSequenceDocument !== 'function') return;
             saveButton.disabled = true;
@@ -177,21 +278,57 @@ export class SequenceGridSection {
         const seqNodeWithSlots = node as BaseNode & {
             activeSlotIndex?: number;
             getSlots?: () => any[];
-            selectSlot?: (index: number) => void;
+            getSelectedSlotIndices?: () => number[];
+            selectSlot?: (index: number, options?: { toggle?: boolean; range?: boolean }) => void;
             addSlot?: () => number;
-            removeSlot?: (index: number) => void;
+            removeSlot?: (index?: number) => void;
+            loadDroppedItemsIntoSlots?: (items: any[], target?: number | 'plus') => Promise<void>;
             getResolvedStepSlots?: (stepCount?: number) => number[];
         };
+
+        const handleDroppedSequenceItems = async (dataTransfer: DataTransfer, target?: number | 'plus') => {
+            const items = getDroppedSequenceItems(dataTransfer);
+            if (items.length === 0) return;
+            try {
+                if (typeof seqNodeWithSlots.loadDroppedItemsIntoSlots === 'function') {
+                    await seqNodeWithSlots.loadDroppedItemsIntoSlots(items, target);
+                }
+                if (assignedModifier?.properties && items[0]) {
+                    assignedModifier.properties.output_value = items[0].filepath;
+                    if (items[0].id != null) assignedModifier.properties.output_item_id = items[0].id;
+                }
+                windowContext?.refreshAudioPreview?.();
+                await windowContext?.renderTabContent?.();
+            } catch (error) {
+                saveStatus.textContent = error instanceof Error ? error.message : 'Could not load sequence';
+                saveStatus.classList.add('is-error');
+            }
+        };
+
         if (typeof seqNodeWithSlots.getSlots === 'function') {
             const slots = seqNodeWithSlots.getSlots();
             const stripEl = SlotStrip.render({
+                node,
+                slots,
                 slotCount: slots.length,
                 activeSlot: seqNodeWithSlots.activeSlotIndex ?? 0,
+                selectedSlots: seqNodeWithSlots.getSelectedSlotIndices?.() ?? [seqNodeWithSlots.activeSlotIndex ?? 0],
                 accentColor: (node as any).nodeColor || (node as any).color || '#ec4899',
-                onSelect: async (idx) => {
-                    seqNodeWithSlots.selectSlot?.(idx);
+                canAcceptDrop: hasSequenceDragPayload,
+                onSelect: async (idx, modifiers) => {
+                    seqNodeWithSlots.selectSlot?.(idx, modifiers);
                     windowContext?.refreshAudioPreview?.();
                     await windowContext?.renderTabContent?.();
+                },
+                onDragHoverSlot: (idx) => {
+                    seqNodeWithSlots.selectSlot?.(idx);
+                    syncNameDisplay();
+                },
+                onDropOnSlot: (idx, dt) => {
+                    void handleDroppedSequenceItems(dt, idx);
+                },
+                onDropOnAdd: (dt) => {
+                    void handleDroppedSequenceItems(dt, 'plus');
                 },
                 onAdd: async () => {
                     seqNodeWithSlots.addSlot?.();
@@ -200,6 +337,10 @@ export class SequenceGridSection {
                 },
                 onRemove: async (idx) => {
                     seqNodeWithSlots.removeSlot?.(idx);
+                    windowContext?.refreshAudioPreview?.();
+                    await windowContext?.renderTabContent?.();
+                },
+                onPaste: async () => {
                     windowContext?.refreshAudioPreview?.();
                     await windowContext?.renderTabContent?.();
                 }
@@ -216,37 +357,26 @@ export class SequenceGridSection {
         wrapper.appendChild(viewport);
         container.appendChild(wrapper);
 
-        viewport.addEventListener('dragover', event => {
-            if (!event.dataTransfer || !getDroppedSequenceItem(event.dataTransfer)) return;
-            event.preventDefault();
-            event.stopPropagation();
-            event.dataTransfer.dropEffect = 'copy';
-            viewport.classList.add('is-dragover');
-        });
-        viewport.addEventListener('dragleave', event => {
-            if (!viewport.contains(event.relatedTarget as Node | null)) viewport.classList.remove('is-dragover');
-        });
-        viewport.addEventListener('drop', async event => {
-            event.preventDefault();
-            event.stopPropagation();
-            viewport.classList.remove('is-dragover');
-            if (!event.dataTransfer) return;
-            const item = getDroppedSequenceItem(event.dataTransfer);
-            const applyItem = (window as any).applyLibraryItemToSequence;
-            if (!item || typeof applyItem !== 'function') return;
-            try {
-                if (node.properties?.asset_modifier_id != null) {
-                    node.updateProperty('asset_modifier_id', null);
-                    window.dispatchEvent(new CustomEvent('modifier-assignment-changed', { detail: { nodeId: node.id } }));
-                }
-                await applyItem(node, item);
-                windowContext.refreshAudioPreview();
-                await windowContext.renderTabContent();
-            } catch (error) {
-                saveStatus.textContent = error instanceof Error ? error.message : 'Could not load sequence';
-                saveStatus.classList.add('is-error');
-            }
-        });
+        for (const targetEl of [viewport, nameInput]) {
+            targetEl.addEventListener('dragover', event => {
+                if (!hasSequenceDragPayload(event.dataTransfer)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+                targetEl.classList.add('is-dragover');
+            });
+            targetEl.addEventListener('dragleave', event => {
+                if (!targetEl.contains(event.relatedTarget as Node | null)) targetEl.classList.remove('is-dragover');
+            });
+            targetEl.addEventListener('drop', event => {
+                if (!hasSequenceDragPayload(event.dataTransfer)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                targetEl.classList.remove('is-dragover');
+                if (!event.dataTransfer) return;
+                void handleDroppedSequenceItems(event.dataTransfer);
+            });
+        }
 
         sequence.forEach((_value: number, index: number) => {
             const number = document.createElement('div');

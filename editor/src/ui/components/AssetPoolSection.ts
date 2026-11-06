@@ -1,53 +1,24 @@
 import { type BaseNode } from '../../nodes/BaseNode.ts';
 import { getAssetDisplayName } from '../libraryFilters.ts';
+import { WidgetFactory } from '../WidgetFactory.ts';
+import {
+    attachLibraryDragData,
+    clearActiveLibraryDragData,
+    DRAG_MIME_POOL_REORDER,
+    getDroppedPoolItemsByType,
+    hasAudioDragPayload,
+    hasSequenceDragPayload,
+} from '../dragPayload.ts';
 
-interface DroppedPoolItem {
-    id?: number | string;
-    itemType?: string;
-    filepath: string;
-    name?: string;
-    key?: string | null;
-    bpm?: number | null;
-    duration_seconds?: number | null;
-}
-
-function getDroppedPoolItems(dataTransfer: DataTransfer): DroppedPoolItem[] {
-    const raw = dataTransfer.getData('application/x-gaia-library-item')
-        || dataTransfer.getData('text/plain');
-    if (!raw) return [];
-    try {
-        const payload = JSON.parse(raw);
-        const items = payload?.type === 'library-items' && Array.isArray(payload.items)
-            ? payload.items
-            : payload?.type === 'library-item' ? [payload] : [];
-        return items.filter((item: any) =>
-            item && typeof item.filepath === 'string' && item.filepath.length > 0
-        );
-    } catch {
-        return [];
-    }
-}
-
-function poolAcceptsItem(node: BaseNode, item: DroppedPoolItem): boolean {
-    const acceptedType = String(node.properties?.accepted_asset_type || '');
-    if (!acceptedType) return true;
-    const path = String(item.filepath || item.name || '').toLowerCase();
-    const isMidi = item.itemType === 'midi' || path.endsWith('.mid') || path.endsWith('.midi');
-    const isSequence = item.itemType === 'sequence' || path.endsWith('.seq');
-    if (acceptedType === 'midi') return isMidi;
-    if (acceptedType === 'sequence_source') return isMidi || isSequence;
-    return !isMidi && !isSequence;
+function isSequencePoolMode(poolNode: any, ownerNode: any): boolean {
+    const ownerType = ownerNode?.getNodeType?.() || ownerNode?.properties?.node_type;
+    const acceptedType = poolNode?.properties?.accepted_asset_type || ownerNode?.acceptedPoolAssetType;
+    return acceptedType === 'sequence_source' || ownerType === 'sequence';
 }
 
 function poolItemKey(item: any): string {
-    const filepath = String(item?.absolute_path || item?.filepath || '');
-    const locator = filepath || `${item?.collection_id ?? item?.id ?? ''}:${item?.name ?? ''}`;
-    return locator
-        .replace(/\\/g, '/')
-        .toLocaleLowerCase();
+    return String(item?.id ?? item?.filepath ?? item?.absolute_path ?? '');
 }
-
-const POOL_REORDER_MIME = 'application/x-sin-asset-pool-index';
 
 export class AssetPoolSection {
     static async render(
@@ -55,128 +26,225 @@ export class AssetPoolSection {
         node: BaseNode,
         _windowContext: any
     ): Promise<void> {
-        const items: any[] = Array.isArray(node.properties.selected_items)
-            ? node.properties.selected_items
-            : (node.properties.selected_items = []);
-        const isSequencePool = node.properties?.accepted_asset_type === 'sequence_source';
+        const isOwnerNode = node.getNodeType?.() !== 'asset_filter' && node.type !== 'Audio/AssetFilter';
+        const poolNode: any = isOwnerNode ? (node.getAttachedPoolNode?.() || node) : node;
+        const ownerNode: any = isOwnerNode
+            ? node
+            : (() => {
+                const graph = (node as any).graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+                const parentId = poolNode?.properties?.parentId;
+                return parentId != null && graph ? graph.getNodeById?.(parentId) : null;
+            })();
 
-        const wrapper = document.createElement('div');
-        wrapper.className = 'td-param-group asset-pool-group';
-        wrapper.innerHTML = `
-            <div style="margin-bottom: 8px; font-weight: 600; font-size: 11px; color: #475569;">
-                ${isSequencePool ? 'MIDI / Sequence Pool' : 'Asset Pool'} (${items.length} Items)
-            </div>
-            <div class="asset-pool-list" id="prop-asset-pool-list" style="min-height: 60px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; padding: 8px; font-size: 11px; color: #64748b;"></div>
-        `;
+        if (!poolNode.properties) poolNode.properties = {};
+        if (!Array.isArray(poolNode.properties.selected_items)) {
+            poolNode.properties.selected_items = [];
+        }
 
-        container.appendChild(wrapper);
+        const isSequencePool = isSequencePoolMode(poolNode, ownerNode);
 
-        const listEl = wrapper.querySelector('#prop-asset-pool-list') as HTMLElement;
-        if (!listEl) return;
-
-        const commitItems = async (nextItems: any[], removedItem?: any) => {
-            const removedPath = poolItemKey(removedItem);
-            const outputPath = poolItemKey({ filepath: node.properties.output_value });
-            if ((removedPath && removedPath === outputPath) || nextItems.length === 0) {
-                node.updateProperty('output_value', '');
-                node.updateProperty('output_item_id', null);
-                node.updateProperty('output_bpm', null);
-                node.updateProperty('output_key', '');
+        // Render Pool Seed control using the standard WidgetFactory row
+        const seedField = (poolNode.getFields?.() || []).find((f: any) => f.key === 'seed') || {
+            key: 'seed',
+            label: 'Pool Seed',
+            type: 'seed' as const,
+            default: 42,
+            description: 'Deterministic seed or seed sequence (e.g. "42", "42 108", "rand") for selecting pool items across node slots.'
+        };
+        const seedRow = WidgetFactory.createRow(seedField, poolNode, () => {
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('item-pool-preview-refresh', {
+                    detail: { nodeId: poolNode.id }
+                }));
             }
+        });
+        container.appendChild(seedRow);
 
-            node.updateProperty('selected_items', nextItems);
-            node.updateProperty('sequence_index', -1);
+        const group = document.createElement('div');
+        group.className = 'asset-pool-group';
 
-            window.dispatchEvent(new CustomEvent('item-pool-preview-refresh', {
-                detail: { nodeId: node.id }
-            }));
-            await _windowContext.renderTabContent();
+        const items = Array.isArray(poolNode.properties.selected_items)
+            ? [...poolNode.properties.selected_items]
+            : [];
+
+        const listEl = document.createElement('div');
+        listEl.className = `asset-pool-list ${items.length === 0 ? 'is-empty' : ''}`;
+        listEl.id = 'prop-pool-items';
+        listEl.tabIndex = 0;
+        group.appendChild(listEl);
+        container.appendChild(group);
+
+        if (!(poolNode._selectedPoolIndices instanceof Set)) {
+            poolNode._selectedPoolIndices = new Set<number>();
+        }
+        const selectedIndices: Set<number> = poolNode._selectedPoolIndices;
+        for (const idx of [...selectedIndices]) {
+            if (idx < 0 || idx >= items.length) selectedIndices.delete(idx);
+        }
+        let anchorIndex: number | null = selectedIndices.size > 0 ? [...selectedIndices][0] : null;
+
+        const commitItems = async (nextItems: any[]) => {
+            poolNode.updateProperty?.('selected_items', nextItems);
+            poolNode.updateProperty?.('sequence_index', -1);
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('item-pool-preview-refresh', {
+                    detail: { nodeId: poolNode.id }
+                }));
+            }
+            await _windowContext?.renderTabContent?.();
         };
 
-        const moveItem = async (fromIndex: number, toIndex: number) => {
-            if (fromIndex === toIndex
-                || fromIndex < 0 || fromIndex >= items.length
-                || toIndex < 0 || toIndex >= items.length) return;
-            const reordered = [...items];
-            const [moved] = reordered.splice(fromIndex, 1);
-            reordered.splice(toIndex, 0, moved);
-            await commitItems(reordered);
+        const moveSelectedItems = async (sourceIndices: number[], targetIndex: number) => {
+            const validSources = [...new Set(sourceIndices)]
+                .filter(i => i >= 0 && i < items.length)
+                .sort((a, b) => a - b);
+            if (validSources.length === 0) return;
+
+            const movingSet = new Set(validSources);
+            const movingItems = validSources.map(i => items[i]);
+            const remaining: Array<{ origIdx: number; item: any }> = [];
+            items.forEach((item, idx) => {
+                if (!movingSet.has(idx)) {
+                    remaining.push({ origIdx: idx, item });
+                }
+            });
+
+            // Find insertion point in remaining array
+            let insertAt = remaining.findIndex(entry => entry.origIdx >= targetIndex);
+            if (insertAt === -1) insertAt = remaining.length;
+            else if (targetIndex > validSources[0]) {
+                const afterTarget = remaining.findIndex(entry => entry.origIdx > targetIndex);
+                insertAt = afterTarget === -1 ? remaining.length : afterTarget;
+            }
+
+            const nextItems = [
+                ...remaining.slice(0, insertAt).map(e => e.item),
+                ...movingItems,
+                ...remaining.slice(insertAt).map(e => e.item),
+            ];
+
+            selectedIndices.clear();
+            for (let i = 0; i < movingItems.length; i++) {
+                selectedIndices.add(insertAt + i);
+            }
+            await commitItems(nextItems);
+        };
+
+        const deleteIndices = async (indicesToDelete: number[]) => {
+            const delSet = new Set(indicesToDelete);
+            if (delSet.size === 0) return;
+            selectedIndices.clear();
+            await commitItems(items.filter((_, idx) => !delSet.has(idx)));
+        };
+
+        const rowElements: HTMLElement[] = [];
+        const syncRowSelectionUI = () => {
+            rowElements.forEach((el, idx) => {
+                el.classList.toggle('is-selected', selectedIndices.has(idx));
+            });
         };
 
         if (items.length === 0) {
             listEl.textContent = isSequencePool
-                ? 'Drop MIDI or saved sequence assets here'
-                : 'Drop audio assets here';
-            listEl.classList.add('is-empty');
+                ? 'Drop MIDI or sequences from library'
+                : 'Drop samples from library';
         } else {
-            listEl.classList.remove('is-empty');
+            const activeFilepath = String(ownerNode?.properties?.filepath || poolNode?.properties?.output_value || '');
+
             items.forEach((item, idx) => {
                 const row = document.createElement('div');
-                row.className = 'asset-pool-item-row';
+                const itemPath = String(item?.filepath || item?.absolute_path || '');
+                const isActive = Boolean(activeFilepath && itemPath && activeFilepath === itemPath);
+                row.className = `asset-pool-item-row ${isActive ? 'is-active' : ''} ${selectedIndices.has(idx) ? 'is-selected' : ''}`;
                 row.draggable = true;
-                row.dataset.poolIndex = String(idx);
+                row.dataset.index = String(idx);
 
                 const order = document.createElement('span');
                 order.className = 'asset-pool-item-order';
-                order.textContent = `${idx + 1}`;
-                order.title = 'Drag to reorder';
+                order.textContent = String(idx);
 
+                const displayName = getAssetDisplayName(item);
                 const label = document.createElement('span');
                 label.className = 'asset-pool-item-label';
-                label.textContent = getAssetDisplayName(item);
-                label.title = getAssetDisplayName(item);
-
-                const actions = document.createElement('span');
-                actions.className = 'asset-pool-item-actions';
-                const upButton = document.createElement('button');
-                upButton.type = 'button';
-                upButton.textContent = '↑';
-                upButton.title = 'Move up';
-                upButton.setAttribute('aria-label', `Move ${getAssetDisplayName(item)} up`);
-                upButton.disabled = idx === 0;
-                upButton.addEventListener('click', event => {
-                    event.stopPropagation();
-                    void moveItem(idx, idx - 1);
-                });
-
-                const downButton = document.createElement('button');
-                downButton.type = 'button';
-                downButton.textContent = '↓';
-                downButton.title = 'Move down';
-                downButton.setAttribute('aria-label', `Move ${getAssetDisplayName(item)} down`);
-                downButton.disabled = idx === items.length - 1;
-                downButton.addEventListener('click', event => {
-                    event.stopPropagation();
-                    void moveItem(idx, idx + 1);
-                });
+                label.textContent = displayName;
+                label.title = displayName;
 
                 const deleteButton = document.createElement('button');
                 deleteButton.type = 'button';
                 deleteButton.textContent = '×';
                 deleteButton.title = 'Remove from pool';
                 deleteButton.className = 'asset-pool-item-delete';
-                deleteButton.setAttribute('aria-label', `Remove ${getAssetDisplayName(item)} from pool`);
+                deleteButton.setAttribute('aria-label', `Remove ${displayName} from pool`);
                 deleteButton.addEventListener('click', event => {
                     event.stopPropagation();
-                    void commitItems(items.filter((_, itemIndex) => itemIndex !== idx), item);
+                    const targets = (selectedIndices.has(idx) && selectedIndices.size > 1)
+                        ? [...selectedIndices]
+                        : [idx];
+                    void deleteIndices(targets);
                 });
 
-                actions.append(upButton, downButton, deleteButton);
-                row.append(order, label, actions);
+                row.append(order, label, deleteButton);
+
+                // Clicking selects item(s) in the pool without replacing the active slot
+                row.addEventListener('click', event => {
+                    event.stopPropagation();
+                    listEl.focus({ preventScroll: true });
+                    if (event.shiftKey && anchorIndex !== null) {
+                        const start = Math.min(anchorIndex, idx);
+                        const end = Math.max(anchorIndex, idx);
+                        if (!event.ctrlKey && !event.metaKey) selectedIndices.clear();
+                        for (let i = start; i <= end; i++) selectedIndices.add(i);
+                    } else if (event.ctrlKey || event.metaKey) {
+                        if (selectedIndices.has(idx)) selectedIndices.delete(idx);
+                        else selectedIndices.add(idx);
+                        anchorIndex = idx;
+                    } else {
+                        selectedIndices.clear();
+                        selectedIndices.add(idx);
+                        anchorIndex = idx;
+                    }
+                    syncRowSelectionUI();
+                });
 
                 row.addEventListener('dragstart', event => {
                     if (!event.dataTransfer) return;
-                    event.dataTransfer.effectAllowed = 'move';
-                    event.dataTransfer.setData(POOL_REORDER_MIME, String(idx));
-                    row.classList.add('is-reordering');
+                    if (!selectedIndices.has(idx)) {
+                        selectedIndices.clear();
+                        selectedIndices.add(idx);
+                        anchorIndex = idx;
+                        syncRowSelectionUI();
+                    }
+                    const draggedIdxList = [...selectedIndices].sort((a, b) => a - b);
+                    const draggedItems = draggedIdxList.map(i => {
+                        const it = items[i];
+                        return {
+                            id: it.id,
+                            filepath: String(it.filepath || it.absolute_path || ''),
+                            itemType: it.type || (isSequencePool ? 'sequence' : 'audio'),
+                            name: it.name || getAssetDisplayName(it),
+                            key: it.key ?? null,
+                            bpm: it.bpm ?? null,
+                            duration_seconds: it.duration_seconds ?? null,
+                            fromPool: true,
+                            poolIndex: i
+                        };
+                    });
+                    attachLibraryDragData(event.dataTransfer, draggedItems, {
+                        effectAllowed: 'copyMove',
+                        poolReorderIndices: draggedIdxList
+                    });
+                    draggedIdxList.forEach(i => rowElements[i]?.classList.add('is-reordering'));
                 });
+
                 row.addEventListener('dragend', () => {
-                    listEl.querySelectorAll('.asset-pool-item-row').forEach(element => {
+                    clearActiveLibraryDragData();
+                    rowElements.forEach(element => {
                         element.classList.remove('is-reordering', 'is-reorder-target');
                     });
                 });
+
                 row.addEventListener('dragover', event => {
-                    if (!event.dataTransfer?.types.includes(POOL_REORDER_MIME)) return;
+                    if (!event.dataTransfer?.types.includes(DRAG_MIME_POOL_REORDER)) return;
                     event.preventDefault();
                     event.stopPropagation();
                     event.dataTransfer.dropEffect = 'move';
@@ -184,28 +252,47 @@ export class AssetPoolSection {
                 });
                 row.addEventListener('dragleave', () => row.classList.remove('is-reorder-target'));
                 row.addEventListener('drop', event => {
-                    if (!event.dataTransfer?.types.includes(POOL_REORDER_MIME)) return;
-                    const sourceIndex = Number(event.dataTransfer?.getData(POOL_REORDER_MIME));
-                    if (!Number.isInteger(sourceIndex)) return;
+                    if (!event.dataTransfer?.types.includes(DRAG_MIME_POOL_REORDER)) return;
+                    const rawIndices = event.dataTransfer.getData(DRAG_MIME_POOL_REORDER);
+                    const sourceIndices = rawIndices
+                        .split(',')
+                        .map(s => Number(s.trim()))
+                        .filter(n => Number.isInteger(n));
+                    if (sourceIndices.length === 0) return;
                     event.preventDefault();
                     event.stopPropagation();
-                    void moveItem(sourceIndex, idx);
+                    row.classList.remove('is-reorder-target');
+                    void moveSelectedItems(sourceIndices, idx);
                 });
+
+                rowElements.push(row);
                 listEl.appendChild(row);
             });
         }
 
+        listEl.addEventListener('keydown', (event: KeyboardEvent) => {
+            if ((event.key === 'Delete' || event.key === 'Backspace') && selectedIndices.size > 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                void deleteIndices([...selectedIndices]);
+            }
+        });
+
+        const canAcceptPoolDrop = (dt: DataTransfer | null): boolean => {
+            return isSequencePool ? hasSequenceDragPayload(dt) : hasAudioDragPayload(dt);
+        };
+
         listEl.addEventListener('dragover', event => {
-            if (event.dataTransfer?.types.includes(POOL_REORDER_MIME)) {
+            if (event.dataTransfer?.types.includes(DRAG_MIME_POOL_REORDER)) {
                 event.preventDefault();
                 event.stopPropagation();
                 event.dataTransfer.dropEffect = 'move';
                 return;
             }
-            if (!event.dataTransfer || getDroppedPoolItems(event.dataTransfer).filter(item => poolAcceptsItem(node, item)).length === 0) return;
+            if (!canAcceptPoolDrop(event.dataTransfer)) return;
             event.preventDefault();
             event.stopPropagation();
-            event.dataTransfer.dropEffect = 'copy';
+            if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
             listEl.classList.add('is-dragover');
         });
         listEl.addEventListener('dragleave', event => {
@@ -214,19 +301,25 @@ export class AssetPoolSection {
             }
         });
         listEl.addEventListener('drop', async event => {
-            event.preventDefault();
-            event.stopPropagation();
             listEl.classList.remove('is-dragover');
             if (!event.dataTransfer) return;
-            const isPoolReorder = event.dataTransfer.types.includes(POOL_REORDER_MIME);
-            const sourceIndex = isPoolReorder
-                ? Number(event.dataTransfer.getData(POOL_REORDER_MIME))
-                : -1;
-            if (isPoolReorder && Number.isInteger(sourceIndex) && sourceIndex >= 0 && sourceIndex < items.length) {
-                await moveItem(sourceIndex, items.length - 1);
+            if (event.dataTransfer.types.includes(DRAG_MIME_POOL_REORDER)) {
+                event.preventDefault();
+                event.stopPropagation();
+                const rawIndices = event.dataTransfer.getData(DRAG_MIME_POOL_REORDER);
+                const sourceIndices = rawIndices
+                    .split(',')
+                    .map(s => Number(s.trim()))
+                    .filter(n => Number.isInteger(n));
+                if (sourceIndices.length > 0) {
+                    await moveSelectedItems(sourceIndices, items.length - 1);
+                }
                 return;
             }
-            const droppedItems = getDroppedPoolItems(event.dataTransfer).filter(item => poolAcceptsItem(node, item));
+            if (!canAcceptPoolDrop(event.dataTransfer)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const droppedItems = getDroppedPoolItemsByType(event.dataTransfer, isSequencePool);
             if (droppedItems.length === 0) return;
 
             const merged = new Map<string, any>();
@@ -249,15 +342,17 @@ export class AssetPoolSection {
                 if (key) merged.set(key, poolItem);
             }
 
-            node.updateProperty('selected_items', [...merged.values()]);
-            if (node.properties.seed == null) {
-                node.updateProperty('seed', 42);
+            poolNode.updateProperty?.('selected_items', [...merged.values()]);
+            if (poolNode.properties.seed == null) {
+                poolNode.updateProperty?.('seed', 42);
             }
-            node.updateProperty('sequence_index', -1);
-            window.dispatchEvent(new CustomEvent('item-pool-preview-refresh', {
-                detail: { nodeId: node.id }
-            }));
-            await _windowContext.renderTabContent();
+            poolNode.updateProperty?.('sequence_index', -1);
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('item-pool-preview-refresh', {
+                    detail: { nodeId: poolNode.id }
+                }));
+            }
+            await _windowContext?.renderTabContent?.();
         });
     }
 }

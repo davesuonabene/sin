@@ -7,6 +7,7 @@
 import { type FieldSchema } from '../../editor/src/fields/FieldSchema.ts';
 import {
     hashSeed,
+    isFieldOperatorExpression,
     mulberry32,
     resolveModifierSlotSeeds,
     rollSeedExpression
@@ -198,7 +199,7 @@ export function isFieldMappableToRandom(node: any, paramKey: string): boolean {
     }
     const field = findFieldSchema(node, paramKey);
     if (!field) {
-        if (['section_points', 'section_probability', 'section_sample_start'].includes(paramKey)) {
+        if (['section_points', 'section_probability'].includes(paramKey)) {
             return true;
         }
         return false;
@@ -294,16 +295,22 @@ export function populateOwnerSlotsFromRandom(modifierNode: any, ownerNode: any):
 
             if (STEP_PARAM_KEYS.includes(dest.paramKey)) {
                 const fieldKey = dest.paramKey;
+                const isUnitDefault = ['velocity', 'gate_length', 'subdivisions', 'probability'].includes(fieldKey);
                 if (!dest.baseValueArray || !Array.isArray(dest.baseValueArray) || dest.baseValueArray.length !== nextSteps.length) {
-                    dest.baseValueArray = nextSteps.map((st: any) =>
-                        Number(st?.[fieldKey] ?? (['velocity', 'gate_length', 'subdivisions', 'probability'].includes(fieldKey) ? 1 : 0))
-                    );
+                    dest.baseValueArray = nextSteps.map((st: any) => {
+                        const v = Number(st?.[fieldKey]);
+                        return (Number.isFinite(v) && (!isUnitDefault || v > 0)) ? v : (isUnitDefault ? 1 : 0);
+                    });
                 }
                 const baseValues: number[] = dest.baseValueArray || [];
                 for (let i = 0; i < nextSteps.length; i++) {
                     const stepObj = nextSteps[i];
                     if (stepObj && stepObj[fieldKey] !== undefined) {
-                        const newVal = evalDestValue(dest, baseValues[i] ?? Number(stepObj[fieldKey]), field, prng());
+                        const rawBase = baseValues[i];
+                        const effectiveBase = (Number.isFinite(rawBase) && (!isUnitDefault || rawBase > 0))
+                            ? rawBase
+                            : (Number(stepObj[fieldKey]) > 0 ? Number(stepObj[fieldKey]) : (dest.baseValue > 0 ? dest.baseValue : (isUnitDefault ? 1.0 : 0.0)));
+                        const newVal = evalDestValue(dest, effectiveBase, field, prng());
                         stepObj[fieldKey] = newVal;
                         if (fieldKey === 'subdivisions') stepObj.subdivision_enabled = newVal > 1;
                     }
@@ -432,15 +439,23 @@ export function applyRandomModulation(
         if (STEP_PARAM_KEYS.includes(dest.paramKey) && (ownerNode.type === 'Audio/Sequence' || ownerNode.properties?.node_type === 'sequence' || Array.isArray(ownerNode.properties?.step_parameters))) {
             ensureOwnerStepParameters();
             const fieldKey = dest.paramKey;
+            const isUnitDefault = ['velocity', 'gate_length', 'subdivisions', 'probability'].includes(fieldKey);
             if (!dest.baseValueArray || !Array.isArray(dest.baseValueArray) || dest.baseValueArray.length !== ownerNode.properties.step_parameters.length) {
-                dest.baseValueArray = ownerNode.properties.step_parameters.map((s: any) => Number(s?.[fieldKey] ?? (['velocity', 'gate_length', 'subdivisions', 'probability'].includes(fieldKey) ? 1 : 0)));
+                dest.baseValueArray = ownerNode.properties.step_parameters.map((s: any) => {
+                    const v = Number(s?.[fieldKey]);
+                    return (Number.isFinite(v) && (!isUnitDefault || v > 0)) ? v : (isUnitDefault ? 1 : 0);
+                });
             }
             const baseValues: number[] = dest.baseValueArray || [];
             const nextSteps = ownerNode.properties.step_parameters.map((s: any) => ({ ...(s || {}) }));
             for (let i = 0; i < nextSteps.length; i++) {
                 const stepObj = nextSteps[i];
                 if (stepObj && stepObj[fieldKey] !== undefined) {
-                    const newVal = evalDestValue(dest, baseValues[i] ?? Number(stepObj[fieldKey]), field, destPrng());
+                    const rawBase = baseValues[i];
+                    const effectiveBase = (Number.isFinite(rawBase) && (!isUnitDefault || rawBase > 0))
+                        ? rawBase
+                        : (Number(stepObj[fieldKey]) > 0 ? Number(stepObj[fieldKey]) : (dest.baseValue > 0 ? dest.baseValue : (isUnitDefault ? 1.0 : 0.0)));
+                    const newVal = evalDestValue(dest, effectiveBase, field, destPrng());
                     stepObj[fieldKey] = newVal;
                     if (fieldKey === 'subdivisions') stepObj.subdivision_enabled = newVal > 1;
                 }
@@ -685,6 +700,22 @@ export function refreshArmedSeeds(
     const allNodes = ((graph as any)._nodes || (graph as any).nodes || []) as any[];
     let rolledAny = false;
 
+    // 1. Reset internal trigger counter on every node when refreshing
+    for (const node of allNodes) {
+        if (!node?.properties) continue;
+        if (Number(node.properties.trigger_count) !== 0) {
+            node.properties.trigger_count = 0;
+            rolledAny = true;
+        } else {
+            node.properties.trigger_count = 0;
+        }
+        const nodeData = trackNodes?.get(node.id);
+        if (nodeData) {
+            nodeData.trigger_count = 0;
+        }
+    }
+
+    // 2. Roll armed seed controllers and attached modifiers
     for (const node of allNodes) {
         if (!node?.properties) continue;
         if (node.properties.seed === undefined) continue;
@@ -702,12 +733,14 @@ export function refreshArmedSeeds(
             const parentId = node.properties.parentId ?? trackNodes?.get(node.id)?.parentId;
             const ownerNode = parentId != null ? (graph.getNodeById?.(parentId) || allNodes.find((n: any) => n?.id === parentId)) : null;
             if (ownerNode) {
+                if (ownerNode.properties) {
+                    ownerNode.properties.trigger_count = 0;
+                }
                 const isSeqOwner = ownerNode.type === 'Audio/Sequence' || ownerNode.properties?.node_type === 'sequence';
                 if (isSeqOwner) {
                     node.properties.output_value = '';
-                } else {
-                    populateOwnerSlotsFromPool(node, ownerNode);
                 }
+                populateOwnerSlotsFromPool(node, ownerNode);
                 if (typeof window !== 'undefined') {
                     window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: ownerNode.id } }));
                 }
@@ -742,6 +775,28 @@ export function refreshArmedSeeds(
             }
         }
 
+        if (typeof window !== 'undefined' && node.id != null) {
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
+        }
+        rolledAny = true;
+    }
+
+    // 3. Re-evaluate any node-level Field Operators (parameter operators or pool_query operators) at trigger_count = 0
+    for (const node of allNodes) {
+        if (!node?.properties) continue;
+        const hasNodeOps = node.properties.field_operators && Object.keys(node.properties.field_operators).length > 0;
+        const hasSlotOps = Array.isArray(node.properties.slots) && node.properties.slots.some((s: any) =>
+            (s?.field_operators && Object.keys(s.field_operators).length > 0) || isFieldOperatorExpression(s?.pool_query)
+        );
+        const hasPoolOp = isFieldOperatorExpression(node.properties.pool_query);
+        if (!hasNodeOps && !hasSlotOps && !hasPoolOp) continue;
+
+        if (node.properties.seed === undefined && node.properties.seed_refresh !== false) {
+            node.properties.seed_salt = (Number(node.properties.seed_salt) || 0) + 1;
+        }
+        if (typeof node.evaluateAllFieldOperators === 'function') {
+            node.evaluateAllFieldOperators(0);
+        }
         if (typeof window !== 'undefined' && node.id != null) {
             window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
         }

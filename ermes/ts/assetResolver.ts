@@ -6,10 +6,115 @@
 import {
     type NodeSlot,
     hashSeed,
+    isRandomToken,
+    isRangeOperatorToken,
     mulberry32,
     resolveModifierSlotSeeds,
-    rollSeedExpression
+    rollSeedExpression,
+    tokenizeFieldOperator,
+    wrapSlotIndex
 } from './slotLanguage.ts';
+
+/**
+ * Resolves a single item from an asset pool using a selector query or Field Operator:
+ * - List / Cycle Operator ("0 0 0 1", "kick_a kick_b"): selects token at `triggerCount % tokens.length`
+ *   (strictly driven by `triggerCount`, independent of `slotSeed`)
+ * - Range Operator ("0..2", "rand(0, 2)"): deterministic seeded selection in [min, max]
+ * - Random ("rand", "random", or ""): deterministic seeded selection for `slotIndex`
+ * - Integer index ("0", "1", ...): modulo-wrapped index into `items`
+ * - String (matching asset name): case-insensitive exact, prefix, or substring match against item name / filename
+ */
+export function resolvePoolItemByQuery(
+    items: any[],
+    query: unknown,
+    slotIndex: number = 0,
+    slotSeed: number = 42,
+    isSequential: boolean = false,
+    triggerCount: number = 0
+): any | null {
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const raw = String(query ?? '').trim();
+    const lower = raw.toLowerCase();
+    const triggerIdx = Math.max(0, Math.floor(Number(triggerCount) || 0));
+
+    const extractNames = (item: any) => {
+        const name = String(item?.name || '').trim().toLowerCase();
+        const nameStem = name.replace(/\.[^.]+$/, '');
+        const fp = String(item?.filepath || item?.absolute_path || '').trim();
+        const base = (fp.split(/[\\/]/).pop() || '').toLowerCase();
+        const baseStem = base.replace(/\.[^.]+$/, '');
+        return { name, nameStem, base, baseStem, fpLower: fp.toLowerCase() };
+    };
+
+    // If raw is an exact match for a single item name (even if it contains spaces), return it directly
+    if (raw && !isRandomToken(raw) && !isRangeOperatorToken(raw)) {
+        for (const item of items) {
+            const { name, nameStem, base, baseStem } = extractNames(item);
+            if (name === lower || nameStem === lower || base === lower || baseStem === lower) {
+                return item;
+            }
+        }
+    }
+
+    // Multi-token list operator: select token strictly by `triggerCount` (independent of seed)
+    const tokens = tokenizeFieldOperator(raw);
+    if (tokens.length > 1) {
+        const activeToken = tokens[wrapSlotIndex(triggerIdx, tokens.length)];
+        return resolvePoolItemByQuery(items, activeToken, slotIndex, slotSeed, isSequential, triggerIdx);
+    }
+
+    const rangeSpec = isRangeOperatorToken(raw);
+    if (rangeSpec) {
+        const loIdx = Math.floor(rangeSpec.min);
+        const hiIdx = Math.floor(rangeSpec.max);
+        const span = Math.max(1, hiIdx - loIdx + 1);
+        const prng = mulberry32(hashSeed(slotSeed, slotIndex + triggerIdx, 0xA55E));
+        const chosenIdx = loIdx + Math.floor(prng() * span);
+        return items[wrapSlotIndex(chosenIdx, items.length)] || null;
+    }
+
+    if (!raw || lower === 'rand' || lower === 'random') {
+        if (isSequential) {
+            const idx = wrapSlotIndex(slotSeed + slotIndex + triggerIdx, items.length);
+            return items[idx] || null;
+        }
+        const prng = mulberry32(hashSeed(slotSeed, slotIndex + triggerIdx, 0xA55E));
+        const idx = Math.floor(prng() * items.length);
+        return items[idx] || null;
+    }
+
+    if (/^-?\d+$/.test(raw)) {
+        const parsedIdx = parseInt(raw, 10);
+        const idx = wrapSlotIndex(parsedIdx, items.length);
+        return items[idx] || null;
+    }
+
+    // 1. Exact match on name, stem, or filename
+    for (const item of items) {
+        const { name, nameStem, base, baseStem } = extractNames(item);
+        if (name === lower || nameStem === lower || base === lower || baseStem === lower) {
+            return item;
+        }
+    }
+
+    // 2. Prefix match on name or filename
+    for (const item of items) {
+        const { name, base } = extractNames(item);
+        if ((name && name.startsWith(lower)) || (base && base.startsWith(lower))) {
+            return item;
+        }
+    }
+
+    // 3. Substring match on name, filename, or path
+    for (const item of items) {
+        const { name, base, fpLower } = extractNames(item);
+        if ((name && name.includes(lower)) || (base && base.includes(lower)) || (fpLower && fpLower.includes(lower))) {
+            return item;
+        }
+    }
+
+    return null;
+}
 
 export function parseBpmFromFilename(filename: string): number | null {
     const match = filename.match(/(\d{2,3}(?:\.\d+)?)\s*bpm/i) || filename.match(/(\d{2,3}(?:\.\d+)?)[_\s-]+bpm/i);
@@ -62,32 +167,52 @@ export function populateOwnerSlotsFromPool(
         || ownerNode.type === 'sequence'
         || ownerNode.type === 'Sequence'
         || ownerNode.properties?.node_type === 'sequence';
-    if (isSeq) return;
 
     const rawItems = resolvedSelectedItems || modifierNode.properties.selected_items || [];
     const items = rawItems.filter((item: any) => Boolean(item?.absolute_path || item?.filepath));
     if (items.length === 0) return;
 
     if (!Array.isArray(ownerNode.properties.slots) || ownerNode.properties.slots.length === 0) {
-        const cropStart = Number(ownerNode.properties.crop_start ?? ownerNode.properties.sample_start ?? 0);
-        const cropEnd = Number(ownerNode.properties.crop_end ?? ownerNode.properties.sample_end ?? 1);
-        ownerNode.properties.slots = [{
-            slot: 0,
-            index: 0,
-            filepath: ownerNode.properties.filepath || '',
-            library_item_id: ownerNode.properties.library_item_id,
-            original_bpm: ownerNode.properties.original_bpm,
-            key: ownerNode.properties.key || 'C',
-            crop_start: cropStart,
-            crop_end: cropEnd,
-            sample_start: cropStart,
-            sample_end: cropEnd,
-            pitch_shift: Number(ownerNode.properties.pitch_shift ?? ownerNode.properties.transpose ?? 0),
-            time_stretch: Number(ownerNode.properties.time_stretch ?? ownerNode.properties.stretch_factor ?? 1),
-        }];
+        if (typeof ownerNode.getSlots === 'function') {
+            ownerNode.getSlots();
+        } else if (isSeq) {
+            ownerNode.properties.slots = [{
+                slot: 0,
+                index: 0,
+                pool_query: ownerNode.properties.pool_query,
+                filepath: ownerNode.properties.filepath || '',
+                library_item_id: ownerNode.properties.library_item_id,
+                sequence: Array.isArray(ownerNode.properties.sequence) ? [...ownerNode.properties.sequence] : [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+                step_parameters: Array.isArray(ownerNode.properties.step_parameters) ? ownerNode.properties.step_parameters : [],
+                sample_slot: String(ownerNode.properties.sample_slot ?? '*'),
+                step_length: Number(ownerNode.properties.step_length ?? 0.25),
+            }];
+        } else {
+            const cropStart = Number(ownerNode.properties.crop_start ?? ownerNode.properties.sample_start ?? 0);
+            const cropEnd = Number(ownerNode.properties.crop_end ?? ownerNode.properties.sample_end ?? 1);
+            ownerNode.properties.slots = [{
+                slot: 0,
+                index: 0,
+                pool_query: ownerNode.properties.pool_query,
+                filepath: ownerNode.properties.filepath || '',
+                library_item_id: ownerNode.properties.library_item_id,
+                original_bpm: ownerNode.properties.original_bpm,
+                key: ownerNode.properties.key || 'C',
+                crop_start: cropStart,
+                crop_end: cropEnd,
+                sample_start: cropStart,
+                sample_end: cropEnd,
+                pitch_shift: Number(ownerNode.properties.pitch_shift ?? ownerNode.properties.transpose ?? 0),
+                time_stretch: Number(ownerNode.properties.time_stretch ?? ownerNode.properties.stretch_factor ?? 1),
+            }];
+        }
     }
 
     const slots: NodeSlot[] = ownerNode.properties.slots;
+    const activeIdx = Math.min(
+        Math.max(0, Number(ownerNode.activeSlotIndex ?? ownerNode.properties.active_slot ?? 0)),
+        slots.length - 1
+    );
     const seedSalt = Number(modifierNode.properties.seed_salt || ownerNode.properties.seed_salt || 0) * 9973;
     const slotSeeds = resolveModifierSlotSeeds(
         modifierNode.properties.seed ?? 42,
@@ -95,40 +220,56 @@ export function populateOwnerSlotsFromPool(
         Number(ownerNode.id || modifierNode.id || 1) + seedSalt
     );
     const isSequential = modifierNode.properties.playbackMode === 'Sequential';
+    const triggerCount = Math.max(0, Math.floor(Number(ownerNode.properties.trigger_count) || 0));
 
     for (let s = 0; s < slots.length; s++) {
-        let idx = 0;
-        if (isSequential) {
-            idx = ((slotSeeds[0] + s) % items.length + items.length) % items.length;
-        } else {
-            const prng = mulberry32(hashSeed(slotSeeds[s], s, 0xA55E));
-            idx = Math.floor(prng() * items.length);
+        const slotQuery = slots[s]?.pool_query ?? (s === activeIdx ? ownerNode.properties?.pool_query : undefined);
+        const hasExistingFixedAsset = Boolean(slots[s]?.filepath) && slotQuery === '';
+        if (hasExistingFixedAsset) {
+            continue;
         }
-        const chosen = items[idx];
+        const seedForSlot = isSequential ? slotSeeds[0] : slotSeeds[s];
+        const chosen = resolvePoolItemByQuery(items, slotQuery, s, seedForSlot, isSequential, triggerCount)
+            || resolvePoolItemByQuery(items, 'rand', s, seedForSlot, isSequential, triggerCount);
         if (!chosen) continue;
         const filepath = String(chosen.absolute_path || chosen.filepath || '');
         const bpm = chosen.bpm ?? chosen.original_bpm ?? parseBpmFromFilename(filepath);
         const key = chosen.key != null ? String(chosen.key).trim() : undefined;
 
-        slots[s] = {
-            ...(slots[s] || {}),
-            slot: s,
-            index: s,
-            filepath,
-            library_item_id: chosen.id,
-            original_bpm: bpm ?? slots[s]?.original_bpm,
-            key: key || slots[s]?.key || 'C',
-            ...(Number.isFinite(Number(chosen.duration_seconds)) && Number(chosen.duration_seconds) > 0
-                ? { duration_seconds: Number(chosen.duration_seconds) }
-                : {}),
-        };
+        if (isSeq) {
+            slots[s] = {
+                ...(slots[s] || {}),
+                slot: s,
+                index: s,
+                filepath,
+                library_item_id: chosen.id ?? slots[s]?.library_item_id,
+                sequence_name: chosen.name || slots[s]?.sequence_name,
+            };
+        } else {
+            slots[s] = {
+                ...(slots[s] || {}),
+                slot: s,
+                index: s,
+                filepath,
+                library_item_id: chosen.id,
+                original_bpm: bpm ?? slots[s]?.original_bpm,
+                key: key || slots[s]?.key || 'C',
+                ...(Number.isFinite(Number(chosen.duration_seconds)) && Number(chosen.duration_seconds) > 0
+                    ? { duration_seconds: Number(chosen.duration_seconds) }
+                    : {}),
+            };
+        }
     }
 
-    const activeIdx = Math.min(
-        Math.max(0, Number(ownerNode.activeSlotIndex ?? ownerNode.properties.active_slot ?? 0)),
-        slots.length - 1
-    );
     const activeSlot = slots[activeIdx] || slots[0];
+    if (isSeq) {
+        if (activeSlot?.filepath) {
+            modifierNode.properties.output_value = activeSlot.filepath;
+            if (activeSlot.library_item_id != null) modifierNode.properties.output_item_id = activeSlot.library_item_id;
+        }
+        return;
+    }
+
     if (activeSlot?.filepath) {
         if (typeof ownerNode.updateProperty === 'function') {
             if (ownerNode.properties.filepath !== activeSlot.filepath) {
@@ -386,13 +527,21 @@ export async function resolveAssetFilterNode(
             || ownerNode.type === 'Sequence'
             || ownerNode.properties?.node_type === 'sequence';
         if (isSeq && assetPath) {
+            if (requestItems.length > 0) {
+                populateOwnerSlotsFromPool(modifierNode, ownerNode, requestItems);
+            }
+            const activeIdx = Math.max(0, Number(ownerNode.activeSlotIndex ?? ownerNode.properties?.active_slot ?? 0));
+            const seqSlot = Array.isArray(ownerNode.properties?.slots) ? ownerNode.properties.slots[activeIdx] : undefined;
+            const seqAssetPath = String(seqSlot?.filepath || assetPath);
+            const seqItemId = seqSlot?.library_item_id ?? libraryItemId;
+            const seqItemName = seqSlot?.sequence_name || selectedItem?.name || seqAssetPath.split(/[\\/]/).pop();
             const applySequence = typeof window !== 'undefined' ? (window as any).applyLibraryItemToSequence : undefined;
             if (typeof applySequence === 'function') {
                 await applySequence(ownerNode, {
-                    id: libraryItemId,
-                    filepath: assetPath,
-                    itemType: libraryItem?.type || selectedItem?.type || (assetPath.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi'),
-                    name: selectedItem?.name || assetPath.split(/[\\/]/).pop(),
+                    id: seqItemId,
+                    filepath: seqAssetPath,
+                    itemType: libraryItem?.type || selectedItem?.type || (seqAssetPath.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi'),
+                    name: seqItemName,
                     bpm: selectedItem?.bpm || null,
                     key: resolvedKey || null
                 });
@@ -515,7 +664,9 @@ export async function resolveAssignedAssetFilters(
                     const rawSlots = Array.isArray(sampleNode.properties.slots) ? sampleNode.properties.slots : [];
                     const hasUnpopulatedSlots = !isSeq && rawSlots.length > 0 && rawSlots.some((s: any) => !s?.filepath);
 
-                    const assetPath = modifier.properties.output_value || sampleNode.properties?.filepath;
+                    const activeSlotIdx = Math.max(0, Number(sampleNode.activeSlotIndex ?? sampleNode.properties?.active_slot ?? 0));
+                    const activeSlotFp = rawSlots[activeSlotIdx]?.filepath;
+                    const assetPath = sampleNode.properties?.filepath || activeSlotFp || modifier.properties.output_value;
                     if (assetPath && !modifier.properties.output_value) {
                         modifier.properties.output_value = assetPath;
                         modifierChanged = true;

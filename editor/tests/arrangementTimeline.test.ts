@@ -140,14 +140,10 @@ test('ArrangementNode adapts section cuts proportionally when total_bars changes
     assert.deepEqual(arr.properties.section_points, [8]);
 });
 
-test('ArrangementNode registers section_sample_start as Start Offset', async () => {
+test('ArrangementNode does not expose section_sample_start', async () => {
     const { ArrangementNode } = await import('../src/nodes/ArrangementNode.ts');
     const field = ArrangementNode.fields.find(f => f.key === 'section_sample_start');
-    assert.ok(field, 'section_sample_start field schema must be registered');
-    assert.equal(field?.label, 'Start Offset');
-    assert.equal(field?.type, 'slider');
-    assert.equal(field?.min, 0);
-    assert.equal(field?.max, 1);
+    assert.equal(field, undefined, 'section_sample_start must be removed from ArrangementNode');
 });
 
 test('compositeArrangementBuffer loops onto itself when continuous and stops at end of sample when quantized', async () => {
@@ -173,9 +169,9 @@ test('compositeArrangementBuffer loops onto itself when continuous and stops at 
         };
 
         const sr = 100;
-        const len = 200; // 1 bar at 120 bpm (2.0s = 200 samples)
+        const len = 50; // 0.25 bar clip inside a 1-bar (200 samples) arrangement
         const channelData = new Float32Array(len);
-        for (let i = 0; i < len; i++) channelData[i] = i;
+        for (let i = 0; i < len; i++) channelData[i] = i + 1;
 
         const mockBuffer: any = {
             sampleRate: sr,
@@ -185,7 +181,7 @@ test('compositeArrangementBuffer loops onto itself when continuous and stops at 
             getChannelData: () => channelData
         };
 
-        // 1. Continuous quantize: loop wraps onto itself starting from Start Offset
+        // 1. Continuous quantize: loop wraps onto itself across the 200 samples
         const contOut = compositeArrangementBuffer(
             mockBuffer,
             [],
@@ -193,20 +189,14 @@ test('compositeArrangementBuffer loops onto itself when continuous and stops at 
             1.0,
             120,
             {
-                sectionSampleStart: [0.25], // sample index 50
                 sectionQuant: ['auto']
             }
         );
         assert.ok(contOut);
         const contData = contOut.getChannelData(0);
         assert.equal(contData.length, 200);
-        // First 150 samples: 50..199
-        for (let i = 0; i < 150; i++) {
-            assert.equal(contData[i], 50 + i);
-        }
-        // Next 50 samples: 0..49 (looped onto itself)
-        for (let i = 0; i < 50; i++) {
-            assert.equal(contData[150 + i], i);
+        for (let i = 0; i < 200; i++) {
+            assert.equal(contData[i], (i % 50) + 1);
         }
 
         // 2. Non-continuous quantize: playback stops when reaching the end of the sample
@@ -217,7 +207,6 @@ test('compositeArrangementBuffer loops onto itself when continuous and stops at 
             1.0,
             120,
             {
-                sectionSampleStart: [0.75], // sample index 150 (50 samples remain)
                 sectionQuant: ['0.5'],      // half bar = 100 samples
                 sectionQuantAnchor: ['start']
             }
@@ -225,16 +214,16 @@ test('compositeArrangementBuffer loops onto itself when continuous and stops at 
         assert.ok(quantOut);
         const quantData = quantOut.getChannelData(0);
         assert.equal(quantData.length, 200);
-        // Cell 1: 0..50 plays 150..199, 50..100 is silent (0)
+        // Cell 1: 0..50 plays 1..50, 50..100 is silent (0)
         for (let i = 0; i < 50; i++) {
-            assert.equal(quantData[i], 150 + i);
+            assert.equal(quantData[i], i + 1);
         }
         for (let i = 50; i < 100; i++) {
             assert.equal(quantData[i], 0);
         }
-        // Cell 2: 100..150 plays 150..199, 150..200 is silent (0)
+        // Cell 2: 100..150 plays 1..50, 150..200 is silent (0)
         for (let i = 0; i < 50; i++) {
-            assert.equal(quantData[100 + i], 150 + i);
+            assert.equal(quantData[100 + i], i + 1);
         }
         for (let i = 150; i < 200; i++) {
             assert.equal(quantData[i], 0);

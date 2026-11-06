@@ -129,9 +129,13 @@ def build_node_object(node_data: Any) -> AudioObject:
             seed_mode=_get_val(node_data, "seed_mode", "moving"),
             filepath=actual_path,
             slots=_get_val(node_data, "slots", None),
-            sample_slot=_get_val(node_data, "sample_slot", "0"),
+            active_slot=_get_val(node_data, "active_slot", 0),
+            sample_slot=_get_val(node_data, "sample_slot", "*"),
             step_slots=_get_val(node_data, "step_slots", None),
             cycle_seeds=_get_val(node_data, "cycle_seeds", None),
+            pool_query=_get_val(node_data, "pool_query", None),
+            selected_items=_get_val(node_data, "selected_items", []) or [],
+            field_operators=_get_val(node_data, "field_operators", None),
         )
     elif node_type == "arrangement":
         obj = ArrangementObject(
@@ -144,7 +148,6 @@ def build_node_object(node_data: Any) -> AudioObject:
             section_points=_get_val(node_data, "section_points", None),
             section_enabled=_get_val(node_data, "section_enabled", None),
             section_probability=_get_val(node_data, "section_probability", None),
-            section_sample_start=_get_val(node_data, "section_sample_start", None),
             section_quant=_get_val(node_data, "section_quant", None),
             section_quant_anchor=_get_val(node_data, "section_quant_anchor", None),
             section_slots=_get_val(node_data, "section_slots", None),
@@ -166,12 +169,24 @@ def build_node_object(node_data: Any) -> AudioObject:
             (s.get("filepath") if isinstance(s, dict) else getattr(s, "filepath", None))
             for s in raw_slots
         )
+        has_pool_query_or_ops = (
+            bool(_get_val(node_data, "pool_query", None))
+            or bool(_get_val(node_data, "field_operators", None))
+            or any(
+                (
+                    bool(s.get("pool_query")) or bool(s.get("field_operators"))
+                    if isinstance(s, dict)
+                    else bool(getattr(s, "pool_query", None)) or bool(getattr(s, "field_operators", None))
+                )
+                for s in raw_slots
+            )
+        )
         is_dynamic_pool_mode = refresh_mode in {
             "local", "local_refresh", "self_render",
             "parent", "parent_refresh", "parent_render",
         }
         is_global_pool_mode = refresh_mode in {"global", "global_refresh"}
-        if not has_multi_slots and selected_items and (
+        if not has_multi_slots and not has_pool_query_or_ops and selected_items and (
             is_dynamic_pool_mode
             or (is_global_pool_mode and not (actual_path or has_populated_slots))
         ):
@@ -191,6 +206,11 @@ def build_node_object(node_data: Any) -> AudioObject:
                 filepath=actual_path,
                 node_type="sample",
                 slots=raw_slots,
+                active_slot=_get_val(node_data, "active_slot", 0),
+                pool_query=_get_val(node_data, "pool_query", None),
+                selected_items=selected_items,
+                field_operators=_get_val(node_data, "field_operators", None),
+                seed=_get_val(node_data, "seed", None),
             )
     else:
         obj = AudioObject(

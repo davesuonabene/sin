@@ -1,3 +1,16 @@
+export type VisualizationTypeId =
+    | 'loop'
+    | 'realtime'
+    | 'spectrum'
+    | 'sample'
+    | 'sequence'
+    | 'arrangement';
+
+export interface VisualizationTypeOption {
+    id: VisualizationTypeId;
+    label: string;
+}
+
 export interface RenderBox {
     x: number;
     y: number;
@@ -14,6 +27,7 @@ export interface SignalTelemetry {
     isPlaying: boolean;       // Playback transport active
     activeNodeIds?: Set<number | string>;
     realtimeScope?: Float32Array | null; // Real-time oscilloscope waveform buffer
+    realtimeSpectrum?: Uint8Array | null; // Real-time FFT frequency spectrum buffer
 }
 
 export interface WaveformSignal {
@@ -58,7 +72,6 @@ export interface ArrangementSection {
     startBar: number;
     lengthBars: number;
     probability: number;      // 0.0 - 1.0
-    sampleStart: number;      // 0.0 - 1.0
     quant?: string;
     label?: string;
     slotIndex?: number;       // Resolved upstream slot index for this section

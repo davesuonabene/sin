@@ -171,19 +171,30 @@ class TestSinCli(unittest.TestCase):
 
     def test_workspace_save_bare_name_resolution(self):
         """CLI resolves workspace saves by bare name in saves/."""
-        # Test compose info with bare name
-        result_info = self.runner.invoke(app, ["compose", "info", "ILOVEIT", "--json"])
-        self.assertEqual(result_info.exit_code, 0)
-        info = json.loads(result_info.stdout)
-        self.assertEqual(info["format"], "workspace-save")
-        self.assertEqual(info["bpm"], 102)
+        source_save = PROJECT_ROOT / "saves" / "0004.json"
+        test_save = PROJECT_ROOT / "saves" / "_cli_test_bare_name.json"
+        try:
+            with open(source_save, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            with open(test_save, "w", encoding="utf-8") as f:
+                json.dump(data, f)
 
-        # Test render with bare name in dry-run mode
-        result_render = self.runner.invoke(app, ["render", "ILOVEIT", "--dry-run", "--json"])
-        self.assertEqual(result_render.exit_code, 0)
-        rendered = json.loads(result_render.stdout)
-        self.assertEqual(rendered["status"], "success")
-        self.assertTrue(rendered["dry_run"])
+            # Test compose info with bare name
+            result_info = self.runner.invoke(app, ["compose", "info", "_cli_test_bare_name", "--json"])
+            self.assertEqual(result_info.exit_code, 0)
+            info = json.loads(result_info.stdout)
+            self.assertEqual(info["format"], "workspace-save")
+            self.assertEqual(info["bpm"], 142)
+
+            # Test render with bare name in dry-run mode
+            result_render = self.runner.invoke(app, ["render", "_cli_test_bare_name", "--dry-run", "--json"])
+            self.assertEqual(result_render.exit_code, 0)
+            rendered = json.loads(result_render.stdout)
+            self.assertEqual(rendered["status"], "success")
+            self.assertTrue(rendered["dry_run"])
+        finally:
+            if test_save.is_file():
+                test_save.unlink()
 
 
 if __name__ == "__main__":

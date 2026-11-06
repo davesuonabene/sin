@@ -983,10 +983,6 @@
             1,
             1
           ],
-          "section_sample_start": [
-            0,
-            0
-          ],
           "section_quant": [
             "auto",
             "auto"
@@ -2007,10 +2003,6 @@
             1,
             1
           ],
-          "section_sample_start": [
-            0,
-            0.1
-          ],
           "section_quant": [
             "auto",
             "auto"
@@ -2223,10 +2215,6 @@
           "section_probability": [
             1,
             1
-          ],
-          "section_sample_start": [
-            0,
-            0.5
           ],
           "section_quant": [
             "auto",
@@ -3062,11 +3050,6 @@
             1,
             1
           ],
-          "section_sample_start": [
-            0,
-            0,
-            0
-          ],
           "section_quant": [
             "auto",
             "auto",
@@ -3179,10 +3162,6 @@
           "section_probability": [
             0.75,
             1
-          ],
-          "section_sample_start": [
-            0,
-            0
           ],
           "section_quant": [
             "auto",
@@ -3516,10 +3495,6 @@
           "section_probability": [
             1,
             1
-          ],
-          "section_sample_start": [
-            0,
-            0
           ],
           "section_quant": [
             "auto",
@@ -3905,10 +3880,6 @@
           "section_probability": [
             1,
             1
-          ],
-          "section_sample_start": [
-            0,
-            0.25
           ],
           "section_quant": [
             "auto",

@@ -46,9 +46,8 @@ class System:
         node_entry["duration_seconds"] = float(duration_seconds)
         if extra:
             node_entry.update(extra)
-        # Store numpy buffer only for composite track nodes that require intermediate stem encoding.
-        # Leaf nodes (samples, pools, sequences, arrangements) only provide manifest metadata.
-        if node_type in ("track", "master", "bus", "arrangement"):
+        # Store numpy buffer for composite and sequence nodes that require intermediate stem encoding.
+        if node_type in ("track", "master", "bus", "arrangement", "sequence"):
             if not hasattr(self, "_node_stems"):
                 self._node_stems = {}
             self._node_stems[str(node_id)] = audio_array
@@ -62,11 +61,26 @@ class System:
         })
         node_entry.setdefault("events", []).append(event)
 
-    def capture_manifest_state(self) -> dict:
+    def capture_manifest_state(self, allowed_node_ids: Optional[set[str]] = None) -> dict:
         import copy
+        manifest_nodes = self.manifest.get("nodes", {})
+        node_stems = getattr(self, "_node_stems", {})
+        if allowed_node_ids is not None:
+            return {
+                "manifest_nodes": {
+                    nid: copy.deepcopy(nentry)
+                    for nid, nentry in manifest_nodes.items()
+                    if str(nid) in allowed_node_ids
+                },
+                "node_stems": {
+                    nid: stem
+                    for nid, stem in node_stems.items()
+                    if str(nid) in allowed_node_ids
+                },
+            }
         return {
-            "manifest_nodes": copy.deepcopy(self.manifest.get("nodes", {})),
-            "node_stems": getattr(self, "_node_stems", {}).copy()
+            "manifest_nodes": copy.deepcopy(manifest_nodes),
+            "node_stems": node_stems.copy()
         }
 
     def restore_manifest_state(self, state: dict) -> None:

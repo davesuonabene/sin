@@ -27,6 +27,7 @@ class FxModuleModel(BaseModel):
 class NodeSlotModel(BaseModel):
     slot: int = 0
     label: Optional[str] = None
+    pool_query: Optional[str] = None
     filepath: Optional[str] = None
     library_item_id: Optional[Union[int, str]] = None
     original_bpm: Optional[float] = None
@@ -34,12 +35,15 @@ class NodeSlotModel(BaseModel):
     duration_seconds: Optional[float] = None
     crop_start: Optional[float] = None
     crop_end: Optional[float] = None
+    pitch_shift: Optional[float] = None
+    time_stretch: Optional[float] = None
     sequence: Optional[List[int]] = None
     step_parameters: Optional[List[Dict[str, Any]]] = None
     sample_slot: Optional[str] = None
     step_slots: Optional[List[int]] = None
     seed: Optional[Union[str, float, int]] = None
     cycle_seeds: Optional[List[int]] = None
+    field_operators: Optional[Dict[str, str]] = None
 
     def get(self, key: str, default: Any = None) -> Any:
         val = getattr(self, key, default)
@@ -84,7 +88,10 @@ class AudioNodeModel(BaseModel):
         "parent_render", "self_render", "manual", "fixed"
     ] = "off"
     slots: List[NodeSlotModel] = []
-    sample_slot: Optional[str] = "0"
+    active_slot: int = 0
+    pool_query: Optional[str] = None
+    field_operators: Optional[Dict[str, str]] = None
+    sample_slot: Optional[str] = "*"
     step_slots: List[int] = []
     cycle_seeds: List[int] = []
     section_slots: List[int] = []
@@ -93,7 +100,6 @@ class AudioNodeModel(BaseModel):
     section_points: List[float] = []
     section_enabled: List[bool] = []
     section_probability: List[float] = []
-    section_sample_start: List[float] = []
     section_quant: List[str] = []
     section_quant_anchor: List[str] = []
     quant: Optional[str] = "none"
@@ -132,7 +138,7 @@ class AudioNodeModel(BaseModel):
         return str(v).lower()
 
     @field_validator('section_points', 'section_enabled', 'section_probability',
-                     'section_sample_start', 'section_quant', 'section_quant_anchor',
+                     'section_quant', 'section_quant_anchor',
                      'slots', 'step_slots', 'cycle_seeds', 'section_slots',
                      'chain', 'children', mode='before')
     @classmethod

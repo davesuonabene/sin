@@ -47,7 +47,6 @@ export class AssetFilterNode extends ModulatorNode {
 
     static defaultColor = "#7e22ce";
     static defaultIcon = "search";
-    static defaultShape = "diamond" as const;
     static badgeLabel = "PATH";
     static nodeType = "asset_filter";
     static defaultTab = "FILTER";
@@ -73,8 +72,7 @@ export class AssetFilterNode extends ModulatorNode {
             seed: 42,
             seed_refresh: true,
             color: "#7e22ce",
-            icon: "search",
-            shape: "diamond"
+            icon: "search"
         };
 
     }

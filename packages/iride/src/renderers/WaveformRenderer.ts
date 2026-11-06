@@ -1,50 +1,13 @@
 import { BaseSignalRenderer } from './BaseSignalRenderer.ts';
 import { type RenderBox, type SignalTelemetry, type WaveformSignal, type RendererOptions } from '../types.ts';
 import { extractPeaksFromBuffer } from '../utils/peakExtractor.ts';
-import { drawPlayhead, drawRoundRect } from '../utils/drawingUtils.ts';
-
-function colorWithAlpha(color: string, alpha: number): string {
-    if (!color) return `rgba(5, 150, 105, ${alpha})`;
-    if (color.startsWith('#')) {
-        let c = color.slice(1);
-        if (c.length === 3) c = c.split('').map(x => x + x).join('');
-        const num = parseInt(c, 16);
-        if (!isNaN(num)) {
-            const r = (num >> 16) & 255;
-            const g = (num >> 8) & 255;
-            const b = num & 255;
-            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-        }
-    }
-    if (color.startsWith('rgb(')) {
-        return color.replace('rgb(', 'rgba(').replace(')', `, ${alpha})`);
-    }
-    if (color.startsWith('rgba(')) {
-        return color.replace(/[\d\.]+\)$/, `${alpha})`);
-    }
-    return color;
-}
-
-function getOrCreateOffscreenCanvas(existing: HTMLCanvasElement | null, width: number, height: number): HTMLCanvasElement | null {
-    if (typeof document === 'undefined') return null;
-    const w = Math.max(1, Math.floor(width));
-    const h = Math.max(1, Math.floor(height));
-    if (existing) {
-        if (existing.width !== w || existing.height !== h) {
-            existing.width = w;
-            existing.height = h;
-        }
-        return existing;
-    }
-    try {
-        const c = document.createElement('canvas');
-        c.width = w;
-        c.height = h;
-        return c;
-    } catch {
-        return null;
-    }
-}
+import {
+    colorWithAlpha,
+    drawPlayhead,
+    drawRoundRect,
+    drawSlotBadge,
+    getOrCreateOffscreenCanvas
+} from '../utils/drawingUtils.ts';
 
 export class WaveformRenderer extends BaseSignalRenderer {
     private signal: WaveformSignal | null = null;
@@ -53,11 +16,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
     private cachedWidth = 0;
     private maskCanvas: HTMLCanvasElement | null = null;
     private tintCanvas: HTMLCanvasElement | null = null;
-    private maskFingerprint: string = '';
-    private sweepHistoryMin = new Float32Array(256);
-    private sweepHistoryMax = new Float32Array(256);
-    private sweepIndex = 0;
-    private lastPhase = 0;
+    private maskFingerprint = '';
 
     constructor(options: RendererOptions = {}) {
         super({
@@ -71,18 +30,10 @@ export class WaveformRenderer extends BaseSignalRenderer {
         if (!signal?.buffer && !signal?.peaks) {
             this.cachedPeaks = null;
             this.cachedBuffer = null;
-            this.sweepHistoryMin.fill(0);
-            this.sweepHistoryMax.fill(0);
-            this.sweepIndex = 0;
-            this.lastPhase = 0;
             this.maskFingerprint = '';
         } else if (signal.buffer && signal.buffer !== this.cachedBuffer) {
             this.cachedPeaks = null;
             this.cachedBuffer = signal.buffer;
-            this.sweepHistoryMin.fill(0);
-            this.sweepHistoryMax.fill(0);
-            this.sweepIndex = 0;
-            this.lastPhase = 0;
             this.maskFingerprint = '';
         } else if (signal.peaks && signal.peaks !== this.cachedPeaks) {
             this.cachedPeaks = signal.peaks;
@@ -100,12 +51,9 @@ export class WaveformRenderer extends BaseSignalRenderer {
         if (width <= 0 || height <= 0) return;
 
         ctx.save();
-
-        // Clip to viewport
         drawRoundRect(ctx, x, y, width, height, 4);
         ctx.clip();
 
-        // Background: clean light background matching theme
         ctx.fillStyle = this.options.backgroundColor || '#ffffff';
         ctx.fillRect(x, y, width, height);
 
@@ -113,24 +61,8 @@ export class WaveformRenderer extends BaseSignalRenderer {
         const signal = this.signal;
         const accent = signal?.accentColor || this.options.accentColor || '#059669';
         const isPlaying = Boolean(telemetry?.isPlaying);
-        const scopeMode = this.options.scopeMode || (this.options.isMasterScope ? 'drawn' : 'full');
 
-        // MODE 1: Real-Time Drawn Oscilloscope Sweep (Left-to-Right from RAM preview)
-        if (scopeMode === 'drawn' && isPlaying) {
-            this.renderDrawnScope(ctx, x, y, width, height, midY, accent, telemetry);
-            ctx.restore();
-            return;
-        }
-
-        // MODE 2: Real-Time Scrolled Oscilloscope (Scrolling window from RAM preview)
-        if (scopeMode === 'scrolled' && isPlaying) {
-            this.renderScrolledScope(ctx, x, y, width, height, midY, accent, telemetry);
-            ctx.restore();
-            return;
-        }
-
-        // MODE 3: Full Static Stem / Sample Waveform with Scrubber
-        // Center line
+        // Center reference line
         ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -138,7 +70,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
         ctx.lineTo(x + width, midY);
         ctx.stroke();
 
-        // Check if we have peaks or need to extract them from buffer
+        // Extract peaks from AudioBuffer when buffer or viewport width changes
         if (signal?.buffer && (!this.cachedPeaks || this.cachedWidth !== Math.floor(width) || this.cachedBuffer !== signal.buffer)) {
             this.cachedWidth = Math.floor(width);
             this.cachedBuffer = signal.buffer;
@@ -147,7 +79,6 @@ export class WaveformRenderer extends BaseSignalRenderer {
             const totalDur = (signal.duration && signal.duration > 0) ? signal.duration : buf.duration;
             const bufferRatio = Math.min(1.0, Math.max(0.01, buf.duration / Math.max(0.01, totalDur)));
             if (bufferRatio < 0.99) {
-                // Buffer is progressively filling: extract peaks proportionally up to buffer front
                 const bufferedCols = Math.max(1, Math.min(this.cachedWidth, Math.floor(this.cachedWidth * bufferRatio)));
                 const partialPeaks = extractPeaksFromBuffer(buf, bufferedCols);
                 const fullPeaks = new Float32Array(this.cachedWidth * 2);
@@ -162,10 +93,6 @@ export class WaveformRenderer extends BaseSignalRenderer {
         }
 
         const peaks = this.cachedPeaks;
-
-        // Trigger-reactive logic for samples:
-        // If playback is running and the node specifies isTriggered:
-        // When not triggered, dim the waveform. When triggered, light up bright and sweep triggerProgress.
         const hasTriggerState = signal?.isTriggered !== undefined;
         const isTriggerActive = hasTriggerState ? Boolean(signal?.isTriggered) : true;
         const isDimmed = isPlaying && hasTriggerState && !isTriggerActive;
@@ -175,7 +102,6 @@ export class WaveformRenderer extends BaseSignalRenderer {
             const colWidth = width / columns;
             const halfHeight = (height - 4) * 0.5;
 
-            // Crop boundaries (if any)
             const cropStartNorm = signal?.cropStart != null ? Math.max(0, Math.min(1, signal.cropStart)) : 0;
             const cropEndNorm = signal?.cropEnd != null ? Math.max(0, Math.min(1, signal.cropEnd)) : 1;
             const cropStartX = x + cropStartNorm * width;
@@ -186,8 +112,11 @@ export class WaveformRenderer extends BaseSignalRenderer {
             const bufferFrontX = hasBufferConstraint ? x + Math.max(0, Math.min(1, bufferedProgress)) * width : null;
             const isInvalidated = Boolean(signal?.isInvalidated);
 
-            // Waveform columns (draw truthful audio peaks directly from engine via cached mask)
-            const peakHash = `${peaks.length}_${peaks[0]?.toFixed(2)}_${peaks[Math.floor(columns / 2) * 2]?.toFixed(2)}_${peaks[peaks.length - 1]?.toFixed(2)}`;
+            let peakChecksum = 0;
+            for (let i = 0; i < peaks.length; i++) {
+                peakChecksum = ((peakChecksum * 31) + Math.round(peaks[i] * 1000)) | 0;
+            }
+            const peakHash = `${peaks.length}_${peakChecksum}`;
             const bufId = signal?.buffer ? `${signal.buffer.length}_${signal.buffer.duration.toFixed(3)}` : 'nobuf';
             const currentFp = `${bufId}_${peakHash}_${columns}_${Math.floor(width)}_${Math.floor(height)}_${cropStartNorm}_${cropEndNorm}`;
             const mask = getOrCreateOffscreenCanvas(this.maskCanvas, width, height);
@@ -213,16 +142,13 @@ export class WaveformRenderer extends BaseSignalRenderer {
                             const colX = i * colWidth;
                             const h = Math.max(1, bottom - top);
 
-                            if (colX < cropStartNorm * width || colX > cropEndNorm * width) {
-                                mCtx.fillStyle = 'rgba(255, 255, 255, 0.25)';
-                            } else {
-                                mCtx.fillStyle = '#ffffff';
-                            }
+                            mCtx.fillStyle = (colX < cropStartNorm * width || colX > cropEndNorm * width)
+                                ? 'rgba(255, 255, 255, 0.25)'
+                                : '#ffffff';
                             mCtx.fillRect(colX, top, Math.max(1, colWidth - 0.5), h);
                         }
                     }
 
-                    // Tint the cached mask with accent color
                     tCtx.clearRect(0, 0, width, height);
                     tCtx.drawImage(mask, 0, 0);
                     tCtx.globalCompositeOperation = 'source-in';
@@ -260,7 +186,6 @@ export class WaveformRenderer extends BaseSignalRenderer {
                 }
             }
 
-            // Draw buffer-fill leading front edge
             if (bufferFrontX != null) {
                 ctx.strokeStyle = '#38bdf8';
                 ctx.lineWidth = 1.25;
@@ -270,7 +195,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
                 ctx.stroke();
             }
 
-            // Draw crop lines (only when not playing or when editing)
+            // Sample crop boundaries (only when crop is active on SampleNode)
             if (!isPlaying) {
                 if (cropStartNorm > 0.001) {
                     ctx.strokeStyle = '#f59e0b';
@@ -289,29 +214,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
                     ctx.stroke();
                 }
             }
-        } else if (isPlaying && telemetry?.realtimeScope && telemetry.realtimeScope.length >= 2) {
-            // Live real-time scope sweep during playback when static buffer peaks are not yet extracted
-            const scope = telemetry.realtimeScope;
-            const step = Math.max(1, Math.floor(scope.length / width));
-            const ampScale = (height - 6) * 0.45;
-            ctx.strokeStyle = accent;
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            let first = true;
-            for (let i = 0; i < width; i++) {
-                const sampleIdx = Math.min(scope.length - 1, i * step);
-                const val = scope[sampleIdx] || 0;
-                const plotY = midY - val * ampScale;
-                if (first) {
-                    ctx.moveTo(x + i, plotY);
-                    first = false;
-                } else {
-                    ctx.lineTo(x + i, plotY);
-                }
-            }
-            ctx.stroke();
         } else {
-            // Idle placeholder line
             ctx.strokeStyle = isDimmed ? colorWithAlpha(accent, 0.15) : colorWithAlpha(accent, 0.35);
             ctx.lineWidth = 1.5;
             ctx.beginPath();
@@ -328,313 +231,29 @@ export class WaveformRenderer extends BaseSignalRenderer {
             }
         }
 
-        // Live Playhead Scrubber
+        // Playhead Needle
         if (isPlaying) {
             if (signal?.playbackProgress != null) {
-                // Explicit node-level playback progress (e.g. sample length loop follow)
-                const playheadX = x + Math.max(0, Math.min(1, signal.playbackProgress)) * width;
-                drawPlayhead(ctx, playheadX, y, y + height, '#0284c7');
+                if (!hasTriggerState || isTriggerActive) {
+                    const playheadX = x + Math.max(0, Math.min(1, signal.playbackProgress)) * width;
+                    drawPlayhead(ctx, playheadX, y, y + height, '#0284c7');
+                }
             } else if (hasTriggerState) {
-                // In trigger-reactive mode: only sweep when triggered
                 if (isTriggerActive && signal?.triggerProgress != null) {
                     const playheadX = x + Math.max(0, Math.min(1, signal.triggerProgress)) * width;
                     drawPlayhead(ctx, playheadX, y, y + height, '#0284c7');
                 }
             } else if (telemetry && telemetry.duration > 0) {
-                // Continuous playhead across full stem
-                const progress = Math.max(0, Math.min(1, telemetry.time / telemetry.duration));
+                const progress = Math.max(0, Math.min(1, ((telemetry.time % telemetry.duration) + telemetry.duration) % telemetry.duration / telemetry.duration));
                 const playheadX = x + progress * width;
                 drawPlayhead(ctx, playheadX, y, y + height, '#0284c7');
             }
         }
 
-        if (!this.options.minified && (signal?.slotCount ?? 1) > 1) {
-            const label = `[${signal?.activeSlot ?? 0}/${signal?.slotCount}]`;
-            ctx.font = 'bold 8px Inter, monospace';
-            const textW = ctx.measureText(label).width;
-            const pillW = textW + 6;
-            const pillH = 11;
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
-            drawRoundRect(ctx, x + 3, y + 3, pillW, pillH, 2.5);
-            ctx.fill();
-            ctx.fillStyle = '#ffffff';
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(label, x + 6, y + 3 + pillH * 0.5);
+        if (!this.options.minified) {
+            drawSlotBadge(ctx, x, y, signal?.activeSlot, signal?.slotCount);
         }
 
         ctx.restore();
     }
-
-    private getPeakFromBuffer(
-        buffer: AudioBuffer,
-        startTime: number,
-        endTime: number,
-        gain: number = 1.0
-    ): { min: number; max: number } {
-        const sr = buffer.sampleRate;
-        const totalSamples = buffer.length;
-        const startSample = Math.max(0, Math.floor(startTime * sr));
-        const endSample = Math.min(totalSamples, Math.max(startSample + 1, Math.ceil(endTime * sr)));
-
-        if (startSample >= totalSamples || endSample <= startSample) {
-            return { min: 0, max: 0 };
-        }
-
-        const channelData = buffer.getChannelData(0);
-        const span = endSample - startSample;
-        const step = Math.max(1, Math.floor(span / 16));
-
-        let min = 0;
-        let max = 0;
-        for (let i = startSample; i < endSample; i += step) {
-            const v = channelData[i] * gain;
-            if (v < min) min = v;
-            if (v > max) max = v;
-        }
-
-        return {
-            min: Math.max(-1.0, Math.min(1.0, min)),
-            max: Math.max(-1.0, Math.min(1.0, max))
-        };
-    }
-
-    private renderDrawnScope(
-        ctx: CanvasRenderingContext2D,
-        x: number,
-        y: number,
-        width: number,
-        height: number,
-        midY: number,
-        accent: string,
-        telemetry?: SignalTelemetry
-    ): void {
-        // Grid / Center line
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(x, midY);
-        ctx.lineTo(x + width, midY);
-        ctx.stroke();
-
-        const configuredWindow = Number(this.options.scopeWindow);
-        const windowDuration = configuredWindow > 0
-            ? configuredWindow
-            : (this.signal?.duration && this.signal.duration > 0
-                ? this.signal.duration
-                : (telemetry?.duration && telemetry.duration > 0 ? telemetry.duration : 1.0));
-
-        const time = Math.max(0, telemetry?.time || 0);
-        const cycleIndex = Math.floor(time / windowDuration);
-        const windowStartTime = cycleIndex * windowDuration;
-        const phase = Math.max(0, Math.min(1, (time - windowStartTime) / windowDuration));
-
-        // When phase wraps around (left-to-right reset), clear upcoming sweep
-        if (phase < this.lastPhase) {
-            this.sweepHistoryMin.fill(0);
-            this.sweepHistoryMax.fill(0);
-            this.sweepIndex = 0;
-        }
-        this.lastPhase = phase;
-
-        const scopeGain = Number(this.options.scopeGain) || 1.0;
-        const buffer = this.signal?.buffer;
-        const numColumns = 256;
-        const targetIdx = Math.min(numColumns - 1, Math.floor(phase * (numColumns - 1)));
-
-        // Extract waveform data for elapsed portion of the window
-        if (buffer) {
-            const bufDur = buffer.duration > 0 ? buffer.duration : windowDuration;
-            const cropS = this.signal?.cropStart ?? 0;
-            const cropE = this.signal?.cropEnd ?? 1;
-            const span = Math.max(0.01, cropE - cropS);
-            const isSampleSignal = (cropS > 0 || cropE < 1 || this.signal?.playbackProgress != null);
-
-            for (let i = this.sweepIndex; i <= targetIdx; i++) {
-                const normPos = i / numColumns;
-                let bufferTime: number;
-                let stepTime: number;
-
-                if (isSampleSignal) {
-                    bufferTime = (cropS * bufDur) + (normPos * span * bufDur);
-                    stepTime = (span * bufDur) / numColumns;
-                } else {
-                    const cycleStart = (cycleIndex * windowDuration) % bufDur;
-                    bufferTime = (cycleStart + normPos * windowDuration) % bufDur;
-                    stepTime = windowDuration / numColumns;
-                }
-
-                const { min, max } = this.getPeakFromBuffer(buffer, bufferTime, bufferTime + stepTime, scopeGain);
-                this.sweepHistoryMin[i] = min;
-                this.sweepHistoryMax[i] = max;
-            }
-        } else if (telemetry?.realtimeScope && telemetry.realtimeScope.length >= 2) {
-            // Fallback to live master analyser when buffer is not yet generated
-            const scopeData = telemetry.realtimeScope;
-            let maxAbs = 0;
-            let signedVal = 0;
-            for (let i = 0; i < scopeData.length; i++) {
-                const s = scopeData[i];
-                if (Math.abs(s) > maxAbs) {
-                    maxAbs = Math.abs(s);
-                    signedVal = s;
-                }
-            }
-            const amp = Math.max(-1.0, Math.min(1.0, signedVal * scopeGain));
-            for (let i = this.sweepIndex; i <= targetIdx; i++) {
-                this.sweepHistoryMin[i] = Math.min(0, amp);
-                this.sweepHistoryMax[i] = Math.max(0, amp);
-            }
-        }
-        this.sweepIndex = targetIdx;
-
-        const ampScale = height * 0.44;
-        const colWidth = width / numColumns;
-
-        // Trace waveform from LEFT to current phase position
-        for (let i = 0; i <= targetIdx; i++) {
-            const px = x + (i / numColumns) * width;
-            const top = midY - this.sweepHistoryMax[i] * ampScale;
-            const bottom = midY - this.sweepHistoryMin[i] * ampScale;
-            const h = Math.max(1.25, bottom - top);
-            ctx.fillStyle = accent;
-            ctx.fillRect(px, top, Math.max(1, colWidth), h);
-        }
-
-        // Glowing sweep head dot at current leading edge
-        if (targetIdx > 0) {
-            const headX = x + phase * width;
-            const headY = midY - (this.sweepHistoryMax[targetIdx] || 0) * ampScale;
-            ctx.fillStyle = '#ffffff';
-            ctx.beginPath();
-            ctx.arc(headX, headY, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.strokeStyle = accent;
-            ctx.lineWidth = 1;
-            ctx.stroke();
-        }
-
-        if (!this.options.minified) {
-            // Scope Mode Badge
-            ctx.fillStyle = '#059669';
-            ctx.beginPath();
-            ctx.arc(x + width - 10, y + 10, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.fillStyle = '#059669';
-            ctx.font = 'bold 8px Inter, monospace';
-            ctx.textAlign = 'right';
-            ctx.textBaseline = 'middle';
-            const winLabel = configuredWindow > 0 ? `${windowDuration.toFixed(2)}s` : `AUTO (${windowDuration.toFixed(2)}s)`;
-            ctx.fillText(`SCOPE · ${winLabel}`, x + width - 16, y + 10);
-        }
-    }
-
-    private renderScrolledScope(
-        ctx: CanvasRenderingContext2D,
-        x: number,
-        y: number,
-        width: number,
-        height: number,
-        midY: number,
-        accent: string,
-        telemetry?: SignalTelemetry
-    ): void {
-        // Center line
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(x, midY);
-        ctx.lineTo(x + width, midY);
-        ctx.stroke();
-
-        const configuredWindow = Number(this.options.scopeWindow);
-        const windowDuration = configuredWindow > 0
-            ? configuredWindow
-            : (this.signal?.duration && this.signal.duration > 0
-                ? this.signal.duration
-                : (telemetry?.duration && telemetry.duration > 0 ? telemetry.duration : 1.0));
-
-        const time = Math.max(0, telemetry?.time || 0);
-        const startTime = time - windowDuration * 0.5;
-        const scopeGain = Number(this.options.scopeGain) || 1.0;
-        const buffer = this.signal?.buffer;
-        const ampScale = height * 0.44;
-        const totalCols = Math.floor(width);
-
-        if (buffer) {
-            const bufDur = buffer.duration > 0 ? buffer.duration : windowDuration;
-            const cropS = this.signal?.cropStart ?? 0;
-            const cropE = this.signal?.cropEnd ?? 1;
-            const span = Math.max(0.01, cropE - cropS);
-            const isSampleSignal = (cropS > 0 || cropE < 1 || this.signal?.playbackProgress != null);
-
-            for (let c = 0; c < totalCols; c++) {
-                const colNorm = c / totalCols;
-                let t1: number;
-                let t2: number;
-
-                if (isSampleSignal) {
-                    const activeDur = bufDur * span;
-                    const cycleT = ((time % activeDur) + activeDur) % activeDur;
-                    const offsetInWin = (colNorm - 0.5) * windowDuration;
-                    const sampleT = (((cycleT + offsetInWin) % activeDur) + activeDur) % activeDur;
-                    t1 = (cropS * bufDur) + sampleT;
-                    t2 = t1 + (windowDuration / totalCols);
-                } else {
-                    t1 = ((startTime + colNorm * windowDuration) % bufDur + bufDur) % bufDur;
-                    t2 = t1 + (windowDuration / totalCols);
-                }
-
-                const { min, max } = this.getPeakFromBuffer(buffer, t1, t2, scopeGain);
-                const top = midY - max * ampScale;
-                const bottom = midY - min * ampScale;
-                const h = Math.max(1.25, bottom - top);
-                ctx.fillStyle = accent;
-                ctx.fillRect(x + c, top, 1.25, h);
-            }
-        } else if (telemetry?.realtimeScope && telemetry.realtimeScope.length >= 2) {
-            const scopeData = telemetry.realtimeScope;
-            const len = scopeData.length;
-            for (let c = 0; c < totalCols; c++) {
-                const idx = Math.min(len - 1, Math.floor((c / totalCols) * len));
-                const amp = Math.max(-1.0, Math.min(1.0, scopeData[idx] * scopeGain));
-                const top = midY - Math.max(0, amp) * ampScale;
-                const bottom = midY - Math.min(0, amp) * ampScale;
-                const h = Math.max(1.25, bottom - top);
-                ctx.fillStyle = accent;
-                ctx.fillRect(x + c, top, 1.25, h);
-            }
-        }
-
-        // Center Scrubber Needle (NOW)
-        const needleX = x + width * 0.5;
-        ctx.strokeStyle = '#0284c7';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(needleX, y);
-        ctx.lineTo(needleX, y + height);
-        ctx.stroke();
-
-        ctx.fillStyle = '#0284c7';
-        ctx.beginPath();
-        ctx.arc(needleX, midY, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-
-        if (!this.options.minified) {
-            // Scope Mode Badge
-            ctx.fillStyle = '#0284c7';
-            ctx.beginPath();
-            ctx.arc(x + width - 10, y + 10, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.fillStyle = '#0284c7';
-            ctx.font = 'bold 8px Inter, monospace';
-            ctx.textAlign = 'right';
-            ctx.textBaseline = 'middle';
-            const winLabel = configuredWindow > 0 ? `${windowDuration.toFixed(2)}s` : `AUTO (${windowDuration.toFixed(2)}s)`;
-            ctx.fillText(`SCROLL · ${winLabel}`, x + width - 16, y + 10);
-        }
-    }
 }
-

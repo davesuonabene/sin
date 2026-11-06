@@ -132,6 +132,63 @@ export class NodeContextMenu {
         colorsContainer.appendChild(colorGrid);
         this.menuElement.appendChild(colorsContainer);
 
+        if (node.isVisualizationSupported !== false && typeof node.getSupportedVisualizationOptions === 'function') {
+            const vizOptions = node.getSupportedVisualizationOptions();
+            if (Array.isArray(vizOptions) && vizOptions.length > 0) {
+                const vizContainer = document.createElement('div');
+                vizContainer.className = 'ctx-menu-viz-type';
+
+                const vizLabel = document.createElement('label');
+                vizLabel.className = 'ctx-menu-colors-header';
+                vizLabel.textContent = 'Visualization Type';
+                vizContainer.appendChild(vizLabel);
+
+                const vizSelect = document.createElement('select');
+                vizSelect.className = 'ctx-menu-select';
+                vizSelect.setAttribute('aria-label', 'Visualization Type');
+
+                const currentViz = typeof node.getVisualizationType === 'function'
+                    ? node.getVisualizationType()
+                    : (node.properties?.visualization_type || vizOptions[0].id);
+
+                vizOptions.forEach((opt: { id: string; label: string }) => {
+                    const optionEl = document.createElement('option');
+                    optionEl.value = opt.id;
+                    optionEl.textContent = opt.label;
+                    if (opt.id === currentViz) {
+                        optionEl.selected = true;
+                    }
+                    vizSelect.appendChild(optionEl);
+                });
+
+                vizSelect.onpointerdown = (e) => e.stopPropagation();
+                vizSelect.onclick = (e) => e.stopPropagation();
+                vizSelect.onchange = (e) => {
+                    e.stopPropagation();
+                    const nextType = vizSelect.value;
+                    const graphCanvas = (window as any).editorCanvas;
+                    const selectedMap = (graphCanvas?.selected_nodes || {}) as Record<string | number, any>;
+                    const isNodeSelected = selectedMap[node.id] || node.is_selected;
+                    const targetNodes: any[] = isNodeSelected && Object.keys(selectedMap).length > 0
+                        ? Object.values(selectedMap)
+                        : [node];
+
+                    for (const target of targetNodes) {
+                        if (!target || target.isVisualizationSupported === false) continue;
+                        if (typeof target.setVisualizationType === 'function') {
+                            target.setVisualizationType(nextType);
+                        } else if (typeof target.updateProperty === 'function') {
+                            target.updateProperty('visualization_type', nextType);
+                        }
+                    }
+                    this.hide();
+                };
+
+                vizContainer.appendChild(vizSelect);
+                this.menuElement.appendChild(vizContainer);
+            }
+        }
+
         const isRenderEnabled = node.properties?.render_enabled !== false;
         const isFreezeProtected = node.properties?.freeze_refresh !== false;
         const isViewerCookEnabled = node.properties?.visualization_enabled !== false;

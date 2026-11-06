@@ -11,6 +11,7 @@ import {
 import { drawNeonIcon, type NeonIcon } from '../nodes/NodeVisuals';
 import { clearLibraryCache, fetchLibrary as fetchCachedLibrary, submitLibraryMetadataProposal } from '../api';
 import { groupFileVersions, type GroupedFileVersion } from '../libraryVersioning';
+import { attachLibraryDragData, clearActiveLibraryDragData } from './dragPayload';
 
 type LibraryTypeVisual = {
     icon: NeonIcon;
@@ -799,8 +800,7 @@ export class LibraryPanel {
 
         contentRow.ondragstart = (e) => {
             if (e.dataTransfer) {
-                const payload = {
-                    type: 'library-item',
+                attachLibraryDragData(e.dataTransfer, [{
                     itemType: content.type || 'sample',
                     id: content.id,
                     filepath: content.absolute_path,
@@ -811,12 +811,10 @@ export class LibraryPanel {
                     stems: content.stems || [],
                     is_valid_length: content.is_valid_length ?? true,
                     length_variance: content.length_variance ?? 0.0,
-                };
-                e.dataTransfer.setData('text/plain', JSON.stringify(payload));
-                e.dataTransfer.setData('application/x-gaia-library-item', JSON.stringify(payload));
-                e.dataTransfer.effectAllowed = 'copy';
+                } as any], { effectAllowed: 'copy' });
             }
         };
+        contentRow.ondragend = () => clearActiveLibraryDragData();
 
         contentRow.onclick = (e) => {
             e.stopPropagation();
@@ -1056,14 +1054,14 @@ export class LibraryPanel {
                             .filter(candidate => this.selectedItemKeys.has(this.getItemKey(candidate)))
                         : [item];
                     const draggedItems = selectedItems.length ? selectedItems : [item];
-                    const payload = draggedItems.length === 1
-                        ? { type: 'library-item', ...this.toDragItem(draggedItems[0]) }
-                        : { type: 'library-items', items: draggedItems.map(candidate => this.toDragItem(candidate)) };
-                    e.dataTransfer.setData('text/plain', JSON.stringify(payload));
-                    e.dataTransfer.setData('application/x-gaia-library-item', JSON.stringify(payload));
-                    e.dataTransfer.effectAllowed = 'copy';
+                    attachLibraryDragData(
+                        e.dataTransfer,
+                        draggedItems.map(candidate => this.toDragItem(candidate)),
+                        { effectAllowed: 'copy' }
+                    );
                 }
             };
+            el.ondragend = () => clearActiveLibraryDragData();
 
             el.onmousedown = (e) => {
                 if (isAssetOrganizer(item)) return;

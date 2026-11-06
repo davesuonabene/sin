@@ -1,0 +1,5118 @@
+{
+  "version": 2,
+  "savedAt": "2026-11-03T20:01:55.677Z",
+  "frozen": false,
+  "graph": {
+    "last_node_id": 42,
+    "last_link_id": 22,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 228,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Trap Drill 808 Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 2894
+            },
+            {
+              "id": 2895
+            },
+            {
+              "id": 2896
+            },
+            {
+              "id": 2897
+            },
+            {
+              "id": 2898
+            },
+            {
+              "id": 2899
+            },
+            {
+              "id": 2900
+            },
+            {
+              "id": 2901
+            },
+            {
+              "id": 2902
+            },
+            {
+              "id": 2903
+            },
+            {
+              "id": 2072
+            },
+            {
+              "id": 2073
+            },
+            {
+              "id": 2074
+            },
+            {
+              "id": 2075
+            },
+            {
+              "id": 2076
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "1804",
+          "seed_refresh": true,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "parentId": 2,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "is_main_preview": false,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 2,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              9
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_900",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.3548,
+                "gain_db": -9
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "808 Sub Core",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "follow",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#059669",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "node_type": "sample",
+          "asset_modifier_id": 1,
+          "is_main_preview": false,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\!Mike Zara's Stash\\808s\\MZ 808 [20 Min].wav",
+              "library_item_id": 2894,
+              "original_bpm": 120,
+              "key": "C",
+              "crop_start": 0,
+              "crop_end": 1,
+              "sample_start": 0,
+              "sample_end": 1,
+              "pitch_shift": 0,
+              "time_stretch": 1
+            }
+          ],
+          "active_slot": 0,
+          "key_match_target": "C"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 3,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 658,
+          "1": 228,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "808 Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 7354
+            },
+            {
+              "id": 7356
+            },
+            {
+              "id": 7274
+            },
+            {
+              "id": 7276
+            },
+            {
+              "id": 7279
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "4215",
+          "seed_refresh": true,
+          "color": "#059669",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "accepted_asset_type": "sequence_source",
+          "parentId": 4,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 5,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 714,
+          "1": 228,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "808 Humanizer",
+          "color": "#059669",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 3131,
+          "seed_refresh": true,
+          "destinations": [
+            {
+              "id": "808-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Velocity",
+              "minPercent": -10,
+              "maxPercent": 5,
+              "baseValue": 0.95,
+              "enabled": true,
+              "baseValueArray": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0.85,
+                0,
+                0,
+                0.92,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "id": "808-off",
+              "paramKey": "offset",
+              "paramLabel": "Offset",
+              "minPercent": -15,
+              "maxPercent": 15,
+              "baseValue": 0,
+              "enabled": true,
+              "baseValueArray": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0.035,
+                0,
+                0,
+                0.02,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "is_main_preview": false,
+          "parentId": 4,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 7,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 388,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Punch Trap Kick Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 3532
+            },
+            {
+              "id": 3533
+            },
+            {
+              "id": 3534
+            },
+            {
+              "id": 3535
+            },
+            {
+              "id": 3536
+            },
+            {
+              "id": 3537
+            },
+            {
+              "id": 3538
+            },
+            {
+              "id": 3539
+            },
+            {
+              "id": 3540
+            },
+            {
+              "id": 3541
+            },
+            {
+              "id": 3542
+            },
+            {
+              "id": 3543
+            },
+            {
+              "id": 3544
+            },
+            {
+              "id": 3545
+            },
+            {
+              "id": 3546
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "823",
+          "seed_refresh": true,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 8,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 8,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 280,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              1
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_900",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.3548,
+                "gain_db": -9
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Kick Punch",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#0284c7",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 7,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\!Mike Zara's Stash\\Kicks\\MZ Kick [Blueface].wav",
+              "library_item_id": 3544,
+              "original_bpm": 120,
+              "key": "none",
+              "crop_start": 0,
+              "crop_end": 1,
+              "sample_start": 0,
+              "sample_end": 1,
+              "pitch_shift": 0,
+              "time_stretch": 1
+            }
+          ],
+          "active_slot": 0,
+          "key_match_target": ""
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
+        "shape": 1
+      },
+      {
+        "id": 9,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 660,
+          "1": 388,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Kick Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 7354
+            },
+            {
+              "id": 7355
+            },
+            {
+              "id": 7364
+            },
+            {
+              "id": 7267
+            },
+            {
+              "id": 7272
+            },
+            {
+              "id": 4170
+            },
+            {
+              "id": 4171
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "7329",
+          "seed_refresh": true,
+          "color": "#0284c7",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "accepted_asset_type": "sequence_source",
+          "parentId": 10,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
+        "shape": 1
+      },
+      {
+        "id": 10,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 280,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 20,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 1
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              2
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "Cloud Kick - Heavy Offbeat Drive",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_003nbw",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_rl46m2",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Cloud Kick - Heavy Offbeat Drive",
+          "node_type": "sequence",
+          "active_slot": 0,
+          "sample_slot": "*",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0.95,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0.02,
+              "velocity": 0.85,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 0,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 3810,
+          "seed_refresh": true,
+          "color": "#0284c7",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "asset_modifier_id": 9,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "sequence": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "step_parameters": [
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0.95,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0.02,
+                  "velocity": 0.85,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 0,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                }
+              ],
+              "sample_slot": "*",
+              "step_length": 0.25
+            }
+          ],
+          "target_bpm": 120,
+          "length_source_id": 27,
+          "seed_salt": 2
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
+        "shape": 1
+      },
+      {
+        "id": 11,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 716,
+          "1": 388,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Kick Dynamics",
+          "color": "#0284c7",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 9612,
+          "seed_refresh": true,
+          "destinations": [
+            {
+              "id": "kick-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Velocity",
+              "minPercent": -8,
+              "maxPercent": 5,
+              "baseValue": 1,
+              "enabled": true,
+              "baseValueArray": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0.95,
+                0,
+                0.85,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "id": "kick-off",
+              "paramKey": "offset",
+              "paramLabel": "Offset",
+              "minPercent": -10,
+              "maxPercent": 15,
+              "baseValue": 0,
+              "enabled": true,
+              "baseValueArray": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0.02,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "is_main_preview": false,
+          "parentId": 10,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#0284c7",
+        "bgcolor": "#0284c7",
+        "boxcolor": "#0284c7",
+        "shape": 1
+      },
+      {
+        "id": 22,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 868,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Ghost Snare & Layer Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 3927
+            },
+            {
+              "id": 3928
+            },
+            {
+              "id": 3929
+            },
+            {
+              "id": 3930
+            },
+            {
+              "id": 3931
+            },
+            {
+              "id": 3932
+            },
+            {
+              "id": 3933
+            },
+            {
+              "id": 3934
+            },
+            {
+              "id": 3851
+            },
+            {
+              "id": 3852
+            },
+            {
+              "id": 3853
+            },
+            {
+              "id": 3854
+            },
+            {
+              "id": 3855
+            },
+            {
+              "id": 3856
+            },
+            {
+              "id": 3709
+            },
+            {
+              "id": 3710
+            },
+            {
+              "id": 3711
+            },
+            {
+              "id": 3712
+            },
+            {
+              "id": 3713
+            },
+            {
+              "id": 3714
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "3356",
+          "seed_refresh": true,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 23,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 24,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 660,
+          "1": 868,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 9,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Ghost Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 7363
+            },
+            {
+              "id": 7367
+            },
+            {
+              "id": 7275
+            },
+            {
+              "id": 7278
+            },
+            {
+              "id": 7281
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "4497",
+          "seed_refresh": true,
+          "color": "#db2777",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "accepted_asset_type": "sequence_source",
+          "parentId": 25,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 26,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 716,
+          "1": 868,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 10,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Ghost Velocity Jitter",
+          "color": "#db2777",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 8465,
+          "seed_refresh": true,
+          "destinations": [
+            {
+              "id": "perc-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Velocity",
+              "minPercent": -20,
+              "maxPercent": 15,
+              "baseValue": 0.6,
+              "enabled": true,
+              "baseValueArray": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ]
+            },
+            {
+              "id": "perc-off",
+              "paramKey": "offset",
+              "paramLabel": "Offset",
+              "minPercent": -15,
+              "maxPercent": 25,
+              "baseValue": 0.005,
+              "enabled": true,
+              "baseValueArray": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "is_main_preview": false,
+          "parentId": 25,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#db2777",
+        "bgcolor": "#db2777",
+        "boxcolor": "#db2777",
+        "shape": 1
+      },
+      {
+        "id": 28,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 1028,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 11,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Vinyl Scratch & Foley Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 3353
+            },
+            {
+              "id": 3399
+            },
+            {
+              "id": 3420
+            },
+            {
+              "id": 3348
+            },
+            {
+              "id": 3335
+            },
+            {
+              "id": 3791
+            },
+            {
+              "id": 2272
+            },
+            {
+              "id": 2273
+            },
+            {
+              "id": 2274
+            },
+            {
+              "id": 2275
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "382",
+          "seed_refresh": true,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 29,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 29,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 920,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 12,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              11
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_1400",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.1995,
+                "gain_db": -14
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Vinyl Scratch & Foley FX",
+          "sample_type": "one_shot",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#d97706",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "sample",
+          "asset_modifier_id": 28,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\!Mike Zara's Stash\\FX\\MZ FX [Clean Scratch].wav",
+              "library_item_id": 3353,
+              "original_bpm": 111,
+              "key": "",
+              "crop_start": 0,
+              "crop_end": 1,
+              "sample_start": 0,
+              "sample_end": 1,
+              "pitch_shift": 0,
+              "time_stretch": 1
+            }
+          ],
+          "active_slot": 0,
+          "key_match_target": ""
+        },
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 30,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 920,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 21,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 11
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              12
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_dt0mw0",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_dx1fmc",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Texture Accent Sequence",
+          "node_type": "sequence",
+          "active_slot": 0,
+          "sample_slot": "*",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 9776,
+          "seed_refresh": true,
+          "color": "#d97706",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "sequence": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                1
+              ],
+              "step_parameters": [
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                }
+              ],
+              "sample_slot": "*",
+              "step_length": 0.25
+            }
+          ],
+          "target_bpm": 120,
+          "length_source_id": 34,
+          "duration_seconds": 6.857142857142857,
+          "seed_salt": 2
+        },
+        "color": "#d97706",
+        "bgcolor": "#d97706",
+        "boxcolor": "#d97706",
+        "shape": 1
+      },
+      {
+        "id": 31,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 1188,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 13,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Vintage Tape & Vinyl Bed Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 482
+            },
+            {
+              "id": 7266
+            },
+            {
+              "id": 7265
+            },
+            {
+              "id": 7263
+            },
+            {
+              "id": 11848
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "1587",
+          "seed_refresh": true,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 32,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 32,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 14,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              13
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_1800",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.1259,
+                "gain_db": -18
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Vintage Vinyl & Tape Bed",
+          "sample_type": "loop",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#0891b2",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "total_bars": 4,
+          "node_type": "sample",
+          "asset_modifier_id": 31,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\The Crate vol.6\\Loops n samples\\Tape noise (Astrud Gilberto - The Sadness Of After).wav",
+              "library_item_id": 482,
+              "original_bpm": 116,
+              "key": "",
+              "crop_start": 0,
+              "crop_end": 1,
+              "sample_start": 0,
+              "sample_end": 1,
+              "pitch_shift": 0,
+              "time_stretch": 1
+            }
+          ],
+          "active_slot": 0,
+          "key_match_target": ""
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2",
+        "shape": 1
+      },
+      {
+        "id": 33,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 1080,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 22,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 13
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              14
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_3oki2n",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_zi7gog",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Texture Bed Sustained",
+          "node_type": "sequence",
+          "active_slot": 0,
+          "sample_slot": "*",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "sample_start": 0,
+              "gate_length": 1,
+              "offset": 0,
+              "velocity": 1,
+              "probability": 1,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 7873,
+          "seed_refresh": true,
+          "color": "#0891b2",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "sequence": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "step_parameters": [
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "sample_start": 0,
+                  "gate_length": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 1,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                }
+              ],
+              "sample_slot": "*",
+              "step_length": 0.25
+            }
+          ],
+          "target_bpm": 120,
+          "length_source_id": 34,
+          "duration_seconds": 6.857142857142857,
+          "seed_salt": 2
+        },
+        "color": "#0891b2",
+        "bgcolor": "#0891b2",
+        "boxcolor": "#0891b2",
+        "shape": 1
+      },
+      {
+        "id": 34,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 880,
+          "1": 1000,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 26,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 12
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 14
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              20
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_e47hoe",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_ukty2k",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Texture & Foley Bus",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 140,
+          "total_bars": "global",
+          "visualization_type": "loop",
+          "color": "#0f172a",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 6.857142857142857
+        },
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b",
+        "shape": 1
+      },
+      {
+        "id": 35,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 408,
+          "1": 1348,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 15,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Vintage Crate Loop Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 626
+            },
+            {
+              "id": 627
+            },
+            {
+              "id": 628
+            },
+            {
+              "id": 629
+            },
+            {
+              "id": 630
+            },
+            {
+              "id": 631
+            },
+            {
+              "id": 632
+            },
+            {
+              "id": 633
+            },
+            {
+              "id": 634
+            },
+            {
+              "id": 635
+            },
+            {
+              "id": 636
+            },
+            {
+              "id": 637
+            },
+            {
+              "id": 13287
+            },
+            {
+              "id": 13288
+            },
+            {
+              "id": 13289
+            },
+            {
+              "id": 13290
+            },
+            {
+              "id": 13291
+            },
+            {
+              "id": 13294
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "8612",
+          "seed_refresh": true,
+          "color": "#7e22ce",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "parentId": 36,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 36,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 320,
+          "1": 1240,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 16,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              15
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_1050",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.2985,
+                "gain_db": -10.5
+              }
+            },
+            {
+              "id": "post_gain_0",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Vintage Melodic Source",
+          "sample_type": "loop",
+          "start_beat": 0,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "lead",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#4f46e5",
+          "icon": "sample",
+          "shape": "circle",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "total_bars": 4,
+          "node_type": "sample",
+          "asset_modifier_id": 35,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "filepath": "C:\\web-projects\\sin\\assets\\vaults\\packs\\Chaos Hip Hop Melodies (BETA)\\Analog\\Cymatics - Aquamarine - 160 BPM C Min (MoogOne+SubPhatty).wav",
+              "library_item_id": 13287,
+              "original_bpm": 160,
+              "key": "Cmin",
+              "crop_start": 0,
+              "crop_end": 1,
+              "sample_start": 0,
+              "sample_end": 1,
+              "pitch_shift": 0,
+              "time_stretch": 1
+            }
+          ],
+          "active_slot": 0,
+          "key_match_target": ""
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5",
+        "shape": 1
+      },
+      {
+        "id": 37,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 660,
+          "1": 1348,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 17,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_name": "Melodic Chop Pattern Pool",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 4220
+            },
+            {
+              "id": 4221
+            },
+            {
+              "id": 4205
+            },
+            {
+              "id": 4193
+            },
+            {
+              "id": 4192
+            },
+            {
+              "id": 4208
+            },
+            {
+              "id": 4206
+            },
+            {
+              "id": 4207
+            },
+            {
+              "id": 4180
+            },
+            {
+              "id": 4224
+            },
+            {
+              "id": 4217
+            },
+            {
+              "id": 4213
+            },
+            {
+              "id": 4214
+            },
+            {
+              "id": 4228
+            },
+            {
+              "id": 4225
+            },
+            {
+              "id": 7267
+            },
+            {
+              "id": 7271
+            },
+            {
+              "id": 7272
+            },
+            {
+              "id": 7277
+            },
+            {
+              "id": 7278
+            },
+            {
+              "id": 7280
+            },
+            {
+              "id": 7281
+            },
+            {
+              "id": 7282
+            },
+            {
+              "id": 7285
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": "3669",
+          "seed_refresh": true,
+          "color": "#4f46e5",
+          "icon": "search",
+          "shape": "diamond",
+          "is_main_preview": false,
+          "accepted_asset_type": "sequence_source",
+          "parentId": 39,
+          "fixed_item": null,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5",
+        "shape": 1
+      },
+      {
+        "id": 38,
+        "type": "Audio/Random",
+        "pos": {
+          "0": 716,
+          "1": 1348,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": true
+        },
+        "order": 18,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "properties": {
+          "node_type": "random",
+          "modifier_kind": "random",
+          "node_name": "Chop Dynamics Jitter",
+          "color": "#4f46e5",
+          "icon": "shuffle",
+          "shape": "diamond",
+          "refresh_mode": "global",
+          "seed": 6851,
+          "seed_refresh": true,
+          "destinations": [
+            {
+              "id": "p1-chop-vel",
+              "paramKey": "velocity",
+              "paramLabel": "Velocity",
+              "minPercent": -10,
+              "maxPercent": 8,
+              "baseValue": 0.92,
+              "enabled": true,
+              "baseValueArray": [
+                0.61811,
+                1,
+                0.69764,
+                1,
+                0.68383,
+                1,
+                0.6378,
+                1,
+                0.66273,
+                1,
+                0.43701,
+                1,
+                0.64436,
+                1,
+                0.65354,
+                0.41339
+              ]
+            },
+            {
+              "id": "p1-chop-off",
+              "paramKey": "offset",
+              "paramLabel": "Offset",
+              "minPercent": -10,
+              "maxPercent": 15,
+              "baseValue": 0,
+              "enabled": true,
+              "baseValueArray": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "is_main_preview": false,
+          "parentId": 39,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "target_bpm": 120,
+          "seed_salt": 3
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5",
+        "shape": 1
+      },
+      {
+        "id": 39,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 600,
+          "1": 1240,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 23,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 15
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              16
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "140 BPM A Min (3)",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_j5cod4",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_8zobop",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "140 BPM A Min (3)",
+          "node_type": "sequence",
+          "active_slot": 0,
+          "sample_slot": "*",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "step_parameters": [
+            {
+              "offset": 0,
+              "velocity": 0.7874,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 0.7874,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 0.7874,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 0.7874,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "offset": 0,
+              "velocity": 1,
+              "probability": 100,
+              "subdivision_enabled": false,
+              "subdivisions": 1,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.5,
+          "play_mode": "gate",
+          "release": 0.08,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 737,
+          "seed_refresh": true,
+          "color": "#4f46e5",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "asset_modifier_id": 37,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "sequence": [
+                1,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0
+              ],
+              "step_parameters": [
+                {
+                  "offset": 0,
+                  "velocity": 0.7874,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 0.7874,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 0.7874,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 0.7874,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "offset": 0,
+                  "velocity": 1,
+                  "probability": 100,
+                  "subdivision_enabled": false,
+                  "subdivisions": 1,
+                  "sample_start": 0,
+                  "gate_length": 1
+                }
+              ],
+              "sample_slot": "*",
+              "step_length": 0.5
+            }
+          ],
+          "target_bpm": 120,
+          "length_source_id": 40,
+          "seed_salt": 2
+        },
+        "color": "#4f46e5",
+        "bgcolor": "#4f46e5",
+        "boxcolor": "#4f46e5",
+        "shape": 1
+      },
+      {
+        "id": 40,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 880,
+          "1": 1240,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 27,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 16
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              19
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_4fk5bt",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_tupz8y",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Sample Loop Bus",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 140,
+          "total_bars": "global",
+          "visualization_type": "loop",
+          "color": "#0f172a",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 6.857142857142857
+        },
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b",
+        "shape": 1
+      },
+      {
+        "id": 41,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1160,
+          "1": 720,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 29,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 17
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 18
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 19
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 20
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": null,
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_77qk4f",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_v14ecg",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Master Output",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 140,
+          "total_bars": "global",
+          "visualization_type": "loop",
+          "color": "#0f172a",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": true,
+          "node_type": "track",
+          "duration_seconds": 6.857142857142857
+        },
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b",
+        "shape": 1
+      },
+      {
+        "id": 6,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 1021,
+          "1": 123,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 28,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 22
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              18
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_9vbvp7",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_dccn36",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "808 Bass Bus",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 140,
+          "total_bars": "global",
+          "visualization_type": "loop",
+          "color": "#0f172a",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 6.857142857142857
+        },
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b",
+        "shape": 1
+      },
+      {
+        "id": 4,
+        "type": "Audio/Sequence",
+        "pos": {
+          "0": 598,
+          "1": 120,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 19,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 9
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              21
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "10000001",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_lcweqh",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.3126079367123955,
+                "gain_db": -10.1
+              }
+            },
+            {
+              "id": "post_gain_pxnpqr",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "10000001",
+          "node_type": "sequence",
+          "active_slot": 0,
+          "sample_slot": "*",
+          "total_bars": 4,
+          "length_inherited": true,
+          "sequence": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0
+          ],
+          "step_parameters": [
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            },
+            {
+              "probability": 1,
+              "offset": 0,
+              "velocity": 1,
+              "subdivisions": 1,
+              "subdivision_enabled": false,
+              "sample_start": 0,
+              "gate_length": 1
+            }
+          ],
+          "step_length": 0.25,
+          "play_mode": "trigger",
+          "release": 0,
+          "fade_ms": 0,
+          "selected_step": 0,
+          "seed": 319,
+          "seed_refresh": true,
+          "color": "#059669",
+          "icon": "sequence",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "seed_mode": "moving",
+          "asset_modifier_id": 3,
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "sequence": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0
+              ],
+              "step_parameters": [
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                },
+                {
+                  "probability": 1,
+                  "offset": 0,
+                  "velocity": 1,
+                  "subdivisions": 1,
+                  "subdivision_enabled": false,
+                  "sample_start": 0,
+                  "gate_length": 1
+                }
+              ],
+              "sample_slot": "*",
+              "step_length": 0.25
+            }
+          ],
+          "target_bpm": 120,
+          "length_source_id": 42,
+          "seed_salt": 2,
+          "visualization_type": "loop"
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 42,
+        "type": "Audio/Arrangement",
+        "pos": {
+          "0": 825,
+          "1": 26,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 24,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 21
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              22
+            ]
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_5e187f",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_snhwyq",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Arrangement",
+          "node_type": "arrangement",
+          "total_bars": 4,
+          "section_points": [],
+          "section_probability": [
+            1
+          ],
+          "section_quant": [
+            "auto"
+          ],
+          "section_quant_anchor": [
+            "start"
+          ],
+          "section_slots": [
+            "*"
+          ],
+          "seed": 5891,
+          "seed_refresh": true,
+          "start_beat": 0,
+          "color": "#059669",
+          "icon": "arrangement",
+          "shape": "square",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "filepath": "",
+          "mix_mode": "sum",
+          "original_bpm": 120,
+          "target_bpm": 120,
+          "bpm": 120,
+          "key": "",
+          "duration_seconds": 6.857142857142857,
+          "visualization_type": "loop",
+          "seed_salt": 1
+        },
+        "color": "#059669",
+        "bgcolor": "#059669",
+        "boxcolor": "#059669",
+        "shape": 1
+      },
+      {
+        "id": 27,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 896,
+          "1": 353,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 25,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 2
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              17
+            ],
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_nvi70c",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_1vmwyn",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Punch Drum Bus",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 140,
+          "total_bars": "global",
+          "visualization_type": "loop",
+          "color": "#0f172a",
+          "icon": "mixer",
+          "shape": "diamond",
+          "visual_width": 220,
+          "visual_height": 76,
+          "is_main_preview": false,
+          "node_type": "track",
+          "duration_seconds": 6.857142857142857
+        },
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b",
+        "shape": 1
+      }
+    ],
+    "links": [
+      [
+        1,
+        8,
+        0,
+        10,
+        0,
+        "audio"
+      ],
+      [
+        2,
+        10,
+        0,
+        27,
+        0,
+        "audio"
+      ],
+      [
+        9,
+        2,
+        0,
+        4,
+        0,
+        "audio"
+      ],
+      [
+        11,
+        29,
+        0,
+        30,
+        0,
+        "audio"
+      ],
+      [
+        12,
+        30,
+        0,
+        34,
+        0,
+        "audio"
+      ],
+      [
+        13,
+        32,
+        0,
+        33,
+        0,
+        "audio"
+      ],
+      [
+        14,
+        33,
+        0,
+        34,
+        1,
+        "audio"
+      ],
+      [
+        15,
+        36,
+        0,
+        39,
+        0,
+        "audio"
+      ],
+      [
+        16,
+        39,
+        0,
+        40,
+        0,
+        "audio"
+      ],
+      [
+        17,
+        27,
+        0,
+        41,
+        0,
+        "audio"
+      ],
+      [
+        18,
+        6,
+        0,
+        41,
+        1,
+        "audio"
+      ],
+      [
+        19,
+        40,
+        0,
+        41,
+        2,
+        "audio"
+      ],
+      [
+        20,
+        34,
+        0,
+        41,
+        3,
+        "audio"
+      ],
+      [
+        21,
+        4,
+        0,
+        42,
+        0,
+        "audio"
+      ],
+      [
+        22,
+        42,
+        0,
+        6,
+        0,
+        "audio"
+      ]
+    ],
+    "groups": [],
+    "config": {
+      "links_ontop": true
+    },
+    "extra": {
+      "global_parameters": {
+        "bpm": 140,
+        "total_bars": 4,
+        "key": "Cmin"
+      },
+      "main_preview": {
+        "node_id": 41,
+        "mode": "auto"
+      },
+      "global_freeze": false
+    },
+    "version": 0.4
+  }
+}

@@ -88,6 +88,14 @@ export class GaplessAudioScheduler {
         }
     }
 
+    getByteFrequencyData(array: Uint8Array): void {
+        if (this.analyser) {
+            (this.analyser as any).getByteFrequencyData(array);
+        } else {
+            array.fill(0);
+        }
+    }
+
     getFullAudioBuffer(): AudioBuffer | null {
         if (this.fullBufferDirty) {
             this.updateFullBuffer();

@@ -32,7 +32,8 @@ export class PropertiesWindow {
             if ((event as CustomEvent).detail?.nodeId === this.node.id) void this.render();
         };
         this.nodePropertiesRefreshHandler = (event: Event) => {
-            if ((event as CustomEvent).detail?.nodeId === this.node.id) void this.renderTabContent();
+            const detail = (event as CustomEvent).detail;
+            if (detail?.nodeId === this.node.id && !detail?.liveTelemetry) void this.renderTabContent();
         };
         this.arrangementGraphHandler = () => {
             if ((this.node as any).shouldRefreshTabOnGraphChange?.(this.activeTab)) {
@@ -157,8 +158,6 @@ export class PropertiesWindow {
             'offset': ['step_parameters'],
             'velocity': ['step_parameters'],
             'probability': ['step_parameters'],
-            'sample start': ['section_sample_start'],
-            'start offset': ['section_sample_start'],
             'quantize': ['section_quant'],
             'anchor': ['section_quant_anchor'],
             'roll': ['step_parameters'],
@@ -229,7 +228,6 @@ export class PropertiesWindow {
             toolbarFields.push(
                 { label: 'Section cuts', fields: ['section_points'], selector: '.arrangement-visualizer' },
                 { label: 'Section probability', fields: ['section_probability'], selector: '#sec-prob-input' },
-                { label: 'Section start offset', fields: ['section_sample_start'], selector: '#sec-sample-start-input' },
                 { label: 'Section quantize', fields: ['section_quant'], selector: '#prop-sec-quant' },
                 { label: 'Section anchor', fields: ['section_quant_anchor'], selector: '#prop-sec-quant-anchor' }
             );
@@ -342,11 +340,19 @@ export class PropertiesWindow {
                 </div>
 
                 <!-- Tab Content Body -->
-                <div class="td-param-body" id="td-tab-content">
-                    <div class="td-section-container td-section-loading">Loading controls…</div>
-                </div>
+                <div class="td-param-body" id="td-tab-content"></div>
             </div>
         `;
+
+        const paramContainer = this.container.querySelector('.td-param-container') as HTMLElement | null;
+        paramContainer?.addEventListener('dragover', (event: DragEvent) => {
+            if (!event.defaultPrevented) {
+                event.stopPropagation();
+                if (event.dataTransfer) {
+                    event.dataTransfer.dropEffect = 'none';
+                }
+            }
+        });
 
         const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
         this.setupInlineTitleEditor(titleDisplay, titleText);
@@ -502,40 +508,15 @@ export class PropertiesWindow {
             const schema = (this.node as any).getPanelSchema();
             const tabConfig = schema.tabs?.find((t: any) => t.id === this.activeTab);
             if (tabConfig && tabConfig.sections) {
-                contentContainer.innerHTML = '';
-                const pendingSectionPromises: Promise<void>[] = [];
+                const fragment = document.createDocumentFragment();
                 for (const section of tabConfig.sections) {
-                    // Waveform decoding is the expensive panel path.  Keep the
-                    // field controls available and show a compact placeholder
-                    // while that one section is prepared in the background.
-                    if (section.type === 'waveform_crop') {
-                        const placeholder = document.createElement('div');
-                        placeholder.className = 'td-section-container td-section-loading';
-                        placeholder.textContent = 'Loading waveform…';
-                        contentContainer.appendChild(placeholder);
-                        const wfPromise = SectionRendererFactory.renderSection(section, this.node as any, this)
-                            .then(el => {
-                                if (token !== this.renderToken || this.disposed) return;
-                                placeholder.replaceWith(el);
-                                finish();
-                            })
-                            .catch(error => {
-                                if (token !== this.renderToken || this.disposed) return;
-                                placeholder.textContent = 'Could not load waveform.';
-                                console.error('Could not render waveform panel', error);
-                            });
-                        pendingSectionPromises.push(wfPromise);
-                        continue;
-                    }
                     const el = await SectionRendererFactory.renderSection(section, this.node as any, this);
                     if (token !== this.renderToken || this.disposed) return;
-                    contentContainer.appendChild(el);
+                    fragment.appendChild(el);
                 }
+                contentContainer.replaceChildren(fragment);
                 SectionRendererFactory.updateNodeFieldStates(contentContainer, this.node as any);
                 finish();
-                if (pendingSectionPromises.length > 0) {
-                    await Promise.all(pendingSectionPromises);
-                }
                 return;
             }
         }

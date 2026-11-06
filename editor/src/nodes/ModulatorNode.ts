@@ -3,7 +3,6 @@ import { BaseNode } from './BaseNode.ts';
 import { CanvasButton } from '../ui/CanvasButton.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
-import { type NodeShape } from './NodeVisuals.ts';
 
 export function getDefaultModulatorChain() {
     return [
@@ -48,7 +47,6 @@ export class ModulatorNode extends BaseNode {
     ];
     static defaultColor = "#7e22ce";
     static defaultIcon = "pulse";
-    static defaultShape: NodeShape = "triangle";
     static badgeLabel = "MOD";
     static nodeType = "modulator";
     static defaultTab = "MODULATOR";
@@ -70,7 +68,6 @@ export class ModulatorNode extends BaseNode {
         this.properties.node_name = this.properties.node_name || "Modulator";
         this.properties.color = this.properties.color || "#7e22ce";
         this.properties.icon = this.properties.icon || "pulse";
-        this.properties.shape = this.properties.shape || "triangle";
         if (!this.properties.chain || !Array.isArray(this.properties.chain) || this.properties.chain.length === 0) {
             this.properties.chain = getDefaultModulatorChain();
         }

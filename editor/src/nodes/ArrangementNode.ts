@@ -2,16 +2,16 @@ import { LiteGraph } from 'litegraph.js';
 import { BaseNode } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
-import { ArrangementRenderer, type RenderBox, type SignalTelemetry, type ArrangementSection } from '../../../packages/iride/src/index.ts';
+import { ArrangementRenderer, type RenderBox, type SignalTelemetry, type ArrangementSection, type VisualizationTypeId } from '../../../packages/iride/src/index.ts';
 import { compositeArrangementBuffer, getNodeGainMultiplier, applyGainToBuffer } from '../audioCompositor.ts';
+import { resolveCycleSeeds, resolveSectionSlot } from '../../../ermes/ts/slotLanguage.ts';
 
 export interface ArrangementSectionStructure {
     points: number[];
     probability: number[];
-    sampleStart: number[];
     quant: string[];
     quantAnchor: ArrangementSectionAnchor[];
-    slots?: number[];
+    slots?: Array<number | string>;
 }
 
 export type ArrangementSectionAnchor = 'start' | 'end';
@@ -48,9 +48,8 @@ export class ArrangementNode extends BaseNode {
 
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'Arrangement', tab: 'COMMON' },
-        { key: 'section_slots', label: 'Slot', type: 'int', default: 0, min: 0, max: 64, step: 1, tab: 'ARRANGEMENT', description: 'Upstream slot index for the selected section.' },
+        { key: 'section_slots', label: 'Slot', type: 'string', default: '*', tab: 'ARRANGEMENT', description: 'Upstream slot selector for the selected section ("*" for active upstream slot, integer index, or "rand").' },
         { key: 'section_probability', label: 'Probability', type: 'float', default: 1.0, min: 0, max: 1, step: 0.1, tab: 'ARRANGEMENT', description: 'Playback probability for the selected section.' },
-        { key: 'section_sample_start', label: 'Start Offset', type: 'slider', default: 0.0, min: 0, max: 1, step: 0.1, tab: 'ARRANGEMENT', description: 'Normalized cue playback start offset for the incoming audio (0.0 to 1.0).' },
         { key: 'section_quant', label: 'Quantize', type: 'select', default: 'auto', options: [{ value: 'auto', label: 'Continuous' }, { value: 'bar', label: 'Bar' }, { value: '0.5', label: 'Half Bar' }, { value: 'beat', label: 'Beat' }, { value: 'none', label: 'Once' }], tab: 'ARRANGEMENT', description: 'Retrigger interval for the selected section.' },
         { key: 'section_quant_anchor', label: 'Anchor', type: 'select', default: 'start', options: [{ value: 'start', label: 'Start' }, { value: 'end', label: 'End' }], tab: 'ARRANGEMENT', description: 'Align each section trigger to the start or end of its quant cell.' },
         { key: 'seed', label: 'Seed', type: 'seed', default: 42, tab: 'ARRANGEMENT' }
@@ -58,42 +57,42 @@ export class ArrangementNode extends BaseNode {
 
     static defaultColor = "#f59e0b";
     static defaultIcon = "arrangement";
-    static defaultShape = "square" as const;
-    static readonly bodySize = 28;
     static badgeLabel = "ARR";
     static nodeType = "arrangement";
     static defaultTab = "ARRANGEMENT";
     static tabs = ["ARRANGEMENT", "CHAIN", "COMMON"];
+    static override defaultVisualizationType: VisualizationTypeId = 'arrangement';
+    static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['arrangement', 'loop', 'realtime', 'spectrum'];
 
     constructor() {
         super();
         this.title = "Arrangement";
         this.size = this.computeSize();
-        
+
         // Distinct amber/orange style for arrangement nodes
         this.color = "#f59e0b";
         this.bgcolor = "#f59e0b";
         this.boxcolor = "#d97706";
-        
+
         this.properties = {
             ...this.properties,
             node_name: "Arrangement",
             node_type: "arrangement",
+            target_bpm: "global",
+            bpm: "global",
             total_bars: 4.0,
             section_points: [],
             section_probability: [1.0],
-            section_sample_start: [0.0],
             section_quant: ["auto"],
             section_quant_anchor: ["start"],
-            section_slots: [0],
+            section_slots: ["*"],
             seed: 42,
             seed_refresh: true,
             start_beat: 0,
             color: "#f59e0b",
-            icon: "arrangement",
-            shape: "square"
+            icon: "arrangement"
         };
-        
+
         this.addInput("Input", "audio");
         this.addOutput("Audio", "audio");
     }
@@ -118,15 +117,67 @@ export class ArrangementNode extends BaseNode {
                 .map((value, index) => legacyEnabled[index] === false
                     ? 0
                     : Math.max(0, Math.min(1, Number(value) || 0))),
-            sampleStart: this.normalizeSectionValues<number>('section_sample_start', sectionCount, 0.0)
-                .map(value => Math.max(0, Math.min(1, Number(value) || 0))),
             quant: this.normalizeSectionValues<string>('section_quant', sectionCount, legacyQuant)
                 .map(quant => this.normalizeQuant(quant, legacyQuant)),
             quantAnchor: this.normalizeSectionValues<ArrangementSectionAnchor>('section_quant_anchor', sectionCount, legacyAnchor)
                 .map(anchor => anchor === 'end' ? 'end' : anchor === 'start' ? 'start' : legacyAnchor),
-            slots: this.normalizeSectionValues<number>('section_slots', sectionCount, 0)
-                .map(slot => Math.max(0, Math.floor(Number(slot) || 0)))
+            slots: this.normalizeSectionValues<number | string>('section_slots', sectionCount, '*')
+                .map(slot => this.normalizeSectionSlot(slot))
         };
+    }
+
+    public getUpstreamSlotCount(): number {
+        const inputNodes = this.getInputNodes();
+        for (const inputNode of inputNodes) {
+            if (typeof (inputNode as any)?.getSlots === 'function') {
+                return Math.max(1, (inputNode as any).getSlots().length);
+            }
+            if (Array.isArray(inputNode?.properties?.slots) && inputNode.properties.slots.length > 0) {
+                return inputNode.properties.slots.length;
+            }
+        }
+        return 1;
+    }
+
+    public getUpstreamActiveSlot(): number {
+        const inputNodes = this.getInputNodes();
+        for (const inputNode of inputNodes) {
+            const active = (inputNode as any)?.activeSlotIndex ?? inputNode?.properties?.active_slot;
+            if (active !== undefined && Number.isFinite(Number(active))) {
+                return Math.max(0, Math.trunc(Number(active)));
+            }
+        }
+        return 0;
+    }
+
+    public getResolvedSectionSlots(): number[] {
+        const structure = this.getSectionStructure();
+        const rawSlots = structure.slots || ['*'];
+        const upstreamCount = this.getUpstreamSlotCount();
+        const upstreamActive = this.getUpstreamActiveSlot();
+        const seedSalt = Number(this.properties?.seed_salt || 0) * 9973;
+        const cycleSeeds = resolveCycleSeeds(this.properties?.seed ?? 42, Math.max(1, rawSlots.length), (this.id || 1) + seedSalt);
+        return rawSlots.map((slotVal, idx) =>
+            resolveSectionSlot(slotVal, upstreamCount, upstreamActive, cycleSeeds[idx % cycleSeeds.length] ?? 42, idx)
+        );
+    }
+
+    private normalizeSectionSlot(slot: unknown): number | string {
+        if (typeof slot === 'number' && Number.isFinite(slot)) {
+            return Math.max(0, Math.floor(slot));
+        }
+        const str = String(slot ?? '*').trim();
+        if (!str || str === '*' || str.toLowerCase() === 'default' || str.toLowerCase() === 'active') {
+            return '*';
+        }
+        if (str.toLowerCase() === 'rand' || str.toLowerCase() === 'random') {
+            return 'rand';
+        }
+        const num = Number(str);
+        if (Number.isFinite(num)) {
+            return Math.max(0, Math.floor(num));
+        }
+        return '*';
     }
 
     /**
@@ -166,19 +217,16 @@ export class ArrangementNode extends BaseNode {
             points: [...structure.points],
             probability: this.resizeSectionValues(structure.probability, sectionCount, 1.0)
                 .map(value => Math.max(0, Math.min(1, Number(value) || 0))),
-            sampleStart: this.resizeSectionValues(structure.sampleStart, sectionCount, 0.0)
-                .map(value => Math.max(0, Math.min(1, Number(value) || 0))),
             quant: this.resizeSectionValues(structure.quant, sectionCount, 'auto')
                 .map(quant => this.normalizeQuant(quant, 'auto')),
             quantAnchor: this.resizeSectionValues(structure.quantAnchor, sectionCount, 'start')
                 .map(anchor => anchor === 'end' ? 'end' : 'start'),
-            slots: this.resizeSectionValues(currentSlots, sectionCount, 0)
-                .map(slot => Math.max(0, Math.floor(Number(slot) || 0)))
+            slots: this.resizeSectionValues<number | string>(currentSlots, sectionCount, '*')
+                .map(slot => this.normalizeSectionSlot(slot))
         };
 
         this.updateProperty('section_points', normalized.points);
         this.updateProperty('section_probability', normalized.probability);
-        this.updateProperty('section_sample_start', normalized.sampleStart);
         this.updateProperty('section_quant', normalized.quant);
         this.updateProperty('section_quant_anchor', normalized.quantAnchor);
         this.updateProperty('section_slots', normalized.slots);
@@ -189,26 +237,18 @@ export class ArrangementNode extends BaseNode {
         if (cachedNode) {
             cachedNode.section_points = [...normalized.points];
             cachedNode.section_probability = [...normalized.probability];
-            cachedNode.section_sample_start = [...normalized.sampleStart];
             cachedNode.section_quant = [...normalized.quant];
             cachedNode.section_quant_anchor = [...normalized.quantAnchor];
             cachedNode.section_slots = [...(normalized.slots || [])];
         }
     }
 
-    updateSectionSlot(sectionIndex: number, value: number): void {
+    updateSectionSlot(sectionIndex: number, value: number | string): void {
         const structure = this.getSectionStructure();
         const slots = structure.slots || [];
         if (sectionIndex < 0 || sectionIndex >= slots.length) return;
-        slots[sectionIndex] = Math.max(0, Math.floor(Number(value) || 0));
+        slots[sectionIndex] = this.normalizeSectionSlot(value);
         structure.slots = slots;
-        this.updateSectionStructure(structure);
-    }
-
-    updateSectionSampleStart(sectionIndex: number, value: number): void {
-        const structure = this.getSectionStructure();
-        if (sectionIndex < 0 || sectionIndex >= structure.sampleStart.length) return;
-        structure.sampleStart[sectionIndex] = Math.max(0, Math.min(1, Number(value) || 0));
         this.updateSectionStructure(structure);
     }
 
@@ -277,11 +317,10 @@ export class ArrangementNode extends BaseNode {
 
         const newSectionIdx = sectionIdx + 1;
         structure.probability.splice(newSectionIdx, 0, structure.probability[sectionIdx] ?? 1.0);
-        structure.sampleStart.splice(newSectionIdx, 0, structure.sampleStart[sectionIdx] ?? 0.0);
         structure.quant.splice(newSectionIdx, 0, structure.quant[sectionIdx] ?? 'auto');
         structure.quantAnchor.splice(newSectionIdx, 0, structure.quantAnchor[sectionIdx] ?? 'start');
         if (structure.slots) {
-            structure.slots.splice(newSectionIdx, 0, structure.slots[sectionIdx] ?? 0);
+            structure.slots.splice(newSectionIdx, 0, structure.slots[sectionIdx] ?? '*');
         }
 
         this.updateSectionStructure(structure);
@@ -298,7 +337,6 @@ export class ArrangementNode extends BaseNode {
         // right-hand section's values so every array stays aligned to the range.
         const removedSectionIndex = cutIndex + 1;
         structure.probability.splice(removedSectionIndex, 1);
-        structure.sampleStart.splice(removedSectionIndex, 1);
         structure.quant.splice(removedSectionIndex, 1);
         structure.quantAnchor.splice(removedSectionIndex, 1);
         if (structure.slots) {
@@ -386,14 +424,15 @@ export class ArrangementNode extends BaseNode {
     override prepareSerializedModel(model: any): any {
         const structure = this.getSectionStructure();
         const { probability: _probability, quant: _quant, quant_anchor: _quantAnchor, ...sectionOnlyModel } = model;
-        const resolvedSlots = Array.isArray(model.section_slots) && model.section_slots.length === (structure.slots || []).length
+        const resolvedSlots = Array.isArray(model.section_slots)
+            && model.section_slots.length === (structure.slots || []).length
+            && model.section_slots.every((s: any) => typeof s === 'number' && Number.isFinite(s))
             ? model.section_slots
-            : (structure.slots || [0]);
+            : this.getResolvedSectionSlots();
         return {
             ...sectionOnlyModel,
             section_points: structure.points,
             section_probability: structure.probability,
-            section_sample_start: structure.sampleStart,
             section_quant: structure.quant,
             section_quant_anchor: structure.quantAnchor,
             section_slots: resolvedSlots
@@ -403,10 +442,11 @@ export class ArrangementNode extends BaseNode {
     private _cachedVisualSections: ArrangementSection[] | null = null;
     private _cachedVisualFingerprint: string = '';
 
-    override drawVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
+    protected override drawDedicatedVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
         const totalBars = Math.max(0.25, Number(this.properties?.total_bars) || 4.0);
         const structure = this.getSectionStructure();
-        const fingerprint = `${totalBars}:${JSON.stringify(structure)}`;
+        const resolvedSlots = this.getResolvedSectionSlots();
+        const fingerprint = `${totalBars}:${JSON.stringify(structure)}:${resolvedSlots.join(',')}`;
 
         let sections = this._cachedVisualSections;
         if (!sections || this._cachedVisualFingerprint !== fingerprint) {
@@ -420,16 +460,14 @@ export class ArrangementNode extends BaseNode {
                 const endBar = sectionBoundaries[i + 1];
                 const lengthBars = Math.max(0.01, endBar - startBar);
                 const prob = typeof structure.probability[i] === 'number' ? structure.probability[i] : 1.0;
-                const sampleStart = typeof structure.sampleStart[i] === 'number' ? structure.sampleStart[i] : 0.0;
                 const quant = structure.quant[i] || 'auto';
-                const slotIndex = typeof structure.slots?.[i] === 'number' ? structure.slots[i] : 0;
+                const slotIndex = typeof resolvedSlots[i] === 'number' ? resolvedSlots[i] : 0;
 
                 sections.push({
                     index: i,
                     startBar,
                     lengthBars,
                     probability: prob,
-                    sampleStart,
                     quant,
                     slotIndex
                 });
@@ -479,8 +517,7 @@ export class ArrangementNode extends BaseNode {
 
     override getGhostBoundFieldOverrides(): Record<string, string[]> {
         return {
-            'probability': ['section_probability'],
-            'sample start': ['section_sample_start']
+            'probability': ['section_probability']
         };
     }
 
@@ -517,13 +554,14 @@ export class ArrangementNode extends BaseNode {
         const totalBars = Number(this.properties?.total_bars) || globalBars || 4;
         const bpm = Number.isFinite(globalBpm) && globalBpm > 0 ? globalBpm : 120;
         const structure = this.getSectionStructure();
+        const resolvedSlots = this.getResolvedSectionSlots();
         const sectionPoints = structure.points;
         const sectionEnabled = Array.isArray(this.properties?.section_enabled) ? this.properties.section_enabled : undefined;
         const seed = Number.isFinite(Number(this.properties?.seed)) ? Number(this.properties?.seed) : 42;
         const enabledKey = sectionEnabled ? sectionEnabled.map(Boolean).join(',') : 'all';
 
         const nodeGain = getNodeGainMultiplier(this);
-        const fp = `${totalBars}_${bpm}_${sectionPoints.join(',')}_${enabledKey}_${(structure.slots || []).join(',')}_${structure.probability.join(',')}_${structure.sampleStart.join(',')}_${structure.quant.join(',')}_${structure.quantAnchor.join(',')}_${seed}_${nodeGain}`;
+        const fp = `${totalBars}_${bpm}_${sectionPoints.join(',')}_${enabledKey}_${resolvedSlots.join(',')}_${structure.probability.join(',')}_${structure.quant.join(',')}_${structure.quantAnchor.join(',')}_${seed}_${nodeGain}`;
         if (this._cachedCompositedBuffer && this._lastInputBufferRef === inputBuffer && this._lastArrangementFingerprint === fp) {
             return this._cachedCompositedBuffer;
         }
@@ -535,9 +573,8 @@ export class ArrangementNode extends BaseNode {
             totalBars,
             bpm,
             {
-                sectionSlots: structure.slots,
+                sectionSlots: resolvedSlots,
                 sectionProbability: structure.probability,
-                sectionSampleStart: structure.sampleStart,
                 sectionQuant: structure.quant,
                 sectionQuantAnchor: structure.quantAnchor,
                 seed

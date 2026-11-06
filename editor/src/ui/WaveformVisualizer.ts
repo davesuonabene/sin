@@ -1,4 +1,4 @@
-import { getSharedAudioContext } from '../audioBufferCache.ts';
+import { fetchAudioBuffer, getCachedAudioBufferSync, getSharedAudioContext } from '../audioBufferCache.ts';
 
 export interface WaveformVisualizerOptions {
     container?: HTMLElement;
@@ -226,35 +226,43 @@ export class WaveformVisualizer {
         return ((norm - this.viewStart) / viewWidth) * width;
     }
 
+    public setAudioBufferSync(buffer: AudioBuffer | null): void {
+        this.stopPreview();
+        this.audioBuffer = buffer;
+        this.maskFingerprint = '';
+        this.tintFingerprint = '';
+        this.draw();
+    }
+
     public async loadAudio(source: string | AudioBuffer | ArrayBuffer): Promise<void> {
         this.stopPreview();
+
+        if (typeof source === 'string') {
+            const cached = getCachedAudioBufferSync(source);
+            if (cached) {
+                this.setAudioBufferSync(cached);
+                return;
+            }
+        } else if (source instanceof AudioBuffer) {
+            this.setAudioBufferSync(source);
+            return;
+        }
+
         this.showLoadingState();
 
         try {
             this.maskFingerprint = '';
             this.tintFingerprint = '';
-            if (source instanceof AudioBuffer) {
-                this.audioBuffer = source;
+            if (typeof source === 'string') {
+                const decoded = await fetchAudioBuffer(source);
+                if (!decoded) {
+                    throw new Error(`Could not decode audio: ${source}`);
+                }
+                this.audioBuffer = decoded;
             } else {
                 const audioContext = getSharedAudioContext();
                 if (!audioContext) throw new Error('AudioContext unavailable');
-
-                let arrayBuffer: ArrayBuffer;
-                if (typeof source === 'string') {
-                    let fetchUrl = source;
-                    if (!source.startsWith('http') && !source.startsWith('/api') && !source.startsWith('/assets')) {
-                        fetchUrl = `/api/audio/file?filepath=${encodeURIComponent(source)}`;
-                    }
-                    const resp = await fetch(fetchUrl);
-                    if (!resp.ok) {
-                        throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
-                    }
-                    arrayBuffer = await resp.arrayBuffer();
-                } else {
-                    arrayBuffer = source;
-                }
-
-                this.audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                this.audioBuffer = await audioContext.decodeAudioData(source);
             }
             this.maskFingerprint = '';
             this.tintFingerprint = '';
