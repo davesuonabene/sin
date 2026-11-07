@@ -42,7 +42,14 @@ ASSET_TYPES = (
     AssetTypeDefinition("sample", "Sample", "audio", description="Audio prepared for sampling; loop state is metadata."),
     AssetTypeDefinition("midi", "MIDI", "file"),
     AssetTypeDefinition("sequence", "Sequence", "file"),
-    AssetTypeDefinition("folder", "Folder", "asset", abstract=True, container=True),
+    AssetTypeDefinition(
+        "folder",
+        "Folder",
+        "asset",
+        abstract=False,
+        container=True,
+        description="Filesystem folder.",
+    ),
     AssetTypeDefinition(
         "collection",
         "Folder",
@@ -57,6 +64,15 @@ ASSET_TYPES = (
         container=True,
         importable=True,
         description="Direct audio stems with matching lengths and distinct musical roles.",
+        analysis_default=True,
+    ),
+    AssetTypeDefinition(
+        "zoom_h4",
+        "Zoom H4",
+        "multitrack",
+        container=True,
+        importable=True,
+        description="Zoom H4 multitrack recording folder.",
         analysis_default=True,
     ),
     AssetTypeDefinition(

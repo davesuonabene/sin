@@ -242,36 +242,25 @@
 
         function folderAssignmentOptions(preview, selected, node, folderStatsMap = null) {
             const isIgnore = selected === 'action:ignore';
-            const isUnderSamplePack = isFolderUnderSamplePack(node?.relative_path);
-            const isSamplePack = !isUnderSamplePack && selected === 'profile:sample_pack';
             const isMultitrack = selected === 'type:multitrack';
             const isZoomH4 = selected === 'profile:zoom_h4';
+            const isFolder = !isIgnore && !isMultitrack && !isZoomH4;
 
             const st = folderStatsMap?.get(node?.relative_path);
-            const hasMedia = st ? st.hasMedia : false;
             const audioCount = st ? st.audioCount : 0;
-            const isPossibleSamplePack = !isUnderSamplePack && (
-                node?.suggested_assignment === 'profile:sample_pack' ||
-                node?.detected_assignment === 'profile:sample_pack' ||
-                isSamplePack ||
-                hasMedia
-            );
             const isPossibleMultitrack = node?.detected_assignment === 'type:multitrack' ||
                 node?.suggested_assignment === 'type:multitrack' ||
                 isMultitrack ||
                 audioCount >= 2;
 
-            let html = `<option value="action:contain" ${(!isSamplePack && (selected === 'action:contain' || isUnderSamplePack)) ? 'selected' : ''}>Container</option>`;
-            if (isPossibleSamplePack) {
-                html += `<option value="profile:sample_pack" ${isSamplePack ? 'selected' : ''}>Sample pack</option>`;
-            }
+            let html = `<option value="type:folder" ${isFolder ? 'selected' : ''}>Folder</option>`;
             if (isPossibleMultitrack) {
                 html += `<option value="type:multitrack" ${isMultitrack ? 'selected' : ''}>Multitrack</option>`;
             }
             if (node?.detected_assignment === 'profile:zoom_h4' || isZoomH4) {
                 html += `<option value="profile:zoom_h4" ${isZoomH4 ? 'selected' : ''}>Zoom H4</option>`;
             }
-            html += `<option value="action:ignore" ${isIgnore ? 'selected' : ''}>Ignore</option>`;
+            html += `<option value="action:ignore" ${isIgnore ? 'selected' : ''}>Ignore (dissolve in parent)</option>`;
             return html;
         }
 
@@ -544,10 +533,9 @@
                         ${selectedFolderCount > 0 ? `
                             <div class="import-bulk-group">
                                 <span class="import-bulk-group-label">Set folders:</span>
-                                <button id="bulk-folder-sample-pack" class="secondary compact" type="button" title="Set selected folders as Sample pack (audio files will be marked as samples)">Sample pack</button>
-                                <button id="bulk-folder-container" class="secondary compact" type="button" title="Set selected folders as Container">Container</button>
+                                <button id="bulk-folder-container" class="secondary compact" type="button" title="Set selected folders as normal Folder">Folder</button>
                                 <button id="bulk-folder-multitrack" class="secondary compact" type="button" title="Set selected folders as Multitrack">Multitrack</button>
-                                <button id="bulk-folder-ignore" class="secondary compact" type="button" title="Ignore selected folders">Ignore</button>
+                                <button id="bulk-folder-ignore" class="secondary compact" type="button" title="Ignore selected folders (dissolve contents into parent folder)">Ignore</button>
                             </div>
                         ` : ''}
                         ${selectedFileCount > 0 ? `
@@ -570,7 +558,7 @@
                 ${preview.warnings?.length ? `<div class="import-warning-box"><strong>Inspection warnings</strong>${preview.warnings.map(warning => `<div>${escapeHtml(warning)}</div>`).join('')}</div>` : ''}
                 ${renderImportFilters(preview, filterSummary)}
                 ${conflictPanel}
-                <section class="import-transfer-choice"><label for="import-transfer-mode"><strong>File handling</strong></label><select id="import-transfer-mode"><option value="move" ${state.importTransferMode === 'move' ? 'selected' : ''}>Move files into vault</option><option value="copy" ${state.importTransferMode === 'copy' ? 'selected' : ''}>Copy files into vault</option><option value="keep" ${state.importTransferMode === 'keep' ? 'selected' : ''} ${preview.source_kind === 'zip' ? 'disabled' : ''}>Keep files in original position (reference)</option></select><p>${escapeHtml(transferHelp)}</p></section>
+                <section class="import-transfer-choice"><label for="import-transfer-mode"><strong>File handling</strong></label><select id="import-transfer-mode"><option value="copy" ${state.importTransferMode !== 'move' ? 'selected' : ''}>Copy files into vault</option><option value="move" ${state.importTransferMode === 'move' ? 'selected' : ''}>Move files into vault</option></select><p>${escapeHtml(transferHelp)}</p></section>
                 ${hasAudioEntries ? `<label class="import-analysis-choice"><input id="import-skip-track-analysis" type="checkbox" ${state.skipTrackAnalysis ? 'checked' : ''}><span><strong>Skip analysis for tracks</strong><small>Import rows assigned the Track type using inspection only; BPM, key, duration, and embedded metadata will remain empty until analyzed later.</small></span></label>` : ''}
             </div>
             <section class="import-table-section">
@@ -817,14 +805,7 @@
                     .map(k => k.slice(7));
                 folderPaths.forEach(folderPath => {
                     state.importUserModifiedFolders.add(folderPath);
-                    state.importFolderAssignments.set(folderPath, 'action:contain');
-                    (preview.entries || []).forEach(entry => {
-                        if (folderPath === '.' || entry.relative_path.startsWith(`${folderPath}/`)) {
-                            if (entry.family === 'audio') {
-                                state.importItemTypes.set(entry.index, entry.type || 'track');
-                            }
-                        }
-                    });
+                    state.importFolderAssignments.set(folderPath, 'type:folder');
                 });
                 renderImportPreview();
             });
@@ -1167,27 +1148,18 @@
 
                 if (!scanComplete) {
                     if (!state.importFolderAssignments.has(fpath)) {
-                        state.importFolderAssignments.set(fpath, 'action:contain');
+                        state.importFolderAssignments.set(fpath, 'type:folder');
                     }
                     continue;
                 }
 
-                const isUnderSamplePack = [...samplePackRoots].some(root =>
-                    root === '.' ? fpath !== '.' : fpath.startsWith(`${root}/`)
-                );
-
-                if (isUnderSamplePack) {
-                    state.importFolderAssignments.set(fpath, 'action:contain');
-                } else if (folder.detected_assignment) {
+                if (folder.detected_assignment === 'profile:zoom_h4' || folder.detected_assignment === 'type:multitrack') {
                     state.importFolderAssignments.set(fpath, folder.detected_assignment);
-                    if (folder.detected_assignment === 'profile:sample_pack') {
+                } else {
+                    if (folder.detected_assignment === 'profile:sample_pack' || folder.suggested_assignment === 'profile:sample_pack') {
                         samplePackRoots.add(fpath);
                     }
-                } else if (folder.suggested_assignment === 'profile:sample_pack') {
-                    state.importFolderAssignments.set(fpath, 'profile:sample_pack');
-                    samplePackRoots.add(fpath);
-                } else {
-                    state.importFolderAssignments.set(fpath, 'action:contain');
+                    state.importFolderAssignments.set(fpath, 'type:folder');
                 }
             }
 
@@ -1631,7 +1603,9 @@
             });
             if (state.vaultPathPickerMode) {
                 sourcePickerSelection.textContent = state.sourcePickerDirectory || 'No folder selected.';
-                sourcePickerChoose.textContent = state.vaultPathPickerMode === 'migrate' ? 'Migrate to this root' : 'Use this root';
+                sourcePickerChoose.textContent = state.vaultPathPickerMode === 'migrate'
+                    ? 'Migrate to this root'
+                    : (state.vaultPathPickerMode === 'mirror' ? 'Mirror this folder' : 'Use this root');
             } else if (state.sourcePickerSelection) {
                 sourcePickerSelection.textContent = state.sourcePickerSelection;
                 sourcePickerChoose.textContent = 'Choose file';
@@ -1677,10 +1651,21 @@
             const activeVault = selectedVault();
             state.vaultPathPickerMode = mode;
             state.projectImportPickerActive = false;
-            if (sourcePickerTitle) sourcePickerTitle.textContent = mode === 'migrate' ? 'Migrate vault' : 'Choose vault storage';
-            if (sourcePickerSubtitle) sourcePickerSubtitle.textContent = 'Choose the asset-store folder that should contain this vault.';
+            if (sourcePickerTitle) {
+                sourcePickerTitle.textContent = mode === 'migrate'
+                    ? 'Migrate vault'
+                    : (mode === 'mirror' ? 'Choose folder to mirror' : 'Choose vault storage');
+            }
+            if (sourcePickerSubtitle) {
+                sourcePickerSubtitle.textContent = mode === 'mirror'
+                    ? 'Select an external folder to mirror in this vault.'
+                    : 'Choose the asset-store folder that should contain this vault.';
+            }
             if (!sourcePickerDialog.open) sourcePickerDialog.showModal();
-            const initialPath = mode === 'migrate' ? activeVault?.root_path : vaultPathInput?.value.trim();
+            const mirrorSourceInput = document.getElementById('vault-mirror-source-input');
+            const initialPath = mode === 'migrate'
+                ? activeVault?.root_path
+                : (mode === 'mirror' ? mirrorSourceInput?.value.trim() : vaultPathInput?.value.trim());
             await loadSourcePicker(initialPath || null);
         }
 
@@ -1692,7 +1677,13 @@
                 sourcePickerDialog.close();
                 if (!path) return;
                 if (mode === 'migrate') migrateActiveVault(path);
-                else if (vaultPathInput) {
+                else if (mode === 'mirror') {
+                    const mirrorSourceInput = document.getElementById('vault-mirror-source-input');
+                    if (mirrorSourceInput) {
+                        mirrorSourceInput.value = path;
+                        mirrorSourceInput.title = path;
+                    }
+                } else if (vaultPathInput) {
                     vaultPathInput.value = path;
                     vaultPathInput.title = path;
                 }

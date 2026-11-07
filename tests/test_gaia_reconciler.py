@@ -1,6 +1,7 @@
 from pathlib import Path
+import shutil
 
-from gaia import crud, models, project_service, reconciler, reference_service, schemas, vaults
+from gaia import crud, deletion_service, mirrors, models, project_service, reconciler, reference_service, schemas, vaults
 from gaia.routers import vaults as vaults_router
 from tests.support import GaiaTestCase
 
@@ -316,4 +317,184 @@ class TestGaiaReconciler(GaiaTestCase):
         self.assertEqual(refreshed.parent_id, project.id)
         refs = reference_service.list_references(self.db, project.id)
         self.assertIn(item.id, {r.to_item_id for r in refs})
+
+    def test_mirror_reference_1to1_and_partial_collect_into_vault(self):
+        ext_root = self.temp_path / "ExternalPack"
+        kick_src = self.write_audio(ext_root / "Drums", "Kick.wav", seconds=0.1)
+        snare_src = self.write_audio(ext_root / "Drums", "Snare.wav", seconds=0.2)
+        pad_src = self.write_audio(ext_root, "Pad.wav", seconds=0.3)
+
+        mirror = mirrors.create_mirror(
+            self.db,
+            self.vault.id,
+            schemas.VaultMirrorCreate(
+                source_path=str(ext_root),
+                target_folder_path="ExternalPack",
+                mode="reference_1to1",
+            ),
+        )
+        self.assertIsNotNone(mirror.root_item_id)
+        root_folder = crud.get_item(self.db, mirror.root_item_id)
+        self.assertEqual(root_folder.type, "folder")
+        self.assertEqual(root_folder.storage_mode, "external_reference")
+
+        kick_item = self.db.query(models.Item).filter(models.Item.absolute_path == str(kick_src.resolve())).first()
+        snare_item = self.db.query(models.Item).filter(models.Item.absolute_path == str(snare_src.resolve())).first()
+        pad_item = self.db.query(models.Item).filter(models.Item.absolute_path == str(pad_src.resolve())).first()
+        self.assertIsNotNone(kick_item)
+        self.assertIsNotNone(snare_item)
+        self.assertIsNotNone(pad_item)
+        self.assertEqual(kick_item.storage_mode, "external_reference")
+        self.assertEqual(snare_item.storage_mode, "external_reference")
+
+        # Partial collect of Kick.wav into vault
+        collected = vaults.collect_items_into_vault(self.db, [kick_item.id])
+        self.assertTrue(any(i.id == kick_item.id for i in collected))
+        self.db.expire_all()
+
+        kick_after = crud.get_item(self.db, kick_item.id)
+        snare_after = crud.get_item(self.db, snare_item.id)
+        expected_kick_dest = vaults.vault_store(self.vault) / "ExternalPack" / "Drums" / "Kick.wav"
+        self.assertEqual(kick_after.storage_mode, "managed")
+        self.assertEqual(Path(kick_after.absolute_path), expected_kick_dest.resolve())
+        self.assertTrue(expected_kick_dest.is_file())
+        self.assertEqual(kick_after.attributes["import"]["source_path"], str(kick_src.resolve()))
+
+        # Snare remains an external reference at its original path
+        self.assertEqual(snare_after.storage_mode, "external_reference")
+        self.assertEqual(Path(snare_after.absolute_path), snare_src.resolve())
+
+        # Mirror scanner knows Kick is already in the vault via source_path
+        m_status = mirrors.scan_mirror_discrepancies(self.db, mirror)
+        self.assertTrue(m_status["in_sync"])
+        self.assertEqual(m_status["total_discrepancies"], 0)
+
+    def test_mirror_distill_copy_conflict_versioning_and_reorganization(self):
+        ext_root = self.temp_path / "FieldDrops"
+        kick_a = self.write_audio(ext_root / "SubA", "Kick.wav", seconds=0.1)
+        kick_b = self.write_audio(ext_root / "SubB", "Kick.wav", seconds=0.25)
+        dup_a = ext_root / "SubC" / "Kick.wav"
+        dup_a.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(kick_a, dup_a)
+
+        mirror = mirrors.create_mirror(
+            self.db,
+            self.vault.id,
+            schemas.VaultMirrorCreate(
+                source_path=str(ext_root),
+                target_folder_path="Distilled",
+                mode="distill_copy",
+            ),
+        )
+        store = vaults.vault_store(self.vault)
+        distilled_dir = store / "Distilled"
+        self.assertTrue((distilled_dir / "Kick.wav").is_file())
+        self.assertTrue((distilled_dir / "Kick [SubB].wav").is_file())
+
+        # Modify SubA/Kick.wav externally -> triggers sync warning and creates .02 revision on sync
+        self.write_audio(ext_root / "SubA", "Kick.wav", seconds=0.45)
+        vault_status = reconciler.scan_vault_discrepancies(self.db, self.vault.id)
+        self.assertFalse(vault_status["in_sync"])
+        self.assertEqual(len(vault_status["mirrors"][0]["modified_files"]), 1)
+
+        rec_res = reconciler.reconcile_vault(
+            self.db,
+            self.vault.id,
+            schemas.VaultReconcileRequest(sync_all_mirrors=True),
+        )
+        self.assertEqual(rec_res.mirrored_count, 1)
+        self.assertTrue((distilled_dir / "Kick.02.wav").is_file())
+        self.assertTrue((distilled_dir / "Kick.wav").is_file())
+
+        # Reorganize Kick [SubB].wav into another folder inside the vault -> mirror still sees it as in_sync
+        other_folder = project_service.create_folder(self.db, "Reorganized", vault_id=self.vault.id)
+        kick_b_item = crud.get_item_by_path(self.db, str((distilled_dir / "Kick [SubB].wav").resolve()), self.vault.id)
+        project_service.place_items(self.db, other_folder.id, [kick_b_item.id], mode="move")
+
+        m_status_after = mirrors.scan_mirror_discrepancies(self.db, mirror)
+        self.assertTrue(m_status_after["in_sync"])
+
+    def test_folder_dissolve_vs_normal_folder_delete(self):
+        pack = project_service.create_folder(self.db, "LoopPack", vault_id=self.vault.id)
+        sub = project_service.create_folder(self.db, "Sub", vault_id=self.vault.id, parent_id=pack.id)
+
+        f1_src = self.write_audio(self.temp_path / "src", "Loop1.wav")
+        f2_src = self.write_audio(self.temp_path / "src", "Loop2.wav")
+        f1_dest = Path(pack.absolute_path) / "Loop1.wav"
+        f2_dest = Path(sub.absolute_path) / "Loop2.wav"
+        shutil.copy2(f1_src, f1_dest)
+        shutil.copy2(f2_src, f2_dest)
+
+        item1 = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(f1_dest.resolve()),
+                vault_id=self.vault.id,
+                parent_id=pack.id,
+                type="sample",
+                size_bytes=f1_dest.stat().st_size,
+            ),
+        )
+        item2 = crud.create_item(
+            self.db,
+            schemas.AudioItemCreate(
+                absolute_path=str(f2_dest.resolve()),
+                vault_id=self.vault.id,
+                parent_id=sub.id,
+                type="sample",
+                size_bytes=f2_dest.stat().st_size,
+            ),
+        )
+
+        # 1. Explicit Dissolve of Sub moves Loop2.wav into LoopPack and deletes Sub
+        dissolve_res = project_service.dissolve_folder(self.db, sub.id)
+        self.assertEqual(dissolve_res["parent_id"], pack.id)
+        self.assertEqual(dissolve_res["moved_count"], 1)
+        self.assertIsNone(crud.get_item(self.db, sub.id))
+        self.assertFalse(Path(sub.absolute_path).exists())
+
+        self.db.expire_all()
+        item2_after = crud.get_item(self.db, item2.id)
+        self.assertEqual(item2_after.parent_id, pack.id)
+        self.assertEqual(Path(item2_after.absolute_path), (Path(pack.absolute_path) / "Loop2.wav").resolve())
+
+        # 2. Link Loop1.wav to a Project, then normal-delete LoopPack:
+        # Loop2.wav and LoopPack are deleted, while Loop1.wav is preserved at vault root
+        project = project_service.create_project(self.db, "RefProject", "project", self.vault.id)
+        reference_service.create_source_reference(self.db, project.id, item1.id)
+
+        del_res = deletion_service.delete_entries(self.db, [schemas.ItemDeleteLocator(item_id=pack.id)])
+        self.assertEqual(del_res["status"], "success")
+        self.assertIsNone(crud.get_item(self.db, pack.id))
+        self.assertIsNone(crud.get_item(self.db, item2.id))
+
+        self.db.expire_all()
+        item1_preserved = crud.get_item(self.db, item1.id)
+        self.assertIsNotNone(item1_preserved)
+        self.assertIsNone(item1_preserved.parent_id)
+        self.assertTrue(Path(item1_preserved.absolute_path).is_file())
+
+    def test_all_vaults_sync_status_and_reconcile(self):
+        vault2 = vaults.create_vault(self.db, "Second Vault", None, preview="hidden")
+        store1 = vaults.vault_store(self.vault)
+        store2 = vaults.vault_store(vault2)
+
+        self.write_audio(store1 / "FolderA", "Untracked1.wav")
+        self.write_audio(store2 / "FolderB", "Untracked2.wav")
+
+        all_status = vaults_router.read_all_vaults_sync_status(self.db)
+        self.assertFalse(all_status["in_sync"])
+        self.assertEqual(all_status["total_discrepancies"], 2)
+        self.assertEqual(len(all_status["untracked"]), 2)
+        vault_ids_seen = {u["vault_id"] for u in all_status["untracked"]}
+        self.assertEqual(vault_ids_seen, {self.vault.id, vault2.id})
+
+        rec_res = vaults_router.reconcile_all_vaults_endpoint(
+            schemas.VaultReconcileRequest(add_all_untracked=True),
+            self.db,
+        )
+        self.assertEqual(rec_res.added_count, 2)
+        self.assertTrue(rec_res.in_sync)
+
+
 

@@ -109,6 +109,9 @@ def migrate_performance_indexes() -> None:
         if "playlist_items" in table_names:
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_playlist_items_playlist ON playlist_items (playlist_id, position)"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_playlist_items_item ON playlist_items (item_id)"))
+        if "vault_mirrors" in table_names:
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_vault_mirrors_vault ON vault_mirrors (vault_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_vault_mirrors_root_item ON vault_mirrors (root_item_id)"))
 
 
 

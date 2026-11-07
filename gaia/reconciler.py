@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import json
 import mimetypes
 import os
 from pathlib import Path
@@ -16,6 +18,7 @@ IGNORE_EXTENSIONS = {
     ".asd",
     ".bak",
     ".crdownload",
+    ".lnk",
     ".part",
     ".peak",
     ".pkf",
@@ -40,6 +43,7 @@ IGNORE_DIRNAMES = {
     ".pytest_cache",
     ".sin",
     "__pycache__",
+    "auto-backups",
     "node_modules",
 }
 
@@ -49,37 +53,86 @@ def _resolve_container_and_project(
     vault_id: int,
     file_path: Path,
     store: Path,
+    *,
+    create_missing_folders: bool = False,
 ) -> tuple[models.Item | None, models.ProjectItem | None]:
-    """Find the nearest enclosing container item and owning project for a file path in a vault."""
+    """Find (or synthesize) the nearest enclosing container item and owning project for a file path in a vault."""
+    import json
     try:
         current = file_path.parent.resolve()
         store_resolved = store.resolve()
     except OSError:
         return None, None
 
+    if current == store_resolved or not _is_relative_to(current, store_resolved):
+        return None, None
+
     parent_item: models.Item | None = None
-    while current != store_resolved and _is_relative_to(current, store_resolved):
+    probe = current
+    while probe != store_resolved and _is_relative_to(probe, store_resolved):
         folder_item = (
             db.query(models.Item)
             .filter(
                 models.Item.vault_id == vault_id,
-                models.Item.absolute_path == str(current),
+                models.Item.absolute_path == str(probe),
             )
             .first()
         )
         if folder_item:
             parent_item = folder_item
             break
-        current = current.parent
-
-    if not parent_item:
-        return None, None
+        probe = probe.parent
 
     owning_project: models.ProjectItem | None = None
-    if isinstance(parent_item, models.ProjectItem) or getattr(parent_item, "type", None) == "project":
-        owning_project = parent_item
-    else:
-        owning_project = project_service._find_owning_project(db, parent_item)
+    if parent_item:
+        if isinstance(parent_item, models.ProjectItem) or getattr(parent_item, "type", None) == "project":
+            owning_project = parent_item
+        else:
+            owning_project = project_service._find_owning_project(db, parent_item)
+
+    # Synthesize missing intermediate FolderItem rows for normal vault directories
+    is_domain_container = (
+        owning_project is not None
+        or (parent_item is not None and getattr(parent_item, "type", None) in {"project", "multitrack", "zoom_h4"})
+    )
+    if create_missing_folders and not is_domain_container:
+        rel_parts = current.relative_to(store_resolved).parts
+        curr_parent_id: int | None = None
+        curr_folder: models.Item | None = None
+        for idx in range(len(rel_parts)):
+            sub_dir = (store_resolved / Path(*rel_parts[: idx + 1])).resolve()
+            existing = (
+                db.query(models.FolderItem)
+                .filter(
+                    models.FolderItem.vault_id == vault_id,
+                    models.FolderItem.absolute_path == str(sub_dir),
+                )
+                .first()
+            )
+            if not existing:
+                existing = models.FolderItem(
+                    absolute_path=str(sub_dir),
+                    vault_id=vault_id,
+                    parent_id=curr_parent_id,
+                    title=sub_dir.name,
+                    source_kind="managed",
+                    source_path=str(sub_dir),
+                    content_count=0,
+                    type="folder",
+                    storage_mode="managed",
+                    availability="ready",
+                    metadata_json=json.dumps({
+                        "is_folder": True,
+                        "profile_id": "folder",
+                        "profile_label": "Folder",
+                    }),
+                )
+                db.add(existing)
+                db.flush()
+            curr_folder = existing
+            curr_parent_id = existing.id
+        if curr_folder is not None:
+            parent_item = curr_folder
 
     return parent_item, owning_project
 
@@ -190,12 +243,86 @@ def _is_relative_to(candidate: Path, base: Path) -> bool:
         return False
 
 
-def scan_vault_discrepancies(db: Session, vault_id: int) -> dict[str, Any]:
+def _walk_vault_store_files(
+    store_str: str,
+    vault_id: int,
+    vault_name: str,
+) -> dict[str, dict[str, Any]]:
+    """Fast iterative os.scandir walker using cached DirEntry.stat without per-file Path.resolve()."""
+    disk_files: dict[str, dict[str, Any]] = {}
+    stack = [store_str]
+    entries_collected: list[tuple[str, str, str, int, str]] = []
+    prefix_len = len(store_str) + 1
+
+    while stack:
+        curr_dir = stack.pop()
+        try:
+            with os.scandir(curr_dir) as it:
+                subdirs: list[str] = []
+                for entry in it:
+                    name = entry.name
+                    if entry.is_dir(follow_symlinks=False):
+                        if name not in IGNORE_DIRNAMES and not name.startswith((".", ".deleting-")):
+                            subdirs.append(entry.path)
+                    elif entry.is_file(follow_symlinks=False):
+                        if name.lower() in IGNORE_FILENAMES or name.startswith((".", "._", "~$")):
+                            continue
+                        ext = os.path.splitext(name)[1].lower()
+                        if ext in IGNORE_EXTENSIONS:
+                            continue
+                        try:
+                            st = entry.stat(follow_symlinks=False)
+                        except OSError:
+                            continue
+                        norm_p = os.path.normpath(entry.path)
+                        rel_p = norm_p[prefix_len:].replace("\\", "/") if len(norm_p) > prefix_len else name
+                        entries_collected.append((norm_p, name, rel_p, st.st_size, ext))
+                for subdir in sorted(subdirs, reverse=True):
+                    stack.append(subdir)
+        except OSError:
+            continue
+
+    entries_collected.sort(key=lambda x: x[0])
+    for norm_p, name, rel_p, st_size, ext in entries_collected:
+        norm_key = os.path.normcase(norm_p)
+        disk_files[norm_key] = {
+            "path": norm_p,
+            "filename": name,
+            "relative_path": rel_p,
+            "size_bytes": st_size,
+            "type": infer_file_type(name),
+            "extension": ext,
+            "vault_id": vault_id,
+            "vault_name": vault_name,
+        }
+    return disk_files
+
+
+def _extract_item_title(metadata_json: str | None, fallback_name: str) -> str:
+    if metadata_json and '"title"' in metadata_json:
+        try:
+            meta = json.loads(metadata_json)
+            if isinstance(meta, dict) and meta.get("title"):
+                return str(meta["title"])
+        except Exception:
+            pass
+    return fallback_name
+
+
+def scan_vault_discrepancies(
+    db: Session,
+    vault_id: int,
+    *,
+    preloaded_vault: models.Vault | None = None,
+    preloaded_rows: list[tuple[Any, ...]] | None = None,
+    preloaded_mirrors: list[models.VaultMirror] | None = None,
+    preloaded_disk_files: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Compare the physical vault store directory against database items.
 
     Returns detected untracked files, missing items, and suggested relinkings.
     """
-    vault = vaults.get_vault(db, vault_id)
+    vault = preloaded_vault or vaults.get_vault(db, vault_id)
     if not vault:
         raise ValueError("Vault not found")
 
@@ -208,93 +335,114 @@ def scan_vault_discrepancies(db: Session, vault_id: int) -> dict[str, Any]:
             "untracked": [],
             "missing": [],
             "moved": [],
+            "mirrors": [],
             "total_discrepancies": 0,
             "error": "Vault storage directory does not exist on disk",
         }
 
+    store_str = os.path.normpath(str(store))
+    store_norm_prefix = os.path.normcase(store_str) + os.sep
+
     # 1. Gather all legitimate physical files on disk
-    disk_files: dict[str, dict[str, Any]] = {}
-    for root_dir, dirs, files in os.walk(store, topdown=True):
-        # Prune ignored directories
-        dirs[:] = [
-            d for d in sorted(dirs)
-            if d not in IGNORE_DIRNAMES and not d.startswith((".", ".deleting-"))
-        ]
+    disk_files = (
+        dict(preloaded_disk_files)
+        if preloaded_disk_files is not None
+        else _walk_vault_store_files(store_str, vault_id, vault.name)
+    )
 
-        for filename in sorted(files):
-            if filename.lower() in IGNORE_FILENAMES or filename.startswith((".", "._", "~$")):
-                continue
-            ext = Path(filename).suffix.lower()
-            if ext in IGNORE_EXTENSIONS:
-                continue
+    # 2. Query lightweight scalar rows for all database items owned by this vault
+    if preloaded_rows is None:
+        preloaded_rows = (
+            db.query(
+                models.Item.id,
+                models.Item.absolute_path,
+                models.Item.type,
+                models.Item.storage_mode,
+                models.Item.availability,
+                models.Item.size_bytes,
+                models.Item.file_hash,
+                models.Item.metadata_json,
+            )
+            .filter(models.Item.vault_id == vault_id)
+            .all()
+        )
 
-            file_path = Path(root_dir) / filename
-            try:
-                stat_res = file_path.stat()
-            except OSError:
-                continue
+    # 3. Scan configured VaultMirrors first so mirrored external items and offline drives are handled accurately
+    from . import mirrors as mirrors_service
 
-            resolved = file_path.resolve()
-            norm_key = os.path.normcase(str(resolved))
-            rel_path = str(resolved.relative_to(store)).replace("\\", "/")
-
-            disk_files[norm_key] = {
-                "path": str(resolved),
-                "filename": filename,
-                "relative_path": rel_path,
-                "size_bytes": stat_res.st_size,
-                "type": infer_file_type(filename),
-                "extension": ext,
-            }
-
-    # 2. Query all database items owned by this vault
-    db_items = db.query(models.Item).filter(models.Item.vault_id == vault_id).all()
+    vault_mirrors = (
+        preloaded_mirrors
+        if preloaded_mirrors is not None
+        else mirrors_service.list_vault_mirrors(db, vault_id)
+    )
+    mirror_statuses = [
+        mirrors_service.scan_mirror_discrepancies(
+            db,
+            m,
+            preloaded_rows=preloaded_rows,
+            vault_name=vault.name,
+        )
+        for m in vault_mirrors
+    ]
+    mirror_prefixes = [
+        os.path.normcase(os.path.normpath(str(Path(m.source_path).resolve()))) + os.sep
+        for m in vault_mirrors
+        if m.source_path
+    ]
 
     missing_list: list[dict[str, Any]] = []
     restorable_item_ids: list[int] = []
+    prefix_len = len(store_str) + 1
 
-    for item in db_items:
-        if isinstance(item, models.FolderItem):
-            # Collections/folders are containers rather than physical asset leaves
+    for row in preloaded_rows:
+        item_id, abs_path, item_type, storage_mode, availability, size_bytes, _file_hash, metadata_json = row
+        if item_type in {"folder", "collection", "project", "multitrack", "zoom_h4"}:
+            # Containers/directories are not leaf files in disk_files
             continue
 
-        item_resolved = Path(item.absolute_path).resolve()
-        item_norm_key = os.path.normcase(str(item_resolved))
+        norm_abs = os.path.normpath(abs_path)
+        item_norm_key = os.path.normcase(norm_abs)
 
         if item_norm_key in disk_files:
-            # File exists on disk as expected
-            if item.availability == "missing":
-                restorable_item_ids.append(item.id)
-            # Remove from disk_files so remaining are untracked
+            if availability == "missing":
+                restorable_item_ids.append(item_id)
             del disk_files[item_norm_key]
         else:
-            # Check if it physically exists elsewhere (e.g. external reference)
-            if not item_resolved.exists():
+            # If this external_reference item is inside a configured VaultMirror,
+            # its sync status is reported under mirror_statuses (preserving offline protection).
+            if (storage_mode or "managed") == "external_reference":
+                if any(item_norm_key.startswith(m_prefix) for m_prefix in mirror_prefixes):
+                    continue
+            # Check if it physically exists elsewhere (e.g. standalone external reference)
+            if not os.path.exists(norm_abs):
                 rel_path = (
-                    str(item_resolved.relative_to(store)).replace("\\", "/")
-                    if _is_relative_to(item_resolved, store)
+                    norm_abs[prefix_len:].replace("\\", "/")
+                    if item_norm_key.startswith(store_norm_prefix) and len(norm_abs) > prefix_len
                     else None
                 )
+                fname = os.path.basename(norm_abs)
                 missing_list.append({
-                    "id": item.id,
-                    "path": item.absolute_path,
-                    "filename": item_resolved.name,
+                    "id": item_id,
+                    "path": abs_path,
+                    "filename": fname,
                     "relative_path": rel_path,
-                    "type": item.type,
-                    "size_bytes": item.size_bytes,
-                    "title": getattr(item, "title", None) or item_resolved.name,
+                    "type": item_type,
+                    "size_bytes": size_bytes,
+                    "title": _extract_item_title(metadata_json, fname),
+                    "vault_id": vault_id,
+                    "vault_name": vault.name,
                 })
 
     untracked_list = list(disk_files.values())
 
-    # 3. Detect candidate renames/moves (same size and extension)
+    # 4. Detect candidate renames/moves (same size and extension)
     moved_list: list[dict[str, Any]] = []
     matched_untracked_keys: set[str] = set()
 
     for missing in missing_list:
         if not missing.get("size_bytes"):
             continue
-        missing_ext = Path(missing["filename"]).suffix.lower()
+        missing_ext = os.path.splitext(missing["filename"])[1].lower()
         candidates = [
             u for u in untracked_list
             if u["path"] not in matched_untracked_keys
@@ -311,9 +459,12 @@ def scan_vault_discrepancies(db: Session, vault_id: int) -> dict[str, Any]:
                 "new_path": match["path"],
                 "filename": match["filename"],
                 "size_bytes": match["size_bytes"],
+                "vault_id": vault_id,
+                "vault_name": vault.name,
             })
 
-    total_discrepancies = len(untracked_list) + len(missing_list)
+    mirror_discrepancy_count = sum(int(m.get("total_discrepancies", 0)) for m in mirror_statuses)
+    total_discrepancies = len(untracked_list) + len(missing_list) + mirror_discrepancy_count
 
     return {
         "vault_id": vault_id,
@@ -322,6 +473,110 @@ def scan_vault_discrepancies(db: Session, vault_id: int) -> dict[str, Any]:
         "untracked": untracked_list,
         "missing": missing_list,
         "moved": moved_list,
+        "mirrors": mirror_statuses,
+        "total_discrepancies": total_discrepancies,
+    }
+
+
+def scan_all_vaults_discrepancies(
+    db: Session,
+    vault_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    """Scan all vaults (or a subset) in parallel using a single bulk DB query + concurrent directory walks."""
+    all_vaults = vaults.get_vaults(db)
+    if vault_ids is not None:
+        wanted = {int(vid) for vid in vault_ids}
+        all_vaults = [v for v in all_vaults if v.id in wanted]
+
+    if not all_vaults:
+        return {
+            "vault_id": 0,
+            "vault_name": "All Vaults",
+            "in_sync": True,
+            "untracked": [],
+            "missing": [],
+            "moved": [],
+            "mirrors": [],
+            "total_discrepancies": 0,
+        }
+
+    if len(all_vaults) == 1:
+        return scan_vault_discrepancies(db, all_vaults[0].id, preloaded_vault=all_vaults[0])
+
+    v_ids = [v.id for v in all_vaults]
+    rows_by_vault: dict[int, list[tuple[Any, ...]]] = {v.id: [] for v in all_vaults}
+    for row in (
+        db.query(
+            models.Item.vault_id,
+            models.Item.id,
+            models.Item.absolute_path,
+            models.Item.type,
+            models.Item.storage_mode,
+            models.Item.availability,
+            models.Item.size_bytes,
+            models.Item.file_hash,
+            models.Item.metadata_json,
+        )
+        .filter(models.Item.vault_id.in_(v_ids))
+        .all()
+    ):
+        rows_by_vault.setdefault(row[0], []).append(row[1:])
+
+    mirrors_by_vault: dict[int, list[models.VaultMirror]] = {v.id: [] for v in all_vaults}
+    for m in (
+        db.query(models.VaultMirror)
+        .filter(models.VaultMirror.vault_id.in_(v_ids))
+        .order_by(models.VaultMirror.id.asc())
+        .all()
+    ):
+        mirrors_by_vault.setdefault(m.vault_id, []).append(m)
+
+    # Walk physical vault directories concurrently (os.scandir releases the GIL)
+    walk_targets: list[tuple[int, str, str]] = []
+    for v in all_vaults:
+        store = vaults.vault_store(v).resolve()
+        if store.exists() and store.is_dir():
+            walk_targets.append((v.id, os.path.normpath(str(store)), v.name))
+
+    disk_by_vault: dict[int, dict[str, dict[str, Any]]] = {}
+    if walk_targets:
+        with ThreadPoolExecutor(max_workers=min(8, len(walk_targets))) as pool:
+            futures = {
+                vid: pool.submit(_walk_vault_store_files, store_str, vid, vname)
+                for vid, store_str, vname in walk_targets
+            }
+            for vid, fut in futures.items():
+                disk_by_vault[vid] = fut.result()
+
+    combined_untracked: list[dict[str, Any]] = []
+    combined_missing: list[dict[str, Any]] = []
+    combined_moved: list[dict[str, Any]] = []
+    combined_mirrors: list[dict[str, Any]] = []
+    total_discrepancies = 0
+
+    for v in all_vaults:
+        status = scan_vault_discrepancies(
+            db,
+            v.id,
+            preloaded_vault=v,
+            preloaded_rows=rows_by_vault.get(v.id, []),
+            preloaded_mirrors=mirrors_by_vault.get(v.id, []),
+            preloaded_disk_files=disk_by_vault.get(v.id),
+        )
+        combined_untracked.extend(status.get("untracked", []))
+        combined_missing.extend(status.get("missing", []))
+        combined_moved.extend(status.get("moved", []))
+        combined_mirrors.extend(status.get("mirrors", []))
+        total_discrepancies += int(status.get("total_discrepancies", 0))
+
+    return {
+        "vault_id": 0,
+        "vault_name": "All Vaults",
+        "in_sync": total_discrepancies == 0,
+        "untracked": combined_untracked,
+        "missing": combined_missing,
+        "moved": combined_moved,
+        "mirrors": combined_mirrors,
         "total_discrepancies": total_discrepancies,
     }
 
@@ -417,7 +672,13 @@ def reconcile_vault(
         if not file_path.exists() or not file_path.is_file():
             continue
 
-        parent_item, owning_project = _resolve_container_and_project(db, vault_id, file_path, store)
+        parent_item, owning_project = _resolve_container_and_project(
+            db,
+            vault_id,
+            file_path,
+            store,
+            create_missing_folders=True,
+        )
         resolved_parent_id = parent_item.id if parent_item else None
 
         # Check if already registered
@@ -500,6 +761,25 @@ def reconcile_vault(
             db.delete(item)
             purged_count += 1
 
+    # 5. Synchronize requested VaultMirrors
+    from . import mirrors as mirrors_service
+
+    mirrored_count = 0
+    if request.sync_all_mirrors or request.sync_mirror_ids:
+        target_mirrors = mirrors_service.list_vault_mirrors(db, vault_id)
+        if not request.sync_all_mirrors and request.sync_mirror_ids is not None:
+            wanted = {int(mid) for mid in request.sync_mirror_ids}
+            target_mirrors = [m for m in target_mirrors if m.id in wanted]
+        for mirror in target_mirrors:
+            res = mirrors_service.sync_mirror(db, mirror, commit=False)
+            mirrored_count += (
+                int(res.get("added_count", 0))
+                + int(res.get("updated_count", 0))
+                + int(res.get("missing_count", 0))
+            )
+
+    mirrors_service._refresh_folder_counts(db, vault_id)
+
     for pid in affected_project_ids:
         try:
             project_service.sync_project_manifest(db, pid)
@@ -517,5 +797,38 @@ def reconcile_vault(
         marked_missing_count=marked_missing_count,
         purged_count=purged_count,
         relinked_count=relinked_count,
+        mirrored_count=mirrored_count,
         in_sync=bool(updated_scan.get("in_sync", True)),
+    )
+
+
+def reconcile_all_vaults(
+    db: Session,
+    request: schemas.VaultReconcileRequest,
+) -> schemas.VaultReconcileResponse:
+    """Reconcile across all vaults in the database."""
+    all_vaults = vaults.get_vaults(db)
+    added_count = 0
+    marked_missing_count = 0
+    purged_count = 0
+    relinked_count = 0
+    mirrored_count = 0
+
+    for v in all_vaults:
+        res = reconcile_vault(db, v.id, request)
+        added_count += res.added_count
+        marked_missing_count += res.marked_missing_count
+        purged_count += res.purged_count
+        relinked_count += res.relinked_count
+        mirrored_count += res.mirrored_count
+
+    updated = scan_all_vaults_discrepancies(db)
+    return schemas.VaultReconcileResponse(
+        vault_id=0,
+        added_count=added_count,
+        marked_missing_count=marked_missing_count,
+        purged_count=purged_count,
+        relinked_count=relinked_count,
+        mirrored_count=mirrored_count,
+        in_sync=bool(updated.get("in_sync", True)),
     )

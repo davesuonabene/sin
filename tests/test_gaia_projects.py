@@ -396,7 +396,8 @@ class TestGaiaProjects(GaiaTestCase):
         )
         self.assertEqual(h4_job["status"], "completed")
         h4 = crud.get_item(self.db, h4_job["result_items"][0]["id"])
-        self.assertEqual(h4.type, "multitrack")
+        self.assertEqual(h4.type, "zoom_h4")
+        self.assertIsInstance(h4, models.MultitrackItem)
         self.assertEqual(h4.attributes["profile_id"], "zoom_h4")
 
         project = project_service.create_from_items(
@@ -640,7 +641,8 @@ class TestGaiaProjects(GaiaTestCase):
 
     def test_create_folder_in_vault(self):
         folder = project_service.create_folder(self.db, "Drums", vault_id=self.vault.id)
-        self.assertIsInstance(folder, models.CollectionItem)
+        self.assertIsInstance(folder, models.FolderItem)
+        self.assertEqual(folder.type, "folder")
         self.assertEqual(folder.title, "Drums")
         self.assertEqual(folder.vault_id, self.vault.id)
         folder_disk = Path(folder.absolute_path)

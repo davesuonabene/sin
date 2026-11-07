@@ -79,6 +79,12 @@
                                         <button id="remove-from-playlist-button"
                                             class="app-menu-item sin-menu-item hidden" type="button"
                                             role="menuitem">Remove from playlist</button>
+                                        <button id="selection-collect-vault"
+                                            class="app-menu-item sin-menu-item hidden" type="button"
+                                            role="menuitem" title="Copy referenced files into the vault folder">Collect into vault</button>
+                                        <button id="selection-dissolve-folder"
+                                            class="app-menu-item sin-menu-item hidden" type="button"
+                                            role="menuitem" title="Dissolve folder into its parent folder">Dissolve folder</button>
                                         <button id="delete-selection"
                                             class="app-menu-item danger-menu-item sin-menu-item" type="button"
                                             role="menuitem" title="Delete selected assets" disabled>Delete
@@ -500,6 +506,10 @@
         <button id="context-new-folder" class="sin-menu-item" type="button" role="menuitem">New folder</button>
         <button id="context-make-folder-move" class="sin-menu-item" type="button" role="menuitem">Make folder and
             move</button>
+        <button id="context-collect-vault" class="sin-menu-item hidden" type="button" role="menuitem">Collect into
+            vault</button>
+        <button id="context-dissolve-folder" class="sin-menu-item hidden" type="button" role="menuitem">Dissolve
+            folder</button>
         <div class="context-divider"></div>
         <button id="analyze-entry" class="sin-menu-item" type="button" role="menuitem">Analyze metadata</button>
         <button id="delete-entry-menu" type="button" role="menuitem" class="danger-menu-item sin-menu-item">Delete
@@ -593,6 +603,27 @@
                     <option value="hidden">Hidden — load when opened</option>
                 </select>
             </div>
+            <div id="vault-mirrors-section" class="dialog-field-row vault-mirrors-section">
+                <div class="vault-mirrors-header">
+                    <label>Mirrored Folders</label>
+                    <span class="help">Track external folders as 1-1 references or distill new files into this vault.</span>
+                </div>
+                <div id="vault-mirrors-list" class="vault-mirrors-list"></div>
+                <div class="vault-mirror-add-row">
+                    <div class="vault-mirror-source-group">
+                        <input id="vault-mirror-source-input" type="text" placeholder="External folder path to mirror…" autocomplete="off">
+                        <button id="vault-mirror-browse-btn" class="secondary" type="button">Browse</button>
+                    </div>
+                    <div class="vault-mirror-options-group">
+                        <select id="vault-mirror-mode-select" class="sin-select" title="Mirroring mode">
+                            <option value="reference_1to1">1-1 Reference (keep external until collected)</option>
+                            <option value="distill_copy">Distill &amp; Copy (flatten &amp; copy into vault)</option>
+                        </select>
+                        <input id="vault-mirror-target-input" type="text" placeholder="Vault folder name (optional)" autocomplete="off">
+                        <button id="vault-mirror-add-btn" class="secondary" type="button">+ Add Mirror</button>
+                    </div>
+                </div>
+            </div>
             <p id="vault-dialog-result" class="result hidden" role="status"></p>
             <div class="dialog-actions">
                 <button id="vault-dialog-cancel" class="secondary" type="button">Cancel</button>
@@ -616,6 +647,14 @@
                     <span id="vault-sync-summary-text">Scanning vault folders…</span>
                 </div>
                 <div id="vault-sync-sections" class="vault-sync-sections">
+                    <div id="sync-mirrors-section" class="sync-section hidden">
+                        <div class="sync-section-header">
+                            <span class="sync-section-badge mirrored">Mirrors</span>
+                            <h3>Mirrored Folder Updates (<span id="sync-mirrors-count">0</span>)</h3>
+                        </div>
+                        <p class="help">Changes detected in external mirrored folders configured for this vault.</p>
+                        <div id="sync-mirrors-list" class="sync-items-list"></div>
+                    </div>
                     <div id="sync-moved-section" class="sync-section hidden">
                         <div class="sync-section-header">
                             <span class="sync-section-badge moved">Moved</span>

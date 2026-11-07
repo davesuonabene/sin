@@ -1400,8 +1400,8 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertEqual((item.type, item.attributes["analysis"]["bpm"]), ("audio", 124))
         self.assertTrue(Path(item.absolute_path).is_file())
         self.assertNotEqual(Path(item.absolute_path), source_file.resolve())
-        self.assertEqual(Path(item.absolute_path).parent, vaults.vault_store(self.vault) / "files")
-        self.assertFalse((vaults.vault_store(self.vault) / "files" / source_file.stem).exists())
+        self.assertEqual(Path(item.absolute_path).parent, vaults.vault_store(self.vault))
+        self.assertFalse((vaults.vault_store(self.vault) / source_file.stem).exists())
 
         folder = self.temp_path / "loose_folder"
         self.write_audio(folder, "Hat.wav")
@@ -1415,7 +1415,7 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertEqual((repeated["imported"], repeated["skipped"]), (0, 2))
         self.assertTrue(all(item.parent_id is None for item in self.db.query(models.Item).all()))
         self.assertTrue(
-            all(Path(row.absolute_path).parent == vaults.vault_store(self.vault) / "files" for row in self.db.query(models.Item).all())
+            all(Path(row.absolute_path).parent == vaults.vault_store(self.vault) for row in self.db.query(models.Item).all())
         )
         self.assertTrue(
             {"Hat.wav", "Hat_2.wav"}.issubset({Path(row.absolute_path).name for row in self.db.query(models.Item).all()})
@@ -1472,7 +1472,7 @@ class TestGaiaLibrary(GaiaTestCase):
         )
         self.assertEqual(completed["status"], "completed")
         pack = crud.get_item(self.db, completed["result_items"][0]["id"])
-        self.assertEqual(pack.type, "collection")
+        self.assertEqual(pack.type, "folder")
         self.assertEqual(pack.attributes["profile_id"], "sample_pack")
         self.assertEqual(pack.attributes["profile_label"], "Sample pack")
         self.assertTrue(pack.attributes["import"]["immutable"])
@@ -1515,7 +1515,8 @@ class TestGaiaLibrary(GaiaTestCase):
         job = self.start_import(preview, excluded_indexes=[artifact_entry["index"]])
         self.assertEqual((job["status"], job["excluded"]), ("completed", 1))
         h4 = crud.get_item(self.db, job["result_items"][0]["id"])
-        self.assertEqual(h4.type, "multitrack")
+        self.assertEqual(h4.type, "zoom_h4")
+        self.assertIsInstance(h4, models.MultitrackItem)
         self.assertFalse((Path(h4.absolute_path) / artifact.name).exists())
         self.assertTrue((Path(h4.absolute_path) / renamed_mix.name).is_file())
         managed_mix = next(child for child in h4.children if Path(child.absolute_path).name == renamed_mix.name)
@@ -1628,7 +1629,7 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertIn("action:contain", values)
         self.assertIn("action:ignore", values)
         labels = {opt["value"]: opt["label"] for opt in preview["folder_type_options"]}
-        self.assertEqual(labels.get("action:contain"), "Container")
+        self.assertEqual(labels.get("action:contain"), "Folder")
         self.assertEqual(labels.get("action:ignore"), "Ignore")
 
         job = self.start_import(
@@ -1637,9 +1638,9 @@ class TestGaiaLibrary(GaiaTestCase):
         )
         self.assertEqual(job["status"], "completed")
 
-        drums_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "Drums").first()
+        drums_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "Drums").first()
         self.assertIsNotNone(drums_col)
-        synth_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "Synth").first()
+        synth_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "Synth").first()
         self.assertIsNone(synth_col)
 
         kick = self.db.query(models.Item).filter(models.Item.absolute_path.like("%Kick.wav")).first()
@@ -1663,12 +1664,12 @@ class TestGaiaLibrary(GaiaTestCase):
         )
         self.assertEqual(job["status"], "completed")
 
-        root_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "MyLibrary").first()
+        root_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "MyLibrary").first()
         self.assertIsNone(root_col)
 
-        suba_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "SubA").first()
+        suba_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "SubA").first()
         self.assertIsNotNone(suba_col)
-        subb_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "SubB").first()
+        subb_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "SubB").first()
         self.assertIsNotNone(subb_col)
 
         root_file = self.db.query(models.Item).filter(models.Item.absolute_path.like("%root_track.wav")).first()
@@ -1702,20 +1703,25 @@ class TestGaiaLibrary(GaiaTestCase):
         )
         self.assertEqual(job["status"], "completed")
 
-        root_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "RootPack").first()
+        root_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "RootPack").first()
         self.assertIsNotNone(root_col)
 
-        subb_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "SubB").first()
+        suba_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "SubA").first()
+        self.assertIsNotNone(suba_col)
+        self.assertEqual(suba_col.parent_id, root_col.id)
+
+        subb_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "SubB").first()
         self.assertIsNone(subb_col)
 
-        deep_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "Deep").first()
+        deep_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "Deep").first()
         self.assertIsNotNone(deep_col)
+        self.assertEqual(deep_col.parent_id, root_col.id)
 
         root_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%root.wav")).first()
         self.assertEqual(root_item.parent_id, root_col.id)
 
         a_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%a.wav")).first()
-        self.assertEqual(a_item.parent_id, root_col.id)
+        self.assertEqual(a_item.parent_id, suba_col.id)
 
         b_item = self.db.query(models.Item).filter(models.Item.absolute_path.like("%b_loose.wav")).first()
         self.assertEqual(b_item.parent_id, root_col.id)
@@ -1740,12 +1746,12 @@ class TestGaiaLibrary(GaiaTestCase):
             },
         )
         self.assertEqual(job["status"], "completed")
-        pack_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "MyPack").first()
+        pack_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "MyPack").first()
         self.assertIsNotNone(pack_col)
         pack_meta = json.loads(pack_col.metadata_json or "{}")
         self.assertEqual(pack_meta.get("profile_id"), "sample_pack")
 
-        drums_col = self.db.query(models.CollectionItem).filter(models.CollectionItem.title == "Drums").first()
+        drums_col = self.db.query(models.FolderItem).filter(models.FolderItem.title == "Drums").first()
         self.assertIsNone(drums_col)
 
         root_s = self.db.query(models.Item).filter(models.Item.absolute_path.like("%root_sample.wav")).first()
@@ -1758,8 +1764,8 @@ class TestGaiaLibrary(GaiaTestCase):
         manifest = json.loads(pack_col.manifest_json)
         rel_paths = {entry["relative_path"] for entry in manifest}
         self.assertIn("root_sample.wav", rel_paths)
-        self.assertIn("Drums/kick.wav", rel_paths)
-        self.assertIn("Drums/Acoustic/acoustic_kick.wav", rel_paths)
+        self.assertIn("kick.wav", rel_paths)
+        self.assertIn("acoustic_kick.wav", rel_paths)
 
     def test_already_in_database_flag_and_subfolder_difference_scan(self):
         source = self.temp_path / "diff-pack"

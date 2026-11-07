@@ -88,15 +88,30 @@ class DeletionContext:
             return None
         if not snapshot.exists():
             return None
-        if (
-            getattr(item, "type", None) == "folder"
-            or bool((getattr(item, "attributes", None) or {}).get("is_folder"))
-            or ("is_folder" in str(getattr(item, "metadata_json", "")))
-        ):
-            # Organizational folders are logical bins; deleting them dissolves the container, not files.
-            return None
         if isinstance(item, models.FolderItem) != snapshot.is_dir():
             return None
+
+        if isinstance(item, models.FolderItem):
+            preserved_ids = crud.externally_referenced_descendants_for_item(self.db, item)
+            if preserved_ids:
+                dest_parent_dir = snapshot.parent
+                preserved_rows = (
+                    self.db.query(models.Item)
+                    .filter(models.Item.id.in_(preserved_ids))
+                    .all()
+                )
+                for pres in preserved_rows:
+                    if isinstance(pres, models.FolderItem) or getattr(pres, "storage_mode", "managed") != "managed":
+                        continue
+                    pres_path = Path(pres.absolute_path).resolve()
+                    try:
+                        pres_path.relative_to(snapshot)
+                    except ValueError:
+                        continue
+                    if pres_path.is_file():
+                        target_path = project_service._unique_destination(dest_parent_dir, pres_path.name)
+                        os.replace(pres_path, target_path)
+                        pres.absolute_path = str(target_path.resolve())
 
         staged = snapshot.parent / f".deleting-{item.id}-{uuid.uuid4().hex}"
         os.replace(snapshot, staged)

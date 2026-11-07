@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from typing import List
 
-from .. import database, reconciler, schemas, vaults
+from .. import database, mirrors, models, reconciler, schemas, vaults
 
 router = APIRouter(prefix="/vaults", tags=["vaults"])
 
@@ -24,6 +24,7 @@ def create_vault(request: schemas.VaultCreate, db: Session = Depends(database.ge
             request.description,
             request.path,
             request.preview,
+            mirrors_list=request.mirrors,
         )
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -86,8 +87,26 @@ def read_import_log(vault_id: int, limit: int = 100, db: Session = Depends(datab
     return vaults.get_logs(db, vault_id, limit)
 
 
+@router.get("/sync-status", response_model=schemas.VaultSyncStatus)
+def read_all_vaults_sync_status(db: Session = Depends(database.get_db)):
+    return reconciler.scan_all_vaults_sync_status(db) if hasattr(reconciler, "scan_all_vaults_sync_status") else reconciler.scan_all_vaults_discrepancies(db)
+
+
+@router.post("/reconcile", response_model=schemas.VaultReconcileResponse)
+def reconcile_all_vaults_endpoint(
+    request: schemas.VaultReconcileRequest,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        return reconciler.reconcile_all_vaults(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/{vault_id}/sync-status", response_model=schemas.VaultSyncStatus)
 def read_vault_sync_status(vault_id: int, db: Session = Depends(database.get_db)):
+    if vault_id <= 0:
+        return reconciler.scan_all_vaults_discrepancies(db)
     try:
         return reconciler.scan_vault_discrepancies(db, vault_id)
     except ValueError as exc:
@@ -100,8 +119,77 @@ def reconcile_vault_endpoint(
     request: schemas.VaultReconcileRequest,
     db: Session = Depends(database.get_db),
 ):
+    if vault_id <= 0:
+        return reconciler.reconcile_all_vaults(db, request)
     try:
         return reconciler.reconcile_vault(db, vault_id, request)
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{vault_id}/mirrors", response_model=List[schemas.VaultMirrorSummary])
+def read_vault_mirrors(vault_id: int, db: Session = Depends(database.get_db)):
+    if not vaults.get_vault(db, vault_id):
+        raise HTTPException(status_code=404, detail="Vault not found")
+    return mirrors.list_vault_mirrors(db, vault_id)
+
+
+@router.post("/{vault_id}/mirrors", response_model=schemas.VaultMirrorSummary)
+def create_vault_mirror(
+    vault_id: int,
+    request: schemas.VaultMirrorCreate,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        return mirrors.create_mirror(db, vault_id, request)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/{vault_id}/mirrors/{mirror_id}", response_model=schemas.VaultMirrorSummary)
+def update_vault_mirror(
+    vault_id: int,
+    mirror_id: int,
+    request: schemas.VaultMirrorUpdate,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        return mirrors.update_mirror(db, vault_id, mirror_id, request)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/{vault_id}/mirrors/{mirror_id}")
+def delete_vault_mirror(
+    vault_id: int,
+    mirror_id: int,
+    untrack_uncollected: bool = True,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        return mirrors.delete_mirror(db, vault_id, mirror_id, untrack_uncollected=untrack_uncollected)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{vault_id}/mirrors/{mirror_id}/sync")
+def sync_vault_mirror(
+    vault_id: int,
+    mirror_id: int,
+    db: Session = Depends(database.get_db),
+):
+    mirror = (
+        db.query(models.VaultMirror)
+        .filter(
+            models.VaultMirror.id == mirror_id,
+            models.VaultMirror.vault_id == vault_id,
+        )
+        .first()
+    )
+    if not mirror:
+        raise HTTPException(status_code=404, detail="Mirror not found")
+    try:
+        return mirrors.sync_mirror(db, mirror)
+    except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

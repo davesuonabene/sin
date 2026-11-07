@@ -182,6 +182,12 @@ function initializeGaiaLibrary() {
     const vaultPathHelp = document.getElementById('vault-path-help');
     const vaultPreviewSelect = document.getElementById('vault-preview-select');
     const vaultDialogResult = document.getElementById('vault-dialog-result');
+    const vaultMirrorsList = document.getElementById('vault-mirrors-list');
+    const vaultMirrorSourceInput = document.getElementById('vault-mirror-source-input');
+    const vaultMirrorBrowseBtn = document.getElementById('vault-mirror-browse-btn');
+    const vaultMirrorModeSelect = document.getElementById('vault-mirror-mode-select');
+    const vaultMirrorTargetInput = document.getElementById('vault-mirror-target-input');
+    const vaultMirrorAddBtn = document.getElementById('vault-mirror-add-btn');
     const searchInput = document.getElementById('search-input');
     const filterControls = document.getElementById('filter-controls');
     const toggleFiltersButton = document.getElementById('toggle-filters');
@@ -221,6 +227,10 @@ function initializeGaiaLibrary() {
     const contextShowOriginalButton = document.getElementById('context-show-original');
     const contextNewFolderButton = document.getElementById('context-new-folder');
     const contextMakeFolderMoveButton = document.getElementById('context-make-folder-move');
+    const contextCollectVaultButton = document.getElementById('context-collect-vault');
+    const contextDissolveFolderButton = document.getElementById('context-dissolve-folder');
+    const selectionCollectVaultButton = document.getElementById('selection-collect-vault');
+    const selectionDissolveFolderButton = document.getElementById('selection-dissolve-folder');
     const folderDialog = document.getElementById('folder-dialog');
     const folderForm = document.getElementById('folder-form');
     const folderNameInput = document.getElementById('folder-name-input');
@@ -972,7 +982,17 @@ function initializeGaiaLibrary() {
     }
 
     function isEntryExternalReference(entry) {
-        if (!entry || entry.kind !== 'reference') return false;
+        if (!entry) return false;
+        const storageMode = String(
+            entry.item?.storage_mode
+            || entry.content?.storage_mode
+            || entry.folderItem?.storage_mode
+            || entry.folderItem?.content?.storage_mode
+            || entry.folderItem?.item?.storage_mode
+            || ''
+        ).toLowerCase();
+        if (storageMode === 'external_reference') return true;
+        if (entry.kind !== 'reference') return false;
         if (typeof entry.is_external === 'boolean') {
             return entry.is_external;
         }
@@ -1198,6 +1218,7 @@ function initializeGaiaLibrary() {
                 state.collectionContentControllers.delete(numericId);
                 state.collectionContentsLoading.delete(numericId);
                 triggerPendingNestedLoads(numericId);
+                scheduleVaultSyncCheck(state.selectedVaultId, 120);
             }
             renderFilterUI();
             renderAssets();
@@ -1447,7 +1468,7 @@ function initializeGaiaLibrary() {
             case 'type': {
                 const label = record.attributes?.profile_label || entry.reference?.attributes?.profile_label || entry.content?.attributes?.profile_label;
                 if (label) return label;
-                if (record.attributes?.is_folder || entry.type === 'collection') return 'Folder';
+                if (record.attributes?.is_folder || entry.type === 'collection' || entry.type === 'folder') return 'Folder';
                 return typeLabel(entry.type);
             }
             case 'author': return firstEntryValue(entry, 'author', 'artist', 'album_artist');
@@ -1549,7 +1570,7 @@ function initializeGaiaLibrary() {
         const item = entry.kind === 'content' ? entry.content : entry.item;
         if ((item?.availability || 'ready') !== 'ready') return false;
         if (entry.kind === 'content') return Boolean(entry.content.streamable);
-        return ['audio', 'track', 'sample', 'multitrack'].includes(entry.type);
+        return ['audio', 'track', 'sample', 'multitrack', 'zoom_h4'].includes(entry.type);
     }
 
     function itemEntry(item, id) {
@@ -1632,7 +1653,7 @@ function initializeGaiaLibrary() {
             return ['audio', 'sample', 'track'].includes(type);
         }
         if (field === 'bpm' || field === 'key') {
-            return ['audio', 'sample', 'midi', 'multitrack'].includes(type);
+            return ['audio', 'sample', 'midi', 'multitrack', 'zoom_h4'].includes(type);
         }
         if (['author', 'album', 'album_artist', 'release_year', 'genre', 'track_number', 'disc_number', 'comment'].includes(field)) {
             return ['audio', 'sample', 'track'].includes(type);
@@ -1957,7 +1978,7 @@ function initializeGaiaLibrary() {
         if (sourceKind === 'zip') {
             return '<span class="collection-title-icon archive" aria-hidden="true" title="Archive"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v9.5h-11z"/><line x1="8" y1="3.5" x2="8" y2="13"/><line x1="6.5" y1="5.5" x2="9.5" y2="5.5"/><line x1="6.5" y1="7.5" x2="9.5" y2="7.5"/><line x1="6.5" y1="9.5" x2="9.5" y2="9.5"/></svg></span>';
         }
-        if (type === 'multitrack') {
+        if (type === 'multitrack' || type === 'zoom_h4') {
             return '<span class="collection-title-icon multitrack" aria-hidden="true" title="Stem collection"><svg viewBox="0 0 16 16"><line x1="2" y1="4.5" x2="14" y2="4.5"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="11.5" x2="14" y2="11.5"/><circle cx="5" cy="4.5" r="1.5" fill="currentColor"/><circle cx="11" cy="8" r="1.5" fill="currentColor"/><circle cx="7" cy="11.5" r="1.5" fill="currentColor"/></svg></span>';
         }
         if (type === 'project' || typeIsProject(type)) {
@@ -1992,7 +2013,9 @@ function initializeGaiaLibrary() {
         );
         if (isCollection) row.title = 'Click the title to preview · double-click to show contents';
         if (isExternalReference) {
-            row.title = 'External linked file · points to file outside this project';
+            row.title = entry.kind === 'reference'
+                ? 'External linked file · points to file outside this project'
+                : 'External referenced item (italic) · Select "Collect into vault" to copy into the vault folder';
         } else if (entry.kind === 'reference') {
             row.title = 'Linked file · edit its project tags in the Tags column';
         }
@@ -3819,6 +3842,8 @@ function initializeGaiaLibrary() {
             moveTargetOptions?.replaceChildren();
             playlistTargetOptions?.replaceChildren();
             if (removeFromPlaylistButton) removeFromPlaylistButton.classList.add('hidden');
+            if (selectionCollectVaultButton) selectionCollectVaultButton.classList.add('hidden');
+            if (selectionDissolveFolderButton) selectionDissolveFolderButton.classList.add('hidden');
             renderSelectionTypeActions([]);
             return;
         }
@@ -3827,6 +3852,26 @@ function initializeGaiaLibrary() {
         if (selectionPlaylistTrigger) selectionPlaylistTrigger.disabled = false;
         if (analyzeSelectionButton) analyzeSelectionButton.disabled = false;
         if (deleteSelectionButton) deleteSelectionButton.disabled = !selectedEntries.some(deletionTargetForEntry);
+
+        const canCollectAny = selectedEntries.some(entry => (
+            isEntryExternalReference(entry)
+            || entry.type === 'folder'
+            || entry.type === 'collection'
+            || entry.kind === 'subfolder'
+        ));
+        if (selectionCollectVaultButton) {
+            selectionCollectVaultButton.classList.toggle('hidden', !canCollectAny);
+        }
+
+        const singleDissolvableFolder = selectedCount === 1 && selectedEntries[0] && (
+            selectedEntries[0].type === 'folder'
+            || selectedEntries[0].type === 'collection'
+            || selectedEntries[0].kind === 'subfolder'
+            || Boolean(selectedEntries[0].item?.attributes?.is_folder || selectedEntries[0].content?.attributes?.is_folder)
+        ) && !typeIsProject(selectedEntries[0].type) && entryFolderItemId(selectedEntries[0]);
+        if (selectionDissolveFolderButton) {
+            selectionDissolveFolderButton.classList.toggle('hidden', !singleDissolvableFolder);
+        }
 
         if (moveTargetOptions) {
             moveTargetOptions.replaceChildren();
@@ -4465,6 +4510,38 @@ function initializeGaiaLibrary() {
             }
         }
 
+        const canCollectContext = selectedEntries.some(entry => (
+            isEntryExternalReference(entry)
+            || entry.type === 'folder'
+            || entry.type === 'collection'
+            || entry.kind === 'subfolder'
+        ));
+        if (contextCollectVaultButton) {
+            if (canCollectContext && count > 0) {
+                contextCollectVaultButton.classList.remove('hidden');
+                contextCollectVaultButton.disabled = false;
+                contextCollectVaultButton.textContent = count > 1 ? `Collect into vault (${count})` : 'Collect into vault';
+            } else {
+                contextCollectVaultButton.classList.add('hidden');
+            }
+        }
+
+        const canDissolveFolder = count === 1 && targetEntry && (
+            targetEntry.type === 'folder'
+            || targetEntry.type === 'collection'
+            || targetEntry.kind === 'subfolder'
+            || Boolean(targetEntry.item?.attributes?.is_folder || targetEntry.content?.attributes?.is_folder)
+        ) && !typeIsProject(targetEntry.type) && entryFolderItemId(targetEntry);
+        if (contextDissolveFolderButton) {
+            if (canDissolveFolder) {
+                contextDissolveFolderButton.classList.remove('hidden');
+                contextDissolveFolderButton.disabled = false;
+                contextDissolveFolderButton.textContent = `Dissolve folder “${targetEntry.title || targetEntry.name}”`;
+            } else {
+                contextDissolveFolderButton.classList.add('hidden');
+            }
+        }
+
         if (contextPlaylistOptions) {
             contextPlaylistOptions.replaceChildren();
             const plHeader = document.createElement('div');
@@ -4739,7 +4816,80 @@ function initializeGaiaLibrary() {
 
             addSidebarVault(null, 'Show all', showAll);
             state.vaults.forEach(vault => {
-                addSidebarVault(vault.id, vault.name, state.selectedPlaylistId === null && vault.id === state.selectedVaultId);
+                const isSelectedVault = state.selectedPlaylistId === null && vault.id === state.selectedVaultId;
+                addSidebarVault(vault.id, vault.name, isSelectedVault);
+
+                const mirrors = Array.isArray(vault.mirrors) ? vault.mirrors : [];
+                const topFolders = isSelectedVault
+                    ? state.items.filter(item => Number(item.vault_id) === Number(vault.id) && (typeIsContainer(item.type) || item.type === 'folder' || item.type === 'collection'))
+                    : [];
+                if (mirrors.length > 0 || topFolders.length > 0) {
+                    const tree = document.createElement('div');
+                    tree.className = 'sidebar-vault-tree';
+                    const mirrorRootIds = new Set(mirrors.map(m => Number(m.root_item_id)).filter(Boolean));
+                    mirrors.forEach(mirror => {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = `sidebar-folder-item${mirror.mirror_mode === 'reference_1to1' ? ' is-referenced' : ''}`;
+                        btn.title = `${mirror.source_path} (${mirror.mirror_mode === 'distill_copy' ? 'Distill & Copy' : '1-1 Reference'})`;
+                        const labelSpan = document.createElement('span');
+                        labelSpan.className = 'sidebar-folder-label';
+                        labelSpan.textContent = mirror.target_folder_path || filename(mirror.source_path);
+                        const badgeSpan = document.createElement('span');
+                        badgeSpan.className = 'sidebar-mirror-badge';
+                        badgeSpan.textContent = '⇄';
+                        btn.append(labelSpan, badgeSpan);
+                        btn.addEventListener('click', async event => {
+                            event.stopPropagation();
+                            if (state.selectedVaultId !== vault.id || state.selectedPlaylistId !== null) {
+                                selectVaultOption(vault.id);
+                            }
+                            if (mirror.root_item_id) {
+                                const rootStr = String(mirror.root_item_id);
+                                state.expandedCollections.add(rootStr);
+                                loadCollectionContents(mirror.root_item_id);
+                                renderAssets();
+                                setTimeout(() => {
+                                    const row = assetList?.querySelector(`[data-item-id="${mirror.root_item_id}"]`);
+                                    row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                                }, 80);
+                            }
+                        });
+                        tree.appendChild(btn);
+                    });
+
+                    topFolders
+                        .filter(folder => !mirrorRootIds.has(Number(folder.id)))
+                        .slice(0, 20)
+                        .forEach(folder => {
+                            const btn = document.createElement('button');
+                            btn.type = 'button';
+                            const isRef = String(folder.storage_mode || '').toLowerCase() === 'external_reference';
+                            btn.className = `sidebar-folder-item${isRef ? ' is-referenced' : ''}`;
+                            btn.title = folder.title || filename(folder.absolute_path);
+                            const labelSpan = document.createElement('span');
+                            labelSpan.className = 'sidebar-folder-label';
+                            labelSpan.textContent = folder.title || filename(folder.absolute_path);
+                            btn.appendChild(labelSpan);
+                            btn.addEventListener('click', event => {
+                                event.stopPropagation();
+                                const idStr = String(folder.id);
+                                if (state.expandedCollections.has(idStr)) {
+                                    state.expandedCollections.delete(idStr);
+                                } else {
+                                    state.expandedCollections.add(idStr);
+                                    loadCollectionContents(folder.id);
+                                }
+                                renderAssets();
+                                setTimeout(() => {
+                                    const row = assetList?.querySelector(`[data-item-id="${folder.id}"]`);
+                                    row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                                }, 60);
+                            });
+                            tree.appendChild(btn);
+                        });
+                    sidebarVaultList.appendChild(tree);
+                }
             });
         }
 
@@ -4819,10 +4969,52 @@ function initializeGaiaLibrary() {
         state.vaults.forEach(vault => addOption(vault.id, vault.name, state.selectedPlaylistId === null && vault.id === state.selectedVaultId));
     }
 
+    function renderVaultDialogMirrors() {
+        if (!vaultMirrorsList) return;
+        vaultMirrorsList.replaceChildren();
+        const activeVault = selectedVault();
+        const mirrors = vaultDialogMode === 'rename'
+            ? (Array.isArray(activeVault?.mirrors) ? activeVault.mirrors : [])
+            : (Array.isArray(state.stagedVaultMirrors) ? state.stagedVaultMirrors : []);
+
+        if (!mirrors.length) {
+            const empty = document.createElement('div');
+            empty.className = 'help';
+            empty.textContent = 'No mirrored folders configured for this vault.';
+            vaultMirrorsList.appendChild(empty);
+            return;
+        }
+
+        mirrors.forEach((mirror, index) => {
+            const row = document.createElement('div');
+            row.className = 'vault-mirror-row';
+            const modeLabel = mirror.mirror_mode === 'distill_copy' ? 'Distill & Copy' : '1-1 Reference';
+            const targetFolder = mirror.target_folder_path || filename(mirror.source_path);
+            row.innerHTML = `
+                <div class="vault-mirror-info">
+                    <span class="vault-mirror-path" title="${escapeHtml(mirror.source_path)}">${escapeHtml(mirror.source_path)}</span>
+                    <div class="vault-mirror-meta">
+                        <span class="vault-mirror-badge">${escapeHtml(modeLabel)}</span>
+                        <span>→ /${escapeHtml(targetFolder)}</span>
+                    </div>
+                </div>
+                <div class="vault-mirror-actions">
+                    ${vaultDialogMode === 'rename' && mirror.id ? `<button type="button" class="sync-action-btn" data-dialog-sync-mirror="${mirror.id}">Sync</button>` : ''}
+                    <button type="button" class="sync-action-btn danger-action" data-dialog-remove-mirror="${vaultDialogMode === 'rename' ? mirror.id : index}">Remove</button>
+                </div>
+            `;
+            vaultMirrorsList.appendChild(row);
+        });
+    }
+
     function openVaultDialog(mode) {
         const activeVault = selectedVault();
         if (mode === 'rename' && !activeVault) return;
         vaultDialogMode = mode;
+        state.stagedVaultMirrors = [];
+        if (vaultMirrorSourceInput) vaultMirrorSourceInput.value = '';
+        if (vaultMirrorTargetInput) vaultMirrorTargetInput.value = '';
+        if (vaultMirrorModeSelect) vaultMirrorModeSelect.value = 'reference_1to1';
         if (vaultDialogEyebrow) vaultDialogEyebrow.textContent = mode === 'rename' ? 'Vault options' : 'New vault';
         if (vaultDialogTitle) vaultDialogTitle.textContent = mode === 'rename' ? 'Vault options' : 'Create a vault';
         if (vaultDialogSubmit) vaultDialogSubmit.textContent = mode === 'rename' ? 'Save changes' : 'Create vault';
@@ -4842,6 +5034,19 @@ function initializeGaiaLibrary() {
                 : 'GAIA creates a storage-key folder for this vault inside the selected root. Leave it unchanged to use the standard asset folder.';
         }
         if (vaultPreviewSelect) vaultPreviewSelect.value = mode === 'rename' ? activeVault.preview : 'quick';
+        renderVaultDialogMirrors();
+        if (mode === 'rename' && activeVault?.id) {
+            fetch(`/vaults/${activeVault.id}/mirrors`)
+                .then(res => res.ok ? res.json() : null)
+                .then(mirrors => {
+                    if (Array.isArray(mirrors)) {
+                        activeVault.mirrors = mirrors;
+                        renderVaultDialogMirrors();
+                        renderSidebar();
+                    }
+                })
+                .catch(() => { });
+        }
         vaultDialogResult?.classList.add('hidden');
         vaultDialogResult.textContent = '';
         vaultDialog?.showModal();
@@ -4855,11 +5060,15 @@ function initializeGaiaLibrary() {
         vaultDialogResult.classList.remove('hidden');
     }
 
-    async function createVaultRecord(name, path = null, preview = 'quick') {
+    async function createVaultRecord(name, path = null, preview = 'quick', mirrors = null) {
+        const payload = { name, description: null, path: path || null, preview };
+        if (Array.isArray(mirrors) && mirrors.length) {
+            payload.mirrors = mirrors;
+        }
         const response = await fetch('/vaults/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description: null, path: path || null, preview }),
+            body: JSON.stringify(payload),
         });
         const vault = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(vault.detail || 'Could not create vault');
@@ -4895,10 +5104,21 @@ function initializeGaiaLibrary() {
                 if (!response.ok) throw new Error(updated.detail || 'Could not rename vault');
                 state.vaults = state.vaults.map(vault => vault.id === updated.id ? updated : vault);
             } else {
+                const pendingSource = vaultMirrorSourceInput?.value.trim();
+                const stagedMirrors = Array.isArray(state.stagedVaultMirrors) ? [...state.stagedVaultMirrors] : [];
+                if (pendingSource) {
+                    stagedMirrors.push({
+                        source_path: pendingSource,
+                        target_folder_path: vaultMirrorTargetInput?.value.trim() || '',
+                        mirror_mode: vaultMirrorModeSelect?.value || 'reference_1to1',
+                        enabled: true,
+                    });
+                }
                 const vault = await createVaultRecord(
                     name,
                     vaultPathInput?.value.trim() || null,
                     vaultPreviewSelect?.value || 'quick',
+                    stagedMirrors,
                 );
                 state.vaults.push(vault);
                 state.selectedVaultId = vault.id;
@@ -4978,6 +5198,13 @@ function initializeGaiaLibrary() {
     const vaultReconciler = window.GaiaVaultReconciler?.init({ state, loadLibrary });
 
     function checkVaultSync(vaultId = state.selectedVaultId) {
+        return vaultReconciler?.checkVaultSync(vaultId);
+    }
+
+    function scheduleVaultSyncCheck(vaultId = state.selectedVaultId, delayMs = 120) {
+        if (vaultReconciler?.scheduleVaultSyncCheck) {
+            return vaultReconciler.scheduleVaultSyncCheck(vaultId, delayMs);
+        }
         return vaultReconciler?.checkVaultSync(vaultId);
     }
 
@@ -5153,6 +5380,7 @@ function initializeGaiaLibrary() {
                         if (!state.collectionContents.has(Number(item.id))) loadCollectionContents(item.id, { reset: true });
                         loadProjectReferencedItems(item.id);
                     });
+                scheduleVaultSyncCheck(state.selectedVaultId, 60);
             } catch (error) {
                 if (error?.name === 'AbortError') return;
                 if (!hasExistingLibrary) assetList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
@@ -6039,6 +6267,203 @@ function initializeGaiaLibrary() {
     }
 
 
+    async function collectSelectedEntriesIntoVault() {
+        const selected = getSelectedEntries();
+        const itemIds = [...new Set(
+            selected
+                .map(entry => entry.kind === 'subfolder' ? entryFolderItemId(entry) : (numericItemId(entry) || entryFolderItemId(entry)))
+                .filter(id => id && Number.isFinite(Number(id)))
+                .map(Number)
+        )];
+        if (!itemIds.length) return;
+        try {
+            const response = await fetch('/items/collect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ item_ids: itemIds }),
+            });
+            const result = await response.json().catch(() => ([]));
+            if (!response.ok) {
+                throw new Error(apiErrorMessage(result, 'Could not collect items into vault'));
+            }
+            const collectedCount = Array.isArray(result) ? result.length : 0;
+            if (summary) {
+                summary.textContent = collectedCount > 0
+                    ? `Collected ${collectedCount} ${collectedCount === 1 ? 'item' : 'items'} into vault`
+                    : 'Selected items are already stored in the vault';
+            }
+            await loadLibrary({ force: true, resetNested: true });
+            await checkVaultSync();
+        } catch (error) {
+            window.alert(error.message || 'Could not collect items into vault');
+        }
+    }
+
+    async function dissolveSelectedFolder() {
+        const selected = getSelectedEntries();
+        const targetEntry = state.contextEntry || (selected.length === 1 ? selected[0] : null);
+        if (!targetEntry) return;
+        const folderId = entryFolderItemId(targetEntry);
+        if (!folderId) return;
+        const folderTitle = targetEntry.title || targetEntry.name || `Folder ${folderId}`;
+        if (!window.confirm(`Dissolve folder “${folderTitle}” and move its contents into its parent folder?`)) return;
+        try {
+            const response = await fetch(`/items/folders/${folderId}/dissolve`, {
+                method: 'POST',
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(apiErrorMessage(result, 'Could not dissolve folder'));
+            }
+            state.selectedEntryIds.clear();
+            state.contextEntry = null;
+            await loadLibrary({ force: true, resetNested: true });
+            await checkVaultSync();
+        } catch (error) {
+            window.alert(error.message || 'Could not dissolve folder');
+        }
+    }
+
+    vaultMirrorBrowseBtn?.addEventListener('click', () => {
+        openVaultPathPicker('mirror');
+    });
+
+    vaultMirrorAddBtn?.addEventListener('click', async () => {
+        const source = vaultMirrorSourceInput?.value.trim() || '';
+        const targetFolder = vaultMirrorTargetInput?.value.trim() || '';
+        const mirrorMode = vaultMirrorModeSelect?.value || 'reference_1to1';
+        if (!source) {
+            showVaultDialogError('Choose or enter an external folder path to mirror.');
+            vaultMirrorSourceInput?.focus();
+            return;
+        }
+        vaultDialogResult?.classList.add('hidden');
+        if (vaultDialogMode === 'rename') {
+            const activeVault = selectedVault();
+            if (!activeVault) return;
+            vaultMirrorAddBtn.disabled = true;
+            try {
+                const response = await fetch(`/vaults/${activeVault.id}/mirrors`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_path: source,
+                        target_folder_path: targetFolder,
+                        mirror_mode: mirrorMode,
+                        enabled: true,
+                    }),
+                });
+                const created = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(apiErrorMessage(created, 'Could not add mirrored folder'));
+                if (!Array.isArray(activeVault.mirrors)) activeVault.mirrors = [];
+                activeVault.mirrors.push(created);
+                if (vaultMirrorSourceInput) vaultMirrorSourceInput.value = '';
+                if (vaultMirrorTargetInput) vaultMirrorTargetInput.value = '';
+                renderVaultDialogMirrors();
+                renderSidebar();
+                await loadLibrary({ force: true, resetNested: true });
+                await checkVaultSync(activeVault.id);
+            } catch (error) {
+                showVaultDialogError(error.message || 'Could not add mirrored folder');
+            } finally {
+                vaultMirrorAddBtn.disabled = false;
+            }
+        } else {
+            if (!Array.isArray(state.stagedVaultMirrors)) state.stagedVaultMirrors = [];
+            state.stagedVaultMirrors.push({
+                source_path: source,
+                target_folder_path: targetFolder,
+                mirror_mode: mirrorMode,
+                enabled: true,
+            });
+            if (vaultMirrorSourceInput) vaultMirrorSourceInput.value = '';
+            if (vaultMirrorTargetInput) vaultMirrorTargetInput.value = '';
+            renderVaultDialogMirrors();
+        }
+    });
+
+    vaultMirrorsList?.addEventListener('click', async event => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const activeVault = selectedVault();
+
+        const syncBtn = target.closest('[data-dialog-sync-mirror]');
+        if (syncBtn && vaultDialogMode === 'rename' && activeVault) {
+            const mirrorId = Number(syncBtn.getAttribute('data-dialog-sync-mirror'));
+            if (!mirrorId) return;
+            syncBtn.disabled = true;
+            try {
+                const res = await fetch(`/vaults/${activeVault.id}/mirrors/${mirrorId}/sync`, { method: 'POST' });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(apiErrorMessage(data, 'Could not sync mirrored folder'));
+                await loadLibrary({ force: true, resetNested: true });
+                await checkVaultSync(activeVault.id);
+            } catch (error) {
+                showVaultDialogError(error.message || 'Could not sync mirror');
+            } finally {
+                syncBtn.disabled = false;
+            }
+            return;
+        }
+
+        const removeBtn = target.closest('[data-dialog-remove-mirror]');
+        if (removeBtn) {
+            const rawId = removeBtn.getAttribute('data-dialog-remove-mirror');
+            if (vaultDialogMode === 'rename' && activeVault) {
+                const mirrorId = Number(rawId);
+                if (!mirrorId) return;
+                removeBtn.disabled = true;
+                try {
+                    const res = await fetch(`/vaults/${activeVault.id}/mirrors/${mirrorId}`, { method: 'DELETE' });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        throw new Error(apiErrorMessage(err, 'Could not remove mirror'));
+                    }
+                    activeVault.mirrors = (activeVault.mirrors || []).filter(m => Number(m.id) !== mirrorId);
+                    renderVaultDialogMirrors();
+                    renderSidebar();
+                    await checkVaultSync(activeVault.id);
+                } catch (error) {
+                    showVaultDialogError(error.message || 'Could not remove mirror');
+                } finally {
+                    removeBtn.disabled = false;
+                }
+            } else {
+                const idx = Number(rawId);
+                if (Number.isInteger(idx) && Array.isArray(state.stagedVaultMirrors)) {
+                    state.stagedVaultMirrors.splice(idx, 1);
+                    renderVaultDialogMirrors();
+                }
+            }
+        }
+    });
+
+    contextCollectVaultButton?.addEventListener('click', async event => {
+        event.preventDefault();
+        event.stopPropagation();
+        contextMenu.classList.add('hidden');
+        await collectSelectedEntriesIntoVault();
+    });
+
+    selectionCollectVaultButton?.addEventListener('click', async event => {
+        event.preventDefault();
+        closeAppMenus();
+        await collectSelectedEntriesIntoVault();
+    });
+
+    contextDissolveFolderButton?.addEventListener('click', async event => {
+        event.preventDefault();
+        event.stopPropagation();
+        contextMenu.classList.add('hidden');
+        await dissolveSelectedFolder();
+    });
+
+    selectionDissolveFolderButton?.addEventListener('click', async event => {
+        event.preventDefault();
+        closeAppMenus();
+        await dissolveSelectedFolder();
+    });
+
     analyzeSelectionButton?.addEventListener('click', async event => {
         event.preventDefault();
         closeAppMenus();
@@ -6357,7 +6782,10 @@ function initializeGaiaLibrary() {
         }
     });
     window.addEventListener('gaia:library-refresh', () => loadLibrary());
-    window.addEventListener('focus', () => checkVaultSync());
+    window.addEventListener('focus', () => scheduleVaultSyncCheck(state.selectedVaultId, 100));
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) scheduleVaultSyncCheck(state.selectedVaultId, 100);
+    });
     initAssetListDelegation();
     loadLibrary().then(() => checkVaultSync());
 }

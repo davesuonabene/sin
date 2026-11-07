@@ -252,8 +252,37 @@ def save_sequence(req: schemas.SequenceSaveRequest, db: Session = Depends(databa
     """Persist a SIN sequence in GAIA's default vault and register it as an asset."""
     document = _validated_sequence_document(req)
     vault = vaults.ensure_default_vault(db)
-    sequence_dir = vaults.vault_store(vault) / "sequences"
+    sequence_dir = (vaults.vault_store(vault) / "sequences").resolve()
     sequence_dir.mkdir(parents=True, exist_ok=True)
+    seq_folder = (
+        db.query(models.FolderItem)
+        .filter(
+            models.FolderItem.vault_id == vault.id,
+            models.FolderItem.absolute_path == str(sequence_dir),
+        )
+        .first()
+    )
+    if not seq_folder:
+        seq_folder = models.FolderItem(
+            absolute_path=str(sequence_dir),
+            vault_id=vault.id,
+            parent_id=None,
+            title="sequences",
+            source_kind="managed",
+            source_path=str(sequence_dir),
+            content_count=0,
+            type="folder",
+            storage_mode="managed",
+            availability="ready",
+            metadata_json=json.dumps({
+                "is_folder": True,
+                "profile_id": "folder",
+                "profile_label": "Folder",
+            }),
+        )
+        db.add(seq_folder)
+        db.flush()
+
     target = sequence_dir / f"{document['name']}.seq"
     temporary = sequence_dir / f".{target.name}.{uuid.uuid4().hex}.tmp"
     try:
@@ -270,6 +299,7 @@ def save_sequence(req: schemas.SequenceSaveRequest, db: Session = Depends(databa
     if existing:
         existing.file_hash = file_hash
         existing.size_bytes = size_bytes
+        existing.parent_id = seq_folder.id
         existing.mime_type = "application/x-sin-sequence+json"
         existing.updated_at = datetime.datetime.utcnow()
         db.commit()
@@ -280,12 +310,15 @@ def save_sequence(req: schemas.SequenceSaveRequest, db: Session = Depends(databa
     item = schemas.ItemCreate(
         absolute_path=absolute_path,
         vault_id=vault.id,
+        parent_id=seq_folder.id,
         file_hash=file_hash,
         size_bytes=size_bytes,
         mime_type="application/x-sin-sequence+json",
         type="sequence",
     )
     result = crud.create_item(db, item)
+    seq_folder.content_count = db.query(models.Item).filter(models.Item.parent_id == seq_folder.id).count()
+    db.commit()
     vaults.log_import(db, vault.id, absolute_path, "imported", "sequence_saved", result.id)
     return result
 
@@ -574,7 +607,7 @@ def _relative_content_path(root: str, path: str) -> str:
 
 def _propagate_content_analysis(db: Session, db_item: models.FolderItem, analyzed: dict) -> None:
     """Copy freshly analyzed manifest metadata to its indexed child item."""
-    children = list(getattr(db_item, "children", []) or [])
+    children = crud._collect_subtree_children(db_item)
     child_by_id = {child.id: child for child in children}
     child_by_path = {
         _relative_content_path(db_item.absolute_path, child.absolute_path): child
@@ -951,6 +984,28 @@ def create_folder(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/folders/{folder_id}/dissolve", response_model=schemas.FolderDissolveResponse)
+def dissolve_folder_endpoint(
+    folder_id: int,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        return project_service.dissolve_folder(db, folder_id)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/collect", response_model=List[schemas.Item])
+def collect_items_into_vault_endpoint(
+    req: schemas.CollectItemsRequest,
+    db: Session = Depends(database.get_db),
+):
+    try:
+        return vaults.collect_items_into_vault(db, req.item_ids)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/{folder_id}/place-items")
 def place_items_in_folder(
     folder_id: int,
@@ -1313,7 +1368,7 @@ def get_item_stems(item_id: int, db: Session = Depends(database.get_db)):
     db_item = crud.get_item(db, item_id=item_id)
     if not db_item:
         raise HTTPException(status_code=404, detail="Item not found")
-    if db_item.type != "multitrack":
+    if db_item.type not in {"multitrack", "zoom_h4"}:
         raise HTTPException(status_code=400, detail="Item is not a multitrack item")
     return {
         "id": item_id,
@@ -1345,7 +1400,7 @@ def stream_item(item_id: int, db: Session = Depends(database.get_db)):
     if db_item.availability != "ready":
         raise HTTPException(status_code=409, detail="Asset transfer is not ready")
     
-    if db_item.type == "multitrack":
+    if db_item.type in {"multitrack", "zoom_h4"}:
         stems = getattr(db_item, "stems", []) or []
         if stems and stems[0].get("absolute_path") and os.path.exists(stems[0]["absolute_path"]):
             return FileResponse(path=stems[0]["absolute_path"], media_type="audio/wav")

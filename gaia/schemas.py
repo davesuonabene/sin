@@ -305,6 +305,11 @@ class CollectionItemCreate(ItemCreate):
     contents: List[CollectionContent] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
 
+
+class FolderItemCreate(CollectionItemCreate):
+    type: str = "folder"
+
+
 class CollectionItem(Item):
     title: Optional[str] = None
     source_kind: Optional[str] = None
@@ -312,6 +317,11 @@ class CollectionItem(Item):
     content_count: int = 0
     contents: List[CollectionContent] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+
+
+class FolderItem(CollectionItem):
+    pass
+
 
 class MultitrackItemCreate(CollectionItemCreate):
     type: str = "multitrack"
@@ -321,12 +331,21 @@ class MultitrackItemCreate(CollectionItemCreate):
     is_valid_length: bool = True
     length_variance: float = 0.0
 
+
+class ZoomH4ItemCreate(MultitrackItemCreate):
+    type: str = "zoom_h4"
+
+
 class MultitrackItem(Item):
     stems: List[StemInfo] = Field(default_factory=list)
     key: Optional[str] = None
     bpm: Optional[int] = None
     is_valid_length: bool = True
     length_variance: float = 0.0
+
+
+class ZoomH4Item(MultitrackItem):
+    pass
 
 
 class ProjectItemCreate(CollectionItemCreate):
@@ -360,6 +379,16 @@ class ImportJobCreateRequest(BaseModel):
     excluded_types: List[str] = Field(default_factory=list)
     excluded_extensions: List[str] = Field(default_factory=list)
     conflict_action: Optional[Literal["skip", "new_snapshot"]] = None
+
+
+class CollectItemsRequest(BaseModel):
+    item_ids: List[int] = Field(default_factory=list)
+
+
+class FolderDissolveResponse(BaseModel):
+    dissolved_folder_id: int
+    parent_id: Optional[int] = None
+    moved_count: int = 0
 
 
 class ProjectCreateRequest(BaseModel):
@@ -579,6 +608,33 @@ class ItemTagRequest(BaseModel):
     tag_id: int
 
 
+class VaultMirrorBase(BaseModel):
+    source_path: str
+    target_folder_path: str = ""
+    mode: Literal["reference_1to1", "distill_copy"] = "reference_1to1"
+    enabled: bool = True
+
+
+class VaultMirrorCreate(VaultMirrorBase):
+    pass
+
+
+class VaultMirrorUpdate(BaseModel):
+    target_folder_path: Optional[str] = None
+    mode: Optional[Literal["reference_1to1", "distill_copy"]] = None
+    enabled: Optional[bool] = None
+
+
+class VaultMirrorSummary(VaultMirrorBase):
+    id: int
+    vault_id: int
+    root_item_id: Optional[int] = None
+    last_synced_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class VaultBase(BaseModel):
     name: str
     description: Optional[str] = None
@@ -586,6 +642,7 @@ class VaultBase(BaseModel):
 
 class VaultCreate(VaultBase):
     path: Optional[str] = None
+    mirrors: List[VaultMirrorCreate] = Field(default_factory=list)
 
 class VaultUpdate(BaseModel):
     name: str
@@ -602,6 +659,7 @@ class Vault(VaultBase):
     path: str
     root_path: str
     created_at: datetime
+    mirrors: List[VaultMirrorSummary] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -636,6 +694,8 @@ class DiscoveredFile(BaseModel):
     size_bytes: int
     type: str
     extension: str
+    vault_id: Optional[int] = None
+    vault_name: Optional[str] = None
 
 
 class MissingFile(BaseModel):
@@ -646,6 +706,8 @@ class MissingFile(BaseModel):
     type: str
     size_bytes: Optional[int] = None
     title: Optional[str] = None
+    vault_id: Optional[int] = None
+    vault_name: Optional[str] = None
 
 
 class MovedFileCandidate(BaseModel):
@@ -654,6 +716,34 @@ class MovedFileCandidate(BaseModel):
     new_path: str
     filename: str
     size_bytes: int
+    vault_id: Optional[int] = None
+    vault_name: Optional[str] = None
+
+
+class MirrorFileDiscrepancy(BaseModel):
+    source_path: str
+    relative_path: str
+    filename: str
+    size_bytes: int = 0
+    status: Literal["new", "modified", "missing", "exact_duplicate"]
+    item_id: Optional[int] = None
+
+
+class VaultMirrorSyncStatus(BaseModel):
+    mirror_id: int
+    vault_id: int
+    vault_name: Optional[str] = None
+    source_path: str
+    target_folder_path: str
+    mode: Literal["reference_1to1", "distill_copy"]
+    enabled: bool = True
+    offline: bool = False
+    in_sync: bool = True
+    new_files: List[MirrorFileDiscrepancy] = Field(default_factory=list)
+    modified_files: List[MirrorFileDiscrepancy] = Field(default_factory=list)
+    missing_files: List[MirrorFileDiscrepancy] = Field(default_factory=list)
+    exact_duplicates: List[MirrorFileDiscrepancy] = Field(default_factory=list)
+    total_discrepancies: int = 0
 
 
 class VaultSyncStatus(BaseModel):
@@ -663,6 +753,7 @@ class VaultSyncStatus(BaseModel):
     untracked: List[DiscoveredFile] = Field(default_factory=list)
     missing: List[MissingFile] = Field(default_factory=list)
     moved: List[MovedFileCandidate] = Field(default_factory=list)
+    mirrors: List[VaultMirrorSyncStatus] = Field(default_factory=list)
     total_discrepancies: int = 0
 
 
@@ -678,6 +769,8 @@ class VaultReconcileRequest(BaseModel):
     mark_all_missing: bool = False
     purge_missing: Optional[List[int]] = None
     relink_moved: Optional[List[RelinkMovedPair]] = None
+    sync_mirror_ids: Optional[List[int]] = None
+    sync_all_mirrors: bool = False
 
 
 class VaultReconcileResponse(BaseModel):
@@ -686,6 +779,7 @@ class VaultReconcileResponse(BaseModel):
     marked_missing_count: int = 0
     purged_count: int = 0
     relinked_count: int = 0
+    mirrored_count: int = 0
     in_sync: bool = True
 
 

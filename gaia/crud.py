@@ -26,7 +26,9 @@ ITEM_POLYMORPHIC_TYPES = (
     models.TrackItem,
     models.SampleItem,
     models.FolderItem,
+    models.CollectionItem,
     models.MultitrackItem,
+    models.ZoomH4Item,
     models.ProjectItem,
 )
 
@@ -73,6 +75,24 @@ def _content_path_key(value: str) -> str:
     return os.path.normcase(os.path.normpath(value or ""))
 
 
+def _child_relative_path(collection: models.FolderItem, child: models.Item) -> str:
+    try:
+        return Path(child.absolute_path).relative_to(Path(collection.absolute_path)).as_posix()
+    except ValueError:
+        pass
+    col_src = getattr(collection, "source_path", None)
+    ch_src = _source_path(child)
+    if col_src and ch_src:
+        try:
+            return Path(ch_src).resolve().relative_to(Path(col_src).resolve()).as_posix()
+        except ValueError:
+            pass
+    folder_attr = (getattr(child, "attributes", {}) or {}).get("folder")
+    if folder_attr:
+        return f"{folder_attr}/{os.path.basename(child.absolute_path)}"
+    return os.path.basename(child.absolute_path)
+
+
 def _child_content(
     collection: models.FolderItem,
     child: models.Item,
@@ -83,14 +103,7 @@ def _child_content(
     existing = dict(existing or {})
     child_analysis = (getattr(child, "attributes", {}) or {}).get("analysis", {})
     child_metadata = _audio_metadata(child)
-    try:
-        relative_path = Path(child.absolute_path).relative_to(Path(collection.absolute_path)).as_posix()
-    except ValueError:
-        folder_attr = (getattr(child, "attributes", {}) or {}).get("folder")
-        if folder_attr:
-            relative_path = f"{folder_attr}/{os.path.basename(child.absolute_path)}"
-        else:
-            relative_path = os.path.basename(child.absolute_path)
+    relative_path = _child_relative_path(collection, child)
     return {
         **existing,
         "index": existing.get("index", fallback_index),
@@ -145,10 +158,7 @@ def _merge_collection_contents(
         if entry.get("relative_path")
     ]
     for child in sorted(children, key=lambda value: value.absolute_path.casefold()):
-        try:
-            relative_path = Path(child.absolute_path).relative_to(Path(collection.absolute_path)).as_posix()
-        except ValueError:
-            relative_path = os.path.basename(child.absolute_path)
+        relative_path = _child_relative_path(collection, child)
         path_key = _content_path_key(relative_path)
         contents_by_path[path_key] = _child_content(collection, child, contents_by_path.get(path_key))
         if path_key not in content_order:
@@ -158,6 +168,21 @@ def _merge_collection_contents(
         if content.get("index") is None:
             content["index"] = index
     return contents
+
+
+def _collect_subtree_children(db_item) -> list[models.Item]:
+    result: list[models.Item] = []
+    seen: set[int] = set()
+    queue = list(getattr(db_item, "children", []) or [])
+    while queue:
+        child = queue.pop(0)
+        if child.id in seen:
+            continue
+        seen.add(child.id)
+        result.append(child)
+        if getattr(child, "type", None) in {"folder", "collection"}:
+            queue.extend(list(getattr(child, "children", []) or []))
+    return result
 
 
 def _populate_item_fields(db_item):
@@ -174,10 +199,14 @@ def _populate_item_fields(db_item):
         # Child rows are canonical when present, but merge them over the
         # manifest rather than discarding manifest-only entries. This keeps
         # legacy and interrupted imports readable during gradual backfill.
+        leaf_children = [
+            child for child in _collect_subtree_children(db_item)
+            if getattr(child, "type", None) not in {"folder", "collection"}
+        ]
         contents = _merge_collection_contents(
             db_item,
             _manifest_contents(db_item),
-            list(getattr(db_item, "children", []) or []),
+            leaf_children,
         )
         db_item.contents = contents
         db_item.content_count = len(contents)
@@ -185,7 +214,7 @@ def _populate_item_fields(db_item):
             db_item.warnings = json.loads(getattr(db_item, "warnings_json", None) or "[]")
         except Exception:
             db_item.warnings = []
-    if isinstance(db_item, models.MultitrackItem) or getattr(db_item, "type", None) == "multitrack":
+    if isinstance(db_item, models.MultitrackItem) or getattr(db_item, "type", None) in {"multitrack", "zoom_h4"}:
         stems_raw = getattr(db_item, "stems_json", None)
         if stems_raw:
             try:
@@ -370,24 +399,60 @@ def get_item_summaries(
         root_tag_alias = aliased(models.Tag)
         root_item_tags = models.item_tags.alias("root_item_tags")
         pattern = f"%{needle}%"
+        matched_parent_ids = {
+            row[0]
+            for row in db.query(models.Item.parent_id)
+            .outerjoin(models.item_tags, models.item_tags.c.item_id == models.Item.id)
+            .outerjoin(models.Tag, models.Tag.id == models.item_tags.c.tag_id)
+            .filter(
+                models.Item.parent_id.isnot(None),
+                or_(
+                    models.Item.type.ilike(pattern),
+                    models.Item.absolute_path.ilike(pattern),
+                    models.Item.metadata_json.ilike(pattern),
+                    models.Tag.name.ilike(pattern),
+                ),
+            )
+            .all()
+            if row[0] is not None
+        }
+        matched_root_ids: set[int] = set()
+        frontier_parents = set(matched_parent_ids)
+        seen_parents: set[int] = set()
+        while frontier_parents:
+            seen_parents.update(frontier_parents)
+            parent_rows = (
+                db.query(models.Item.id, models.Item.parent_id)
+                .filter(models.Item.id.in_(frontier_parents))
+                .all()
+            )
+            next_parents: set[int] = set()
+            for p_id, gp_id in parent_rows:
+                if gp_id is None:
+                    matched_root_ids.add(p_id)
+                elif gp_id not in seen_parents:
+                    next_parents.add(gp_id)
+            frontier_parents = next_parents
+
+        or_clauses = [
+            models.Item.type.ilike(pattern),
+            models.Item.absolute_path.ilike(pattern),
+            models.Item.metadata_json.ilike(pattern),
+            child_alias.type.ilike(pattern),
+            child_alias.absolute_path.ilike(pattern),
+            child_alias.metadata_json.ilike(pattern),
+            child_tag_alias.name.ilike(pattern),
+            root_tag_alias.name.ilike(pattern),
+        ]
+        if matched_root_ids:
+            or_clauses.append(models.Item.id.in_(matched_root_ids))
         query = (
             query.outerjoin(child_alias, models.Item.id == child_alias.parent_id)
             .outerjoin(models.item_tags, models.item_tags.c.item_id == child_alias.id)
             .outerjoin(child_tag_alias, child_tag_alias.id == models.item_tags.c.tag_id)
             .outerjoin(root_item_tags, root_item_tags.c.item_id == models.Item.id)
             .outerjoin(root_tag_alias, root_tag_alias.id == root_item_tags.c.tag_id)
-            .filter(
-                or_(
-                    models.Item.type.ilike(pattern),
-                    models.Item.absolute_path.ilike(pattern),
-                    models.Item.metadata_json.ilike(pattern),
-                    child_alias.type.ilike(pattern),
-                    child_alias.absolute_path.ilike(pattern),
-                    child_alias.metadata_json.ilike(pattern),
-                    child_tag_alias.name.ilike(pattern),
-                    root_tag_alias.name.ilike(pattern),
-                )
-            )
+            .filter(or_(*or_clauses))
             .distinct()
         )
     roots = query.order_by(models.Item.updated_at.desc(), models.Item.id.desc()).offset(skip).limit(limit).all()
@@ -395,27 +460,51 @@ def get_item_summaries(
         return []
 
     root_ids = [item.id for item in roots]
+    folder_to_root: dict[int, int] = {item_id: item_id for item_id in root_ids}
+    frontier = list(root_ids)
+    while frontier:
+        sub_rows = (
+            db.query(models.Item.id, models.Item.parent_id)
+            .filter(
+                models.Item.parent_id.in_(frontier),
+                models.Item.type.in_(["folder", "collection"]),
+            )
+            .all()
+        )
+        next_frontier = []
+        for sub_id, p_id in sub_rows:
+            if sub_id not in folder_to_root and p_id in folder_to_root:
+                folder_to_root[sub_id] = folder_to_root[p_id]
+                next_frontier.append(sub_id)
+        frontier = next_frontier
+
+    all_folder_ids = list(folder_to_root.keys())
     child_types: dict[int, set[str]] = {item_id: set() for item_id in root_ids}
     for parent_id, child_type in (
         db.query(models.Item.parent_id, models.Item.type)
-        .filter(models.Item.parent_id.in_(root_ids))
+        .filter(
+            models.Item.parent_id.in_(all_folder_ids),
+            ~models.Item.type.in_(["folder", "collection"]),
+        )
         .distinct()
         .all()
     ):
-        if parent_id is not None and child_type:
-            child_types[parent_id].add(child_type)
+        root_id = folder_to_root.get(parent_id)
+        if root_id is not None and child_type:
+            child_types[root_id].add(child_type)
 
     child_tags: dict[int, set[str]] = {item_id: set() for item_id in root_ids}
     for parent_id, tag_name in (
         db.query(models.Item.parent_id, models.Tag.name)
         .join(models.item_tags, models.item_tags.c.item_id == models.Item.id)
         .join(models.Tag, models.Tag.id == models.item_tags.c.tag_id)
-        .filter(models.Item.parent_id.in_(root_ids))
+        .filter(models.Item.parent_id.in_(all_folder_ids))
         .distinct()
         .all()
     ):
-        if parent_id is not None and tag_name:
-            child_tags[parent_id].add(tag_name)
+        root_id = folder_to_root.get(parent_id)
+        if root_id is not None and tag_name:
+            child_tags[root_id].add(tag_name)
 
     return [
             item_summary(
@@ -456,7 +545,7 @@ def get_collection_contents_page(
     subfolder_ids = [
         row[0] for row in
         db.query(models.Item.id)
-        .filter(models.Item.parent_id == item_id, models.Item.type == "collection")
+        .filter(models.Item.parent_id == item_id, models.Item.type.in_(["folder", "collection"]))
         .all()
     ]
     current_level = subfolder_ids
@@ -465,7 +554,7 @@ def get_collection_contents_page(
         next_level = [
             row[0] for row in
             db.query(models.Item.id)
-            .filter(models.Item.parent_id.in_(current_level), models.Item.type == "collection")
+            .filter(models.Item.parent_id.in_(current_level), models.Item.type.in_(["folder", "collection"]))
             .all()
         ]
         current_level = next_level
@@ -476,11 +565,20 @@ def get_collection_contents_page(
         .scalar()
         or 0
     )
+    non_folder_child_count = (
+        db.query(func.count(models.Item.id))
+        .filter(
+            models.Item.parent_id.in_(folder_ids),
+            ~models.Item.type.in_(["folder", "collection"]),
+        )
+        .scalar()
+        or 0
+    )
 
     # A missing or partially backfilled child index is a legacy condition.
     # Preserve those manifest-only rows with the complete merge path; normal
     # imported collections use the SQL-paged canonical child path below.
-    partial_index = bool(manifest_by_path) and child_count != len(manifest_by_path)
+    partial_index = bool(manifest_by_path) and non_folder_child_count < len(manifest_by_path)
     if child_count == 0 or partial_index:
         children = [] if child_count == 0 else (
             db.query(models.Item)
@@ -549,10 +647,7 @@ def get_collection_contents_page(
             }
         page = []
         for position, child in enumerate(children):
-            try:
-                relative_path = Path(child.absolute_path).relative_to(Path(collection.absolute_path)).as_posix()
-            except ValueError:
-                relative_path = os.path.basename(child.absolute_path)
+            relative_path = _child_relative_path(collection, child)
             existing = manifest_by_path.get(_content_path_key(relative_path))
             page.append(_child_content(
                 collection,
@@ -595,8 +690,10 @@ def create_item(db: Session, item: schemas.ItemCreate, *, commit: bool = True, f
         "audio": models.AudioItem,
         "track": models.TrackItem,
         "sample": models.SampleItem,
+        "folder": models.FolderItem,
         "collection": models.CollectionItem,
         "multitrack": models.MultitrackItem,
+        "zoom_h4": models.ZoomH4Item,
         "project": models.ProjectItem,
     }
     
@@ -610,7 +707,7 @@ def create_item(db: Session, item: schemas.ItemCreate, *, commit: bool = True, f
         availability=getattr(item, "availability", "ready"),
         file_hash=item.file_hash,
         size_bytes=item.size_bytes,
-        mime_type=item.mime_type or ("audio/multitrack" if item.type == "multitrack" else None)
+        mime_type=item.mime_type or ("audio/multitrack" if item.type in {"multitrack", "zoom_h4"} else None)
     )
     attributes = dict(getattr(item, "attributes", {}) or {})
     if item.type in {"audio", "track", "sample"}:
@@ -640,7 +737,7 @@ def create_item(db: Session, item: schemas.ItemCreate, *, commit: bool = True, f
         db_item.content_count = len(contents_list)
         db_item.warnings_json = json.dumps(list(getattr(item, "warnings", []) or []))
 
-    if model_class == models.MultitrackItem:
+    if issubclass(model_class, models.MultitrackItem):
         stems_val = getattr(item, "stems", [])
         if isinstance(stems_val, list):
             stems_list = [s.model_dump() if hasattr(s, "model_dump") else s.dict() if hasattr(s, "dict") else s for s in stems_val]
@@ -712,6 +809,44 @@ def _remove_child_from_parent_manifest(db: Session, child: models.Item) -> None:
         parent.content_count = len(remaining)
 
 
+def externally_referenced_descendants_for_item(db: Session, db_item: models.Item) -> set[int]:
+    """Return descendant IDs of ``db_item`` that are referenced by an external project."""
+    subtree_ids = {db_item.id}
+    frontier = [db_item.id]
+    while frontier:
+        child_ids = [
+            row[0]
+            for row in db.query(models.Item.id)
+            .filter(models.Item.parent_id.in_(frontier))
+            .all()
+            if row[0] not in subtree_ids
+        ]
+        subtree_ids.update(child_ids)
+        frontier = child_ids
+
+    descendant_ids = subtree_ids - {db_item.id}
+    if not descendant_ids:
+        return set()
+    owner_context_ids = owning_project_context_ids(db, db_item)
+    return {
+        row[0]
+        for row in db.query(models.ItemReference.to_item_id)
+        .filter(
+            models.ItemReference.to_item_id.in_(descendant_ids),
+            ~models.ItemReference.context_id.in_(subtree_ids | owner_context_ids),
+        )
+        .all()
+    } | {
+        row[0]
+        for row in db.query(models.ItemReference.from_item_id)
+        .filter(
+            models.ItemReference.from_item_id.in_(descendant_ids),
+            ~models.ItemReference.context_id.in_(subtree_ids | owner_context_ids),
+        )
+        .all()
+    }
+
+
 def delete_item(db: Session, item_id: int, *, commit: bool = True):
     db_item = get_item(db, item_id=item_id)
     if not db_item:
@@ -745,41 +880,11 @@ def delete_item(db: Session, item_id: int, *, commit: bool = True):
     if item_external_references:
         raise ValueError("Item is referenced by a project; remove those references before deleting it")
 
-    is_folder_bin = (
-        getattr(db_item, "type", None) == "folder"
-        or bool((getattr(db_item, "attributes", None) or {}).get("is_folder"))
-        or ("is_folder" in str(getattr(db_item, "metadata_json", "")))
-    )
-    if is_folder_bin:
-        child_items = db.query(models.Item).filter(models.Item.parent_id == db_item.id).all()
-        parent_item = get_item(db, db_item.parent_id) if db_item.parent_id else None
-        for child in child_items:
-            child.parent_id = db_item.parent_id
-            child.parent = parent_item
-        db.flush()
-        subtree_ids = {db_item.id}
-
     # Descendants that are referenced outside this subtree/owning project must be preserved,
     # rather than failing container/folder deletion or deleting active external project references.
     descendant_ids = subtree_ids - {db_item.id}
     if descendant_ids:
-        externally_referenced_descendants = {
-            row[0]
-            for row in db.query(models.ItemReference.to_item_id)
-            .filter(
-                models.ItemReference.to_item_id.in_(descendant_ids),
-                ~models.ItemReference.context_id.in_(subtree_ids | owner_context_ids),
-            )
-            .all()
-        } | {
-            row[0]
-            for row in db.query(models.ItemReference.from_item_id)
-            .filter(
-                models.ItemReference.from_item_id.in_(descendant_ids),
-                ~models.ItemReference.context_id.in_(subtree_ids | owner_context_ids),
-            )
-            .all()
-        }
+        externally_referenced_descendants = externally_referenced_descendants_for_item(db, db_item)
         if externally_referenced_descendants:
             preserved_ids = set(externally_referenced_descendants)
             frontier = list(externally_referenced_descendants)
@@ -796,7 +901,6 @@ def delete_item(db: Session, item_id: int, *, commit: bool = True):
 
             preserved_items = db.query(models.Item).filter(
                 models.Item.id.in_(externally_referenced_descendants),
-                models.Item.parent_id == db_item.id,
             ).all()
             parent_item = get_item(db, db_item.parent_id) if db_item.parent_id else None
             for preserved_item in preserved_items:
@@ -807,6 +911,10 @@ def delete_item(db: Session, item_id: int, *, commit: bool = True):
             db.flush()
 
             subtree_ids -= preserved_ids
+
+    db.query(models.VaultMirror).filter(
+        models.VaultMirror.root_item_id.in_(subtree_ids)
+    ).update({models.VaultMirror.root_item_id: None}, synchronize_session=False)
 
     _remove_child_from_parent_manifest(db, db_item)
     # Project-owned generated files may be linked in their owning project's

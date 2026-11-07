@@ -140,6 +140,14 @@ class MultitrackItem(FolderItem):
     }
 
 
+class ZoomH4Item(MultitrackItem):
+    """A Zoom H4 multitrack recording folder."""
+
+    __mapper_args__ = {
+        "polymorphic_identity": "zoom_h4",
+    }
+
+
 class ProjectItem(FolderItem):
     """Base class for user-created project workflows."""
     __tablename__ = "project_items"
@@ -220,6 +228,29 @@ class Vault(Base):
 
     items = relationship("Item", back_populates="vault")
     import_logs = relationship("VaultImportLog", back_populates="vault", cascade="all, delete-orphan")
+    mirrors = relationship("VaultMirror", back_populates="vault", cascade="all, delete-orphan")
+
+
+class VaultMirror(Base):
+    """A watched external folder mirrored into a vault as 1-1 references or distilled copies."""
+    __tablename__ = "vault_mirrors"
+    __table_args__ = (
+        UniqueConstraint("vault_id", "source_path", name="uq_vault_mirror_source"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    vault_id = Column(Integer, ForeignKey("vaults.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_path = Column(String, nullable=False, index=True)
+    target_folder_path = Column(String, nullable=False, default="")
+    root_item_id = Column(Integer, ForeignKey("items.id", ondelete="SET NULL"), nullable=True, index=True)
+    mode = Column(String, nullable=False, default="reference_1to1")  # "reference_1to1" | "distill_copy"
+    enabled = Column(Boolean, nullable=False, default=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+
+    vault = relationship("Vault", back_populates="mirrors")
+    root_item = relationship("Item", foreign_keys=[root_item_id])
 
 
 class VaultImportLog(Base):

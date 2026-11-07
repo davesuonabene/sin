@@ -2115,7 +2115,7 @@ def stream_library_file(file_id: str):
         raise HTTPException(status_code=404, detail="File not found in DB")
         
     abs_path = row["absolute_path"]
-    if row["type"] == "multitrack" or os.path.isdir(abs_path):
+    if row["type"] in {"multitrack", "zoom_h4"} or os.path.isdir(abs_path):
         if row["stems_json"]:
             try:
                 stems = json.loads(row["stems_json"])

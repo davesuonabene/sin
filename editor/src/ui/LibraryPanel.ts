@@ -26,6 +26,7 @@ const LIBRARY_TYPE_VISUALS: Record<string, LibraryTypeVisual> = {
     sequence: { icon: 'sequence', color: '#ec4899', label: 'Sequence' },
     track: { icon: 'mixer', color: '#06b6d4', label: 'Track' },
     multitrack: { icon: 'mixer', color: '#f59e0b', label: 'Multitrack' },
+    zoom_h4: { icon: 'mixer', color: '#f59e0b', label: 'Zoom H4' },
     collection: { icon: 'arrangement', color: '#ec4899', label: 'Collection' },
     sample_pack: { icon: 'arrangement', color: '#ec4899', label: 'Sample pack' },
     project: { icon: 'arrangement', color: '#38bdf8', label: 'Project' },
@@ -980,8 +981,9 @@ export class LibraryPanel {
             const displayName = versionedItem.fileVersionDisplayName || getAssetDisplayName(item);
             const typeVisual = getLibraryTypeVisual(item);
 
+            const isMultitrack = item.type === 'multitrack' || item.type === 'zoom_h4';
             const metaParts: string[] = [];
-            if (item.type === 'multitrack' && Array.isArray(item.stems)) {
+            if (isMultitrack && Array.isArray(item.stems)) {
                 metaParts.push(`${item.stems.length} Stems`);
             } else if (isAssetOrganizer(item)) {
                 metaParts.push(`${versionedOrganizerContents.length} Items`);
@@ -990,9 +992,9 @@ export class LibraryPanel {
             if (item.key) metaParts.push(item.key);
             
             let lengthBadge = '';
-            if (item.type === 'multitrack' && item.is_valid_length === false) {
+            if (isMultitrack && item.is_valid_length === false) {
                 lengthBadge = `<span class="multitrack-length-tag warning" title="Stem length variance: ${item.length_variance}s">⚠️ Length mismatch</span>`;
-            } else if (item.type === 'multitrack' && item.is_valid_length === true) {
+            } else if (isMultitrack && item.is_valid_length === true) {
                 lengthBadge = `<span class="multitrack-length-tag valid" title="All stems equal length">✓ Equal length</span>`;
             }
 
@@ -1004,7 +1006,7 @@ export class LibraryPanel {
 
             const isOrganizer = isAssetOrganizer(item);
             let multitrackToggle = '';
-            if (item.type === 'multitrack' && Array.isArray(item.stems) && item.stems.length > 0) {
+            if (isMultitrack && Array.isArray(item.stems) && item.stems.length > 0) {
                 multitrackToggle = `<button class="multitrack-toggle-btn" title="Toggle Stem List" aria-label="Toggle stem list">▼</button>`;
             }
 
@@ -1139,8 +1141,8 @@ export class LibraryPanel {
                 if (item.id) {
                     this.currentAudio = new Audio(item.stream_url || `/api/library/stream/${item.id}`);
                     this.currentAudio.play().catch(e => console.error("Preview failed", e));
-                    el.style.backgroundColor = item.type === 'multitrack' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(2, 132, 199, 0.12)';
-                    el.style.borderColor = item.type === 'multitrack' ? '#f59e0b' : '#0284c7';
+                    el.style.backgroundColor = isMultitrack ? 'rgba(245, 158, 11, 0.12)' : 'rgba(2, 132, 199, 0.12)';
+                    el.style.borderColor = isMultitrack ? '#f59e0b' : '#0284c7';
                     this.playingRow = el;
                     
                     this.currentAudio.onended = () => {
@@ -1153,7 +1155,7 @@ export class LibraryPanel {
 
             itemWrapper.appendChild(el);
 
-            if (item.type === 'multitrack' && Array.isArray(item.stems) && item.stems.length > 0) {
+            if (isMultitrack && Array.isArray(item.stems) && item.stems.length > 0) {
                 const stemContainer = document.createElement('div');
                 stemContainer.className = 'multitrack-stem-container';
                 stemContainer.style.display = 'none';

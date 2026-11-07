@@ -684,7 +684,12 @@ def apply_profile(
     profile = profiles.get_profile(profile_id)
     if not profile:
         raise ReferenceError("Profile not found")
-    if source.type != profile.container_type:
+    profile_matches = (
+        source.type == profile.container_type
+        or (profile.container_type == "multitrack" and source.type == "zoom_h4")
+        or (profile.container_type in {"collection", "folder"} and source.type in {"collection", "folder"})
+    )
+    if not profile_matches:
         raise ReferenceError("Profile does not match this source item type")
 
     root = Path(source.absolute_path)

@@ -1788,6 +1788,168 @@ dialog:not([open]),
     border: 1px solid rgba(56, 189, 248, 0.3);
 }
 
+.sync-section-badge.mirrored {
+    color: #c084fc;
+    background: rgba(192, 132, 252, 0.14);
+    border: 1px solid rgba(192, 132, 252, 0.34);
+}
+
+/* Vault Mirrors Section in Vault Dialog */
+.vault-mirrors-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+.vault-mirrors-header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.vault-mirrors-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+.vault-mirror-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    background: var(--page);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+.vault-mirror-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.vault-mirror-path {
+    color: var(--text);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vault-mirror-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.vault-mirror-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--app-accent-a42, rgba(255, 255, 255, 0.2));
+}
+
+.vault-mirror-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+
+.vault-mirror-add-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    background: var(--surface-raised, rgba(255, 255, 255, 0.02));
+    border: 1px dashed var(--border);
+    border-radius: 3px;
+}
+
+.vault-mirror-source-group,
+.vault-mirror-options-group {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    align-items: center;
+}
+
+.vault-mirror-options-group {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
+}
+
+/* Sidebar Vault Folder / Mirror Subgraph */
+.sidebar-vault-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar-vault-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-left: 14px;
+    margin-bottom: 2px;
+}
+
+.sidebar-folder-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    width: 100%;
+    padding: 3px 8px;
+    color: var(--muted);
+    background: transparent;
+    border: 0;
+    border-radius: 2px;
+    font-size: 11px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.sidebar-folder-item:hover,
+.sidebar-folder-item.active {
+    color: var(--text);
+    background: var(--accent-soft);
+}
+
+.sidebar-folder-item.is-referenced .sidebar-folder-label {
+    font-style: italic;
+}
+
+.sidebar-folder-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sidebar-mirror-badge {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--muted);
+    opacity: 0.85;
+}
+
 .sync-items-list {
     display: flex;
     flex-direction: column;

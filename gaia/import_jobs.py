@@ -44,9 +44,11 @@ JOB_RETENTION_SECONDS = 24 * 60 * 60
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "stale"}
 COPY_PROGRESS_CHUNK_BYTES = 8 * 1024 * 1024
 FOLDER_TYPE_ASSIGNMENTS = {
-    "action:contain": ("collection", None),
-    "type:collection": ("collection", None),
+    "action:contain": ("folder", None),
+    "type:folder": ("folder", None),
+    "type:collection": ("folder", None),
     "type:multitrack": ("multitrack", None),
+    "type:zoom_h4": ("zoom_h4", "zoom_h4"),
 }
 FILE_FAMILY_TYPES = {
     "audio": ("audio", "track", "sample"),
@@ -1048,7 +1050,8 @@ def create_preview(
             "inspection_ms": round((time.perf_counter() - started) * 1000),
             "profiles": profile_options,
             "folder_type_options": [
-                {"value": "action:contain", "label": "Container"},
+                {"value": "type:folder", "label": "Folder"},
+                {"value": "action:contain", "label": "Folder"},
                 {"value": "action:ignore", "label": "Ignore"},
             ],
             "filter_options": _compute_filter_options(entries),
@@ -1091,7 +1094,8 @@ def create_preview(
         "inspection_ms": round((time.perf_counter() - started) * 1000),
         "profiles": profile_options,
         "folder_type_options": [
-            {"value": "action:contain", "label": "Container"},
+            {"value": "type:folder", "label": "Folder"},
+            {"value": "action:contain", "label": "Folder"},
             {"value": "action:ignore", "label": "Ignore"},
         ],
         "filter_options": _compute_filter_options(entries),
@@ -1142,18 +1146,51 @@ def _topmost_folder_targets(assignments: dict[str, str]) -> list[tuple[str, str]
         if not assignment or assignment == "action:ignore":
             continue
         contained = False
-        for parent, parent_assignment in targets:
-            if not _relative_is_within(path, parent):
-                continue
-            if parent_assignment.startswith("profile:") or parent_assignment.startswith("type:"):
-                contained = True
-                break
-            if not _is_intervening_ignored(path, parent, assignments):
+        for parent, _parent_assignment in targets:
+            if _relative_is_within(path, parent):
                 contained = True
                 break
         if not contained:
             targets.append((path, assignment))
     return targets
+
+
+def _dissolved_relative_path(
+    entry_rel: str,
+    target_rel: str,
+    folder_assignments: dict[str, str],
+    reserved: set[str] | None = None,
+) -> str:
+    relative = PurePosixPath(entry_rel)
+    prefix = PurePosixPath() if target_rel == "." else PurePosixPath(target_rel)
+    rebased = relative if target_rel == "." else relative.relative_to(prefix)
+    if len(rebased.parts) > 1 and folder_assignments:
+        kept_parts: list[str] = []
+        curr = prefix
+        for part in rebased.parts[:-1]:
+            curr = curr / part if str(curr) not in ("", ".") else PurePosixPath(part)
+            if folder_assignments.get(curr.as_posix()) == "action:ignore":
+                continue
+            kept_parts.append(part)
+        kept_parts.append(rebased.name)
+        rebased = PurePosixPath(*kept_parts)
+    candidate = rebased.as_posix()
+    if reserved is None:
+        return candidate
+    if candidate.casefold() not in reserved:
+        reserved.add(candidate.casefold())
+        return candidate
+    parent = rebased.parent
+    stem = Path(rebased.name).stem or "asset"
+    suffix = Path(rebased.name).suffix
+    counter = 2
+    while True:
+        alt_name = f"{stem}_{counter}{suffix}"
+        alt = (parent / alt_name).as_posix() if str(parent) not in ("", ".") else alt_name
+        if alt.casefold() not in reserved:
+            reserved.add(alt.casefold())
+            return alt
+        counter += 1
 
 
 def _find_target_for_entry(entry_rel: str, targets: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1169,15 +1206,19 @@ def _is_contained_by(relative_path: str, target_path: str, assignments: dict[str
 
 
 def _resolve_folder_assignment(assignment: str, available_profiles: list[dict[str, Any]]) -> tuple[str, str | None]:
-    if assignment in {"action:contain", "type:collection"}:
-        return "collection", None
+    if assignment in {"action:contain", "type:folder", "type:collection"}:
+        return "folder", None
+    if assignment in {"profile:zoom_h4", "type:zoom_h4"}:
+        return "zoom_h4", "zoom_h4"
     if assignment in FOLDER_TYPE_ASSIGNMENTS:
         return FOLDER_TYPE_ASSIGNMENTS[assignment]
     if assignment.startswith("profile:"):
         profile_id = assignment.split(":", 1)[1]
         profile = next((value for value in available_profiles if value["id"] == profile_id), None)
-        if not profile or profile["container_type"] not in {"collection", "multitrack"}:
+        if not profile or profile["container_type"] not in {"collection", "folder", "multitrack", "zoom_h4"}:
             raise ImportPreviewError(f"Unknown folder profile: {profile_id}")
+        if profile["container_type"] in {"collection", "folder"}:
+            return "folder", profile_id
         return profile["container_type"], profile_id
     raise ImportPreviewError(f"Unsupported folder classification: {assignment}")
 
@@ -1393,16 +1434,82 @@ def _item_schema_for_manifest(
 
 def _index_children(db: Session, snapshot: dict[str, Any], vault_id: int, parent_id: int, job: dict[str, Any], prefix: str) -> None:
     root = Path(snapshot["absolute_path"])
+    subfolder_ids_by_rel: dict[str, int] = {}
+    if snapshot.get("type") in {"folder", "collection"}:
+        rel_folders: set[str] = set()
+        for entry in snapshot["contents"]:
+            rel_parts = PurePosixPath(entry["relative_path"]).parts[:-1]
+            for depth_idx in range(1, len(rel_parts) + 1):
+                rel_folders.add(PurePosixPath(*rel_parts[:depth_idx]).as_posix())
+        for folder_rel in sorted(rel_folders, key=lambda p: (len(PurePosixPath(p).parts), p.casefold())):
+            f_parts = PurePosixPath(folder_rel).parts
+            parent_rel = PurePosixPath(*f_parts[:-1]).as_posix() if len(f_parts) > 1 else ""
+            f_parent_id = subfolder_ids_by_rel.get(parent_rel, parent_id) if parent_rel else parent_id
+            f_abs = (root / Path(folder_rel)).resolve()
+            existing_sub = (
+                db.query(models.FolderItem)
+                .filter(
+                    models.FolderItem.vault_id == vault_id,
+                    models.FolderItem.absolute_path == str(f_abs),
+                )
+                .first()
+            )
+            if existing_sub:
+                subfolder_ids_by_rel[folder_rel] = existing_sub.id
+            else:
+                f_src = (
+                    f"{snapshot['source_path']}::{folder_rel}"
+                    if snapshot.get("source_kind") == "zip"
+                    else str(Path(snapshot["source_path"]) / Path(folder_rel))
+                    if snapshot.get("source_path")
+                    else str(f_abs)
+                )
+                sub_schema = schemas.FolderItemCreate(
+                    absolute_path=str(f_abs),
+                    vault_id=vault_id,
+                    parent_id=f_parent_id,
+                    storage_mode=snapshot.get("storage_mode", "managed"),
+                    availability=snapshot.get("availability", "ready"),
+                    size_bytes=0,
+                    mime_type="inode/directory",
+                    title=f_parts[-1],
+                    source_kind=snapshot.get("source_kind", "folder"),
+                    source_path=f_src,
+                    contents=[],
+                    warnings=[],
+                    attributes={
+                        "is_folder": True,
+                        "profile_id": "folder",
+                        "profile_label": "Folder",
+                        "import": {
+                            "job_id": job["job_id"],
+                            "mode": job["transfer_mode"],
+                            "source_path": f_src,
+                        },
+                    },
+                )
+                created_sub = crud.create_item(db, sub_schema, commit=False, flush=True)
+                subfolder_ids_by_rel[folder_rel] = created_sub.id
+
     pending: list[tuple[models.Item, dict[str, Any], dict[str, Any] | None]] = []
     for entry in snapshot["contents"]:
-        original = entry["relative_path"] if prefix == "." else (PurePosixPath(prefix) / entry["relative_path"]).as_posix()
+        original = entry.get("preview_relative_path") or (
+            entry["relative_path"] if prefix == "." else (PurePosixPath(prefix) / entry["relative_path"]).as_posix()
+        )
+        entry.pop("preview_relative_path", None)
         forced_type = _forced_item_type(original, entry, job)
         preview_entry = _preview_entry(original, job)
+        rel_parent = PurePosixPath(entry["relative_path"]).parent.as_posix()
+        item_parent_id = (
+            subfolder_ids_by_rel.get(rel_parent, parent_id)
+            if rel_parent not in ("", ".") and snapshot.get("type") in {"folder", "collection"}
+            else parent_id
+        )
         item_schema = _item_schema_for_manifest(
             entry,
             root / Path(entry["relative_path"]),
             vault_id,
-            parent_id,
+            item_parent_id,
             forced_type,
             storage_mode=snapshot.get("storage_mode", "managed"),
             availability=snapshot.get("availability", "ready"),
@@ -1453,7 +1560,7 @@ def _container_snapshot(
 ) -> dict[str, Any]:
     analysis: dict[str, Any] = {}
     warnings = list(import_warnings)
-    if analyze and target["container_type"] == "multitrack":
+    if analyze and target["container_type"] in {"multitrack", "zoom_h4"}:
         try:
             analysis = multitrack_analyzer.analyze_multitrack_folder(str(destination), recursive=False)
         except Exception as exc:
@@ -1516,13 +1623,18 @@ def _create_container(db: Session, snapshot: dict[str, Any], vault: models.Vault
         "source_path": snapshot["source_path"], "contents": snapshot["contents"],
         "warnings": snapshot["warnings"], "attributes": attributes,
     }
-    if snapshot["type"] == "multitrack":
+    if snapshot["type"] == "zoom_h4":
+        schema = schemas.ZoomH4ItemCreate(
+            **common, stems=snapshot["stems"], key=snapshot["key"], bpm=snapshot["bpm"],
+            is_valid_length=snapshot["is_valid_length"], length_variance=snapshot["length_variance"],
+        )
+    elif snapshot["type"] == "multitrack":
         schema = schemas.MultitrackItemCreate(
             **common, stems=snapshot["stems"], key=snapshot["key"], bpm=snapshot["bpm"],
             is_valid_length=snapshot["is_valid_length"], length_variance=snapshot["length_variance"],
         )
     else:
-        schema = schemas.CollectionItemCreate(**common)
+        schema = schemas.FolderItemCreate(**common)
     result = crud.create_item(db, schema, commit=False)
     _index_children(db, snapshot, vault.id, result.id, job, target["relative_path"])
     crud.save_collection_contents(db, result, snapshot["contents"], commit=False, flush=False)
@@ -2056,11 +2168,18 @@ class ImportJobManager:
                     if existing_col and task.get("conflict_action") != "new_snapshot":
                         existing_contents = json.loads(existing_col.manifest_json or "[]")
                         start_idx = max((c.get("index", -1) for c in existing_contents), default=-1) + 1
+                        reserved_rel = {str(c.get("relative_path", "")).casefold() for c in existing_contents if c.get("relative_path")}
                         seeds = []
                         for idx_offset, entry in enumerate(entries):
-                            relative = PurePosixPath(entry["relative_path"])
-                            rebased = relative if target["relative_path"] == "." else relative.relative_to(prefix)
-                            seeds.append(_manifest_seed(preview, entry, rebased.as_posix(), start_idx + idx_offset))
+                            rebased_posix = _dissolved_relative_path(
+                                entry["relative_path"],
+                                target["relative_path"],
+                                task["folder_assignments"],
+                                reserved_rel,
+                            )
+                            seed = _manifest_seed(preview, entry, rebased_posix, start_idx + idx_offset)
+                            seed["preview_relative_path"] = entry["relative_path"]
+                            seeds.append(seed)
                         snapshot = _container_snapshot(
                             preview,
                             destination,
@@ -2088,11 +2207,18 @@ class ImportJobManager:
                                 "entry": entry,
                             })
                     else:
+                        reserved_rel: set[str] = set()
                         seeds = []
                         for index, entry in enumerate(entries):
-                            relative = PurePosixPath(entry["relative_path"])
-                            rebased = relative if target["relative_path"] == "." else relative.relative_to(prefix)
-                            seeds.append(_manifest_seed(preview, entry, rebased.as_posix(), index))
+                            rebased_posix = _dissolved_relative_path(
+                                entry["relative_path"],
+                                target["relative_path"],
+                                task["folder_assignments"],
+                                reserved_rel,
+                            )
+                            seed = _manifest_seed(preview, entry, rebased_posix, index)
+                            seed["preview_relative_path"] = entry["relative_path"]
+                            seeds.append(seed)
                         snapshot = _container_snapshot(
                             preview,
                             destination,
@@ -2118,7 +2244,7 @@ class ImportJobManager:
 
                 loose = [entry for entry in included_entries if entry["index"] in task["loose_indexes"]]
                 if loose:
-                    files_root = store / "files"
+                    files_root = store
                     reserved: set[str] = set()
                     for index, entry in enumerate(loose):
                         source = root.joinpath(*PurePosixPath(entry["relative_path"]).parts)
@@ -2256,6 +2382,13 @@ class ImportJobManager:
                         if isinstance(result, models.FolderItem):
                             refreshed = crud.get_item(db, result.id)
                             refreshed.availability = "ready"
+                            for sub in crud._collect_subtree_children(refreshed):
+                                if isinstance(sub, models.FolderItem):
+                                    sub.availability = "ready"
+                                    sub.content_count = len([
+                                        c for c in crud._collect_subtree_children(sub)
+                                        if getattr(c, "type", None) not in {"folder", "collection"}
+                                    ])
                     db.commit()
                     if transfer_mode == "move" and preview["source_kind"] == "zip":
                         Path(preview["source_path"]).unlink()
@@ -2496,7 +2629,7 @@ def _remove_abandoned_rows(db: Session, job_id: str | None = None) -> int:
         .filter(models.Item.availability.in_(("pending", "transferring")))
         .all()
     )
-    candidates.sort(key=lambda item: item.parent_id is None)
+    candidates.sort(key=lambda item: (item.parent_id is None, -len(Path(item.absolute_path).parts)))
     removed = 0
     for item in candidates:
         import_state = (item.attributes or {}).get("import") or {}

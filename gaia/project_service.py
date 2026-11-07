@@ -889,14 +889,15 @@ def create_folder(
         folder_path = _unique_destination(store, folder_name)
 
     folder_path.mkdir(parents=True, exist_ok=True)
-    folder = models.CollectionItem(
+    folder = models.FolderItem(
         absolute_path=str(folder_path.resolve()),
         vault_id=vault.id,
         parent_id=parent_id,
         title=folder_name,
         source_kind="managed",
+        source_path=str(folder_path.resolve()),
         content_count=0,
-        type="collection",
+        type="folder",
         storage_mode="managed",
         availability="ready",
         metadata_json=json.dumps({"is_folder": True, "profile_id": "folder", "profile_label": "Folder"}),
@@ -927,6 +928,129 @@ def create_folder(
     db.commit()
     db.refresh(folder)
     return folder
+
+
+def dissolve_folder(db: Session, folder_id: int) -> dict:
+    """Dissolve a FolderItem into its parent folder (or vault root), moving direct children up one level."""
+    from . import mirrors
+
+    folder = db.query(models.FolderItem).filter(models.FolderItem.id == folder_id).first()
+    if not folder:
+        raise ValueError("Folder not found")
+    if isinstance(folder, (models.ProjectItem, models.MultitrackItem, models.ZoomH4Item)) or folder.type in {
+        "project",
+        "multitrack",
+        "zoom_h4",
+    }:
+        raise ValueError("Only standard folders can be dissolved")
+
+    vault = vaults.get_vault(db, folder.vault_id)
+    if not vault:
+        raise ValueError("Owning vault not found")
+    store = vaults.vault_store(vault).resolve()
+    parent_id = folder.parent_id
+    parent_folder = (
+        db.query(models.FolderItem).filter(models.FolderItem.id == parent_id).first()
+        if parent_id is not None
+        else None
+    )
+
+    if parent_folder is not None and getattr(parent_folder, "storage_mode", "managed") == "managed":
+        dest_dir = Path(parent_folder.absolute_path).resolve()
+    else:
+        dest_dir = store
+
+    children = (
+        db.query(models.Item)
+        .filter(models.Item.parent_id == folder.id)
+        .order_by(models.Item.id.asc())
+        .all()
+    )
+
+    moves: list[tuple[Path, Path]] = []
+    operations: list[dict[str, str]] = []
+    folder_disk_path = Path(folder.absolute_path).resolve()
+    context_project = _find_owning_project(db, folder)
+
+    try:
+        for child in children:
+            if getattr(child, "storage_mode", "managed") == "managed":
+                src_path = Path(child.absolute_path).resolve()
+                if src_path.exists() and _is_within(store, src_path) and src_path.parent != dest_dir:
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    dest_path = _unique_destination(dest_dir, src_path.name)
+                    src_path.replace(dest_path)
+                    moves.append((src_path, dest_path))
+                    operations.append({"source": str(src_path), "target": str(dest_path)})
+            child.parent_id = parent_id
+            attrs = dict(child.attributes or {})
+            if parent_folder is None and "folder" in attrs:
+                attrs.pop("folder", None)
+                child.attributes = attrs
+
+        if context_project:
+            folder_label = _folder_label(folder, context_project)
+            parent_label = _folder_label(parent_folder, context_project) if parent_folder else None
+            if folder_label:
+                refs = (
+                    db.query(models.ItemReference)
+                    .filter(models.ItemReference.context_id == context_project.id)
+                    .all()
+                )
+                for ref in refs:
+                    ref_folder = (ref.attributes or {}).get("folder")
+                    if ref_folder == folder_label:
+                        ref_attrs = dict(ref.attributes or {})
+                        if parent_label:
+                            ref_attrs["folder"] = parent_label
+                        else:
+                            ref_attrs.pop("folder", None)
+                        ref.attributes = ref_attrs
+
+        db.flush()
+        if operations:
+            vaults.rewrite_managed_paths(db.connection(), operations, preserve_source_paths=True)
+
+        # Point any mirror using this folder as root_item_id to parent_id
+        for m in db.query(models.VaultMirror).filter(models.VaultMirror.root_item_id == folder.id).all():
+            m.root_item_id = parent_id
+
+        crud._remove_child_from_parent_manifest(db, folder)
+        db.delete(folder)
+        db.flush()
+        mirrors._refresh_folder_counts(db, vault.id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        for src, dst in reversed(moves):
+            if dst.exists() and not src.exists():
+                src.parent.mkdir(parents=True, exist_ok=True)
+                dst.replace(src)
+        raise
+
+    if (
+        getattr(folder, "storage_mode", "managed") == "managed"
+        and folder_disk_path != store
+        and _is_within(store, folder_disk_path)
+        and folder_disk_path.is_dir()
+    ):
+        try:
+            if not any(folder_disk_path.iterdir()):
+                folder_disk_path.rmdir()
+        except OSError:
+            pass
+
+    if context_project:
+        try:
+            sync_project_manifest(db, context_project.id)
+        except Exception:
+            pass
+
+    return {
+        "dissolved_folder_id": folder_id,
+        "parent_id": parent_id,
+        "moved_count": len(children),
+    }
 
 
 def adopt_orphans(db: Session, project_id: int) -> dict:

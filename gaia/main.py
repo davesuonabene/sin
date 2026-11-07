@@ -19,6 +19,7 @@ with database.SessionLocal() as db:
     vaults.ensure_default_vault(db)
     profiles.ensure_builtin_profile_bundles()
     project_manifest.migrate_v1_project_layouts(db)
+    vaults.migrate_to_1to1_physical_vaults(db)
 import_jobs.cleanup_stale_staging()
 import_jobs.cleanup_abandoned_import_rows()
 
