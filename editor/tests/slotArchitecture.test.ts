@@ -1181,9 +1181,11 @@ test('Inspector panel never switches slots during playback: IRIDE canvas stays r
 });
 
 test('window.editorGraph fallback and advanceAssetPoolSeed do not lock pool seed on normal refresh', () => {
+    const hadWindow = 'window' in globalThis && (globalThis as any).window !== undefined;
+    const prevWindow = (globalThis as any).window;
     const prevEditorGraph = (globalThis as any).window?.editorGraph;
     try {
-        (globalThis as any).window = (globalThis as any).window || {};
+        (globalThis as any).window = (globalThis as any).window || { dispatchEvent: () => {} };
         (globalThis as any).window.editorGraph = {
             extra: { global_seed: 4, global_seed_locked: true, field_refresh_epoch: 2 },
         };
@@ -1206,8 +1208,90 @@ test('window.editorGraph fallback and advanceAssetPoolSeed do not lock pool seed
         assert.equal(poolNode.properties.locked_pool_seed, undefined);
         assert.deepEqual([0, 1, 2, 3].map(i => resolveSectionSlot('rand', 4, 0, 42, i)), [1, 1, 2, 1]);
     } finally {
-        if ((globalThis as any).window) {
-            (globalThis as any).window.editorGraph = prevEditorGraph;
+        if (!hadWindow) {
+            delete (globalThis as any).window;
+        } else {
+            (globalThis as any).window = prevWindow;
+            if ((globalThis as any).window) {
+                (globalThis as any).window.editorGraph = prevEditorGraph;
+            }
         }
     }
+});
+
+test('SequenceNode.getResolvedStepSlots delegates to resolveStepSlots for Cycle, Wrapper, and Event operators, and N-level hierarchy serializes wrapper_bars', () => {
+    const sample = new SampleNode();
+    sample.id = 901;
+    sample.addSlot(); // 2 slots (0 and 1)
+    sample.outputs = [{ name: 'Out', type: 'audio', links: [2001] }];
+
+    const seq = new SequenceNode();
+    seq.id = 902;
+    seq.properties.sequence = [1, 1, 1, 1];
+    seq.getSlots()[0].sequence = [1, 1, 1, 1];
+    seq.inputs = [{ name: 'In', type: 'audio', link: 2001 }];
+    seq.outputs = [{ name: 'Out', type: 'audio', links: [2002] }];
+
+    const subTrackA = new TrackNode();
+    subTrackA.id = 903;
+    subTrackA.properties.total_bars = 2;
+    subTrackA.inputs = [{ name: 'In', type: 'audio', link: 2002 }];
+    subTrackA.outputs = [{ name: 'Out', type: 'audio', links: [2003] }];
+
+    const subTrackB = new TrackNode();
+    subTrackB.id = 904;
+    subTrackB.properties.total_bars = 4;
+    subTrackB.inputs = [{ name: 'In', type: 'audio', link: 2003 }];
+    subTrackB.outputs = [{ name: 'Out', type: 'audio', links: [2004] }];
+
+    const masterTrack = new TrackNode();
+    masterTrack.id = 905;
+    masterTrack.properties.total_bars = 8;
+    masterTrack.inputs = [{ name: 'In', type: 'audio', link: 2004 }];
+
+    const mockGraph: any = {
+        extra: { global_seed: 0, global_parameters: { bpm: 120, total_bars: 8, key: 'C' } },
+        _nodes: [sample, seq, subTrackA, subTrackB, masterTrack],
+        links: {
+            2001: { id: 2001, origin_id: 901, target_id: 902 },
+            2002: { id: 2002, origin_id: 902, target_id: 903 },
+            2003: { id: 2003, origin_id: 903, target_id: 904 },
+            2004: { id: 2004, origin_id: 904, target_id: 905 },
+        },
+        getNodeById: (id: number) => [sample, seq, subTrackA, subTrackB, masterTrack].find(n => n.id === id) || null,
+        sendActionToCanvas: () => {},
+    };
+    (sample as any).graph = mockGraph;
+    (seq as any).graph = mockGraph;
+
+    // 1. "[0 1]" subdivides the 4-step pattern cycle into [0, 0, 1, 1] (not [0, 0, 0, 0])
+    seq.applyFieldOperator('sample_slot', '[0 1]');
+    assert.deepEqual(seq.getResolvedStepSlots(4, 2), [0, 0, 1, 1]);
+
+    // 2. "<0 1>" alternates active steps [0, 1, 0, 1]
+    seq.applyFieldOperator('sample_slot', '<0 1>');
+    assert.deepEqual(seq.getResolvedStepSlots(4, 2), [0, 1, 0, 1]);
+
+    // 3. Verify resolveStepSlots wraps cumulative cycleIdx modulo numCycles for wrapperProgress
+    assert.deepEqual(
+        resolveStepSlots('0 1', 4, 2, 42, 0, { wrapperIdx: 1, cycleIdx: 2, numCycles: 2, activeSequence: [1, 1, 1, 1] }),
+        [0, 0, 0, 0]
+    );
+    assert.deepEqual(
+        resolveStepSlots('0 1', 4, 2, 42, 0, { wrapperIdx: 1, cycleIdx: 3, numCycles: 2, activeSequence: [1, 1, 1, 1] }),
+        [1, 1, 1, 1]
+    );
+
+    // 4. Verify 3-level hierarchy wrapper_bars serialization
+    const compiledMaster = serializeNodeSubtree(mockGraph, 905);
+    const compiledSubB = compiledMaster.children[0];
+    const compiledSubA = compiledSubB.children[0];
+    const compiledSeq = compiledSubA.children[0];
+    assert.equal(compiledMaster.total_bars, 8);
+    assert.equal(compiledSubB.total_bars, 4);
+    assert.equal(compiledSubB.wrapper_bars, 8);
+    assert.equal(compiledSubA.total_bars, 2);
+    assert.equal(compiledSubA.wrapper_bars, 4);
+    assert.equal(compiledSeq.total_bars, 2);
+    assert.equal(compiledSeq.wrapper_bars, 2);
 });

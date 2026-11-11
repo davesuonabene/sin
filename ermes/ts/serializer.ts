@@ -61,7 +61,7 @@ export function serializeNodeSubtree(
     };
     const workspaceBars = resolveGlobalNumber(globalParameters.total_bars, 'total_bars', 4.0);
 
-    const findDownstreamMasterBars = (startNodeId: number): number | undefined => {
+    const findParentWrapperBars = (startNodeId: number): number | undefined => {
         const visited = new Set<number>();
         let currentId: number | undefined = startNodeId;
         while (currentId != null && !visited.has(currentId)) {
@@ -154,15 +154,16 @@ export function serializeNodeSubtree(
         const isGlobalOrInherited = rawTotalBars == null
             || String(rawTotalBars).toLowerCase() === 'global'
             || Boolean(nodeObj?.properties?.length_inherited);
-        const ancestorMasterBars = parentTotalBars ?? findDownstreamMasterBars(nodeId);
-        const fallbackBars = ancestorMasterBars ?? workspaceBars;
+        const parentWrapperBars = parentTotalBars ?? findParentWrapperBars(nodeId);
+        const fallbackBars = parentWrapperBars ?? workspaceBars;
         const isSampleLoop = (nodeObj?.properties?.sample_type ?? data?.sample_type ?? 'loop') === 'loop';
         const total_bars = isGlobalOrInherited
             ? (nodeType === 'sample'
                 ? ((isSampleLoop && (parentNodeType === undefined || parentNodeType === 'track')) ? fallbackBars : undefined)
                 : fallbackBars)
             : resolveGlobalNumber(rawTotalBars, 'total_bars', fallbackBars);
-        const global_bars = Math.max(Number(total_bars || fallbackBars), Number(ancestorMasterBars ?? workspaceBars));
+        const wrapper_bars = Math.max(Number(total_bars || fallbackBars), Number(parentWrapperBars ?? workspaceBars));
+        const global_bars = wrapper_bars;
         const section_points = nodeObj?.properties?.section_points ?? data?.section_points ?? (nodeType === "arrangement" ? [] : undefined);
         const section_enabled = nodeObj?.properties?.section_enabled ?? data?.section_enabled ?? (nodeType === "arrangement" ? [] : undefined);
         const section_probability = nodeObj?.properties?.section_probability ?? data?.section_probability ?? (nodeType === "arrangement" ? [1.0] : undefined);
@@ -455,6 +456,7 @@ export function serializeNodeSubtree(
             release: nodeObj?.properties?.release ?? data?.release ?? (nodeType === "sequence" ? 0 : undefined),
             fade_ms: fadeMs,
             total_bars: total_bars,
+            wrapper_bars: wrapper_bars,
             global_bars: global_bars,
             global_seed: global_seed,
             field_seed: field_seed,

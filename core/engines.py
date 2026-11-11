@@ -224,7 +224,11 @@ def build_node_object(node_data: Any) -> AudioObject:
     if node_id is not None:
         obj.node_id = int(node_id)
     obj.node_type = str(node_type or "track")
-    obj.global_bars = _get_val(node_data, "global_bars", None)
+    resolved_wrapper_bars = _get_val(node_data, "wrapper_bars", None)
+    if resolved_wrapper_bars is None:
+        resolved_wrapper_bars = _get_val(node_data, "global_bars", None)
+    obj.wrapper_bars = resolved_wrapper_bars
+    obj.global_bars = resolved_wrapper_bars
     obj.global_seed = _get_val(node_data, "global_seed", None)
     obj.field_seed = _get_val(node_data, "field_seed", None)
     if not hasattr(obj, "field_operators") or obj.field_operators is None:

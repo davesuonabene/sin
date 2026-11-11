@@ -640,6 +640,162 @@ class TestSlotLanguageAndMultiSlotDsp(unittest.TestCase):
             sample_obj.render_slot(0, system, iteration=4, cycle_idx=0, cycle_progress=0.8, event_idx=4)
             self.assertEqual(sample_obj._last_rendered_filepath, p2)
 
+    def test_three_level_nested_hierarchy_continuous_events_and_manifest_offsets(self):
+        sr = 44100
+        system = System(sample_rate=sr, bpm=120.0, render_mode="preview")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p0 = os.path.join(tmpdir, "s0.wav")
+            p1 = os.path.join(tmpdir, "s1.wav")
+            p2 = os.path.join(tmpdir, "s2.wav")
+            sf.write(p0, np.full((sr // 10, 1), 0.1, dtype=np.float32), sr)
+            sf.write(p1, np.full((sr // 10, 1), 0.5, dtype=np.float32), sr)
+            sf.write(p2, np.full((sr // 10, 1), 0.9, dtype=np.float32), sr)
+
+            # 3-slot Sample -> 1 hit/bar Sequence ("<0 1 2>") -> SubTrack A (2 bars) -> SubTrack B (4 bars) -> Master (8 bars)
+            sample_obj = SampleObject(
+                filepath=p0,
+                sample_type="one_shot",
+                slots=[
+                    {"index": 0, "filepath": p0, "sample_start": 0.0, "sample_end": 1.0},
+                    {"index": 1, "filepath": p1, "sample_start": 0.0, "sample_end": 1.0},
+                    {"index": 2, "filepath": p2, "sample_start": 0.0, "sample_end": 1.0},
+                ],
+                node_id=901,
+            )
+
+            seq_obj = SequenceObject(
+                sequence=[1, 0, 0, 0],
+                step_length=1.0,
+                total_bars=2.0,
+                wrapper_bars=2.0,
+                sample_slot="<0 1 2>",
+                field_operators={"sample_slot": "<0 1 2>"},
+                slots=[
+                    {
+                        "index": 0,
+                        "sequence": [1, 0, 0, 0],
+                        "sample_slot": "<0 1 2>",
+                        "step_length": 1.0,
+                        "field_operators": {"sample_slot": "<0 1 2>"},
+                    }
+                ],
+                node_id=902,
+            )
+            seq_obj.add_child(sample_obj, 0.0)
+
+            sub_track_a = AudioObject(
+                node_id=903,
+                node_name="SubTrackA",
+                total_bars=2.0,
+                wrapper_bars=4.0,
+            )
+            sub_track_a.add_child(seq_obj, 0.0)
+
+            sub_track_b = AudioObject(
+                node_id=904,
+                node_name="SubTrackB",
+                total_bars=4.0,
+                wrapper_bars=8.0,
+            )
+            sub_track_b.add_child(sub_track_a, 0.0)
+
+            master_track = AudioObject(
+                node_id=905,
+                node_name="MasterTrack",
+                total_bars=8.0,
+                wrapper_bars=8.0,
+            )
+            master_track.add_child(sub_track_b, 0.0)
+
+            rendered = master_track.render(system)
+            flat = rendered.reshape(-1) if rendered.ndim == 1 else np.max(np.abs(rendered), axis=0)
+            bar_samples = int(4 * (60.0 / 120.0) * sr)
+            self.assertEqual(flat.shape[0], 8 * bar_samples)
+
+            # Across 8 bars (1 hit per bar), "<0 1 2>" must advance continuously:
+            # Bar 0..7 slots -> [0, 1, 2, 0, 1, 2, 0, 1] -> peaks [0.1, 0.5, 0.9, 0.1, 0.5, 0.9, 0.1, 0.5]
+            expected_peaks = [0.1, 0.5, 0.9, 0.1, 0.5, 0.9, 0.1, 0.5]
+            for b, exp_peak in enumerate(expected_peaks):
+                bar_start = b * bar_samples
+                peak = float(np.max(np.abs(flat[bar_start : bar_start + bar_samples // 4])))
+                self.assertAlmostEqual(peak, exp_peak, places=2)
+
+            # Verify manifest events are recorded with time-shifted timestamps across all 8 bars (16.0s at 120 BPM)
+            seq_events = system.manifest.get("nodes", {}).get("902", {}).get("events", [])
+            self.assertEqual(len(seq_events), 8)
+            self.assertEqual([e.get("iteration") for e in seq_events], [0, 1, 2, 3, 4, 5, 6, 7])
+            self.assertEqual([e.get("sample_slot_resolved") for e in seq_events], [0, 1, 2, 0, 1, 2, 0, 1])
+            self.assertEqual([e.get("time") for e in seq_events], [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0])
+
+            sub_a_events = system.manifest.get("nodes", {}).get("903", {}).get("events", [])
+            self.assertEqual([e.get("time") for e in sub_a_events], [0.0, 4.0, 8.0, 12.0])
+            self.assertEqual([e.get("iteration") for e in sub_a_events], [0, 1, 2, 3])
+
+            sub_b_events = system.manifest.get("nodes", {}).get("904", {}).get("events", [])
+            self.assertEqual([e.get("time") for e in sub_b_events], [0.0, 8.0])
+            self.assertEqual([e.get("iteration") for e in sub_b_events], [0, 1])
+
+    def test_arrangement_wrapper_progress_and_continuous_sequence_events(self):
+        sr = 44100
+        system = System(sample_rate=sr, bpm=120.0, render_mode="preview")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p0 = os.path.join(tmpdir, "s0.wav")
+            p1 = os.path.join(tmpdir, "s1.wav")
+            sf.write(p0, np.full((sr // 10, 1), 0.2, dtype=np.float32), sr)
+            sf.write(p1, np.full((sr // 10, 1), 0.8, dtype=np.float32), sr)
+
+            sample_obj = SampleObject(
+                filepath=p0,
+                sample_type="one_shot",
+                slots=[
+                    {"index": 0, "filepath": p0, "sample_start": 0.0, "sample_end": 1.0},
+                    {"index": 1, "filepath": p1, "sample_start": 0.0, "sample_end": 1.0},
+                ],
+                node_id=951,
+            )
+
+            # 1-bar Sequence with unbracketed "0 1" (wrapper-scoped) inside a 4-bar Arrangement:
+            # First half of Arrangement (bars 0, 1) -> slot 0 (0.2)
+            # Second half of Arrangement (bars 2, 3) -> slot 1 (0.8)
+            seq_obj = SequenceObject(
+                sequence=[1, 0, 0, 0],
+                step_length=1.0,
+                total_bars=1.0,
+                sample_slot="0 1",
+                field_operators={"sample_slot": "0 1"},
+                slots=[
+                    {
+                        "index": 0,
+                        "sequence": [1, 0, 0, 0],
+                        "sample_slot": "0 1",
+                        "step_length": 1.0,
+                        "field_operators": {"sample_slot": "0 1"},
+                    }
+                ],
+                node_id=952,
+            )
+            seq_obj.add_child(sample_obj, 0.0)
+
+            arr_obj = ArrangementObject(
+                total_bars=4.0,
+                section_points=[],
+                section_slots=["*"],
+                node_id=953,
+            )
+            arr_obj.add_child(seq_obj, 0.0)
+
+            rendered = arr_obj.render(system)
+            flat = rendered.reshape(-1) if rendered.ndim == 1 else np.max(np.abs(rendered), axis=0)
+            bar_samples = int(4 * (60.0 / 120.0) * sr)
+            peaks = [
+                float(np.max(np.abs(flat[b * bar_samples : b * bar_samples + bar_samples // 4])))
+                for b in range(4)
+            ]
+            self.assertAlmostEqual(peaks[0], 0.2, places=2)
+            self.assertAlmostEqual(peaks[1], 0.2, places=2)
+            self.assertAlmostEqual(peaks[2], 0.8, places=2)
+            self.assertAlmostEqual(peaks[3], 0.8, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,20 +2,21 @@
  * ERMES Deterministic Slot, Pool & Bracketed Field Operator Engine (TypeScript)
  *
  * Provides cross-language bit-identical PRNG (SplitMix32 + Mulberry32)
- * matching `ermes/py/slot_language.py` and evaluates hierarchical Field Operators:
+ * matching `ermes/py/slot_language.py` and evaluates hierarchical Field Operators
+ * driven strictly by the 2 runtime triggers: **Cycle** (Wrapper & Local) and **Event**:
  *
- * - Top-level (unbracketed): Global Scope (spans or subdivides Ancestor Master Global Length `G`)
- *   - `random` -> 1 random value per Global Trigger
- *   - `0 1` or `random random` -> subdivides Global Length `G` into equal slices
- * - `[ ... ]`: Cycle Scope (refreshes every Cycle Trigger `cycleIdx` and subdivides Cycle Length `C`)
- *   - `[random]` -> 1 random value per Cycle Trigger
- *   - `[0 1]` or `[0 random]` -> subdivides Cycle Length `C` into equal slices
- *   - `[random][random]` -> 2 top-level Global halves, each refreshing every Cycle Trigger
+ * - Top-level (unbracketed): Wrapper Cycle Scope (spans or subdivides the Parent Master's Wrapper Cycle `W`)
+ *   - `random` -> 1 random value per Wrapper Cycle
+ *   - `0 1` or `random random` -> subdivides Wrapper Cycle `W` into equal slices
+ * - `[ ... ]`: Local Cycle Scope (refreshes every Node Cycle `cycleIdx` and subdivides Local Cycle Length `C`)
+ *   - `[random]` -> 1 random value per Local Cycle
+ *   - `[0 1]` or `[0 random]` -> subdivides Local Cycle Length `C` into equal slices
+ *   - `[random][random]` -> 2 top-level Wrapper Cycle halves, each refreshing every Local Cycle
  * - `< ... >`: Sequential Event Scope (advances 1 item per active Event Request `eventIdx`)
  *   - `<0 1 2>` -> sequential round-robin across active events
  *   - `<random>` -> new random value on every active event
  *   - `<0 random>` -> alternates fixed `0` and fresh `random` on sequential events
- *   - `[0 <random>]` -> first half of cycle is `0`, second half rolls `random` on every event
+ *   - `[0 <random>]` -> first half of local cycle is `0`, second half rolls `random` on every event
  */
 
 export interface NodeSlot {
@@ -57,15 +58,19 @@ export interface FieldEvalContext {
     seed?: unknown;
     /** Salt for parameter key disambiguation */
     salt?: number;
-    /** Global trigger index from ancestor Master (0, 1, 2, ...) */
+    /** Parent/Wrapper cycle trigger index (0, 1, 2, ...) */
+    wrapperIdx?: number;
+    /** Normalized progress within the Parent/Wrapper Cycle [0.0, 1.0) */
+    wrapperProgress?: number;
+    /** Legacy alias for wrapperIdx */
     globalIdx?: number;
-    /** Normalized progress within the current Global Trigger [0.0, 1.0) */
+    /** Legacy alias for wrapperProgress */
     globalProgress?: number;
-    /** Cycle trigger index within the current Global Trigger (0, 1, 2, ...) */
+    /** Local cycle trigger index (0, 1, 2, ...) */
     cycleIdx?: number;
-    /** Normalized progress within the current Cycle Trigger [0.0, 1.0) */
+    /** Normalized progress within the current Local Cycle [0.0, 1.0) */
     cycleProgress?: number;
-    /** Continuous sequential event index within the current Global Trigger (0, 1, 2, ...) */
+    /** Continuous sequential event index (0, 1, 2, ...) */
     eventIdx?: number;
     /** Window-local sequential event index when inside a subdivided slice (defaults to eventIdx) */
     windowEventIdx?: number;
@@ -73,9 +78,10 @@ export interface FieldEvalContext {
     triggerCount?: number;
 }
 
-export type FieldScope = 'global' | 'cycle' | 'event';
+export type FieldScope = 'wrapper' | 'cycle' | 'event' | 'global';
 
 export type FieldAstNode =
+    | { kind: 'wrapper_group'; items: FieldAstNode[] }
     | { kind: 'global_group'; items: FieldAstNode[] }
     | { kind: 'cycle_group'; items: FieldAstNode[]; groupIndex: number }
     | { kind: 'event_group'; items: FieldAstNode[]; groupIndex: number }
@@ -330,19 +336,20 @@ export function tokenizeFieldOperator(expr: unknown): string[] {
 }
 
 const AST_CACHE_MAX = 256;
-const _astCache = new Map<string, Extract<FieldAstNode, { kind: 'global_group' }>>();
+const _astCache = new Map<string, Extract<FieldAstNode, { kind: 'wrapper_group' }>>();
 
 /**
  * Parses a Field Operator string into a hierarchical AST:
- * - Outer `global_group` subdivides the Ancestor Global Length (`G`)
- * - `[ ... ]` `cycle_group` refreshes each Cycle Trigger and subdivides the Cycle Length (`C`)
+ * - Outer `wrapper_group` subdivides the Parent Master's Wrapper Cycle (`W`)
+ * - `[ ... ]` `cycle_group` refreshes each Local Cycle Trigger and subdivides the Local Cycle Length (`C`)
  * - `< ... >` `event_group` advances sequentially on each active Event Request
  */
-export function parseFieldOperatorAST(expr: unknown): Extract<FieldAstNode, { kind: 'global_group' }> {
+export function parseFieldOperatorAST(expr: unknown): Extract<FieldAstNode, { kind: 'wrapper_group' }> {
     if (typeof expr === 'object' && expr !== null && 'kind' in expr) {
         const node = expr as FieldAstNode;
-        if (node.kind === 'global_group') return node;
-        return { kind: 'global_group', items: [node] };
+        if (node.kind === 'wrapper_group') return node;
+        if (node.kind === 'global_group') return { kind: 'wrapper_group', items: node.items };
+        return { kind: 'wrapper_group', items: [node] };
     }
     const cacheKey = String(expr ?? '').trim();
     const cached = _astCache.get(cacheKey);
@@ -388,8 +395,8 @@ export function parseFieldOperatorAST(expr: unknown): Extract<FieldAstNode, { ki
         return items;
     };
 
-    const ast: Extract<FieldAstNode, { kind: 'global_group' }> = {
-        kind: 'global_group',
+    const ast: Extract<FieldAstNode, { kind: 'wrapper_group' }> = {
+        kind: 'wrapper_group',
         items: parseItems(undefined)
     };
     if (_astCache.size >= AST_CACHE_MAX) {
@@ -453,20 +460,21 @@ export function resolveFieldOperatorLeaf(
     const eventIdx = Math.max(0, Math.floor(Number(ctx.eventIdx ?? legacyTrigger ?? 0)));
     const windowEventIdx = Math.max(0, Math.floor(Number(ctx.windowEventIdx ?? eventIdx)));
 
-    const hasExplicitGlobalProgress = ctx.globalProgress !== undefined && Number.isFinite(Number(ctx.globalProgress));
+    const rawWrapperProg = ctx.wrapperProgress ?? ctx.globalProgress;
+    const hasExplicitWrapperProgress = rawWrapperProg !== undefined && Number.isFinite(Number(rawWrapperProg));
     const hasExplicitCycleProgress = ctx.cycleProgress !== undefined && Number.isFinite(Number(ctx.cycleProgress));
 
-    let globalProgress = hasExplicitGlobalProgress
-        ? Math.max(0, Math.min(0.999999, Number(ctx.globalProgress)))
+    const wrapperProgress = hasExplicitWrapperProgress
+        ? Math.max(0, Math.min(0.999999, Number(rawWrapperProg)))
         : 0;
-    let cycleProgress = hasExplicitCycleProgress
+    const cycleProgress = hasExplicitCycleProgress
         ? Math.max(0, Math.min(0.999999, Number(ctx.cycleProgress)))
         : 0;
 
     const evalNode = (
         node: FieldAstNode,
         currentScope: FieldScope,
-        gProg: number,
+        wProg: number,
         cProg: number,
         activeSliceIdx: number,
         inSubdividedWindow: boolean
@@ -487,28 +495,28 @@ export function resolveFieldOperatorLeaf(
         const count = items.length;
         if (count === 0) return null;
 
-        if (node.kind === 'global_group') {
+        if (node.kind === 'wrapper_group' || node.kind === 'global_group') {
             if (count === 1) {
-                return evalNode(items[0], 'global', gProg, cProg, 0, inSubdividedWindow);
+                return evalNode(items[0], 'wrapper', wProg, cProg, 0, inSubdividedWindow);
             }
             let sliceIdx: number;
-            let localGProg: number;
-            if (hasExplicitGlobalProgress) {
-                const scaled = gProg * count;
+            let localWProg: number;
+            if (hasExplicitWrapperProgress) {
+                const scaled = wProg * count;
                 sliceIdx = Math.min(count - 1, Math.max(0, Math.floor(scaled)));
-                localGProg = scaled - sliceIdx;
+                localWProg = scaled - sliceIdx;
             } else {
                 // Fallback when evaluated without timeline progress (e.g. direct triggerCount step)
                 const fallbackIdx = legacyTrigger ?? cycleIdx;
                 sliceIdx = wrapSlotIndex(fallbackIdx, count);
-                localGProg = 0;
+                localWProg = 0;
             }
-            return evalNode(items[sliceIdx], 'global', localGProg, cProg, sliceIdx, true);
+            return evalNode(items[sliceIdx], 'wrapper', localWProg, cProg, sliceIdx, true);
         }
 
         if (node.kind === 'cycle_group') {
             if (count === 1) {
-                return evalNode(items[0], 'cycle', gProg, cProg, activeSliceIdx, inSubdividedWindow);
+                return evalNode(items[0], 'cycle', wProg, cProg, activeSliceIdx, inSubdividedWindow);
             }
             let sliceIdx: number;
             let localCProg: number;
@@ -521,52 +529,53 @@ export function resolveFieldOperatorLeaf(
                 sliceIdx = wrapSlotIndex(fallbackIdx, count);
                 localCProg = 0;
             }
-            return evalNode(items[sliceIdx], 'cycle', gProg, localCProg, sliceIdx, true);
+            return evalNode(items[sliceIdx], 'cycle', wProg, localCProg, sliceIdx, true);
         }
 
         // node.kind === 'event_group' (`< ... >`)
         const effEvt = inSubdividedWindow ? windowEventIdx : eventIdx;
         const chosenIdx = wrapSlotIndex(effEvt, count);
-        return evalNode(items[chosenIdx], 'event', gProg, cProg, chosenIdx, inSubdividedWindow);
+        return evalNode(items[chosenIdx], 'event', wProg, cProg, chosenIdx, inSubdividedWindow);
     };
 
-    return evalNode(ast, 'global', globalProgress, cycleProgress, 0, false);
+    return evalNode(ast, 'wrapper', wrapperProgress, cycleProgress, 0, false);
 }
 
 /**
  * Computes the deterministic 32-bit PRNG seed for a resolved AST leaf based on its bracket scope:
- * - `'global'`: depends on `(seed, globalIdx, tokenIndex, salt)` (1 value per Global Trigger slice)
- * - `'cycle'`: depends on `(seed, globalIdx, cycleIdx, tokenIndex, salt)` (1 value per Cycle Trigger slice)
- * - `'event'`: depends on `(seed, globalIdx, cycleIdx, effectiveEventIdx, tokenIndex, salt)` (1 value per Event)
+ * - `'wrapper'` (`'global'`): depends on `(seed, wrapperIdx, tokenIndex, salt)` (1 value per Wrapper Cycle slice)
+ * - `'cycle'`: depends on `(seed, wrapperIdx, cycleIdx, tokenIndex, salt)` (1 value per Local Cycle slice)
+ * - `'event'`: depends on `(seed, wrapperIdx, cycleIdx, effectiveEventIdx, tokenIndex, salt)` (1 value per Event)
  */
 export function computeLeafPrngSeed(leaf: ResolvedFieldLeaf, ctx: FieldEvalContext = {}): number {
     const baseSeed = normalizeNumericSeed(ctx.seed, 0);
     const salt = (ctx.salt ?? 0xF1E1) >>> 0;
     const legacyTrigger = ctx.triggerCount !== undefined ? Math.max(0, Math.floor(Number(ctx.triggerCount) || 0)) : 0;
-    const globalIdx = Math.max(0, Math.floor(Number(ctx.globalIdx ?? 0)));
+    const rawWrapperIdx = ctx.wrapperIdx ?? ctx.globalIdx;
+    const wrapperIdx = Math.max(0, Math.floor(Number(rawWrapperIdx ?? 0)));
     const cycleIdx = Math.max(0, Math.floor(Number(ctx.cycleIdx ?? legacyTrigger)));
     const tokenSalt = hashSeed(salt, leaf.tokenIndex + 1, leaf.sliceIndex + 1);
 
-    if (leaf.scope === 'global') {
-        // When legacy callers only pass triggerCount (and no globalIdx), include legacyTrigger so rand advances when expected
-        const effectiveGlobalIdx = ctx.globalIdx !== undefined ? globalIdx : legacyTrigger;
-        return hashSeed(baseSeed, effectiveGlobalIdx, tokenSalt, 0x1001);
+    if (leaf.scope === 'wrapper' || leaf.scope === 'global') {
+        // When legacy callers only pass triggerCount (and no wrapperIdx), include legacyTrigger so rand advances when expected
+        const effectiveWrapperIdx = rawWrapperIdx !== undefined ? wrapperIdx : legacyTrigger;
+        return hashSeed(baseSeed, effectiveWrapperIdx, tokenSalt, 0x1001);
     }
     if (leaf.scope === 'cycle') {
-        const combo = hashSeed(globalIdx, cycleIdx, 0x2002);
+        const combo = hashSeed(wrapperIdx, cycleIdx, 0x2002);
         return hashSeed(baseSeed, combo, tokenSalt, 0x2002);
     }
     // leaf.scope === 'event'
-    const combo = hashSeed(globalIdx, cycleIdx, leaf.effectiveEventIdx + 1);
+    const combo = hashSeed(wrapperIdx, cycleIdx, leaf.effectiveEventIdx + 1);
     return hashSeed(baseSeed, combo, tokenSalt, 0x3003);
 }
 
 /**
  * Formats an array of dropped pool/library items into a clean Field Operator expression:
  * - `'event'` (default, for SampleNode): `<item1, item2>` (round-robins per step trigger)
- * - `'cycle'` (for SequenceNode): `[item1][item2]` (subdivides Global Length across cycles)
+ * - `'cycle'` (for SequenceNode): `[item1][item2]` (subdivides Wrapper Cycle across child cycles)
  */
-export function formatPoolListExpression(items: any[], mode: 'plain' | 'event' | 'cycle' | 'global' = 'plain'): string {
+export function formatPoolListExpression(items: any[], mode: 'plain' | 'event' | 'cycle' | 'wrapper' | 'global' = 'plain'): string {
     if (!Array.isArray(items) || items.length === 0) return '';
     const formatted = items
         .map(item => {
@@ -584,7 +593,7 @@ export function formatPoolListExpression(items: any[], mode: 'plain' | 'event' |
     if (mode === 'event') {
         return `<${formatted.join(', ')}>`;
     }
-    if (mode === 'global') {
+    if (mode === 'wrapper' || mode === 'global') {
         return formatted.join(', ');
     }
     return formatted.join(' ');
@@ -758,15 +767,15 @@ export function resolveModifierSlotSeeds(
 
 /**
  * Resolves a `sample_slot` expression across `stepCount` steps within a cycle,
- * supporting the full bracketed Field Operator grammar (`unbracketed` global, `[...]` cycle, `<...>` event).
+ * supporting the full bracketed Field Operator grammar (`unbracketed` wrapper cycle, `[...]` local cycle, `<...>` event).
  *
  * Notice:
  * - For legacy/simple callers that do not pass `options`, `0 1` or `<0 1>` or `[0 1]`
  *   evaluates across the steps of the cycle.
- * - When `options` provides `{ globalIdx, cycleIdx, numCycles, activeSequence, startEventIdx }`,
+ * - When `options` provides `{ wrapperIdx, cycleIdx, numCycles, activeSequence, startEventIdx }`,
  *   `<...>` advances strictly on active steps (`activeSequence[i] == 1`),
  *   `[...]` subdivides `cycleProgress = i / stepCount`, and
- *   unbracketed expressions subdivide `globalProgress = (cycleIdx + cycleProgress) / numCycles`!
+ *   unbracketed expressions subdivide `wrapperProgress = (cycleIdx + cycleProgress) / numCycles`!
  */
 export function resolveStepSlots(
     slotExpr: unknown,
@@ -775,6 +784,7 @@ export function resolveStepSlots(
     cycleSeed: number = 0,
     upstreamActiveSlot: number = 0,
     options?: {
+        wrapperIdx?: number;
         globalIdx?: number;
         cycleIdx?: number;
         numCycles?: number;
@@ -792,7 +802,7 @@ export function resolveStepSlots(
 
     const numericSeed = normalizeNumericSeed(cycleSeed, 0);
     const hasBrackets = /[\[\]<>]/.test(raw);
-    const globalIdx = Math.max(0, Math.floor(Number(options?.globalIdx ?? 0)));
+    const wrapperIdx = Math.max(0, Math.floor(Number(options?.wrapperIdx ?? options?.globalIdx ?? 0)));
     const cycleIdx = Math.max(0, Math.floor(Number(options?.cycleIdx ?? 0)));
     const numCycles = Math.max(1, Math.floor(Number(options?.numCycles ?? 1)));
     const activeSeq = options?.activeSequence;
@@ -825,16 +835,17 @@ export function resolveStepSlots(
     let runningWindowEventIdx = 0;
     let lastSliceKey = '';
 
+    const localCycleInWrapper = cycleIdx % numCycles;
     for (let i = 0; i < count; i++) {
         const isStepActive = activeSeq ? Boolean(activeSeq[i]) : true;
         const cycleProgress = i / count;
-        const globalProgress = (cycleIdx + cycleProgress) / numCycles;
+        const wrapperProgress = (localCycleInWrapper + cycleProgress) / numCycles;
 
         let leaf = resolveFieldOperatorLeaf(ast, {
             seed: numericSeed,
             salt: 0x5107,
-            globalIdx,
-            globalProgress,
+            wrapperIdx,
+            wrapperProgress,
             cycleIdx,
             cycleProgress,
             eventIdx: runningEventIdx,
@@ -849,8 +860,8 @@ export function resolveStepSlots(
                 leaf = resolveFieldOperatorLeaf(ast, {
                     seed: numericSeed,
                     salt: 0x5107,
-                    globalIdx,
-                    globalProgress,
+                    wrapperIdx,
+                    wrapperProgress,
                     cycleIdx,
                     cycleProgress,
                     eventIdx: runningEventIdx,
@@ -869,7 +880,7 @@ export function resolveStepSlots(
                 const prng = mulberry32(computeLeafPrngSeed(leaf, {
                     seed: numericSeed,
                     salt: 0x5107,
-                    globalIdx,
+                    wrapperIdx,
                     cycleIdx,
                 }));
                 const lo = Math.floor(rangeSpec.min);
@@ -879,7 +890,7 @@ export function resolveStepSlots(
                 const prng = mulberry32(computeLeafPrngSeed(leaf, {
                     seed: numericSeed,
                     salt: 0x5107,
-                    globalIdx,
+                    wrapperIdx,
                     cycleIdx,
                 }));
                 rawSlot = Math.floor(prng() * safeSlotCount);

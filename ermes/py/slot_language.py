@@ -225,14 +225,16 @@ _ast_cache: Dict[str, Dict[str, Any]] = {}
 def parse_field_operator_ast(expr: Any) -> Dict[str, Any]:
     """
     Parses a Field Operator string into a hierarchical AST:
-    - Outer `global_group` subdivides the Ancestor Global Length (`G`)
-    - `[ ... ]` `cycle_group` refreshes each Cycle Trigger and subdivides the Cycle Length (`C`)
+    - Outer `wrapper_group` subdivides the Parent Master's Wrapper Cycle (`W`)
+    - `[ ... ]` `cycle_group` refreshes each Local Cycle Trigger and subdivides the Local Cycle Length (`C`)
     - `< ... >` `event_group` advances sequentially on each active Event Request
     """
     if isinstance(expr, dict) and "kind" in expr:
-        if expr["kind"] == "global_group":
+        if expr["kind"] == "wrapper_group":
             return expr
-        return {"kind": "global_group", "items": [expr]}
+        if expr["kind"] == "global_group":
+            return {"kind": "wrapper_group", "items": expr.get("items", [])}
+        return {"kind": "wrapper_group", "items": [expr]}
 
     cache_key = str(expr if expr is not None else "").strip()
     cached = _ast_cache.get(cache_key)
@@ -276,7 +278,7 @@ def parse_field_operator_ast(expr: Any) -> Dict[str, Any]:
                 items.append({"kind": "atom", "value": tok, "tokenIndex": t_idx})
         return items
 
-    ast = {"kind": "global_group", "items": parse_items(None)}
+    ast = {"kind": "wrapper_group", "items": parse_items(None)}
     if len(_ast_cache) >= _AST_CACHE_MAX:
         oldest_key = next(iter(_ast_cache))
         _ast_cache.pop(oldest_key, None)
@@ -330,6 +332,8 @@ def resolve_field_operator_leaf(
     cycle_progress: Optional[float] = None,
     event_idx: Optional[int] = None,
     window_event_idx: Optional[int] = None,
+    wrapper_idx: Optional[int] = None,
+    wrapper_progress: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Evaluates a parsed Field Operator AST at the given hierarchical trigger context,
@@ -344,16 +348,17 @@ def resolve_field_operator_leaf(
     eff_event_idx = max(0, int(event_idx if event_idx is not None else (legacy_trigger if legacy_trigger is not None else 0)))
     eff_window_event_idx = max(0, int(window_event_idx if window_event_idx is not None else eff_event_idx))
 
-    has_explicit_g_prog = global_progress is not None and math.isfinite(float(global_progress))
+    raw_w_prog = wrapper_progress if wrapper_progress is not None else global_progress
+    has_explicit_w_prog = raw_w_prog is not None and math.isfinite(float(raw_w_prog))
     has_explicit_c_prog = cycle_progress is not None and math.isfinite(float(cycle_progress))
 
-    g_prog_init = max(0.0, min(0.999999, float(global_progress))) if has_explicit_g_prog else 0.0
+    w_prog_init = max(0.0, min(0.999999, float(raw_w_prog))) if has_explicit_w_prog else 0.0
     c_prog_init = max(0.0, min(0.999999, float(cycle_progress))) if has_explicit_c_prog else 0.0
 
     def eval_node(
         node: Dict[str, Any],
         current_scope: str,
-        g_prog: float,
+        w_prog: float,
         c_prog: float,
         active_slice_idx: int,
         in_subdivided_window: bool,
@@ -374,22 +379,22 @@ def resolve_field_operator_leaf(
         if count == 0:
             return None
 
-        if kind == "global_group":
+        if kind in ("wrapper_group", "global_group"):
             if count == 1:
-                return eval_node(items[0], "global", g_prog, c_prog, 0, in_subdivided_window)
-            if has_explicit_g_prog:
-                scaled = g_prog * count
+                return eval_node(items[0], "wrapper", w_prog, c_prog, 0, in_subdivided_window)
+            if has_explicit_w_prog:
+                scaled = w_prog * count
                 slice_idx = min(count - 1, max(0, int(math.floor(scaled))))
-                local_g_prog = scaled - slice_idx
+                local_w_prog = scaled - slice_idx
             else:
                 fb_idx = legacy_trigger if legacy_trigger is not None else eff_cycle_idx
                 slice_idx = wrap_slot_index(fb_idx, count)
-                local_g_prog = 0.0
-            return eval_node(items[slice_idx], "global", local_g_prog, c_prog, slice_idx, True)
+                local_w_prog = 0.0
+            return eval_node(items[slice_idx], "wrapper", local_w_prog, c_prog, slice_idx, True)
 
         if kind == "cycle_group":
             if count == 1:
-                return eval_node(items[0], "cycle", g_prog, c_prog, active_slice_idx, in_subdivided_window)
+                return eval_node(items[0], "cycle", w_prog, c_prog, active_slice_idx, in_subdivided_window)
             if has_explicit_c_prog:
                 scaled = c_prog * count
                 slice_idx = min(count - 1, max(0, int(math.floor(scaled))))
@@ -398,14 +403,14 @@ def resolve_field_operator_leaf(
                 fb_idx = legacy_trigger if legacy_trigger is not None else eff_event_idx
                 slice_idx = wrap_slot_index(fb_idx, count)
                 local_c_prog = 0.0
-            return eval_node(items[slice_idx], "cycle", g_prog, local_c_prog, slice_idx, True)
+            return eval_node(items[slice_idx], "cycle", w_prog, local_c_prog, slice_idx, True)
 
         # kind == "event_group" (`< ... >`)
         eff_evt = eff_window_event_idx if in_subdivided_window else eff_event_idx
         chosen_idx = wrap_slot_index(eff_evt, count)
-        return eval_node(items[chosen_idx], "event", g_prog, c_prog, chosen_idx, in_subdivided_window)
+        return eval_node(items[chosen_idx], "event", w_prog, c_prog, chosen_idx, in_subdivided_window)
 
-    return eval_node(ast, "global", g_prog_init, c_prog_init, 0, False)
+    return eval_node(ast, "wrapper", w_prog_init, c_prog_init, 0, False)
 
 
 def compute_leaf_prng_seed(
@@ -415,23 +420,25 @@ def compute_leaf_prng_seed(
     trigger_count: Optional[int] = None,
     global_idx: Optional[int] = None,
     cycle_idx: Optional[int] = None,
+    wrapper_idx: Optional[int] = None,
 ) -> int:
     """Computes the deterministic 32-bit PRNG seed for a resolved AST leaf (bit-identical to TypeScript)."""
     base_seed = normalize_numeric_seed(seed, 0)
     eff_salt = int(salt if salt is not None else 0xF1E1) & 0xFFFFFFFF
     legacy_trigger = max(0, int(trigger_count or 0)) if trigger_count is not None else 0
-    eff_global_idx = max(0, int(global_idx or 0))
+    raw_w_idx = wrapper_idx if wrapper_idx is not None else global_idx
+    eff_wrapper_idx = max(0, int(raw_w_idx or 0))
     eff_cycle_idx = max(0, int(cycle_idx if cycle_idx is not None else legacy_trigger))
     token_salt = hash_seed(eff_salt, int(leaf["tokenIndex"]) + 1, int(leaf["sliceIndex"]) + 1)
 
     scope = leaf["scope"]
-    if scope == "global":
-        effective_g = eff_global_idx if global_idx is not None else legacy_trigger
-        return hash_seed(base_seed, effective_g, token_salt, 0x1001)
+    if scope in ("wrapper", "global"):
+        effective_w = eff_wrapper_idx if raw_w_idx is not None else legacy_trigger
+        return hash_seed(base_seed, effective_w, token_salt, 0x1001)
     if scope == "cycle":
-        combo = hash_seed(eff_global_idx, eff_cycle_idx, 0x2002)
+        combo = hash_seed(eff_wrapper_idx, eff_cycle_idx, 0x2002)
         return hash_seed(base_seed, combo, token_salt, 0x2002)
-    combo = hash_seed(eff_global_idx, eff_cycle_idx, int(leaf["effectiveEventIdx"]) + 1)
+    combo = hash_seed(eff_wrapper_idx, eff_cycle_idx, int(leaf["effectiveEventIdx"]) + 1)
     return hash_seed(base_seed, combo, token_salt, 0x3003)
 
 
@@ -451,13 +458,17 @@ def evaluate_numeric_field_operator(
     cycle_progress: Optional[float] = None,
     event_idx: Optional[int] = None,
     window_event_idx: Optional[int] = None,
+    wrapper_idx: Optional[int] = None,
+    wrapper_progress: Optional[float] = None,
 ) -> float:
-    """Evaluates a numeric Field Operator expression across unbracketed global, `[]` cycle, and `<>` event scopes."""
+    """Evaluates a numeric Field Operator expression across unbracketed wrapper, `[]` cycle, and `<>` event scopes."""
+    eff_w_idx = wrapper_idx if wrapper_idx is not None else global_idx
+    eff_w_prog = wrapper_progress if wrapper_progress is not None else global_progress
     leaf = resolve_field_operator_leaf(
         expr,
         trigger_count=trigger_count,
-        global_idx=global_idx,
-        global_progress=global_progress,
+        wrapper_idx=eff_w_idx,
+        wrapper_progress=eff_w_prog,
         cycle_idx=cycle_idx,
         cycle_progress=cycle_progress,
         event_idx=event_idx,
@@ -476,7 +487,7 @@ def evaluate_numeric_field_operator(
                 seed=seed,
                 salt=salt,
                 trigger_count=trigger_count,
-                global_idx=global_idx,
+                wrapper_idx=eff_w_idx,
                 cycle_idx=cycle_idx,
             )
         )
@@ -490,7 +501,7 @@ def evaluate_numeric_field_operator(
                 seed=seed,
                 salt=salt,
                 trigger_count=trigger_count,
-                global_idx=global_idx,
+                wrapper_idx=eff_w_idx,
                 cycle_idx=cycle_idx,
             )
         )
@@ -538,6 +549,8 @@ def resolve_pool_item_by_query(
     window_event_idx: Optional[int] = None,
     pool_seed: Optional[Any] = None,
     node_id: int = 0,
+    wrapper_idx: Optional[int] = None,
+    wrapper_progress: Optional[float] = None,
 ) -> Optional[Any]:
     """Resolves a single item from an asset pool using a selector query or bracketed Field Operator."""
     if not items:
@@ -565,12 +578,15 @@ def resolve_pool_item_by_query(
             if lower in (n["name"], n["name_stem"], n["base"], n["base_stem"]):
                 return item
 
+    eff_w_idx = wrapper_idx if wrapper_idx is not None else global_idx
+    eff_w_prog = wrapper_progress if wrapper_progress is not None else global_progress
+
     # 2. Evaluate AST leaf for bracketed or multi-token expressions
     leaf = resolve_field_operator_leaf(
         raw,
         trigger_count=trigger_count,
-        global_idx=global_idx,
-        global_progress=global_progress,
+        wrapper_idx=eff_w_idx,
+        wrapper_progress=eff_w_prog,
         cycle_idx=cycle_idx,
         cycle_progress=cycle_progress,
         event_idx=event_idx,
@@ -589,7 +605,7 @@ def resolve_pool_item_by_query(
             seed=numeric_seed,
             salt=0xA55E + int(slot_index or 0),
             trigger_count=trigger_count,
-            global_idx=global_idx,
+            wrapper_idx=eff_w_idx,
             cycle_idx=cycle_idx,
         )
         prng = mulberry32(leaf_seed)
@@ -607,7 +623,7 @@ def resolve_pool_item_by_query(
                 seed=numeric_seed,
                 salt=0xA55E + int(slot_index or 0),
                 trigger_count=trigger_count,
-                global_idx=global_idx,
+                wrapper_idx=eff_w_idx,
                 cycle_idx=cycle_idx,
             )
             prng = mulberry32(leaf_seed)
@@ -703,10 +719,11 @@ def resolve_step_slots(
     num_cycles: Optional[int] = None,
     active_sequence: Optional[List[int]] = None,
     start_event_idx: Optional[int] = None,
+    wrapper_idx: Optional[int] = None,
 ) -> List[int]:
     """
     Resolves a `sample_slot` expression across `step_count` steps, wrapping modulo `upstream_slot_count`,
-    supporting unbracketed Global scope, `[...]` Cycle scope, and `<...>` Sequential Event scope.
+    supporting unbracketed Wrapper Cycle scope, `[...]` Local Cycle scope, and `<...>` Sequential Event scope.
     """
     count = max(1, int(step_count or 16))
     safe_slot_count = max(1, int(upstream_slot_count or 1))
@@ -717,8 +734,9 @@ def resolve_step_slots(
 
     numeric_seed = normalize_numeric_seed(cycle_seed, 0)
     has_brackets = bool(re.search(r"[\[\]<>]", raw))
+    raw_w_idx = wrapper_idx if wrapper_idx is not None else global_idx
     has_hier_opts = any(
-        x is not None for x in (global_idx, cycle_idx, num_cycles, active_sequence, start_event_idx)
+        x is not None for x in (raw_w_idx, cycle_idx, num_cycles, active_sequence, start_event_idx)
     )
 
     if not has_hier_opts and not has_brackets:
@@ -740,7 +758,7 @@ def resolve_step_slots(
         return result
 
     ast = parse_field_operator_ast(raw)
-    eff_g_idx = max(0, int(global_idx or 0))
+    eff_w_idx = max(0, int(raw_w_idx or 0))
     eff_c_idx = max(0, int(cycle_idx or 0))
     eff_num_cycles = max(1, int(num_cycles or 1))
     running_event_idx = max(0, int(start_event_idx or 0))
@@ -748,15 +766,16 @@ def resolve_step_slots(
     last_slice_key = ""
     result = []
 
+    local_cycle_in_wrapper = eff_c_idx % eff_num_cycles
     for i in range(count):
         is_step_active = bool(active_sequence[i]) if (active_sequence is not None and i < len(active_sequence)) else True
         c_prog = float(i) / float(count)
-        g_prog = (float(eff_c_idx) + c_prog) / float(eff_num_cycles)
+        w_prog = (float(local_cycle_in_wrapper) + c_prog) / float(eff_num_cycles)
 
         leaf = resolve_field_operator_leaf(
             ast,
-            global_idx=eff_g_idx,
-            global_progress=g_prog,
+            wrapper_idx=eff_w_idx,
+            wrapper_progress=w_prog,
             cycle_idx=eff_c_idx,
             cycle_progress=c_prog,
             event_idx=running_event_idx,
@@ -769,8 +788,8 @@ def resolve_step_slots(
                 running_window_event_idx = 0
                 leaf = resolve_field_operator_leaf(
                     ast,
-                    global_idx=eff_g_idx,
-                    global_progress=g_prog,
+                    wrapper_idx=eff_w_idx,
+                    wrapper_progress=w_prog,
                     cycle_idx=eff_c_idx,
                     cycle_progress=c_prog,
                     event_idx=running_event_idx,
@@ -788,7 +807,7 @@ def resolve_step_slots(
                         leaf,
                         seed=numeric_seed,
                         salt=0x5107,
-                        global_idx=eff_g_idx,
+                        wrapper_idx=eff_w_idx,
                         cycle_idx=eff_c_idx,
                     )
                 )
@@ -801,7 +820,7 @@ def resolve_step_slots(
                         leaf,
                         seed=numeric_seed,
                         salt=0x5107,
-                        global_idx=eff_g_idx,
+                        wrapper_idx=eff_w_idx,
                         cycle_idx=eff_c_idx,
                     )
                 )

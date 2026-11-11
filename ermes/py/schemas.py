@@ -97,6 +97,7 @@ class AudioNodeModel(BaseModel):
     cycle_seeds: List[int] = []
     section_slots: List[int] = []
     total_bars: Optional[float] = None
+    wrapper_bars: Optional[float] = None
     global_bars: Optional[float] = None
     global_seed: Optional[Union[str, float, int]] = None
     field_seed: Optional[Union[str, float, int]] = None

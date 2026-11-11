@@ -63,6 +63,7 @@ class AudioObject(BaseObject):
         target_bpm: Optional[float] = None,
         node_id: Optional[int] = None,
         node_type: str = "track",
+        wrapper_bars: Optional[float] = None,
         global_bars: Optional[float] = None,
         global_seed: Optional[Union[str, float, int]] = None,
         field_seed: Optional[Union[str, float, int]] = None,
@@ -90,9 +91,11 @@ class AudioObject(BaseObject):
         self.total_bars: Optional[float] = (
             max(0.0, float(total_bars)) if total_bars is not None else None
         )
-        self.global_bars: Optional[float] = (
-            max(0.0, float(global_bars)) if global_bars is not None else None
+        eff_wrapper_bars = wrapper_bars if wrapper_bars is not None else global_bars
+        self.wrapper_bars: Optional[float] = (
+            max(0.0, float(eff_wrapper_bars)) if eff_wrapper_bars is not None else None
         )
+        self.global_bars: Optional[float] = self.wrapper_bars
         self.global_seed: Optional[Union[str, float, int]] = global_seed
         self.field_seed: Optional[Union[str, float, int]] = field_seed
         self.field_operators: Dict[str, str] = {}
@@ -186,10 +189,11 @@ class AudioObject(BaseObject):
         parent_bars = round(float(kwargs["parent_total_bars"]), 4) if kwargs.get("parent_total_bars") is not None else None
         is_dyn_or_moving = getattr(self, "seed_mode", None) == "moving" or getattr(self, "is_dynamic", False)
         eff_iter = int(iteration) if is_dyn_or_moving else 0
-        eff_global_idx = int(kwargs.get("global_idx", 0)) if is_dyn_or_moving else 0
+        raw_w_idx = kwargs.get("wrapper_idx", kwargs.get("global_idx", 0))
+        eff_wrapper_idx = int(raw_w_idx or 0) if is_dyn_or_moving else 0
         g_seed = getattr(self, "global_seed", None)
         f_seed = getattr(self, "field_seed", None)
-        return (render_mode, sr, bpm, loop_flag, parent_bars, eff_iter, eff_global_idx, g_seed, f_seed)
+        return (render_mode, sr, bpm, loop_flag, parent_bars, eff_iter, eff_wrapper_idx, g_seed, f_seed)
 
     def _try_get_cached_render(
         self,
@@ -197,6 +201,7 @@ class AudioObject(BaseObject):
         system: Optional[System] = None,
         slot: int = 0,
         restore_natural_duration: bool = False,
+        timeline_offset_sec: float = 0.0,
     ) -> Optional[np.ndarray]:
         if self.node_id is None or not getattr(self, "fingerprint", None):
             return None
@@ -206,7 +211,7 @@ class AudioObject(BaseObject):
         if system is not None and system.render_mode == "preview":
             cached_extra = GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx, slot=slot)
             if cached_extra and "manifest_state" in cached_extra:
-                system.restore_manifest_state(cached_extra["manifest_state"])
+                system.restore_manifest_state(cached_extra["manifest_state"], target_offset_sec=timeline_offset_sec)
             if restore_natural_duration:
                 if cached_extra and "natural_duration" in cached_extra:
                     self._natural_duration = cached_extra["natural_duration"]
@@ -233,12 +238,16 @@ class AudioObject(BaseObject):
         slot: int = 0,
         extra: Optional[Dict[str, Any]] = None,
         capture_manifest: bool = True,
+        timeline_offset_sec: float = 0.0,
     ) -> None:
         if self.node_id is None or not getattr(self, "fingerprint", None):
             return
         payload_extra: Dict[str, Any] = dict(extra) if extra else {}
         if capture_manifest and system is not None:
-            manifest_state = system.capture_manifest_state(allowed_node_ids=self.get_subtree_node_ids())
+            manifest_state = system.capture_manifest_state(
+                allowed_node_ids=self.get_subtree_node_ids(),
+                base_offset_sec=timeline_offset_sec,
+            )
             if manifest_state:
                 payload_extra["manifest_state"] = manifest_state
         GLOBAL_DAG_CACHE.store(
@@ -269,8 +278,9 @@ class AudioObject(BaseObject):
         - If children exist, recursively renders each child, pads with leading zeros based on start_beat,
           and SUMs them into a parent master numpy array.
         """
+        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
         cache_ctx = self._cache_context(system, **kwargs)
-        cached = self._try_get_cached_render(cache_ctx, system)
+        cached = self._try_get_cached_render(cache_ctx, system, timeline_offset_sec=base_offset_sec)
         if cached is not None:
             return cached
 
@@ -299,7 +309,7 @@ class AudioObject(BaseObject):
 
             data_to_render = self._tile_loop_to_bars(data_to_render, system, **kwargs)
             leaf_out = self.apply_chain(data_to_render, system)
-            self._store_cached_render(leaf_out, cache_ctx, system, capture_manifest=False)
+            self._store_cached_render(leaf_out, cache_ctx, system, capture_manifest=False, timeline_offset_sec=base_offset_sec)
             return leaf_out
 
         if system is None:
@@ -308,8 +318,8 @@ class AudioObject(BaseObject):
         # Render all child nodes recursively and record (start_sample, child_rendered_array)
         rendered_children: List[Tuple[int, np.ndarray]] = []
         max_end_sample = 0
+        outer_wrapper_idx = int(kwargs.get("wrapper_idx", kwargs.get("global_idx", 0)) or 0)
 
-        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
         for start_beat, child in self.children:
             if self.node_id is not None and getattr(child, "node_id", None) is not None:
                 GLOBAL_DAG_CACHE.register_edge(parent_id=self.node_id, child_id=child.node_id)
@@ -322,6 +332,8 @@ class AudioObject(BaseObject):
 
             child_bars = getattr(child, "total_bars", None)
             child_node_type = getattr(child, "node_type", None)
+            wrapped_cycle_count = 1
+            child_bar_dur_sec = 0.0
             if (
                 self.total_bars is not None
                 and self.total_bars > 0
@@ -329,17 +341,23 @@ class AudioObject(BaseObject):
                 and child_bars is not None
                 and 0 < child_bars < self.total_bars
             ):
-                num_global_triggers = max(1, int(np.ceil(float(self.total_bars) / float(child_bars))))
+                wrapped_cycle_count = max(1, int(np.ceil(float(self.total_bars) / float(child_bars))))
                 child_bar_samples = max(1, system.beat_to_samples(float(child_bars) * 4.0))
                 child_bar_dur_sec = float(child_bar_samples) / float(system.sample_rate)
                 seg_buffers: List[np.ndarray] = []
-                for g_idx in range(num_global_triggers):
-                    g_kwargs = dict(child_kwargs)
-                    g_kwargs["global_idx"] = g_idx
-                    g_kwargs["num_global_cycles"] = num_global_triggers
-                    g_kwargs["parent_total_bars"] = child_bars
-                    g_kwargs["timeline_offset_sec"] = start_sec + g_idx * child_bar_dur_sec
-                    seg_audio = child.render(system, **g_kwargs)
+                for w_idx in range(wrapped_cycle_count):
+                    cumulative_w_idx = outer_wrapper_idx * wrapped_cycle_count + w_idx
+                    w_prog = float(w_idx) / float(wrapped_cycle_count)
+                    w_kwargs = dict(child_kwargs)
+                    w_kwargs["wrapper_idx"] = cumulative_w_idx
+                    w_kwargs["global_idx"] = cumulative_w_idx
+                    w_kwargs["wrapper_progress"] = w_prog
+                    w_kwargs["global_progress"] = w_prog
+                    w_kwargs["num_wrapper_cycles"] = wrapped_cycle_count
+                    w_kwargs["num_global_cycles"] = wrapped_cycle_count
+                    w_kwargs["parent_total_bars"] = child_bars
+                    w_kwargs["timeline_offset_sec"] = start_sec + w_idx * child_bar_dur_sec
+                    seg_audio = child.render(system, **w_kwargs)
                     if seg_audio.shape[-1] != child_bar_samples:
                         fitted_seg = np.zeros((*seg_audio.shape[:-1], child_bar_samples), dtype=np.float32)
                         c_len = min(child_bar_samples, seg_audio.shape[-1])
@@ -357,10 +375,18 @@ class AudioObject(BaseObject):
 
             rendered_children.append((start_sample, child_audio))
 
-            if system is not None and getattr(child, "node_id", None) is not None:
+            if system is not None and getattr(child, "node_id", None) is not None and child_node_type != "sequence":
                 child_dur = float(child_audio.shape[-1]) / float(system.sample_rate)
                 nat_dur = getattr(child, "_natural_duration", child_dur)
-                if getattr(child, "sample_type", None) == "loop" and nat_dur > 0 and child_dur > nat_dur:
+                if wrapped_cycle_count > 1 and child_bar_dur_sec > 0:
+                    for w_idx in range(wrapped_cycle_count):
+                        system.record_node_event(child.node_id, {
+                            "time": round(start_sec + w_idx * child_bar_dur_sec, 4),
+                            "duration": round(child_bar_dur_sec, 4),
+                            "iteration": outer_wrapper_idx * wrapped_cycle_count + w_idx,
+                            "parent_id": self.node_id
+                        })
+                elif getattr(child, "sample_type", None) == "loop" and nat_dur > 0 and child_dur > nat_dur:
                     reps = max(1, int(round(child_dur / nat_dur)))
                     for r in range(reps):
                         system.record_node_event(child.node_id, {
@@ -445,7 +471,7 @@ class AudioObject(BaseObject):
         if system is not None and self.node_id is not None:
             dur = float(output_buffer.shape[-1]) / float(system.sample_rate)
             system.record_node_stem(self.node_id, self.node_type, self.name, output_buffer, dur)
-        self._store_cached_render(output_buffer, cache_ctx, system)
+        self._store_cached_render(output_buffer, cache_ctx, system, timeline_offset_sec=base_offset_sec)
         return output_buffer
 
     def render_slot(self, slot: int = 0, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
@@ -675,6 +701,7 @@ class SampleObject(AudioObject):
         selected_items: Optional[List[Dict[str, Any]]] = None,
         field_operators: Optional[Dict[str, str]] = None,
         seed: Optional[Union[str, float, int]] = None,
+        wrapper_bars: Optional[float] = None,
         global_bars: Optional[float] = None,
         global_seed: Optional[Union[str, float, int]] = None,
         field_seed: Optional[Union[str, float, int]] = None,
@@ -701,6 +728,7 @@ class SampleObject(AudioObject):
             target_bpm=target_bpm,
             node_id=node_id,
             node_type=node_type,
+            wrapper_bars=wrapper_bars,
             global_bars=global_bars,
             global_seed=global_seed,
             field_seed=field_seed,
@@ -711,10 +739,12 @@ class SampleObject(AudioObject):
         self.field_operators: Dict[str, str] = dict(field_operators or {})
         self.seed: Union[str, float, int] = seed if seed is not None else 42
         self._trigger_count: int = 0
-        self._window_slice_state: Dict[str, Tuple[Any, int]] = {}
+        self._window_slice_state: Dict[Any, Tuple[Any, int]] = {}
         self._last_rendered_filepath: Optional[str] = None
         self._last_rendered_iteration: int = 0
         self._transform_cache: Dict[Any, np.ndarray] = {}
+        self._raw_audio_cache: Dict[Tuple[str, int], np.ndarray] = {}
+        self._resolved_path_cache: Dict[str, str] = {}
         self.slots: List[Dict[str, Any]] = self._normalize_slots(slots)
         self.is_dynamic = bool(
             is_field_operator_expression(self.pool_query)
@@ -761,9 +791,16 @@ class SampleObject(AudioObject):
             if has_slot_op:
                 self._trigger_count += 1
 
+        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
         cache_ctx = self._cache_context(system, iteration=trigger_idx if has_slot_op else 0, **kwargs)
         if not has_slot_op:
-            cached = self._try_get_cached_render(cache_ctx, system, slot=eff_slot, restore_natural_duration=True)
+            cached = self._try_get_cached_render(
+                cache_ctx,
+                system,
+                slot=eff_slot,
+                restore_natural_duration=True,
+                timeline_offset_sec=base_offset_sec,
+            )
             if cached is not None:
                 cached_extra = (
                     GLOBAL_DAG_CACHE.get_extra(self.node_id, self.fingerprint, context=cache_ctx, slot=eff_slot)
@@ -779,28 +816,29 @@ class SampleObject(AudioObject):
         slot_query_str = str(slot_query or "").strip()
         eff_field_seed = self.field_seed if getattr(self, "field_seed", None) is not None else self.seed
         eff_pool_seed = getattr(self, "global_seed", None)
-        global_idx = int(kwargs.get("global_idx", 0))
+        wrapper_idx = int(kwargs.get("wrapper_idx", kwargs.get("global_idx", 0)) or 0)
         cycle_idx = int(kwargs.get("cycle_idx", trigger_idx))
         event_idx = int(kwargs.get("event_idx", trigger_idx))
         num_cycles = int(kwargs.get("num_cycles", 1))
-        raw_global_progress = kwargs.get("global_progress")
+        raw_wrapper_progress = kwargs.get("wrapper_progress", kwargs.get("global_progress"))
         raw_cycle_progress = kwargs.get("cycle_progress")
-        if trigger_idx == 0 and global_idx == 0:
+        if (trigger_idx == 0 or event_idx == 0) and wrapper_idx == 0:
             self._window_slice_state.clear()
 
         def _get_eval_coords(field_key: str, expr_str: str) -> Tuple[Optional[float], Optional[float], int]:
             use_timeline = (
                 bool(re.search(r"[\[\]<>]", expr_str))
                 or num_cycles > 1
+                or getattr(self, "wrapper_bars", None) is not None
                 or getattr(self, "global_bars", None) is not None
                 or is_random_token(expr_str)
             )
-            g_prog = float(raw_global_progress) if (use_timeline and raw_global_progress is not None) else None
+            w_prog = float(raw_wrapper_progress) if (use_timeline and raw_wrapper_progress is not None) else None
             c_prog = float(raw_cycle_progress) if (use_timeline and raw_cycle_progress is not None) else None
             probe = resolve_field_operator_leaf(
                 expr_str,
-                global_idx=global_idx,
-                global_progress=g_prog,
+                wrapper_idx=wrapper_idx,
+                wrapper_progress=w_prog,
                 cycle_idx=cycle_idx,
                 cycle_progress=c_prog,
                 event_idx=event_idx,
@@ -808,20 +846,21 @@ class SampleObject(AudioObject):
                 trigger_count=trigger_idx,
             )
             if not probe or not probe.get("isSubdividedWindow"):
-                return g_prog, c_prog, event_idx
+                return w_prog, c_prog, event_idx
             slice_key = (
-                global_idx,
+                wrapper_idx,
                 cycle_idx if probe.get("scope") == "cycle" else 0,
                 probe.get("scope"),
                 probe.get("sliceIndex"),
             )
-            prev = self._window_slice_state.get(field_key)
+            state_key = (eff_slot, field_key)
+            prev = self._window_slice_state.get(state_key)
             win_idx = (prev[1] + 1) if (prev is not None and prev[0] == slice_key) else 0
-            self._window_slice_state[field_key] = (slice_key, win_idx)
-            return g_prog, c_prog, win_idx
+            self._window_slice_state[state_key] = (slice_key, win_idx)
+            return w_prog, c_prog, win_idx
 
         if self.selected_items and (is_field_operator_expression(slot_query_str) or (slot_query_str and not slot_filepath)):
-            q_g_prog, q_c_prog, q_win_idx = _get_eval_coords("pool_query", slot_query_str)
+            q_w_prog, q_c_prog, q_win_idx = _get_eval_coords("pool_query", slot_query_str)
             chosen = resolve_pool_item_by_query(
                 self.selected_items,
                 slot_query_str,
@@ -830,8 +869,8 @@ class SampleObject(AudioObject):
                 is_sequential=False,
                 trigger_count=trigger_idx,
                 pool_seed=eff_pool_seed,
-                global_idx=global_idx,
-                global_progress=q_g_prog,
+                wrapper_idx=wrapper_idx,
+                wrapper_progress=q_w_prog,
                 cycle_idx=cycle_idx,
                 cycle_progress=q_c_prog,
                 event_idx=event_idx,
@@ -842,22 +881,30 @@ class SampleObject(AudioObject):
         if not slot_filepath:
             return np.zeros(0, dtype=np.float32)
 
-        slot_filepath_str = str(slot_filepath)
-        if not os.path.exists(slot_filepath_str):
-            alt_path = os.path.join("assets", slot_filepath_str)
-            if os.path.exists(alt_path):
-                slot_filepath_str = alt_path
+        raw_fp_str = str(slot_filepath)
+        slot_filepath_str = self._resolved_path_cache.get(raw_fp_str)
+        if slot_filepath_str is None:
+            slot_filepath_str = raw_fp_str
+            if not os.path.exists(slot_filepath_str):
+                alt_path = os.path.join("assets", slot_filepath_str)
+                if os.path.exists(alt_path):
+                    slot_filepath_str = alt_path
+            self._resolved_path_cache[raw_fp_str] = slot_filepath_str
 
         self._last_rendered_filepath = slot_filepath_str
         self._last_rendered_iteration = trigger_idx
 
         sr = system.sample_rate if system is not None else 44100
-        try:
-            audio_array, _ = load_sample(slot_filepath_str, target_sr=sr)
-        except Exception as e:
-            import logging
-            logging.getLogger("beat_generator.core").warning(f"Failed to load sample '{slot_filepath_str}': {e}")
-            return np.zeros(0, dtype=np.float32)
+        raw_cache_key = (slot_filepath_str, int(sr))
+        audio_array = self._raw_audio_cache.get(raw_cache_key)
+        if audio_array is None:
+            try:
+                audio_array, _ = load_sample(slot_filepath_str, target_sr=sr)
+                self._raw_audio_cache[raw_cache_key] = audio_array
+            except Exception as e:
+                import logging
+                logging.getLogger("beat_generator.core").warning(f"Failed to load sample '{slot_filepath_str}': {e}")
+                return np.zeros(0, dtype=np.float32)
 
         if audio_array.shape[-1] == 0:
             return np.zeros(0, dtype=np.float32)
@@ -870,20 +917,20 @@ class SampleObject(AudioObject):
 
         if slot_ops:
             if "crop_start" in slot_ops:
-                g_p, c_p, w_i = _get_eval_coords("crop_start", slot_ops["crop_start"])
-                slot_crop_start = float(evaluate_numeric_field_operator(slot_ops["crop_start"], min_val=0.0, max_val=1.0, step=0.01, fallback=slot_crop_start, seed=eff_field_seed, trigger_count=trigger_idx, salt=11, global_idx=global_idx, global_progress=g_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
+                w_p, c_p, w_i = _get_eval_coords("crop_start", slot_ops["crop_start"])
+                slot_crop_start = float(evaluate_numeric_field_operator(slot_ops["crop_start"], min_val=0.0, max_val=1.0, step=0.01, fallback=slot_crop_start, seed=eff_field_seed, trigger_count=trigger_idx, salt=11, wrapper_idx=wrapper_idx, wrapper_progress=w_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
             if "crop_end" in slot_ops:
-                g_p, c_p, w_i = _get_eval_coords("crop_end", slot_ops["crop_end"])
-                slot_crop_end = float(evaluate_numeric_field_operator(slot_ops["crop_end"], min_val=0.0, max_val=1.0, step=0.01, fallback=slot_crop_end, seed=eff_field_seed, trigger_count=trigger_idx, salt=13, global_idx=global_idx, global_progress=g_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
+                w_p, c_p, w_i = _get_eval_coords("crop_end", slot_ops["crop_end"])
+                slot_crop_end = float(evaluate_numeric_field_operator(slot_ops["crop_end"], min_val=0.0, max_val=1.0, step=0.01, fallback=slot_crop_end, seed=eff_field_seed, trigger_count=trigger_idx, salt=13, wrapper_idx=wrapper_idx, wrapper_progress=w_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
             if "transpose" in slot_ops:
-                g_p, c_p, w_i = _get_eval_coords("transpose", slot_ops["transpose"])
-                slot_transpose = float(evaluate_numeric_field_operator(slot_ops["transpose"], min_val=-24, max_val=24, step=1, is_integer=True, fallback=slot_transpose, seed=eff_field_seed, trigger_count=trigger_idx, salt=17, global_idx=global_idx, global_progress=g_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
+                w_p, c_p, w_i = _get_eval_coords("transpose", slot_ops["transpose"])
+                slot_transpose = float(evaluate_numeric_field_operator(slot_ops["transpose"], min_val=-24, max_val=24, step=1, is_integer=True, fallback=slot_transpose, seed=eff_field_seed, trigger_count=trigger_idx, salt=17, wrapper_idx=wrapper_idx, wrapper_progress=w_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
             if "cents" in slot_ops:
-                g_p, c_p, w_i = _get_eval_coords("cents", slot_ops["cents"])
-                slot_cents = float(evaluate_numeric_field_operator(slot_ops["cents"], min_val=-100, max_val=100, step=1, is_integer=True, fallback=slot_cents, seed=eff_field_seed, trigger_count=trigger_idx, salt=19, global_idx=global_idx, global_progress=g_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
+                w_p, c_p, w_i = _get_eval_coords("cents", slot_ops["cents"])
+                slot_cents = float(evaluate_numeric_field_operator(slot_ops["cents"], min_val=-100, max_val=100, step=1, is_integer=True, fallback=slot_cents, seed=eff_field_seed, trigger_count=trigger_idx, salt=19, wrapper_idx=wrapper_idx, wrapper_progress=w_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
             if "stretch_factor" in slot_ops:
-                g_p, c_p, w_i = _get_eval_coords("stretch_factor", slot_ops["stretch_factor"])
-                slot_stretch_factor = float(evaluate_numeric_field_operator(slot_ops["stretch_factor"], min_val=0.25, max_val=4.0, step=0.05, fallback=slot_stretch_factor, seed=eff_field_seed, trigger_count=trigger_idx, salt=23, global_idx=global_idx, global_progress=g_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
+                w_p, c_p, w_i = _get_eval_coords("stretch_factor", slot_ops["stretch_factor"])
+                slot_stretch_factor = float(evaluate_numeric_field_operator(slot_ops["stretch_factor"], min_val=0.25, max_val=4.0, step=0.05, fallback=slot_stretch_factor, seed=eff_field_seed, trigger_count=trigger_idx, salt=23, wrapper_idx=wrapper_idx, wrapper_progress=w_p, cycle_idx=cycle_idx, cycle_progress=c_p, event_idx=event_idx, window_event_idx=w_i))
 
         # Apply crop range
         if slot_crop_start > 0.0 or slot_crop_end < 1.0:
@@ -961,30 +1008,42 @@ class SampleObject(AudioObject):
         data_to_render = self._tile_loop_to_bars(data_to_render, system, **kwargs)
         output_buffer = self.apply_chain(data_to_render, system)
         if system is not None and self.node_id is not None:
-            existing_entry = system.manifest.get("nodes", {}).get(str(self.node_id), {})
-            pool_paths = list(existing_entry.get("pool_filepaths", []))
-            slot_paths = [str(s.get("filepath")) for s in self.slots if s.get("filepath")]
-            for sp in slot_paths:
-                if sp and sp not in pool_paths:
-                    pool_paths.append(sp)
-            if slot_filepath_str and slot_filepath_str not in pool_paths:
-                pool_paths.append(slot_filepath_str)
-            active_idx = wrap_slot_index(self.active_slot, max(1, len(self.slots)))
-            active_slot_path = str(self.slots[active_idx].get("filepath") or "") if active_idx < len(self.slots) else ""
-            primary_path = existing_entry.get("filepath") or active_slot_path or slot_filepath_str or (slot_paths[0] if slot_paths else "")
-            extra_meta: Dict[str, Any] = {"filepath": primary_path, "slot": eff_slot}
-            if len(pool_paths) > 1 or has_slot_op:
-                extra_meta["pool_filepaths"] = pool_paths
-                extra_meta["is_pool"] = True
-                extra_meta["is_dynamic_pool"] = True
-            system.record_node_stem(
-                self.node_id,
-                "sample",
-                self.name,
-                output_buffer,
-                sample_natural_dur,
-                extra=extra_meta,
-            )
+            node_key = str(self.node_id)
+            existing_entry = system.manifest.get("nodes", {}).get(node_key)
+            is_step_trigger = bool(kwargs.get("_is_step_trigger", False))
+            if is_step_trigger and existing_entry is not None:
+                # Lightweight update inside Sequence hot-loop: only append newly triggered pool filepaths
+                if slot_filepath_str:
+                    pool_paths = existing_entry.setdefault("pool_filepaths", [])
+                    if slot_filepath_str not in pool_paths:
+                        pool_paths.append(slot_filepath_str)
+                    if len(pool_paths) > 1 or has_slot_op:
+                        existing_entry["is_pool"] = True
+                        existing_entry["is_dynamic_pool"] = True
+            else:
+                pool_paths = list((existing_entry or {}).get("pool_filepaths", []))
+                slot_paths = [str(s.get("filepath")) for s in self.slots if s.get("filepath")]
+                for sp in slot_paths:
+                    if sp and sp not in pool_paths:
+                        pool_paths.append(sp)
+                if slot_filepath_str and slot_filepath_str not in pool_paths:
+                    pool_paths.append(slot_filepath_str)
+                active_idx = wrap_slot_index(self.active_slot, max(1, len(self.slots)))
+                active_slot_path = str(self.slots[active_idx].get("filepath") or "") if active_idx < len(self.slots) else ""
+                primary_path = (existing_entry or {}).get("filepath") or active_slot_path or slot_filepath_str or (slot_paths[0] if slot_paths else "")
+                extra_meta: Dict[str, Any] = {"filepath": primary_path, "slot": eff_slot}
+                if len(pool_paths) > 1 or has_slot_op:
+                    extra_meta["pool_filepaths"] = pool_paths
+                    extra_meta["is_pool"] = True
+                    extra_meta["is_dynamic_pool"] = True
+                system.record_node_stem(
+                    self.node_id,
+                    "sample",
+                    self.name,
+                    output_buffer,
+                    sample_natural_dur,
+                    extra=extra_meta,
+                )
         if not has_slot_op:
             self._store_cached_render(
                 output_buffer,
@@ -995,6 +1054,7 @@ class SampleObject(AudioObject):
                     "natural_duration": getattr(self, "_natural_duration", sample_natural_dur),
                     "resolved_filepath": slot_filepath_str,
                 },
+                timeline_offset_sec=base_offset_sec,
             )
         return output_buffer
 
@@ -1046,6 +1106,7 @@ class SequenceObject(AudioObject):
         pool_query: Optional[str] = None,
         selected_items: Optional[List[Dict[str, Any]]] = None,
         field_operators: Optional[Dict[str, str]] = None,
+        wrapper_bars: Optional[float] = None,
         global_bars: Optional[float] = None,
         global_seed: Optional[Union[str, float, int]] = None,
         field_seed: Optional[Union[str, float, int]] = None,
@@ -1071,6 +1132,7 @@ class SequenceObject(AudioObject):
             key_match_algorithm=key_match_algorithm,
             node_id=node_id,
             node_type="sequence",
+            wrapper_bars=wrapper_bars,
             global_bars=global_bars,
             global_seed=global_seed,
             field_seed=field_seed,
@@ -1100,9 +1162,13 @@ class SequenceObject(AudioObject):
         self.selected_items: List[Dict[str, Any]] = _enrich_selected_items(selected_items)
         self.field_operators: Dict[str, str] = dict(field_operators or {})
         self._sample_trigger_count: int = 0
+        self._slot_event_count: int = 0
         self.slots: List[Dict[str, Any]] = self._normalize_slots(slots)
+
         self.is_dynamic: bool = bool(
-            (self.seed_mode == "moving" and not self.cycle_seeds and not isinstance(self.seed, str))
+            self.seed_mode == "moving"
+            or len(set(self.cycle_seeds)) > 1
+            or is_field_operator_expression(self.seed)
             or is_field_operator_expression(self.pool_query)
             or bool(self.field_operators)
             or is_field_operator_expression(self.sample_slot)
@@ -1205,11 +1271,14 @@ class SequenceObject(AudioObject):
 
     def render_slot(self, slot: int = 0, system: Optional[System] = None, iteration: int = 0, **kwargs: Any) -> np.ndarray:
         eff_slot = wrap_slot_index(slot, max(1, len(self.slots)))
-        if int(iteration) == 0:
+        wrapper_idx = int(kwargs.get("wrapper_idx", kwargs.get("global_idx", 0)) or 0)
+        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
+        if int(iteration) == 0 and wrapper_idx == 0:
             self._sample_trigger_count = 0
+            self._slot_event_count = 0
 
         cache_ctx = self._cache_context(system, iteration=iteration, **kwargs)
-        cached = self._try_get_cached_render(cache_ctx, system, slot=eff_slot)
+        cached = self._try_get_cached_render(cache_ctx, system, slot=eff_slot, timeline_offset_sec=base_offset_sec)
         if cached is not None:
             return cached
 
@@ -1264,10 +1333,11 @@ class SequenceObject(AudioObject):
             if eff_total_bars is None or (loop_pattern and float(parent_bars_kw) > float(eff_total_bars)):
                 eff_total_bars = float(parent_bars_kw)
 
+        has_step_length_op = isinstance(slot_ops, dict) and "step_length" in slot_ops
         if loop_pattern and eff_total_bars is not None and eff_total_bars > 0 and pattern_duration_beats > 0:
             total_duration_beats = eff_total_bars * 4.0
             num_cycles = max(1, int(np.ceil(total_duration_beats / pattern_duration_beats)))
-            num_repeats = max(1, num_cycles * 2)
+            num_repeats = max(1, num_cycles * 2) if has_step_length_op else num_cycles
             timeline_samples = system.beat_to_samples(total_duration_beats)
             max_end_sample = timeline_samples
         else:
@@ -1278,7 +1348,9 @@ class SequenceObject(AudioObject):
 
         eff_field_seed = self.field_seed if getattr(self, "field_seed", None) is not None else active_seed
         eff_pool_seed = getattr(self, "global_seed", None)
-        global_idx = int(kwargs.get("global_idx", 0))
+        eff_wrapper_cycles = max(num_cycles, int(kwargs.get("wrapper_num_cycles", kwargs.get("num_wrapper_cycles", 1)) or 1))
+        passed_wrapper_prog = kwargs.get("wrapper_progress", kwargs.get("global_progress"))
+        base_cycle_iter = int(iteration) if int(iteration) > 0 else (wrapper_idx * num_cycles)
 
         raw_cycle_seeds = slot_cfg.get("cycle_seeds") if isinstance(slot_cfg.get("cycle_seeds"), list) and slot_cfg.get("cycle_seeds") else self.cycle_seeds
         active_cycle_seeds = (
@@ -1316,18 +1388,23 @@ class SequenceObject(AudioObject):
         rendered_steps: List[Tuple[int, np.ndarray, int, float, float, Optional[str], int]] = []
         cycle_telemetry: List[Tuple[int, int, int, str, List[int], int]] = []
         current_beat_offset = 0.0
-        continuous_slot_event_idx = 0
+        continuous_slot_event_idx = self._slot_event_count
 
         for rep in range(num_repeats):
             rep_start_sample = system.beat_to_samples(current_beat_offset)
             if timeline_samples is not None and rep_start_sample >= timeline_samples:
                 break
 
-            cycle_iter = int(iteration) + rep
-            cycle_global_progress = min(0.999999, float(rep) / float(max(1, num_cycles))) if num_cycles > 1 else None
+            cycle_iter = base_cycle_iter + rep
+            if num_cycles > 1:
+                cycle_wrapper_progress: Optional[float] = min(0.999999, float(rep) / float(max(1, num_cycles)))
+            elif passed_wrapper_prog is not None:
+                cycle_wrapper_progress = min(0.999999, max(0.0, float(passed_wrapper_prog)))
+            else:
+                cycle_wrapper_progress = None
             base_rep_seed = active_cycle_seeds[rep % len(active_cycle_seeds)]
             if self.seed_mode == "moving" and not raw_cycle_seeds and not isinstance(active_seed, str):
-                rep_seed = hash_seed(base_rep_seed, iteration, rep + 1)
+                rep_seed = hash_seed(base_rep_seed, cycle_iter, rep + 1)
             else:
                 rep_seed = base_rep_seed
             eval_seed = self.field_seed if getattr(self, "field_seed", None) is not None else rep_seed
@@ -1344,8 +1421,10 @@ class SequenceObject(AudioObject):
                     is_sequential=False,
                     trigger_count=cycle_iter,
                     pool_seed=eff_pool_seed,
-                    global_idx=global_idx,
-                    global_progress=cycle_global_progress,
+                    wrapper_idx=wrapper_idx,
+                    wrapper_progress=cycle_wrapper_progress,
+                    global_idx=wrapper_idx,
+                    global_progress=cycle_wrapper_progress,
                     cycle_idx=cycle_iter,
                     cycle_progress=0.0,
                     event_idx=cycle_iter,
@@ -1364,14 +1443,14 @@ class SequenceObject(AudioObject):
             rep_fade_ms = float(slot_cfg.get("fade_ms") if slot_cfg.get("fade_ms") is not None else self.fade_ms)
             if slot_ops:
                 if "step_length" in slot_ops:
-                    rep_step_length = float(evaluate_numeric_field_operator(slot_ops["step_length"], min_val=0.0625, max_val=4.0, step=0.0625, fallback=rep_step_length, seed=eval_seed, trigger_count=cycle_iter, salt=31, global_idx=global_idx, global_progress=cycle_global_progress, cycle_idx=cycle_iter, cycle_progress=0.0, event_idx=cycle_iter))
+                    rep_step_length = float(evaluate_numeric_field_operator(slot_ops["step_length"], min_val=0.0625, max_val=4.0, step=0.0625, fallback=rep_step_length, seed=eval_seed, trigger_count=cycle_iter, salt=31, wrapper_idx=wrapper_idx, wrapper_progress=cycle_wrapper_progress, global_idx=wrapper_idx, global_progress=cycle_wrapper_progress, cycle_idx=cycle_iter, cycle_progress=0.0, event_idx=cycle_iter))
                 if "release" in slot_ops:
-                    rep_release = float(evaluate_numeric_field_operator(slot_ops["release"], min_val=0.0, max_val=1.0, step=0.01, fallback=rep_release, seed=eval_seed, trigger_count=cycle_iter, salt=37, global_idx=global_idx, global_progress=cycle_global_progress, cycle_idx=cycle_iter, cycle_progress=0.0, event_idx=cycle_iter))
+                    rep_release = float(evaluate_numeric_field_operator(slot_ops["release"], min_val=0.0, max_val=1.0, step=0.01, fallback=rep_release, seed=eval_seed, trigger_count=cycle_iter, salt=37, wrapper_idx=wrapper_idx, wrapper_progress=cycle_wrapper_progress, global_idx=wrapper_idx, global_progress=cycle_wrapper_progress, cycle_idx=cycle_iter, cycle_progress=0.0, event_idx=cycle_iter))
                 if "fade_ms" in slot_ops:
-                    rep_fade_ms = float(evaluate_numeric_field_operator(slot_ops["fade_ms"], min_val=0.0, max_val=5.0, step=0.1, fallback=rep_fade_ms, seed=eval_seed, trigger_count=cycle_iter, salt=41, global_idx=global_idx, global_progress=cycle_global_progress, cycle_idx=cycle_iter, cycle_progress=0.0, event_idx=cycle_iter))
+                    rep_fade_ms = float(evaluate_numeric_field_operator(slot_ops["fade_ms"], min_val=0.0, max_val=5.0, step=0.1, fallback=rep_fade_ms, seed=eval_seed, trigger_count=cycle_iter, salt=41, wrapper_idx=wrapper_idx, wrapper_progress=cycle_wrapper_progress, global_idx=wrapper_idx, global_progress=cycle_wrapper_progress, cycle_idx=cycle_iter, cycle_progress=0.0, event_idx=cycle_iter))
 
             rng = mulberry32(hash_seed(rep_seed, rep, 0x1357))
-            if has_bracket_slot or sample_slot_op or (is_field_operator_expression(slot_expr_str) and num_cycles > 1):
+            if has_bracket_slot or sample_slot_op or (is_field_operator_expression(slot_expr_str) and eff_wrapper_cycles > 1):
                 slot_eval_seed = self.field_seed if (getattr(self, "field_seed", None) is not None or has_bracket_slot) else active_cycle_seeds[0]
                 rep_step_slots = resolve_step_slots(
                     slot_expr_str,
@@ -1379,9 +1458,10 @@ class SequenceObject(AudioObject):
                     upstream_slot_count,
                     slot_eval_seed,
                     upstream_active_slot,
-                    global_idx=global_idx,
+                    wrapper_idx=wrapper_idx,
+                    global_idx=wrapper_idx,
                     cycle_idx=cycle_iter,
-                    num_cycles=num_cycles,
+                    num_cycles=eff_wrapper_cycles,
                     active_sequence=rep_sequence,
                     start_event_idx=continuous_slot_event_idx,
                 )
@@ -1391,6 +1471,7 @@ class SequenceObject(AudioObject):
                 rep_step_slots = base_step_slots
 
             continuous_slot_event_idx += sum(1 for v in rep_sequence if v == 1)
+            self._slot_event_count = continuous_slot_event_idx
             wrapped_cycle_slot = next(
                 (rep_step_slots[i % len(rep_step_slots)] for i, v in enumerate(rep_sequence) if v == 1 and rep_step_slots),
                 rep_step_slots[0] if rep_step_slots else 0,
@@ -1429,7 +1510,12 @@ class SequenceObject(AudioObject):
                         for idx in range(repeats + 1)
                     ]
                     step_cycle_progress = float(step_idx) / float(max(1, len(rep_sequence)))
-                    step_global_progress = min(0.999999, (float(rep) + step_cycle_progress) / float(max(1, num_cycles)))
+                    if num_cycles > 1:
+                        step_wrapper_progress = min(0.999999, (float(rep) + step_cycle_progress) / float(max(1, num_cycles)))
+                    elif passed_wrapper_prog is not None:
+                        step_wrapper_progress = min(0.999999, max(0.0, float(passed_wrapper_prog) + (step_cycle_progress / float(max(1, eff_wrapper_cycles)))))
+                    else:
+                        step_wrapper_progress = step_cycle_progress
                     for subdivision_idx in range(repeats):
                         start_sample = subdivision_boundaries[subdivision_idx]
                         slot_end_sample = subdivision_boundaries[subdivision_idx + 1]
@@ -1438,12 +1524,15 @@ class SequenceObject(AudioObject):
                         self._sample_trigger_count += 1
                         if is_dynamic:
                             step_kwargs = dict(child_kwargs)
-                            step_kwargs["global_idx"] = global_idx
-                            step_kwargs["global_progress"] = step_global_progress
+                            step_kwargs["wrapper_idx"] = wrapper_idx
+                            step_kwargs["wrapper_progress"] = step_wrapper_progress
+                            step_kwargs["global_idx"] = wrapper_idx
+                            step_kwargs["global_progress"] = step_wrapper_progress
                             step_kwargs["cycle_idx"] = cycle_iter
                             step_kwargs["cycle_progress"] = step_cycle_progress
                             step_kwargs["event_idx"] = step_trigger_iter
-                            step_kwargs["num_cycles"] = num_cycles
+                            step_kwargs["num_cycles"] = eff_wrapper_cycles
+                            step_kwargs["_is_step_trigger"] = True
                             audio = first_child.render_slot(
                                 step_slot,
                                 system=system,
@@ -1571,7 +1660,6 @@ class SequenceObject(AudioObject):
                 dur,
                 extra={"sequence": active_sequence, "step_length": self.step_length, "slot": eff_slot}
             )
-        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
         if system is not None and self.node_id is not None:
             for cyc_start_sample, cyc_dur_samples, cyc_iter, cyc_seq_name, cyc_seq, cyc_slot_val in cycle_telemetry:
                 cyc_time = base_offset_sec + (float(cyc_start_sample) / float(system.sample_rate))
@@ -1601,7 +1689,7 @@ class SequenceObject(AudioObject):
                 if step_fp_i:
                     evt_payload["filepath"] = step_fp_i
                 system.record_node_event(first_child.node_id, evt_payload)
-        self._store_cached_render(output_buffer, cache_ctx, system, slot=eff_slot)
+        self._store_cached_render(output_buffer, cache_ctx, system, slot=eff_slot, timeline_offset_sec=base_offset_sec)
         return output_buffer
 
     def render(self, system: Optional[System] = None, iteration: int = 0, **kwargs: Any) -> np.ndarray:
@@ -1715,10 +1803,8 @@ class ItemPoolObject(AudioObject):
                 self._render_count += 1
             return self.current_pool[next_idx]["absolute_path"]
 
-        import hashlib
-        request_seed = str(self.seed) if self._render_count == 0 else f"{self.seed}_{self._render_count}"
-        seed_hash = int(hashlib.md5(request_seed.encode()).hexdigest(), 16)
-        next_idx = seed_hash % pool_size
+        rng = mulberry32(hash_seed(self.seed, self._render_count, 0x7001))
+        next_idx = min(pool_size - 1, int(rng() * pool_size))
         if advance and next_idx == self.last_played_index:
             next_idx = (next_idx + 1) % pool_size
                 
@@ -1882,6 +1968,8 @@ class ArrangementObject(AudioObject):
         cycle_seeds: Optional[List[int]] = None,
         quant: Optional[Union[str, float]] = "auto",
         quant_anchor: str = "start",
+        wrapper_bars: Optional[float] = None,
+        global_bars: Optional[float] = None,
         node_id: Optional[int] = None,
         node_type: str = "arrangement"
     ) -> None:
@@ -1893,6 +1981,7 @@ class ArrangementObject(AudioObject):
             chain=chain,
             data=data,
             sample_type=sample_type,
+            wrapper_bars=wrapper_bars if wrapper_bars is not None else global_bars,
             node_id=node_id,
             node_type=node_type
         )
@@ -2035,8 +2124,10 @@ class ArrangementObject(AudioObject):
         return system.beat_to_samples(4.0)
 
     def render(self, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
+        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
+        outer_wrapper_idx = int(kwargs.get("wrapper_idx", kwargs.get("global_idx", 0)) or 0)
         cache_ctx = self._cache_context(system, **kwargs)
-        cached = self._try_get_cached_render(cache_ctx, system)
+        cached = self._try_get_cached_render(cache_ctx, system, timeline_offset_sec=base_offset_sec)
         if cached is not None:
             return cached
 
@@ -2058,13 +2149,27 @@ class ArrangementObject(AudioObject):
         child_template_events: Dict[Any, Dict[str, List[dict]]] = {}
         observed_channel_shapes: List[Tuple[int, ...]] = []
 
-        def _render_child_slot(c_idx: int, c_obj: AudioObject, slot_idx: int, iter_idx: int = 0) -> Tuple[np.ndarray, Any]:
+        def _render_child_slot(
+            c_idx: int,
+            c_obj: AudioObject,
+            slot_idx: int,
+            iter_idx: int = 0,
+            cell_start_samples: int = 0,
+        ) -> Tuple[np.ndarray, Any]:
             is_dyn = getattr(c_obj, "is_dynamic", False)
             cache_key = (c_idx, slot_idx)
             if not is_dyn and cache_key in cached_slot_audios:
                 return cached_slot_audios[cache_key], cache_key
 
-            evt_key = f"dyn_{iter_idx}" if is_dyn else cache_key
+            child_loop_samples = max(1, self.get_child_loop_samples(c_obj, np.zeros(0), system))
+            child_cycles_in_arr = max(1, int(np.ceil(float(total_samples_to_fill) / float(child_loop_samples))))
+            cell_wrapper_progress = min(
+                0.999999,
+                max(0.0, float(cell_start_samples) / float(max(1, total_samples_to_fill))),
+            )
+            cumulative_iter = outer_wrapper_idx * child_cycles_in_arr + iter_idx
+
+            evt_key = f"dyn_{cumulative_iter}" if is_dyn else cache_key
             before_counts = {
                 nid: len(nentry.get("events", []))
                 for nid, nentry in (system.manifest.get("nodes", {}) if system is not None else {}).items()
@@ -2072,8 +2177,13 @@ class ArrangementObject(AudioObject):
             child_kwargs = dict(kwargs)
             child_kwargs["loop"] = False
             child_kwargs["timeline_offset_sec"] = 0.0
+            child_kwargs["wrapper_idx"] = outer_wrapper_idx
+            child_kwargs["global_idx"] = outer_wrapper_idx
+            child_kwargs["wrapper_progress"] = cell_wrapper_progress
+            child_kwargs["global_progress"] = cell_wrapper_progress
+            child_kwargs["wrapper_num_cycles"] = child_cycles_in_arr
             if is_dyn:
-                audio_out = c_obj.render_slot(slot_idx, system=system, iteration=iter_idx, **child_kwargs)
+                audio_out = c_obj.render_slot(slot_idx, system=system, iteration=cumulative_iter, **child_kwargs)
             else:
                 audio_out = c_obj.render_slot(slot_idx, system=system, **child_kwargs)
                 cached_slot_audios[cache_key] = audio_out
@@ -2112,7 +2222,7 @@ class ArrangementObject(AudioObject):
                 upstream_active = max(0, int(getattr(child, "active_slot", 0) or 0))
                 target_slot = self.get_section_slot(section_index, upstream_slots, upstream_active)
 
-                audio, evt_key = _render_child_slot(child_idx, child, target_slot, iteration_count)
+                audio, evt_key = _render_child_slot(child_idx, child, target_slot, iteration_count, cell_start)
                 iteration_count += 1
                 if audio.shape[-1] == 0:
                     break
@@ -2180,7 +2290,6 @@ class ArrangementObject(AudioObject):
                 dur,
                 extra={"total_bars": self.total_bars}
             )
-        base_offset_sec = float(kwargs.get("timeline_offset_sec", 0.0))
         if system is not None:
             sr = float(system.sample_rate)
             for write_start, event_audio, child_node_id, evt_key, source_start, source_end, target_slot, sample_count, is_continuous in rendered_events:
@@ -2232,5 +2341,5 @@ class ArrangementObject(AudioObject):
                                     new_evt.setdefault("sample_start", round(eff_sample_start, 4))
                                     new_evt.setdefault("loop", bool(is_continuous))
                                 system.record_node_event(int(desc_node_id), new_evt)
-        self._store_cached_render(output_buffer, cache_ctx, system)
+        self._store_cached_render(output_buffer, cache_ctx, system, timeline_offset_sec=base_offset_sec)
         return output_buffer

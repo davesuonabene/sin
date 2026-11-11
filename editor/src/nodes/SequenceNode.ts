@@ -1000,20 +1000,24 @@ export class SequenceNode extends BaseNode {
 
     public getResolvedStepSlots(stepCount = SequenceNode.stepCount): number[] {
         const sampleSlotExpr = this.getFieldOperator('sample_slot') || String(this.properties?.sample_slot ?? '*');
-        if (isFieldOperatorExpression(sampleSlotExpr)) {
-            const cycleSlot = Number(this.evaluateFieldOperatorForKey('sample_slot', sampleSlotExpr));
-            return Array(stepCount).fill(Number.isFinite(cycleSlot) ? cycleSlot : 0);
-        }
         const upstreamCount = this.getUpstreamSlotCount();
         const upstreamActive = this.getUpstreamActiveSlot();
         const seedSalt = Number(this.properties?.seed_salt || 0) * 9973;
         const cycleSeeds = resolveCycleSeeds(this.properties?.seed ?? 42, 1, (this.id || 1) + seedSalt);
+        const activeSeq = Array.isArray(this.properties?.sequence) ? this.properties.sequence : undefined;
         return resolveStepSlots(
             sampleSlotExpr,
             stepCount,
             upstreamCount,
             cycleSeeds[0] ?? 42,
-            upstreamActive
+            upstreamActive,
+            /[\[\]<>]/.test(sampleSlotExpr)
+                ? {
+                    cycleIdx: this.getTriggerCount(),
+                    numCycles: 1,
+                    activeSequence: activeSeq,
+                }
+                : undefined
         );
     }
 

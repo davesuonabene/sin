@@ -61,14 +61,36 @@ class System:
         })
         node_entry.setdefault("events", []).append(event)
 
-    def capture_manifest_state(self, allowed_node_ids: Optional[set[str]] = None) -> dict:
+    def capture_manifest_state(
+        self,
+        allowed_node_ids: Optional[set[str]] = None,
+        base_offset_sec: float = 0.0,
+    ) -> dict:
         import copy
         manifest_nodes = self.manifest.get("nodes", {})
         node_stems = getattr(self, "_node_stems", {})
+        offset = float(base_offset_sec or 0.0)
+
+        def _copy_and_normalize_entry(nentry: dict) -> dict:
+            copied = copy.deepcopy(nentry)
+            if "events" in copied and isinstance(copied["events"], list):
+                rel_events = []
+                for evt in copied["events"]:
+                    if not isinstance(evt, dict):
+                        continue
+                    evt_t = float(evt.get("time", 0.0))
+                    if evt_t >= offset - 1e-5:
+                        evt_c = dict(evt)
+                        evt_c["time"] = round(max(0.0, evt_t - offset), 4)
+                        rel_events.append(evt_c)
+                copied["events"] = rel_events
+            return copied
+
         if allowed_node_ids is not None:
             return {
+                "normalized_offset": True,
                 "manifest_nodes": {
-                    nid: copy.deepcopy(nentry)
+                    nid: _copy_and_normalize_entry(nentry)
                     for nid, nentry in manifest_nodes.items()
                     if str(nid) in allowed_node_ids
                 },
@@ -79,26 +101,41 @@ class System:
                 },
             }
         return {
-            "manifest_nodes": copy.deepcopy(manifest_nodes),
-            "node_stems": node_stems.copy()
+            "normalized_offset": True,
+            "manifest_nodes": {
+                nid: _copy_and_normalize_entry(nentry)
+                for nid, nentry in manifest_nodes.items()
+            },
+            "node_stems": node_stems.copy(),
         }
 
-    def restore_manifest_state(self, state: dict) -> None:
+    def restore_manifest_state(self, state: dict, target_offset_sec: float = 0.0) -> None:
         if not state or not isinstance(state, dict):
             return
         import copy
         manifest_nodes = state.get("manifest_nodes", {})
+        is_normalized = bool(state.get("normalized_offset", False))
+        offset = float(target_offset_sec or 0.0) if is_normalized else 0.0
+
         for nid, nentry in manifest_nodes.items():
             if nid not in self.manifest.setdefault("nodes", {}):
-                self.manifest["nodes"][nid] = copy.deepcopy(nentry)
+                copied_entry = copy.deepcopy(nentry)
+                if offset != 0.0 and isinstance(copied_entry.get("events"), list):
+                    for evt in copied_entry["events"]:
+                        if isinstance(evt, dict) and "time" in evt:
+                            evt["time"] = round(float(evt["time"]) + offset, 4)
+                self.manifest["nodes"][nid] = copied_entry
             else:
                 existing = self.manifest["nodes"][nid]
                 for k, v in nentry.items():
                     if k == "events":
                         existing_events = existing.setdefault("events", [])
                         for evt in v:
-                            if evt not in existing_events:
-                                existing_events.append(copy.deepcopy(evt))
+                            evt_copy = copy.deepcopy(evt)
+                            if offset != 0.0 and isinstance(evt_copy, dict) and "time" in evt_copy:
+                                evt_copy["time"] = round(float(evt_copy["time"]) + offset, 4)
+                            if evt_copy not in existing_events:
+                                existing_events.append(evt_copy)
                     elif k not in existing:
                         existing[k] = copy.deepcopy(v)
 
