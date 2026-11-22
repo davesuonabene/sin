@@ -70,3 +70,7 @@ saves/.current-stage.json
 *.zip
 *.jpg
 /assets
+
+# Native C++ Audio Engine Build Outputs
+engine/build/
+engine/bin/

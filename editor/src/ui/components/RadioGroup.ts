@@ -15,7 +15,7 @@ export interface RadioGroupConfig {
 export class RadioGroup {
     static create(config: RadioGroupConfig): HTMLElement {
         const group = document.createElement('div');
-        group.className = 'td-radio-group';
+        group.className = 'td-radio-group ui-segmented';
         group.setAttribute('role', 'radiogroup');
         group.setAttribute('aria-label', config.ariaLabel);
 
@@ -36,7 +36,7 @@ export class RadioGroup {
 
         for (const option of config.options) {
             const label = document.createElement('label');
-            label.className = 'td-radio-option';
+            label.className = 'td-radio-option ui-segmented-btn';
 
             const input = document.createElement('input');
             input.type = 'radio';
@@ -45,12 +45,17 @@ export class RadioGroup {
             input.checked = option.value === matchedValue;
             if (input.checked) {
                 label.classList.add('is-checked');
+                label.classList.add('is-active');
             }
             input.setAttribute('aria-label', option.label);
             input.addEventListener('change', () => {
                 if (input.checked) {
-                    group.querySelectorAll('.td-radio-option').forEach(el => el.classList.remove('is-checked'));
+                    group.querySelectorAll('.td-radio-option').forEach(el => {
+                        el.classList.remove('is-checked');
+                        el.classList.remove('is-active');
+                    });
                     label.classList.add('is-checked');
+                    label.classList.add('is-active');
                     config.onChange(input.value);
                 }
             });

@@ -1,89 +1,25 @@
 import { loggedTask } from '../runtimeLog';
 import { getSharedAudioContext } from '../audioBufferCache.ts';
+import { WaveformScrubCanvas, formatTransportTime } from '../../../packages/ui/src/waveform-scrub.js';
 
 export class MasterWaveform {
-    private readonly canvas: HTMLCanvasElement;
-    private readonly ctx: CanvasRenderingContext2D;
-    private audioBuffer: AudioBuffer | null = null;
-    private progress = 0;
-    private currentTime = 0;
-    private knownDuration = 0;
-    private hoverProgress: number | null = null;
-    private isSeeking = false;
-    private message = 'Ready to render';
+    private readonly scrub: WaveformScrubCanvas;
+    private readonly timeDisplay: HTMLElement | null;
     private loadToken = 0;
-    private peakCache: Float32Array | null = null;
-    private peakCacheBuffer: AudioBuffer | null = null;
-    private peakCacheColumns = 0;
-    private readonly onSeek: (progress: number) => void;
 
     constructor(container: HTMLElement, onSeek: (progress: number) => void) {
-        this.onSeek = onSeek;
-        this.canvas = document.createElement('canvas');
-        this.canvas.className = 'master-waveform-canvas';
-        this.canvas.tabIndex = 0;
-        this.canvas.setAttribute('role', 'slider');
-        this.canvas.setAttribute('aria-label', 'Audio timeline');
-        this.canvas.setAttribute('aria-valuemin', '0');
-        container.appendChild(this.canvas);
-
-        const context = this.canvas.getContext('2d');
-        if (!context) throw new Error('Could not create master waveform canvas');
-        this.ctx = context;
-
-        new ResizeObserver(() => this.draw()).observe(container);
-        this.canvas.addEventListener('pointerdown', (event) => {
-            if (this.duration <= 0) return;
-            event.preventDefault();
-            this.isSeeking = true;
-            this.canvas.focus();
-            this.canvas.setPointerCapture(event.pointerId);
-            this.seekFromPointer(event);
+        this.timeDisplay = typeof document !== 'undefined' ? document.getElementById('master-time-display') : null;
+        this.scrub = new WaveformScrubCanvas(container, {
+            emptyMessage: 'Ready to render',
+            ariaLabel: 'Audio timeline',
+            onSeek
         });
-        this.canvas.addEventListener('pointermove', (event) => {
-            this.hoverProgress = this.progressFromPointer(event);
-            if (this.isSeeking) this.seekFromPointer(event);
-            else this.draw();
-        });
-        this.canvas.addEventListener('pointerup', (event) => {
-            if (!this.isSeeking) return;
-            this.seekFromPointer(event);
-            this.isSeeking = false;
-            this.canvas.releasePointerCapture(event.pointerId);
-        });
-        this.canvas.addEventListener('pointercancel', () => {
-            this.isSeeking = false;
-        });
-        this.canvas.addEventListener('pointerleave', () => {
-            if (this.isSeeking) return;
-            this.hoverProgress = null;
-            this.draw();
-        });
-        this.canvas.addEventListener('keydown', (event) => {
-            if (this.duration <= 0) return;
-            let nextTime = this.currentTime;
-            if (event.key === 'ArrowLeft') nextTime -= 5;
-            else if (event.key === 'ArrowRight') nextTime += 5;
-            else if (event.key === 'Home') nextTime = 0;
-            else if (event.key === 'End') nextTime = this.duration;
-            else return;
-            event.preventDefault();
-            this.onSeek(Math.max(0, Math.min(1, nextTime / this.duration)));
-        });
-        this.canvas.addEventListener('wheel', (event) => event.preventDefault(), { passive: false });
-        this.updateAccessibility();
-        this.draw();
+        this.syncTimeDisplay();
     }
 
     async load(source: string): Promise<AudioBuffer | null> {
         const token = ++this.loadToken;
-        this.audioBuffer = null;
-        this.invalidatePeaks();
-        this.progress = 0;
-        this.currentTime = 0;
-        this.knownDuration = 0;
-        this.message = 'Loading waveform...';
-        this.draw();
+        this.scrub.setMessage('Loading waveform...');
         try {
             const audioContext = getSharedAudioContext();
             if (!audioContext) throw new Error('AudioContext unavailable');
@@ -94,18 +30,14 @@ export class MasterWaveform {
                 return audioContext.decodeAudioData(data);
             });
             if (token !== this.loadToken) return null;
-            this.audioBuffer = decoded;
-            this.invalidatePeaks();
-            this.knownDuration = decoded.duration;
-            this.message = '';
-            this.updateAccessibility();
-            this.draw();
+            this.scrub.setAudioBuffer(decoded, decoded.duration);
+            this.syncTimeDisplay();
             return decoded;
         } catch (error) {
             if (token !== this.loadToken) return null;
             console.error('Could not load master waveform', error);
-            this.message = 'Waveform unavailable';
-            this.draw();
+            this.scrub.setMessage('Waveform unavailable');
+            this.syncTimeDisplay();
             return null;
         }
     }
@@ -115,224 +47,37 @@ export class MasterWaveform {
     }
 
     get duration() {
-        return this.knownDuration || this.audioBuffer?.duration || 0;
+        return this.scrub.duration;
     }
 
     setPlayback(currentTime: number, duration: number) {
-        if (Number.isFinite(duration) && duration > 0) this.knownDuration = duration;
-        this.currentTime = Math.max(0, Math.min(this.duration, Number.isFinite(currentTime) ? currentTime : 0));
-        this.progress = this.duration > 0 ? this.currentTime / this.duration : 0;
-        this.updateAccessibility();
-        this.draw();
+        this.scrub.setPlayback(currentTime, duration);
+        this.syncTimeDisplay();
     }
 
     setAudioBuffer(buffer: AudioBuffer, totalExpectedDuration?: number): void {
         this.loadToken++;
-        this.audioBuffer = buffer;
-        this.invalidatePeaks();
-        if (totalExpectedDuration && totalExpectedDuration > 0) {
-            this.knownDuration = totalExpectedDuration;
-        } else if (!this.knownDuration || this.knownDuration < buffer.duration) {
-            this.knownDuration = buffer.duration;
-        }
-        this.message = '';
-        this.updateAccessibility();
-        this.draw();
+        this.scrub.setAudioBuffer(buffer, totalExpectedDuration);
+        this.syncTimeDisplay();
+    }
+
+    setPeaks(interleavedMinMax: number[], durationSeconds: number): void {
+        this.loadToken++;
+        this.scrub.setInterleavedPeaks(interleavedMinMax, durationSeconds);
+        this.syncTimeDisplay();
     }
 
     clear(message = 'Ready to render') {
         this.loadToken++;
-        this.audioBuffer = null;
-        this.invalidatePeaks();
-        this.progress = 0;
-        this.currentTime = 0;
-        this.knownDuration = 0;
-        this.hoverProgress = null;
-        this.message = message;
-        this.updateAccessibility();
-        this.draw();
+        this.scrub.clear(message);
+        this.syncTimeDisplay();
     }
 
-    private progressFromPointer(event: PointerEvent) {
-        const rect = this.canvas.getBoundingClientRect();
-        if (rect.width <= 0) return 0;
-        return Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    }
-
-    private seekFromPointer(event: PointerEvent) {
-        const progress = this.progressFromPointer(event);
-        this.hoverProgress = progress;
-        this.progress = progress;
-        this.currentTime = progress * this.duration;
-        this.updateAccessibility();
-        this.draw();
-        this.onSeek(progress);
-    }
-
-    private updateAccessibility() {
-        this.canvas.setAttribute('aria-valuemax', String(Math.round(this.duration)));
-        this.canvas.setAttribute('aria-valuenow', String(Math.round(this.currentTime)));
-        this.canvas.setAttribute('aria-valuetext', `${this.formatTime(this.currentTime)} of ${this.formatTime(this.duration)}`);
-    }
-
-    private formatTime(seconds: number) {
-        if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
-        const total = Math.floor(seconds);
-        const minutes = Math.floor(total / 60);
-        return `${minutes}:${(total % 60).toString().padStart(2, '0')}`;
-    }
-
-    private invalidatePeaks() {
-        this.peakCache = null;
-        this.peakCacheBuffer = null;
-        this.peakCacheColumns = 0;
-    }
-
-    private waveformPeaks(columns: number): { peaks: Float32Array; bufferedCols: number } {
-        if (!this.audioBuffer || columns <= 0) return { peaks: new Float32Array(0), bufferedCols: 0 };
-        const totalDur = this.duration > 0 ? this.duration : this.audioBuffer.duration;
-        const bufferRatio = Math.min(1.0, Math.max(0.01, this.audioBuffer.duration / Math.max(0.01, totalDur)));
-        const bufferedCols = Math.max(1, Math.min(columns, Math.floor(columns * bufferRatio)));
-
-        if (this.peakCache && this.peakCacheBuffer === this.audioBuffer && this.peakCacheColumns === columns) {
-            return { peaks: this.peakCache, bufferedCols };
-        }
-
-        const channels = Array.from(
-            { length: this.audioBuffer.numberOfChannels },
-            (_, channel) => this.audioBuffer!.getChannelData(channel)
-        );
-        const sampleCount = this.audioBuffer.length;
-        const samplesPerColumn = Math.max(1, Math.floor(sampleCount / bufferedCols));
-        const peaks = new Float32Array(columns);
-        for (let x = 0; x < bufferedCols; x++) {
-            const start = x * samplesPerColumn;
-            const end = Math.min(sampleCount, start + samplesPerColumn);
-            let peak = 0;
-            for (let i = start; i < end; i += 4) {
-                for (const samples of channels) peak = Math.max(peak, Math.abs(samples[i] || 0));
-            }
-            peaks[x] = peak;
-        }
-        this.peakCache = peaks;
-        this.peakCacheBuffer = this.audioBuffer;
-        this.peakCacheColumns = columns;
-        return { peaks, bufferedCols };
-    }
-
-    private draw() {
-        const rect = this.canvas.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        const width = Math.max(1, Math.floor(rect.width * dpr));
-        const height = Math.max(1, Math.floor(rect.height * dpr));
-        if (this.canvas.width !== width || this.canvas.height !== height) {
-            this.canvas.width = width;
-            this.canvas.height = height;
-        }
-        const cssWidth = width / dpr;
-        const cssHeight = height / dpr;
-        this.ctx.save();
-        this.ctx.scale(dpr, dpr);
-        const background = this.ctx.createLinearGradient(0, 0, 0, cssHeight);
-        background.addColorStop(0, '#f8fafc');
-        background.addColorStop(1, '#f1f5f9');
-        this.ctx.fillStyle = background;
-        this.ctx.fillRect(0, 0, cssWidth, cssHeight);
-
-        if (this.audioBuffer) {
-            const columns = Math.max(1, Math.floor(cssWidth));
-            const middle = cssHeight / 2;
-            const { peaks, bufferedCols } = this.waveformPeaks(columns);
-            const playheadX = this.progress * cssWidth;
-            const bufferFrontX = (bufferedCols < columns) ? (bufferedCols / columns) * cssWidth : null;
-
-            // Unbuffered background past bufferFrontX
-            if (bufferFrontX != null) {
-                this.ctx.fillStyle = 'rgba(241, 245, 249, 0.7)';
-                this.ctx.fillRect(bufferFrontX, 0, cssWidth - bufferFrontX, cssHeight);
-            }
-
-            const drawPeaks = (color: string, startX: number, endX: number) => {
-                this.ctx.save();
-                this.ctx.beginPath();
-                this.ctx.rect(startX, 0, Math.max(0, endX - startX), cssHeight);
-                this.ctx.clip();
-                this.ctx.strokeStyle = color;
-                this.ctx.lineWidth = 1;
-                for (let x = 0; x < bufferedCols; x++) {
-                    const peakHeight = Math.max(1, peaks[x] * (cssHeight * 0.38));
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(x + 0.5, middle - peakHeight);
-                    this.ctx.lineTo(x + 0.5, middle + peakHeight);
-                    this.ctx.stroke();
-                }
-                this.ctx.restore();
-            };
-
-            const endActiveX = bufferFrontX != null ? Math.min(cssWidth, bufferFrontX) : cssWidth;
-            drawPeaks('#94a3b8', playheadX, endActiveX);
-            drawPeaks('#059669', 0, Math.min(playheadX, endActiveX));
-
-            this.ctx.fillStyle = 'rgba(5, 150, 105, 0.08)';
-            this.ctx.fillRect(0, 0, Math.min(playheadX, endActiveX), cssHeight);
-
-            // Leading cyan front edge of progressive buffer fill
-            if (bufferFrontX != null && bufferFrontX < cssWidth - 1) {
-                this.ctx.strokeStyle = '#38bdf8';
-                this.ctx.lineWidth = 1.5;
-                this.ctx.beginPath();
-                this.ctx.moveTo(bufferFrontX, 0);
-                this.ctx.lineTo(bufferFrontX, cssHeight);
-                this.ctx.stroke();
-            }
-
-            // Playhead scrubber
-            this.ctx.strokeStyle = '#0284c7';
-            this.ctx.lineWidth = 1.5;
-            this.ctx.beginPath();
-            this.ctx.moveTo(playheadX, 0);
-            this.ctx.lineTo(playheadX, cssHeight);
-            this.ctx.stroke();
-
-            const timeLabel = `${this.formatTime(this.currentTime)} / ${this.formatTime(this.duration)}`;
-            this.ctx.font = '600 10px Inter, sans-serif';
-            this.ctx.textAlign = 'left';
-            this.ctx.textBaseline = 'middle';
-            const labelWidth = this.ctx.measureText(timeLabel).width + 12;
-            this.ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-            this.ctx.fillRect(5, cssHeight - 17, labelWidth, 14);
-            this.ctx.strokeStyle = '#cbd5e1';
-            this.ctx.lineWidth = 1;
-            this.ctx.strokeRect(5, cssHeight - 17, labelWidth, 14);
-            this.ctx.fillStyle = '#1e293b';
-            this.ctx.fillText(timeLabel, 11, cssHeight - 10);
-
-            if (this.hoverProgress !== null && !this.isSeeking) {
-                const hoverX = this.hoverProgress * cssWidth;
-                const hoverTime = this.formatTime(this.hoverProgress * this.duration);
-                this.ctx.setLineDash([2, 3]);
-                this.ctx.strokeStyle = 'rgba(2, 132, 199, 0.6)';
-                this.ctx.beginPath();
-                this.ctx.moveTo(hoverX, 0);
-                this.ctx.lineTo(hoverX, cssHeight);
-                this.ctx.stroke();
-                this.ctx.setLineDash([]);
-                this.ctx.font = '600 10px Inter, sans-serif';
-                const hoverWidth = this.ctx.measureText(hoverTime).width + 10;
-                const tooltipX = Math.max(2, Math.min(cssWidth - hoverWidth - 2, hoverX - hoverWidth / 2));
-                this.ctx.fillStyle = '#f8fafc';
-                this.ctx.fillRect(tooltipX, 3, hoverWidth, 14);
-                this.ctx.fillStyle = '#0f172a';
-                this.ctx.textAlign = 'center';
-                this.ctx.fillText(hoverTime, tooltipX + hoverWidth / 2, 10);
-            }
-        } else {
-            this.ctx.fillStyle = '#94a3b8';
-            this.ctx.font = '11px Inter, sans-serif';
-            this.ctx.textAlign = 'center';
-            this.ctx.textBaseline = 'middle';
-            this.ctx.fillText(this.message, cssWidth / 2, cssHeight / 2);
-        }
-        this.ctx.restore();
+    private syncTimeDisplay(): void {
+        const target = this.timeDisplay || (typeof document !== 'undefined' ? document.getElementById('master-time-display') : null);
+        if (!target) return;
+        const dur = this.scrub.duration;
+        const cur = this.scrub.currentTime;
+        target.textContent = `${formatTransportTime(cur)} / ${formatTransportTime(dur)}`;
     }
 }

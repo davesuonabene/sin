@@ -1,0 +1,439 @@
+/* Ableton-minimal Monochrome Shared Controls */
+
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  height: var(--ui-h-sm);
+  min-height: var(--ui-h-sm);
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius);
+  background: transparent;
+  color: var(--ui-text-muted);
+  font-family: var(--ui-font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+
+.ui-btn svg,
+.ui-svg-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ui-btn:hover:not(:disabled),
+.ui-btn:focus-visible:not(:disabled) {
+  background: var(--ui-surface-hover);
+  border-color: var(--ui-border);
+  color: var(--ui-text-strong);
+  outline: none;
+}
+
+.ui-btn:focus-visible:not(:disabled) {
+  border-color: var(--ui-border-focus);
+}
+
+.ui-btn.is-active,
+.ui-btn.active,
+.ui-btn[aria-pressed='true'],
+.ui-btn[aria-expanded='true'] {
+  background: var(--ui-surface-active);
+  border-color: var(--ui-surface-active);
+  color: var(--ui-on-active);
+}
+
+.ui-btn.is-active:hover:not(:disabled),
+.ui-btn.active:hover:not(:disabled),
+.ui-btn[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--ui-surface-active-hover);
+  border-color: var(--ui-surface-active-hover);
+  color: var(--ui-on-active);
+}
+
+.ui-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.ui-btn--bordered {
+  background: var(--ui-surface-subtle);
+  border-color: var(--ui-border);
+  color: var(--ui-text);
+}
+
+.ui-btn--bordered:hover:not(:disabled) {
+  background: var(--ui-surface);
+  border-color: var(--ui-border-strong);
+  color: var(--ui-text-strong);
+}
+
+.ui-btn--icon {
+  width: var(--ui-h-sm);
+  min-width: var(--ui-h-sm);
+  padding: 0;
+}
+
+.ui-btn--xs {
+  height: var(--ui-h-xs);
+  min-height: var(--ui-h-xs);
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+
+.ui-btn--xs.ui-btn--icon {
+  width: var(--ui-h-xs);
+  min-width: var(--ui-h-xs);
+  padding: 0;
+}
+
+.ui-btn--md {
+  height: var(--ui-h-md);
+  min-height: var(--ui-h-md);
+  padding: 0 11px;
+  font-size: 11px;
+}
+
+.ui-btn--primary {
+  background: var(--ui-surface-active);
+  border-color: var(--ui-surface-active);
+  color: var(--ui-on-active);
+}
+
+.ui-btn--primary:hover:not(:disabled),
+.ui-btn--primary:focus-visible:not(:disabled) {
+  background: var(--ui-surface-active-hover);
+  border-color: var(--ui-surface-active-hover);
+  color: var(--ui-on-active);
+}
+
+.ui-btn--danger:hover:not(:disabled) {
+  background: var(--palette-red-50);
+  border-color: var(--palette-red-200);
+  color: var(--ui-signal-danger);
+}
+
+.ui-btn--danger.is-active,
+.ui-btn--danger.active,
+.ui-btn--danger[aria-pressed='true'] {
+  background: var(--ui-signal-danger);
+  border-color: var(--ui-signal-danger);
+  color: var(--ui-on-active);
+}
+
+/* Segmented Toggle Bar */
+.ui-segmented {
+  display: inline-flex;
+  align-items: stretch;
+  box-sizing: border-box;
+  height: var(--ui-h-sm);
+  background: var(--ui-surface-subtle);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  overflow: hidden;
+}
+
+.ui-segmented > button,
+.ui-segmented > .td-radio-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 0;
+  padding: 0 7px;
+  margin: 0;
+  border: 0;
+  border-right: 1px solid var(--ui-border-subtle);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ui-text-muted);
+  font-family: var(--ui-font-sans);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.ui-segmented > button:last-child,
+.ui-segmented > .td-radio-option:last-child {
+  border-right: 0;
+}
+
+.ui-segmented > button:hover:not(:disabled),
+.ui-segmented > .td-radio-option:hover {
+  background: var(--ui-surface);
+  color: var(--ui-text-strong);
+}
+
+.ui-segmented > button.active,
+.ui-segmented > button.is-active,
+.ui-segmented > button[aria-pressed='true'],
+.ui-segmented > .td-radio-option.is-checked,
+.ui-segmented > .td-radio-option:has(input:checked) {
+  background: var(--ui-surface-active);
+  color: var(--ui-on-active);
+  border-color: var(--ui-surface-active);
+  font-weight: 600;
+}
+
+.ui-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--ui-border-subtle);
+  flex-shrink: 0;
+}
+
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface-subtle);
+  color: var(--ui-text-muted);
+  font-family: var(--ui-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.ui-badge--dark {
+  background: var(--ui-surface-active);
+  border-color: var(--ui-surface-active);
+  color: var(--ui-on-active);
+}
+
+.ui-badge--live-dot::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--ui-signal-ok);
+  flex-shrink: 0;
+}
+
+.ui-input {
+  box-sizing: border-box;
+  height: var(--ui-h-sm);
+  padding: 0 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface-subtle);
+  color: var(--ui-text-strong);
+  font-family: var(--ui-font-sans);
+  font-size: 10.5px;
+  outline: none;
+  transition: border-color 0.1s ease, background-color 0.1s ease;
+}
+
+.ui-input:hover:not(:disabled) {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-surface);
+}
+
+.ui-input:focus:not(:disabled) {
+  border-color: var(--ui-border-focus);
+  background: var(--ui-surface);
+}
+
+/* Monochrome Square Checkbox */
+input[type='checkbox'].ui-checkbox,
+.td-param-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.1s ease, border-color 0.1s ease;
+}
+
+input[type='checkbox'].ui-checkbox:hover:not(:disabled),
+.td-param-checkbox:hover:not(:disabled) {
+  border-color: var(--ui-border-focus);
+}
+
+input[type='checkbox'].ui-checkbox:checked,
+.td-param-checkbox:checked {
+  background-color: var(--ui-surface-active);
+  border-color: var(--ui-surface-active);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23ffffff' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3.5 8.5 6.5 11.5 12.5 4.5'/%3E%3C/svg%3E");
+  background-size: 11px 11px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+input[type='checkbox'].ui-checkbox:disabled,
+.td-param-checkbox:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Ableton-Style Recessed Filled Bar Slider */
+.ui-slider {
+  position: relative;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 46px;
+  height: 20px;
+  background: var(--ui-surface-subtle);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  overflow: hidden;
+  cursor: ew-resize;
+  user-select: none;
+  touch-action: none;
+  transition: border-color 0.1s ease, background-color 0.1s ease;
+}
+
+.ui-slider--compact {
+  height: 18px;
+}
+
+.ui-slider:hover:not(.is-disabled),
+.ui-slider:focus-within:not(.is-disabled),
+.ui-slider.is-dragging {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-surface);
+}
+
+.ui-slider:focus-within:not(.is-disabled),
+.ui-slider.is-dragging {
+  border-color: var(--ui-border-focus);
+}
+
+.ui-slider.is-disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.ui-slider-native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ui-slider-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  background: #e2e8f0;
+  pointer-events: none;
+  transition: background-color 0.08s ease;
+}
+
+.ui-slider:hover:not(.is-disabled) .ui-slider-fill,
+.ui-slider.is-dragging .ui-slider-fill {
+  background: #cbd5e1;
+}
+
+.ui-slider-mod-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: none;
+  pointer-events: none;
+  opacity: 0.42;
+}
+
+.ui-slider-zero {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--ui-border-strong);
+  pointer-events: none;
+  display: none;
+  z-index: 1;
+}
+
+.ui-slider[data-bipolar='true'] .ui-slider-zero {
+  display: block;
+}
+
+.ui-slider-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0%;
+  width: 2px;
+  background: var(--ui-text-strong);
+  transform: translateX(-1px);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.ui-slider-content {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+  padding: 0 5px;
+  font-family: var(--ui-font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--ui-text-strong);
+  pointer-events: none;
+}
+
+.ui-slider-label {
+  color: var(--ui-text-muted);
+  font-family: var(--ui-font-sans);
+  font-size: 9px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-slider-value {
+  margin-left: auto;
+  color: var(--ui-text-strong);
+  white-space: nowrap;
+}
+
+.ui-slider-value.is-interactive {
+  pointer-events: auto;
+  cursor: text;
+}

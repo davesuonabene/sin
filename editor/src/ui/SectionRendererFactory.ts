@@ -10,6 +10,7 @@ import { AssetPoolSection } from './components/AssetPoolSection.ts';
 import { RandomDestinationsSection } from './components/RandomDestinationsSection.ts';
 import { ExportSection } from './components/ExportSection.ts';
 import { APPEARANCE_COLOR_PRESETS } from '../config/appearance.ts';
+import { enhanceSelect } from '../../../packages/ui/src/dropdown.js';
 
 export class SectionRendererFactory {
     static async renderSection(
@@ -209,6 +210,7 @@ export class SectionRendererFactory {
         }
         colorSelect.dataset.appearanceKey = 'color';
         control.appendChild(colorSelect);
+        enhanceSelect(colorSelect);
         row.appendChild(control);
         group.appendChild(row);
 

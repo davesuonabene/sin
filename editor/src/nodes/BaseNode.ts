@@ -5,12 +5,12 @@ import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema, type PanelTabConfig } from '../fields/NodePanelSchema.ts';
 import {
     drawNeonIcon,
-    drawPerimeterProgressAccent,
     normalizeNeonIcon,
     traceNodeShape,
     type NodeShape
 } from './NodeVisuals.ts';
 import {
+    colorWithAlpha,
     defaultTransportClock,
     WaveformRenderer,
     OscilloscopeRenderer,
@@ -43,6 +43,56 @@ export const VISUALIZATION_TYPE_LABELS: Record<VisualizationTypeId, string> = {
 
 /** Default attenuation applied before processing newly-created sample nodes. */
 export const DEFAULT_SAMPLE_INPUT_GAIN_DB = -6;
+
+export type NodeToolbarControl =
+    | {
+        kind: 'toggle';
+        id: string;
+        label: string;
+        title?: string;
+        icon?: string;
+        active: boolean;
+        tone?: 'neutral' | 'amber' | 'sky' | 'emerald' | 'danger';
+        onToggle: () => void;
+    }
+    | {
+        kind: 'button';
+        id: string;
+        label: string;
+        title?: string;
+        icon?: string;
+        tone?: 'neutral' | 'danger';
+        disabled?: boolean;
+        onClick: () => void;
+    }
+    | {
+        kind: 'segmented';
+        id: string;
+        label?: string;
+        title?: string;
+        value: string;
+        options: Array<{ value: string; label: string; title?: string }>;
+        onChange: (value: string) => void;
+    }
+    | {
+        kind: 'select';
+        id: string;
+        label?: string;
+        title?: string;
+        value: string;
+        options: Array<{ value: string; label: string }>;
+        onChange: (value: string) => void;
+    }
+    | {
+        kind: 'slot-strip';
+        id: string;
+        count: number;
+        activeIndex: number;
+        selectedIndices?: number[];
+        onSelect: (index: number) => void;
+        onAdd: () => void;
+        onRemove?: () => void;
+    };
 
 export function isModifierNode(node: any): boolean {
     if (!node) return false;
@@ -222,16 +272,48 @@ export abstract class BaseNode extends LGraphNode {
         return normalizeNeonIcon(ctor.defaultIcon);
     }
 
+    get isMasterNode(): boolean {
+        return Boolean(this.properties?.is_main_preview)
+            || this.properties?.role === 'master'
+            || this.properties?.node_name === 'Master Output'
+            || this.title === 'Master Output';
+    }
+
+    get supportsStepLighting(): boolean {
+        return false;
+    }
+
+    protected updateLiveVisualState(_telemetry?: SignalTelemetry): void { }
+
+    onParametersOpened(): void { }
+
+    protected drawClosedIconOverlay(_ctx: CanvasRenderingContext2D, _telemetry?: SignalTelemetry): boolean {
+        return false;
+    }
+
+    protected drawAlertBorder(_ctx: CanvasRenderingContext2D, _isOpenedPanel: boolean, _telemetry?: SignalTelemetry): void { }
+
+    protected readonly _headerDeco = {
+        titleColor: '#0f172a',
+        titleOffsetX: 0,
+        borderColor: '',
+        borderWidth: 0
+    };
+
+    protected drawPanelHeaderDecorations(
+        _ctx: CanvasRenderingContext2D,
+        _width: number,
+        _headerHeight: number,
+        _titleX: number,
+        _telemetry?: SignalTelemetry
+    ): void { }
+
     calculateFlowShape(): NodeShape {
         if (this.isModifier || this.type === 'Audio/Disabled' || this.properties?.disabled) {
             return 'isolated';
         }
-        const isMaster = Boolean(this.properties?.is_main_preview)
-            || this.properties?.role === 'master'
-            || this.properties?.node_name === 'Master Output'
-            || this.title === 'Master Output';
         const hasInputs = Boolean(this.inputs?.length);
-        const hasOutputs = Boolean(this.outputs?.length) && !isMaster;
+        const hasOutputs = Boolean(this.outputs?.length) && !this.isMasterNode;
         if (hasInputs && hasOutputs) return 'through';
         if (hasOutputs) return 'source';
         if (hasInputs) return 'sink';
@@ -522,6 +604,7 @@ export abstract class BaseNode extends LGraphNode {
     get acceptedPoolAssetType(): 'audio' | 'sequence_source' { return 'audio'; }
     shouldRefreshTabOnGraphChange(_tab: string): boolean { return false; }
     getGhostBoundFieldOverrides(): Record<string, string[]> { return {}; }
+    getToolbarControls(): NodeToolbarControl[] { return []; }
 
     getInputNodes(): any[] {
         const graph = this.graph || ((typeof window !== 'undefined') ? (window as any).editorGraph : null);
@@ -900,10 +983,11 @@ export abstract class BaseNode extends LGraphNode {
         const isLibraryDropTarget = canvas?.library_drop_node === this;
         const isMainPreview = Boolean(this.properties?.is_main_preview);
         const telemetry = defaultTransportClock.getTelemetry();
+        this.updateLiveVisualState(telemetry);
 
         ctx.save();
         if (this.isVisualizationActive) {
-            this.drawPanelFrame(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview);
+            this.drawPanelFrame(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview, telemetry);
             if (!this.isModifier) {
                 this.drawSlots(ctx);
             }
@@ -923,7 +1007,8 @@ export abstract class BaseNode extends LGraphNode {
                 this.drawBody(ctx, telemetry);
                 this.drawMinimalBorderFeedback(ctx, telemetry, isSelected, isMainPreview);
             }
-            if (this._distanceStage !== 3 || isSelected || isHovered) {
+            const drewCustomCenter = !this.isModifier && this.drawClosedIconOverlay(ctx, telemetry);
+            if (!drewCustomCenter && (this._distanceStage !== 3 || isSelected || isHovered)) {
                 this.drawIcon(ctx);
             }
             if (!this.isModifier) {
@@ -1045,11 +1130,20 @@ export abstract class BaseNode extends LGraphNode {
 
         const manifestStem = (this as any).manifestStemBuffer as AudioBuffer | undefined;
         const lastRenderedBuf = (this as any)._lastRenderedBuffer as AudioBuffer | undefined;
-        const nodeBuf = this.getAudioBuffer() || undefined;
+        const nodeRealtimePeaks = (this as any).realtimePeaks as Float32Array | undefined;
+        const realtimeMasterPeaks = (isPreviewTarget || (activePreviewId == null && isMainPreview))
+            ? (win?.activeRealtimeMasterPeaks as Float32Array | undefined)
+            : undefined;
+        const resolvedPeaks = nodeRealtimePeaks || realtimeMasterPeaks;
 
-        const displayBuffer = isPreviewTarget
-            ? (schedulerBuf || masterBuf || manifestStem || lastRenderedBuf || nodeBuf)
-            : (manifestStem || lastRenderedBuf || (isMainPreview && activePreviewId == null && !isInvalidated ? masterBuf : undefined) || nodeBuf);
+        let displayBuffer = isPreviewTarget
+            ? (schedulerBuf || masterBuf || manifestStem || lastRenderedBuf)
+            : (manifestStem || lastRenderedBuf || (isMainPreview && activePreviewId == null && !isInvalidated ? masterBuf : undefined));
+
+        // Only evaluate JS client-side buffer synthesis if we don't already have rendered buffer or native C++ peaks!
+        if (!displayBuffer && !resolvedPeaks) {
+            displayBuffer = this.getAudioBuffer() || undefined;
+        }
 
         const explicitProgress = (this as any).bufferedProgress;
         const schedulerProgress = isPreviewTarget ? globalAudioScheduler.getBufferedProgress() : 0;
@@ -1057,7 +1151,10 @@ export abstract class BaseNode extends LGraphNode {
             ? explicitProgress
             : (schedulerProgress > 0 ? schedulerProgress : 1.0);
 
-        const bufferDuration = (this as any).manifestStemDuration || displayBuffer?.duration || 0;
+        const bufferDuration = (this as any).manifestStemDuration
+            || displayBuffer?.duration
+            || (nodeRealtimePeaks ? Number((this as any).realtimePeaksDuration || 0) : 0)
+            || (realtimeMasterPeaks ? Number(win?.activeRealtimeMasterDuration || 0) : 0);
         const expectedDuration = bufferDuration > 0
             ? bufferDuration
             : (autoTrackWindow > 0 ? autoTrackWindow : (telemetry?.duration || 0));
@@ -1078,6 +1175,7 @@ export abstract class BaseNode extends LGraphNode {
 
         return {
             buffer: displayBuffer,
+            peaks: (!displayBuffer && resolvedPeaks) ? resolvedPeaks : undefined,
             duration: expectedDuration,
             accentColor: accent,
             bufferedProgress,
@@ -1137,24 +1235,39 @@ export abstract class BaseNode extends LGraphNode {
         this.sharedWaveformRenderer.render(ctx, bounds, telemetry);
     }
 
+    private _cachedTruncTitleSrc = '';
+    private _cachedTruncTitleMaxW = -1;
+    private _cachedTruncTitleResult = '';
+
     protected truncateTextToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
         if (!text || maxWidth <= 0) return '';
+        const wKey = Math.floor(maxWidth);
+        if (this._cachedTruncTitleSrc === text && this._cachedTruncTitleMaxW === wKey) {
+            return this._cachedTruncTitleResult;
+        }
+        let result: string;
         if (typeof ctx.measureText !== 'function') {
-            return text.length > 18 ? text.slice(0, 16) + '…' : text;
-        }
-        if (ctx.measureText(text).width <= maxWidth) return text;
-        let low = 0;
-        let high = text.length;
-        while (low < high) {
-            const mid = Math.ceil((low + high) / 2);
-            const candidate = text.slice(0, mid) + '…';
-            if (ctx.measureText(candidate).width <= maxWidth) {
-                low = mid;
-            } else {
-                high = mid - 1;
+            result = text.length > 18 ? text.slice(0, 16) + '…' : text;
+        } else if (ctx.measureText(text).width <= maxWidth) {
+            result = text;
+        } else {
+            let low = 0;
+            let high = text.length;
+            while (low < high) {
+                const mid = Math.ceil((low + high) / 2);
+                const candidate = text.slice(0, mid) + '…';
+                if (ctx.measureText(candidate).width <= maxWidth) {
+                    low = mid;
+                } else {
+                    high = mid - 1;
+                }
             }
+            result = low > 0 ? text.slice(0, low) + '…' : '…';
         }
-        return low > 0 ? text.slice(0, low) + '…' : '…';
+        this._cachedTruncTitleSrc = text;
+        this._cachedTruncTitleMaxW = wKey;
+        this._cachedTruncTitleResult = result;
+        return result;
     }
 
     protected drawPanelFrame(
@@ -1162,10 +1275,16 @@ export abstract class BaseNode extends LGraphNode {
         isSelected: boolean,
         isHovered: boolean,
         isLibraryDropTarget: boolean,
-        isMainPreview: boolean
+        isMainPreview: boolean,
+        telemetry?: SignalTelemetry
     ): void {
         const [width, height] = this.size;
         const shape = this.nodeShape;
+        const deco = this._headerDeco;
+        deco.titleColor = '#0f172a';
+        deco.titleOffsetX = 0;
+        deco.borderColor = '';
+        deco.borderWidth = 0;
 
         // Selection / hover / main-preview outer ring
         if (isMainPreview || isSelected || isLibraryDropTarget || isHovered) {
@@ -1188,24 +1307,38 @@ export abstract class BaseNode extends LGraphNode {
         traceNodeShape(ctx, shape, 0, 0, width, height);
         ctx.fill();
 
+        const headerHeight = 22;
+        const baseTitleX = (shape === 'source' || shape === 'isolated') ? 14 : 8;
+
+        ctx.save();
+        traceNodeShape(ctx, shape, 0, 0, width, height);
+        ctx.clip?.();
+        if (telemetry?.isPlaying && this.supportsStepLighting && this.getLiveActivityState(telemetry).isTriggered) {
+            ctx.fillStyle = colorWithAlpha(this.nodeColor, 0.16);
+            ctx.fillRect(0, 0, width, headerHeight);
+            deco.borderColor = this.nodeColor;
+            deco.borderWidth = isSelected ? 2 : 1.5;
+        }
+        this.drawPanelHeaderDecorations(ctx, width, headerHeight, baseTitleX, telemetry);
+        ctx.restore();
+
         // Single peripheral border around everything
-        ctx.strokeStyle = this.boxcolor || this.nodeColor;
-        ctx.lineWidth = isSelected ? 1.5 : 1;
+        ctx.strokeStyle = deco.borderColor || this.boxcolor || this.nodeColor;
+        ctx.lineWidth = deco.borderWidth || (isSelected ? 1.5 : 1);
         traceNodeShape(ctx, shape, 0, 0, width, height);
         ctx.stroke();
 
         // Node Title (clean dark slate text with no header background or icon, dynamically truncated before buttons)
-        const headerHeight = 22;
         const nodeName = this.properties?.node_name || this.title || "Node";
         ctx.font = "600 11px Inter, system-ui, sans-serif";
-        ctx.fillStyle = "#0f172a";
+        ctx.fillStyle = deco.titleColor;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
-        const titleX = (shape === 'source' || shape === 'isolated') ? 14 : 8;
+        const titleX = baseTitleX + deco.titleOffsetX;
         const visibleBtns = this.getVisibleCanvasButtons(isSelected, isHovered);
         const leftmostBtnX = visibleBtns.reduce((minX, btn) => (btn.x < 0 ? Math.min(minX, btn.x) : minX), 0);
         const reservedRight = leftmostBtnX < 0 ? Math.abs(leftmostBtnX) + 4 : 8;
-        const maxTitleWidth = Math.max(24, width - titleX - reservedRight);
+        const maxTitleWidth = Math.max(20, width - titleX - reservedRight);
         const displayTitle = this.truncateTextToWidth(ctx, nodeName, maxTitleWidth);
         ctx.fillText(displayTitle, titleX, headerHeight / 2 + 0.5);
 
@@ -1220,6 +1353,8 @@ export abstract class BaseNode extends LGraphNode {
             ctx.lineTo(width - 3, height - 5);
             ctx.stroke();
         }
+
+        this.drawAlertBorder(ctx, true, telemetry);
     }
 
     protected drawSelectionRing(
@@ -1258,11 +1393,15 @@ export abstract class BaseNode extends LGraphNode {
 
         ctx.save();
         if (shouldDim) {
-            ctx.globalAlpha = 0.72;
+            ctx.globalAlpha = 0.65;
         }
         traceNodeShape(ctx, this.nodeShape, 0, 0, size);
         ctx.fillStyle = this.nodeColor;
         ctx.fill();
+        if (telemetry?.isPlaying && activity.isTriggered && this.supportsStepLighting) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+            ctx.fill();
+        }
         if (this.boxcolor && this.boxcolor !== this.nodeColor) {
             ctx.lineWidth = 1.5;
             ctx.strokeStyle = this.boxcolor;
@@ -1273,8 +1412,7 @@ export abstract class BaseNode extends LGraphNode {
 
     /**
      * Minimal perimeter border accents for closed/far-distance icon nodes.
-     * Communicates live playback triggers, playhead progress, buffer fill, and cache invalidation
-     * purely along the geometric shape border instead of interior visualizations.
+     * Communicates cache invalidation and persistent node alerts without noisy progress bars.
      */
     protected drawMinimalBorderFeedback(
         ctx: CanvasRenderingContext2D,
@@ -1296,20 +1434,8 @@ export abstract class BaseNode extends LGraphNode {
             ctx.restore();
         }
 
-        // 2. Progressive RAM buffer fill: perimeter cyan progress arc
-        const bufProg = (this as any).bufferedProgress;
-        if (typeof bufProg === 'number' && bufProg > 0 && bufProg < 0.999) {
-            drawPerimeterProgressAccent(ctx, this.nodeShape, -2, -2, size + 4, bufProg, "#38bdf8", 2);
-        }
-
-        // 3. Live playback trigger & playhead progress: vivid perimeter border accent
-        if (telemetry?.isPlaying) {
-            const activity = this.getLiveActivityState(telemetry);
-            if (activity.isTriggered) {
-                const progress = typeof activity.progress === 'number' ? Math.max(0.08, activity.progress) : 1.0;
-                drawPerimeterProgressAccent(ctx, this.nodeShape, -2, -2, size + 4, progress, "#38bdf8", 2.5);
-            }
-        }
+        // 2. Persistent node alert border (e.g. Master latched clip warning)
+        this.drawAlertBorder(ctx, false, telemetry);
     }
 
     protected drawIcon(ctx: CanvasRenderingContext2D): void {
@@ -1354,30 +1480,27 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     protected drawNameBadge(ctx: CanvasRenderingContext2D, isSelected: boolean, isHovered: boolean, canvas?: any): void {
-        if (!isSelected && !isHovered) return;
+        const isDistantMode = this._distanceStage === 3;
+        if (!isDistantMode && !isSelected && !isHovered) return;
         const width = BaseNode.visualSize;
-        const nodeName = this.properties?.node_name || this.title || "Node";
+        const rawName = String(this.properties?.node_name || this.title || "Node");
+        const nodeName = (isDistantMode && !isSelected && !isHovered && rawName.length > 18)
+            ? rawName.slice(0, 17) + '…'
+            : rawName;
         const scale = Number(canvas?.ds?.scale) || 1;
-        const fontSize = scale < 0.75
-            ? Math.min(18, Math.max(11, Math.round(11 / Math.sqrt(Math.max(0.25, scale)))))
-            : 11;
-        ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`;
-        const badgeWidth = (typeof ctx.measureText === 'function' ? ctx.measureText(nodeName).width : nodeName.length * 7) + 14;
-        const badgeHeight = Math.max(20, fontSize + 9);
-        const badgeX = width / 2 - badgeWidth / 2;
-        const badgeY = -(badgeHeight + 5);
-        ctx.beginPath();
-        if ((ctx as any).roundRect) (ctx as any).roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 3);
-        else ctx.rect(badgeX, badgeY, badgeWidth, badgeHeight);
-        ctx.fillStyle = "rgba(7, 17, 31, 0.94)";
-        ctx.fill();
-        ctx.strokeStyle = this.nodeColor;
-        ctx.lineWidth = 0.75;
-        ctx.stroke();
-        ctx.fillStyle = "#f8fafc";
+        const clampedScale = Math.max(0.15, scale);
+        const fontSize = isDistantMode
+            ? Math.min(20, Math.max(10, Math.round(7.5 / clampedScale)))
+            : (scale < 0.75
+                ? Math.min(13, Math.max(9.5, Math.round(9.5 / Math.sqrt(Math.max(0.25, scale)))))
+                : 9.5);
+        const fontWeight = (isSelected || isHovered) ? 600 : 500;
+        ctx.font = `${fontWeight} ${fontSize}px Inter, system-ui, sans-serif`;
+        const gap = isDistantMode ? Math.max(5, Math.round(5 / Math.sqrt(clampedScale))) : 5;
+        ctx.fillStyle = (isSelected || isHovered) ? "#334155" : "#64748b";
         ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(nodeName, width / 2, badgeY + badgeHeight / 2 + 0.5);
+        ctx.textBaseline = "bottom";
+        ctx.fillText(nodeName, width / 2, -gap);
     }
 
     constructor() {

@@ -672,5 +672,244 @@ test('resolveAssignedAssetFilters hydrates staged save pool locators via resolve
     }
 });
 
+function createRecordingCanvasCtx() {
+    const arcs: Array<{ cx: number; cy: number; r: number; sa: number; ea: number; fillStyle: string; strokeStyle: string }> = [];
+    const texts: Array<{ text: string; x: number; y: number; font: string; fillStyle: string }> = [];
+    const fills: string[] = [];
+    const strokes: Array<{ strokeStyle: string; lineWidth: number }> = [];
+    const fillRects: Array<{ x: number; y: number; w: number; h: number; fillStyle: string }> = [];
+    const lineDashes: number[][] = [];
+    const alphas: number[] = [];
+
+    const ctx: any = {
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1,
+        font: '11px sans-serif',
+        textAlign: 'left',
+        textBaseline: 'alphabetic',
+        globalAlpha: 1,
+        save: () => { alphas.push(ctx.globalAlpha); },
+        restore: () => { ctx.globalAlpha = 1; },
+        clip: () => { },
+        beginPath: () => { },
+        closePath: () => { },
+        moveTo: () => { },
+        lineTo: () => { },
+        arcTo: () => { },
+        quadraticCurveTo: () => { },
+        bezierCurveTo: () => { },
+        ellipse: () => { },
+        rect: () => { },
+        roundRect: () => { },
+        arc: (cx: number, cy: number, r: number, sa: number, ea: number) => {
+            arcs.push({ cx, cy, r, sa, ea, fillStyle: String(ctx.fillStyle), strokeStyle: String(ctx.strokeStyle) });
+        },
+        fill: () => {
+            fills.push(String(ctx.fillStyle));
+            if (ctx.globalAlpha < 1) alphas.push(ctx.globalAlpha);
+        },
+        stroke: () => {
+            strokes.push({ strokeStyle: String(ctx.strokeStyle), lineWidth: Number(ctx.lineWidth) });
+        },
+        fillRect: (x: number, y: number, w: number, h: number) => {
+            fillRects.push({ x, y, w, h, fillStyle: String(ctx.fillStyle) });
+        },
+        fillText: (text: string, x: number, y: number) => {
+            texts.push({ text: String(text), x, y, font: String(ctx.font), fillStyle: String(ctx.fillStyle) });
+        },
+        measureText: (text: string) => ({ width: String(text).length * 6.5 }),
+        setLineDash: (segments: number[]) => {
+            lineDashes.push([...segments]);
+        },
+    };
+    return { ctx, arcs, texts, fills, strokes, fillRects, lineDashes, alphas };
+}
+
+test('Closed, distant, and opened IRIDE visualizations render radial Arrangement, Sample slot index, Sequence step lighting, Master RMS/clip, and distant name badges without moving perimeter bars', async () => {
+    const { ArrangementNode } = await import('../src/nodes/ArrangementNode.ts');
+    const { SequenceNode } = await import('../src/nodes/SequenceNode.ts');
+    const { defaultTransportClock, CLIP_FILL_COLOR, CLIP_MARKER_COLOR } = await import('../../packages/iride/src/index.ts');
+
+    const prevWindow = (globalThis as any).window;
+    const winObj: any = {
+        ...(prevWindow || {}),
+        dispatchEvent: () => true,
+        addEventListener: () => { },
+        removeEventListener: () => { },
+    };
+    (globalThis as any).window = winObj;
+
+    try {
+        defaultTransportClock.setBpm(120);
+
+        // 1. SequenceNode: no moving perimeter bar (no setLineDash), step lighting dims inactive steps & lights active steps
+        const seq = new SequenceNode();
+        seq.id = 301;
+        seq.properties.node_name = 'Kick Seq';
+        seq.properties.sequence = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+        seq.properties.step_length = 0.25;
+        seq.properties.visualization_enabled = false;
+
+        defaultTransportClock.update(0.0, 4.0, true); // beat 0 -> step 0 (active)
+        const seqRecActive = createRecordingCanvasCtx();
+        seq.drawCanvas(seqRecActive.ctx, { ds: { scale: 1.0 } });
+        assert.equal(seqRecActive.lineDashes.length, 0, 'Closed SequenceNode must not draw moving dashed perimeter bar');
+        assert.ok(seqRecActive.fills.includes('rgba(255, 255, 255, 0.16)'), 'Active step should apply step-lighting sheen');
+
+        defaultTransportClock.update(0.125, 4.0, true); // beat 0.25 -> step 1 (inactive)
+        const seqRecInactive = createRecordingCanvasCtx();
+        seq.drawCanvas(seqRecInactive.ctx, { ds: { scale: 1.0 } });
+        assert.ok(seqRecInactive.alphas.includes(0.65), 'Inactive step should dim closed node body');
+
+        // Opened SequenceNode shows subtle header wash on active step without obstructing viewport
+        seq.properties.visualization_enabled = true;
+        seq.size = seq.computeSize();
+        defaultTransportClock.update(0.0, 4.0, true);
+        const seqOpenRec = createRecordingCanvasCtx();
+        seq.drawCanvas(seqOpenRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(
+            seqOpenRec.fillRects.some(r => r.y === 0 && r.h === 22 && r.fillStyle.startsWith('rgba(')),
+            'Opened SequenceNode should pulse its 22px header strip on active step'
+        );
+
+        // 2. ArrangementNode: centered circular radial loop progress in closed, distant, and opened header
+        const arr = new ArrangementNode();
+        arr.id = 302;
+        arr.properties.node_name = 'Song Form';
+        arr.properties.total_bars = 4;
+        arr.properties.section_points = [2];
+        arr.properties.section_probability = [1, 1];
+        arr.properties.visualization_enabled = false;
+
+        defaultTransportClock.update(2.0, 8.0, true); // 1 bar = 2s at 120 BPM -> bar 1 / 4 = 0.25 progress
+        const arrClosedRec = createRecordingCanvasCtx();
+        arr.drawCanvas(arrClosedRec.ctx, { ds: { scale: 1.0 } });
+        assert.equal(arrClosedRec.lineDashes.length, 0, 'Closed ArrangementNode must not draw moving dashed perimeter bar');
+        assert.ok(
+            arrClosedRec.arcs.some(a => a.cx === 22 && a.cy === 22 && a.r === 14),
+            'Closed ArrangementNode must render centered radial track circle (cx=22, cy=22, r=14)'
+        );
+        assert.ok(
+            arrClosedRec.arcs.some(a => a.cx === 22 && a.cy === 22 && a.r > 12 && Math.abs(a.ea - 0) < 1e-4),
+            'Closed ArrangementNode radial wedge should sweep 25% clockwise to 3 o-clock (angle 0)'
+        );
+
+        // Distant Stage 3 ArrangementNode keeps radial progress and always shows small grey name label on top without background
+        const arrDistantRec = createRecordingCanvasCtx();
+        arr.drawCanvas(arrDistantRec.ctx, { ds: { scale: 0.30 } });
+        assert.equal(arr.currentDistanceStage, 3);
+        assert.ok(arrDistantRec.arcs.some(a => a.cx === 22 && a.cy === 22 && a.r === 14));
+        const arrDistantLabel = arrDistantRec.texts.find(t => t.text === 'Song Form');
+        assert.ok(arrDistantLabel, 'Distant Stage 3 node must display its name on top');
+        assert.equal(arrDistantLabel.fillStyle, '#64748b', 'Icon name label must use grey text');
+        assert.ok(!arrDistantRec.fills.includes('rgba(15, 23, 42, 0.84)') && !arrDistantRec.fills.includes('rgba(7, 17, 31, 0.95)'), 'Icon name label must have no background fill');
+        const labelFontSize = Number(arrDistantLabel.font.match(/\s([\d.]+)px/)?.[1] || 0);
+        assert.ok(labelFontSize > 0 && labelFontSize <= 20, `Expected distant label fontSize <= 20, got ${labelFontSize}`);
+
+        // Opened ArrangementNode displays mini radial dial inside 22px header
+        arr.properties.visualization_enabled = true;
+        arr.size = arr.computeSize();
+        const arrOpenRec = createRecordingCanvasCtx();
+        arr.drawCanvas(arrOpenRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(
+            arrOpenRec.arcs.some(a => a.cy === 11 && a.r === 5.5),
+            'Opened ArrangementNode must render compact r=5.5 radial indicator in header'
+        );
+
+        // 3. SampleNode: shows current slot index in closed, distant, and opened header, following live manifestEvents
+        const sample = new SampleNode();
+        sample.id = 303;
+        sample.properties.node_name = 'Bass Loop';
+        sample.properties.slots = [
+            { slot: 0, filepath: '/a.wav' },
+            { slot: 1, filepath: '/b.wav' },
+            { slot: 2, filepath: '/c.wav' }
+        ];
+        sample.activeSlotIndex = 1;
+        sample.properties.visualization_enabled = false;
+
+        defaultTransportClock.update(0.0, 4.0, false);
+        const sampleIdleRec = createRecordingCanvasCtx();
+        sample.drawCanvas(sampleIdleRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(
+            sampleIdleRec.texts.some(t => t.text === '1' && t.x === 22),
+            'Closed SampleNode should display centered active slot index 1'
+        );
+
+        // Live manifest event overrides displayed slot to 2 during playback
+        (sample as any).manifestEvents = [{ time: 0.0, duration: 1.0, slot: 2 }];
+        defaultTransportClock.update(0.5, 4.0, true);
+        const sampleLiveDistantRec = createRecordingCanvasCtx();
+        sample.drawCanvas(sampleLiveDistantRec.ctx, { ds: { scale: 0.28 } });
+        assert.ok(sampleLiveDistantRec.texts.some(t => t.text === '2' && t.x === 22), 'Distant SampleNode should display live playing slot index 2');
+        assert.ok(sampleLiveDistantRec.texts.some(t => t.text === 'Bass Loop'), 'Distant SampleNode must display its name on top');
+
+        sample.properties.visualization_enabled = true;
+        sample.size = sample.computeSize();
+        const sampleOpenRec = createRecordingCanvasCtx();
+        sample.drawCanvas(sampleOpenRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(sampleOpenRec.texts.some(t => t.text === '2' && t.y <= 22), 'Opened SampleNode should display live slot index pill in header');
+
+        // 4. Master TrackNode: RMS modulates own color, turns red on clip, latches red marker until Parameters opened
+        const master = new TrackNode();
+        master.id = 304;
+        master.properties.node_name = 'Master Output';
+        master.properties.role = 'master';
+        master.properties.color = '#0f172a';
+        master.color = '#0f172a';
+        master.properties.visualization_enabled = false;
+
+        // Silence -> base color
+        defaultTransportClock.setMasterLevels(0, 0);
+        defaultTransportClock.update(0.0, 4.0, false);
+        const masterIdleRec = createRecordingCanvasCtx();
+        master.drawCanvas(masterIdleRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(masterIdleRec.fills.includes('#0f172a'));
+        assert.equal(master.hasClipWarning, false);
+
+        // Mid RMS -> own hue brightened, not red, no clip latch
+        defaultTransportClock.setMasterLevels(0.35, 0.55);
+        defaultTransportClock.update(0.5, 4.0, true);
+        const masterRmsRec = createRecordingCanvasCtx();
+        master.drawCanvas(masterRmsRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(masterRmsRec.fills.some(f => f.startsWith('rgb(')), 'Master should modulate its own color by RMS');
+        assert.ok(!masterRmsRec.fills.includes(CLIP_FILL_COLOR));
+        assert.equal(master.hasClipWarning, false);
+
+        // Clipping -> vivid red fill and latched hasClipWarning = true
+        defaultTransportClock.setMasterLevels(0.9, 1.15);
+        defaultTransportClock.update(0.6, 4.0, true);
+        const masterClipRec = createRecordingCanvasCtx();
+        master.drawCanvas(masterClipRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(masterClipRec.fills.includes(CLIP_FILL_COLOR), 'Clipping Master must turn vivid red');
+        assert.equal(master.hasClipWarning, true);
+        assert.ok(masterClipRec.strokes.some(s => s.strokeStyle === CLIP_MARKER_COLOR && s.lineWidth >= 2));
+
+        // After stopping and toggling visualization open, red clip marker remains latched
+        defaultTransportClock.update(0.6, 4.0, false);
+        master.toggleVisualization();
+        assert.equal(master.hasClipWarning, true, 'Expanding/opening canvas visualization must NOT clear clip marker');
+        const masterStoppedOpenRec = createRecordingCanvasCtx();
+        master.drawCanvas(masterStoppedOpenRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(
+            masterStoppedOpenRec.strokes.some(s => s.strokeStyle === CLIP_MARKER_COLOR && s.lineWidth >= 2),
+            'Opened Master must retain red clip marker border until Parameters panel opens'
+        );
+
+        // Opening Parameters panel clears the latched clip marker
+        master.onParametersOpened();
+        assert.equal(master.hasClipWarning, false, 'Opening Master Parameters panel must clear clip marker');
+        const masterClearedRec = createRecordingCanvasCtx();
+        master.drawCanvas(masterClearedRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(!masterClearedRec.strokes.some(s => s.strokeStyle === CLIP_MARKER_COLOR));
+    } finally {
+        defaultTransportClock.setMasterLevels(0, 0);
+        defaultTransportClock.update(0, 0, false);
+        (globalThis as any).window = prevWindow;
+    }
+});
+
+
 
 

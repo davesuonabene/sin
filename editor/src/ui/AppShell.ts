@@ -1,16 +1,20 @@
-export const HEADER_PLAY_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>';
-export const HEADER_PAUSE_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>';
-export const HEADER_REFRESH_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>';
-export const HEADER_FREEZE_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="12" y1="2" x2="12" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><path d="m20 16-4-4 4-4"></path><path d="m4 8 4 4-4 4"></path><path d="m16 4-4 4-4-4"></path><path d="m8 20 4-4 4 4"></path></svg>';
-export const HEADER_LOCK_OPEN_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>';
-export const HEADER_LOCK_CLOSED_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
-export const HEADER_SIDEBAR_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect><line x1="9" y1="4" x2="9" y2="20"></line></svg>';
-export const HEADER_INSPECTOR_ICON_SVG = '<svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6"/><circle cx="14" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>';
+import { renderIcon } from '../../../packages/ui/src/icons.js';
+import { enhanceSelect } from '../../../packages/ui/src/dropdown.js';
+import { enhanceRangeSlider } from '../../../packages/ui/src/slider.js';
 
-export const playIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>';
-export const pauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>';
-export const volumeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5-.5v7a4 4 0 0 0 0-7z"/></svg>';
-export const mutedIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5 1 2 2 2-2 1.5 1.5-2 2 2 2-1.5 1.5-2-2-2 2-1.5-1.5 2-2-2-2z"/></svg>';
+export const HEADER_PLAY_ICON_SVG = renderIcon('play', 'toolbar-svg-icon');
+export const HEADER_PAUSE_ICON_SVG = renderIcon('pause', 'toolbar-svg-icon');
+export const HEADER_REFRESH_ICON_SVG = renderIcon('refresh', 'toolbar-svg-icon');
+export const HEADER_FREEZE_ICON_SVG = renderIcon('freeze', 'toolbar-svg-icon');
+export const HEADER_LOCK_OPEN_ICON_SVG = renderIcon('lockOpen', 'toolbar-svg-icon');
+export const HEADER_LOCK_CLOSED_ICON_SVG = renderIcon('lockClosed', 'toolbar-svg-icon');
+export const HEADER_SIDEBAR_ICON_SVG = renderIcon('sidebar', 'toolbar-svg-icon');
+export const HEADER_INSPECTOR_ICON_SVG = renderIcon('inspector', 'toolbar-svg-icon');
+
+export const playIcon = renderIcon('play');
+export const pauseIcon = renderIcon('pause');
+export const volumeIcon = renderIcon('volume');
+export const mutedIcon = renderIcon('muted');
 
 export function createAppShell(appElement: HTMLElement) {
     const topHeader = document.createElement('header');
@@ -69,29 +73,29 @@ export function createAppShell(appElement: HTMLElement) {
         </div>
         <div class="header-toolbar-row">
             <div class="header-toolbar-left">
-                <button id="floating-toggle-library" class="header-btn icon-header-btn squared-btn" type="button" title="Toggle Library Panel (Shortcut: L)" aria-label="Toggle Library Panel" aria-expanded="false">
+                <button id="floating-toggle-library" class="header-btn icon-header-btn squared-btn ui-btn ui-btn--icon ui-btn--bordered" type="button" title="Toggle Library Panel (Shortcut: L)" aria-label="Toggle Library Panel" aria-expanded="false">
                     ${HEADER_SIDEBAR_ICON_SVG}
                 </button>
             </div>
             <div class="top-header-center"></div>
             <div class="top-header-right">
-                <button id="global-preview-btn" class="header-btn global-preview-btn icon-header-btn squared-btn" type="button" title="Play transport (Space)" aria-label="Play transport (Space)" disabled>
+                <button id="global-preview-btn" class="header-btn global-preview-btn icon-header-btn squared-btn ui-btn ui-btn--icon ui-btn--bordered" type="button" title="Play transport (Space)" aria-label="Play transport (Space)" disabled>
                     ${HEADER_PLAY_ICON_SVG}
                 </button>
-                <button id="preview-recalculate-btn" class="header-btn preview-recalculate-btn icon-header-btn squared-btn" type="button" title="Refresh pools, samples, and modifiers" aria-label="Refresh pools, samples, and modifiers" disabled>
+                <button id="preview-recalculate-btn" class="header-btn preview-recalculate-btn icon-header-btn squared-btn ui-btn ui-btn--icon ui-btn--bordered" type="button" title="Refresh pools, samples, and modifiers" aria-label="Refresh pools, samples, and modifiers" disabled>
                     ${HEADER_REFRESH_ICON_SVG}
                 </button>
                 <div class="global-seed-control" title="Global Seed (0 = user pool order)">
-                    <input id="global-seed-input" class="global-seed-input" type="number" min="0" step="1" value="0" aria-label="Global Seed" />
-                    <button id="global-seed-lock-btn" class="header-btn global-seed-lock-btn icon-header-btn squared-btn" type="button" title="Global Seed Lock: OFF (Refresh updates Global Seed, pools, random modifiers, and field operators)" aria-label="Lock Global Seed" aria-pressed="false">
+                    <input id="global-seed-input" class="global-seed-input ui-input" type="number" min="0" step="1" value="0" aria-label="Global Seed" />
+                    <button id="global-seed-lock-btn" class="header-btn global-seed-lock-btn icon-header-btn squared-btn ui-btn ui-btn--icon ui-btn--bordered" type="button" title="Global Seed Lock: OFF (Refresh updates Global Seed, pools, random modifiers, and field operators)" aria-label="Lock Global Seed" aria-pressed="false">
                         ${HEADER_LOCK_OPEN_ICON_SVG}
                     </button>
                 </div>
-                <button id="global-freeze-btn" class="header-btn global-freeze-btn icon-header-btn squared-btn" type="button" title="Global Freeze: OFF (Flagged nodes refresh on recalculate)" aria-label="Toggle Global Freeze" aria-pressed="false">
+                <button id="global-freeze-btn" class="header-btn global-freeze-btn icon-header-btn squared-btn ui-btn ui-btn--icon ui-btn--bordered" type="button" title="Global Freeze: OFF (Flagged nodes refresh on recalculate)" aria-label="Toggle Global Freeze" aria-pressed="false">
                     ${HEADER_FREEZE_ICON_SVG}
                 </button>
-                <div class="header-btn-separator" aria-hidden="true"></div>
-                <button id="header-toggle-properties" class="header-btn secondary-tool-btn icon-header-btn squared-btn" type="button" title="Toggle Properties / Inspector (Shortcut: P)" aria-label="Toggle Properties / Inspector" aria-expanded="false">
+                <div class="header-btn-separator ui-divider" aria-hidden="true"></div>
+                <button id="header-toggle-properties" class="header-btn secondary-tool-btn icon-header-btn squared-btn ui-btn ui-btn--icon ui-btn--bordered" type="button" title="Toggle Properties / Inspector (Shortcut: P)" aria-label="Toggle Properties / Inspector" aria-expanded="false">
                     ${HEADER_INSPECTOR_ICON_SVG}
                 </button>
             </div>
@@ -102,27 +106,28 @@ export function createAppShell(appElement: HTMLElement) {
     playbackFooter.className = 'playback-footer';
     playbackFooter.setAttribute('aria-label', 'Playback transport');
     playbackFooter.innerHTML = `
-        <div class="playback-toolbar">
-            <div class="render-select-wrapper">
+        <div class="playback-toolbar ui-transport">
+            <div class="render-select-wrapper ui-transport-target">
                 <select id="temp-files-select" class="playback-track-select sin-select" aria-label="Playback track">
                     <option value="" disabled selected>No renders available</option>
                 </select>
             </div>
-            <div class="master-player-wrapper">
+            <div class="master-player-wrapper ui-transport-controls">
                 <audio id="master-player" preload="metadata"></audio>
-                <button id="master-play-btn" class="master-control-btn" type="button" aria-label="Play" title="Play" disabled>
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>
+                <button id="master-play-btn" class="ui-btn ui-btn--icon ui-btn--bordered master-control-btn" type="button" aria-label="Play" title="Play" disabled>
+                    ${playIcon}
                 </button>
-                <button id="master-loop-btn" class="master-control-btn master-loop-btn" type="button" aria-label="Loop off" title="Loop off" aria-pressed="false" disabled>
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h9.5a3.5 3.5 0 0 1 0 7H15m2-3 3 3-3 3M17 17H7.5a3.5 3.5 0 0 1 0-7H9m-2 3-3-3 3-3"/></svg>
+                <button id="master-loop-btn" class="ui-btn ui-btn--icon ui-btn--bordered master-control-btn master-loop-btn" type="button" aria-label="Loop off" title="Loop off" aria-pressed="false" disabled>
+                    ${renderIcon('loop')}
                 </button>
+                <span id="master-time-display" class="ui-transport-time">0:00 / 0:00</span>
             </div>
-            <div id="master-waveform" class="master-waveform" title="Click or drag to seek"></div>
-            <div class="master-volume-control">
-                <button id="master-mute-btn" class="master-control-btn master-volume-btn" type="button" aria-label="Mute" title="Mute">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm11.5-.5v7a4 4 0 0 0 0-7z"/></svg>
+            <div id="master-waveform" class="master-waveform ui-transport-timeline" title="Click or drag to seek"></div>
+            <div class="master-volume-control ui-transport-right ui-transport-volume">
+                <button id="master-mute-btn" class="ui-btn ui-btn--icon master-control-btn master-volume-btn" type="button" aria-label="Mute" title="Mute">
+                    ${volumeIcon}
                 </button>
-                <input id="master-volume" class="master-volume-slider" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume">
+                <input id="master-volume" class="master-volume-slider ui-transport-volume-slider" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume">
             </div>
         </div>
     `;
@@ -133,6 +138,15 @@ export function createAppShell(appElement: HTMLElement) {
     appElement.appendChild(topHeader);
     appElement.appendChild(dockviewContainer);
     appElement.appendChild(playbackFooter);
+
+    const tempFilesSelectEl = playbackFooter.querySelector('#temp-files-select') as HTMLSelectElement | null;
+    const masterVolumeEl = playbackFooter.querySelector('#master-volume') as HTMLInputElement | null;
+    if (tempFilesSelectEl) {
+        enhanceSelect(tempFilesSelectEl, { preferUp: true });
+    }
+    if (masterVolumeEl) {
+        enhanceRangeSlider(masterVolumeEl, { defaultValue: 1, showValue: false, compact: true });
+    }
 
     // Strictly prevent floating panels from being dragged or positioned higher than y = 0 (under or past the header)
     const clampFloatingPanels = () => {

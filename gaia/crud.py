@@ -25,6 +25,7 @@ ITEM_POLYMORPHIC_TYPES = (
     models.AudioItem,
     models.TrackItem,
     models.SampleItem,
+    models.VideoItem,
     models.FolderItem,
     models.CollectionItem,
     models.MultitrackItem,
@@ -33,24 +34,24 @@ ITEM_POLYMORPHIC_TYPES = (
 )
 
 
-def _audio_metadata(item) -> dict:
-    attributes = getattr(item, "attributes", {}) or {}
-    metadata = attributes.get("audio_metadata") or {}
+def _audio_metadata(item, attributes: dict | None = None) -> dict:
+    attrs = attributes if attributes is not None else (getattr(item, "attributes", {}) or {})
+    metadata = attrs.get("audio_metadata") or {}
     return dict(metadata) if isinstance(metadata, dict) else {}
 
 
-def _source_path(item) -> str | None:
+def _source_path(item, attributes: dict | None = None) -> str | None:
     """Return the pre-import location stored in generic item metadata."""
     direct = getattr(item, "source_path", None)
     if direct:
         return direct
-    attributes = getattr(item, "attributes", {}) or {}
-    import_attributes = attributes.get("import") or {}
+    attrs = attributes if attributes is not None else (getattr(item, "attributes", {}) or {})
+    import_attributes = attrs.get("import") or {}
     return import_attributes.get("source_path") if isinstance(import_attributes, dict) else None
 
 
-def _apply_audio_metadata_fields(item) -> dict:
-    metadata = _audio_metadata(item)
+def _apply_audio_metadata_fields(item, attributes: dict | None = None) -> dict:
+    metadata = _audio_metadata(item, attributes)
     for field in TRACK_METADATA_FIELDS:
         setattr(item, field, metadata.get(field))
     if item.type == "track" and metadata.get("title"):
@@ -64,8 +65,11 @@ def _apply_audio_metadata_fields(item) -> dict:
 
 
 def _manifest_contents(item: models.FolderItem) -> list[dict]:
+    raw = getattr(item, "manifest_json", None)
+    if not raw or raw == "[]":
+        return []
     try:
-        contents = json.loads(getattr(item, "manifest_json", None) or "[]")
+        contents = json.loads(raw)
     except (TypeError, ValueError):
         return []
     return [dict(entry) for entry in contents if isinstance(entry, dict)] if isinstance(contents, list) else []
@@ -75,19 +79,40 @@ def _content_path_key(value: str) -> str:
     return os.path.normcase(os.path.normpath(value or ""))
 
 
-def _child_relative_path(collection: models.FolderItem, child: models.Item) -> str:
+def _fast_relative_posix(root_path: str, child_path: str) -> str | None:
+    """Compute a POSIX relative path using pure string normalization (zero filesystem syscalls)."""
+    if not root_path or not child_path:
+        return None
+    norm_root = os.path.normpath(root_path)
+    norm_child = os.path.normpath(child_path)
+    if os.path.normcase(norm_child).startswith(os.path.normcase(norm_root) + os.sep):
+        return norm_child[len(norm_root) + 1:].replace("\\", "/")
     try:
-        return Path(child.absolute_path).relative_to(Path(collection.absolute_path)).as_posix()
+        rel = os.path.relpath(norm_child, norm_root)
+        if not rel.startswith("..") and rel != ".":
+            return rel.replace("\\", "/")
     except ValueError:
         pass
+    return None
+
+
+def _child_relative_path(
+    collection: models.FolderItem,
+    child: models.Item,
+    *,
+    child_attrs: dict | None = None,
+) -> str:
+    rel = _fast_relative_posix(collection.absolute_path, child.absolute_path)
+    if rel:
+        return rel
+    attrs = child_attrs if child_attrs is not None else (getattr(child, "attributes", {}) or {})
     col_src = getattr(collection, "source_path", None)
-    ch_src = _source_path(child)
+    ch_src = _source_path(child, attrs)
     if col_src and ch_src:
-        try:
-            return Path(ch_src).resolve().relative_to(Path(col_src).resolve()).as_posix()
-        except ValueError:
-            pass
-    folder_attr = (getattr(child, "attributes", {}) or {}).get("folder")
+        rel_src = _fast_relative_posix(col_src, ch_src)
+        if rel_src:
+            return rel_src
+    folder_attr = attrs.get("folder")
     if folder_attr:
         return f"{folder_attr}/{os.path.basename(child.absolute_path)}"
     return os.path.basename(child.absolute_path)
@@ -101,18 +126,27 @@ def _child_content(
     fallback_index: int | None = None,
 ) -> dict:
     existing = dict(existing or {})
-    child_analysis = (getattr(child, "attributes", {}) or {}).get("analysis", {})
-    child_metadata = _audio_metadata(child)
-    relative_path = _child_relative_path(collection, child)
+    child_attrs = getattr(child, "attributes", {}) or {}
+    child_analysis = child_attrs.get("analysis") or {}
+    if not isinstance(child_analysis, dict):
+        child_analysis = {}
+    child_video = child_attrs.get("video_metadata") or {}
+    if not isinstance(child_video, dict):
+        child_video = {}
+    child_metadata = _audio_metadata(child, child_attrs)
+    relative_path = _child_relative_path(collection, child, child_attrs=child_attrs)
+    filename = os.path.basename(child.absolute_path)
+    child_bpm = getattr(child, "bpm", None)
+    child_key = getattr(child, "key", None)
     return {
         **existing,
         "index": existing.get("index", fallback_index),
-        "filename": os.path.basename(child.absolute_path),
+        "filename": filename,
         "title": (
             getattr(child, "title", None)
             or child_metadata.get("title")
             or existing.get("title")
-            or os.path.basename(child.absolute_path)
+            or filename
         ),
         "author": child_metadata.get("author") or existing.get("author"),
         "album": child_metadata.get("album") or existing.get("album"),
@@ -124,21 +158,26 @@ def _child_content(
         "comment": child_metadata.get("comment") or existing.get("comment"),
         "audio_metadata": child_metadata or existing.get("audio_metadata") or {},
         "relative_path": relative_path,
-        "source_path": _source_path(child) or existing.get("source_path"),
+        "source_path": _source_path(child, child_attrs) or existing.get("source_path"),
         "type": child.type,
         "mime_type": child.mime_type,
         "size_bytes": child.size_bytes,
-        "duration_seconds": existing.get("duration_seconds", child_analysis.get("duration_seconds")),
-        "bpm": getattr(child, "bpm", None) if getattr(child, "bpm", None) is not None else child_analysis.get("bpm"),
-        "key": getattr(child, "key", None) if getattr(child, "key", None) is not None else child_analysis.get("key"),
+        "duration_seconds": existing.get(
+            "duration_seconds",
+            child_analysis.get("duration_seconds")
+            if child_analysis.get("duration_seconds") is not None
+            else child_video.get("duration_seconds"),
+        ),
+        "bpm": child_bpm if child_bpm is not None else child_analysis.get("bpm"),
+        "key": child_key if child_key is not None else child_analysis.get("key"),
         "is_loop": getattr(child, "is_loop", None) if child.type == "sample" else child_analysis.get("is_loop"),
-        "favourite": bool((getattr(child, "attributes", {}) or {}).get("favourite") or existing.get("favourite", False)),
+        "favourite": bool(child_attrs.get("favourite") or existing.get("favourite", False)),
         "tags": [tag.name for tag in getattr(child, "tags", [])],
-        "streamable": child.type in {"audio", "track", "sample"},
+        "streamable": child.type in {"audio", "track", "sample", "video"},
         "child_id": child.id,
         "storage_mode": child.storage_mode,
         "availability": "ready" if getattr(child, "availability", None) in {"ready", "available", None} else child.availability,
-        "attributes": dict(getattr(child, "attributes", {}) or existing.get("attributes") or {}),
+        "attributes": dict(child_attrs or existing.get("attributes") or {}),
     }
 
 
@@ -185,13 +224,65 @@ def _collect_subtree_children(db_item) -> list[models.Item]:
     return result
 
 
-def _populate_item_fields(db_item):
+def _bulk_load_subtrees(db: Session, root_items: list[models.Item]) -> dict[int, list[models.Item]]:
+    """Fetch all non-folder descendants for the given folder roots in bounded polymorphic batches."""
+    folder_roots = [
+        item for item in root_items
+        if isinstance(item, models.FolderItem) or type_registry.is_folder_type(getattr(item, "type", None))
+    ]
+    if not folder_roots:
+        return {}
+
+    folder_to_root: dict[int, int] = {item.id: item.id for item in folder_roots}
+    frontier = [item.id for item in folder_roots]
+    while frontier:
+        next_frontier: list[int] = []
+        for offset in range(0, len(frontier), 900):
+            batch = frontier[offset : offset + 900]
+            sub_rows = (
+                db.query(models.Item.id, models.Item.parent_id)
+                .filter(
+                    models.Item.parent_id.in_(batch),
+                    models.Item.type.in_(["folder", "collection"]),
+                )
+                .all()
+            )
+            for sub_id, p_id in sub_rows:
+                if sub_id not in folder_to_root and p_id in folder_to_root:
+                    folder_to_root[sub_id] = folder_to_root[p_id]
+                    next_frontier.append(sub_id)
+        frontier = next_frontier
+
+    all_folder_ids = list(folder_to_root.keys())
+    leaves_by_root: dict[int, list[models.Item]] = {item.id: [] for item in folder_roots}
+    for offset in range(0, len(all_folder_ids), 900):
+        batch = all_folder_ids[offset : offset + 900]
+        children = (
+            db.query(models.Item)
+            .options(
+                selectin_polymorphic(models.Item, ITEM_POLYMORPHIC_TYPES),
+                selectinload(models.Item.tags),
+            )
+            .filter(
+                models.Item.parent_id.in_(batch),
+                ~models.Item.type.in_(["folder", "collection"]),
+            )
+            .all()
+        )
+        for child in children:
+            root_id = folder_to_root.get(child.parent_id)
+            if root_id is not None:
+                leaves_by_root[root_id].append(child)
+    return leaves_by_root
+
+
+def _populate_item_fields(db_item, *, preloaded_leaves: list[models.Item] | None = None):
     if not db_item:
         return db_item
+    attributes = getattr(db_item, "attributes", {}) or {}
     if getattr(db_item, "type", None) in {"audio", "track", "sample"}:
-        _apply_audio_metadata_fields(db_item)
+        _apply_audio_metadata_fields(db_item, attributes)
     elif not getattr(db_item, "title", None):
-        attributes = getattr(db_item, "attributes", {}) or {}
         db_item.title = attributes.get("title") or os.path.basename(
             str(getattr(db_item, "absolute_path", "")).rstrip("/\\")
         )
@@ -199,10 +290,13 @@ def _populate_item_fields(db_item):
         # Child rows are canonical when present, but merge them over the
         # manifest rather than discarding manifest-only entries. This keeps
         # legacy and interrupted imports readable during gradual backfill.
-        leaf_children = [
-            child for child in _collect_subtree_children(db_item)
-            if getattr(child, "type", None) not in {"folder", "collection"}
-        ]
+        if preloaded_leaves is not None:
+            leaf_children = preloaded_leaves
+        else:
+            leaf_children = [
+                child for child in _collect_subtree_children(db_item)
+                if getattr(child, "type", None) not in {"folder", "collection"}
+            ]
         contents = _merge_collection_contents(
             db_item,
             _manifest_contents(db_item),
@@ -223,15 +317,18 @@ def _populate_item_fields(db_item):
                 db_item.stems = []
         else:
             db_item.stems = []
-    db_item.favourite = bool((getattr(db_item, "attributes", {}) or {}).get("favourite", False))
+    db_item.favourite = bool(attributes.get("favourite", False))
     if not isinstance(db_item, models.FolderItem):
-        db_item.source_path = _source_path(db_item)
+        db_item.source_path = _source_path(db_item, attributes)
     return db_item
 
 # Items
 def get_item(db: Session, item_id: int):
     item = db.query(models.Item).filter(models.Item.id == item_id).first()
-    return _populate_item_fields(item)
+    if not item:
+        return None
+    leaves_map = _bulk_load_subtrees(db, [item])
+    return _populate_item_fields(item, preloaded_leaves=leaves_map.get(item.id))
 
 def get_item_by_path(db: Session, absolute_path: str, vault_id: int | None = None):
     norm_path = os.path.abspath(absolute_path)
@@ -281,21 +378,13 @@ def get_item_by_path(db: Session, absolute_path: str, vault_id: int | None = Non
     return None
 
 def get_items(db: Session, skip: int = 0, limit: int = 100, vault_id: int | None = None, include_children: bool = False):
-    # The legacy expanded list is still used by SIN while organizer contents
-    # are displayed inline.  Loading joined-inheritance fields, tags, children,
-    # and child tags lazily turns a medium library into thousands of individual
-    # SQLite statements.  Keep the response shape but fetch each relationship
-    # and polymorphic table in bounded batches.
     query = db.query(models.Item).options(
         selectin_polymorphic(models.Item, ITEM_POLYMORPHIC_TYPES),
         selectinload(models.Item.tags),
-        selectinload(models.Item.children).selectin_polymorphic(ITEM_POLYMORPHIC_TYPES),
-        selectinload(models.Item.children).selectinload(models.Item.tags),
     )
     if vault_id is not None:
         query = query.filter(models.Item.vault_id == vault_id)
         if not include_children:
-            from sqlalchemy.orm import aliased
             parent_alias = aliased(models.Item)
             query = query.outerjoin(parent_alias, models.Item.parent_id == parent_alias.id)
             query = query.filter(
@@ -306,8 +395,9 @@ def get_items(db: Session, skip: int = 0, limit: int = 100, vault_id: int | None
         if not include_children:
             query = query.filter(models.Item.parent_id.is_(None))
     items = query.offset(skip).limit(limit).all()
+    leaves_map = _bulk_load_subtrees(db, items)
     for item in items:
-        _populate_item_fields(item)
+        _populate_item_fields(item, preloaded_leaves=leaves_map.get(item.id))
     return items
 
 
@@ -322,11 +412,20 @@ def item_summary(item: models.Item, *, content_types=None, content_tags=None, ma
     analysis = attributes.get("analysis") or {}
     if not isinstance(analysis, dict):
         analysis = {}
-    audio_metadata = _audio_metadata(item)
+    video_metadata = attributes.get("video_metadata") or {}
+    if not isinstance(video_metadata, dict):
+        video_metadata = {}
+    audio_metadata = _audio_metadata(item, attributes)
     title = audio_metadata.get("title") if item.type in {"audio", "track", "sample"} else attributes.get("title")
     title = title or getattr(item, "title", None) or os.path.basename(
         str(getattr(item, "absolute_path", "")).rstrip("/\\")
     )
+    duration_seconds = analysis.get("duration_seconds")
+    if duration_seconds is None:
+        duration_seconds = video_metadata.get("duration_seconds")
+    item_key = getattr(item, "key", None)
+    item_bpm = getattr(item, "bpm", None)
+    item_is_loop = getattr(item, "is_loop", None)
     return {
         "absolute_path": item.absolute_path,
         "size_bytes": item.size_bytes,
@@ -335,7 +434,7 @@ def item_summary(item: models.Item, *, content_types=None, content_tags=None, ma
         "parent_id": item.parent_id,
         "storage_mode": item.storage_mode,
         "availability": "ready" if getattr(item, "availability", None) in {"ready", "available", None} else item.availability,
-        "attributes": item.attributes,
+        "attributes": attributes,
         "id": item.id,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
@@ -349,13 +448,15 @@ def item_summary(item: models.Item, *, content_types=None, content_tags=None, ma
         "track_number": audio_metadata.get("track_number"),
         "disc_number": audio_metadata.get("disc_number"),
         "comment": audio_metadata.get("comment"),
-        "duration_seconds": analysis.get("duration_seconds"),
-        "key": getattr(item, "key", None) if getattr(item, "key", None) is not None else analysis.get("key"),
-        "bpm": getattr(item, "bpm", None) if getattr(item, "bpm", None) is not None else analysis.get("bpm"),
-        "is_loop": getattr(item, "is_loop", None) if getattr(item, "is_loop", None) is not None else analysis.get("is_loop"),
+        "duration_seconds": duration_seconds,
+        "key": item_key if item_key is not None else analysis.get("key"),
+        "bpm": item_bpm if item_bpm is not None else analysis.get("bpm"),
+        "is_loop": item_is_loop if item_is_loop is not None else analysis.get("is_loop"),
         "favourite": bool(attributes.get("favourite", False)),
         "source_kind": getattr(item, "source_kind", None),
-        "source_path": _source_path(item),
+        "source_path": _source_path(item, attributes),
+        "project_kind": getattr(item, "project_kind", None),
+        "editor_engine": getattr(item, "editor_engine", None),
         "content_count": getattr(item, "content_count", None),
         "content_types": sorted(set(content_types or [])),
         "content_tags": sorted(set(content_tags or []), key=str.casefold),
@@ -374,8 +475,7 @@ def get_item_summaries(
 ) -> list[dict]:
     """Return root rows without hydrating collection contents.
 
-    Child type/tag facets are aggregated with two bulk queries so the UI can
-    still render useful filter chips before a collection is expanded.
+    Uses FTS5 + recursive CTE root resolution when `query_text` is provided.
     """
     query = (
         db.query(models.Item)
@@ -392,69 +492,19 @@ def get_item_summaries(
             models.Vault.preview == vault_preview
         )
     needle = (query_text or "").strip()
-    child_alias = None
     if needle:
-        child_alias = aliased(models.Item)
-        child_tag_alias = aliased(models.Tag)
-        root_tag_alias = aliased(models.Tag)
-        root_item_tags = models.item_tags.alias("root_item_tags")
-        pattern = f"%{needle}%"
-        matched_parent_ids = {
-            row[0]
-            for row in db.query(models.Item.parent_id)
-            .outerjoin(models.item_tags, models.item_tags.c.item_id == models.Item.id)
-            .outerjoin(models.Tag, models.Tag.id == models.item_tags.c.tag_id)
-            .filter(
-                models.Item.parent_id.isnot(None),
-                or_(
-                    models.Item.type.ilike(pattern),
-                    models.Item.absolute_path.ilike(pattern),
-                    models.Item.metadata_json.ilike(pattern),
-                    models.Tag.name.ilike(pattern),
-                ),
-            )
-            .all()
-            if row[0] is not None
-        }
-        matched_root_ids: set[int] = set()
-        frontier_parents = set(matched_parent_ids)
-        seen_parents: set[int] = set()
-        while frontier_parents:
-            seen_parents.update(frontier_parents)
-            parent_rows = (
-                db.query(models.Item.id, models.Item.parent_id)
-                .filter(models.Item.id.in_(frontier_parents))
-                .all()
-            )
-            next_parents: set[int] = set()
-            for p_id, gp_id in parent_rows:
-                if gp_id is None:
-                    matched_root_ids.add(p_id)
-                elif gp_id not in seen_parents:
-                    next_parents.add(gp_id)
-            frontier_parents = next_parents
+        from . import catalog as catalog_service
 
-        or_clauses = [
-            models.Item.type.ilike(pattern),
-            models.Item.absolute_path.ilike(pattern),
-            models.Item.metadata_json.ilike(pattern),
-            child_alias.type.ilike(pattern),
-            child_alias.absolute_path.ilike(pattern),
-            child_alias.metadata_json.ilike(pattern),
-            child_tag_alias.name.ilike(pattern),
-            root_tag_alias.name.ilike(pattern),
-        ]
-        if matched_root_ids:
-            or_clauses.append(models.Item.id.in_(matched_root_ids))
-        query = (
-            query.outerjoin(child_alias, models.Item.id == child_alias.parent_id)
-            .outerjoin(models.item_tags, models.item_tags.c.item_id == child_alias.id)
-            .outerjoin(child_tag_alias, child_tag_alias.id == models.item_tags.c.tag_id)
-            .outerjoin(root_item_tags, root_item_tags.c.item_id == models.Item.id)
-            .outerjoin(root_tag_alias, root_tag_alias.id == root_item_tags.c.tag_id)
-            .filter(or_(*or_clauses))
-            .distinct()
+        _matched_item_ids, matched_root_ids = catalog_service.search_fts_item_ids(
+            db,
+            needle,
+            vault_id=vault_id,
+            vault_preview=vault_preview,
+            limit=5000,
         )
+        if not matched_root_ids:
+            return []
+        query = query.filter(models.Item.id.in_(matched_root_ids))
     roots = query.order_by(models.Item.updated_at.desc(), models.Item.id.desc()).offset(skip).limit(limit).all()
     if not roots:
         return []
@@ -507,7 +557,7 @@ def get_item_summaries(
             child_tags[root_id].add(tag_name)
 
     return [
-            item_summary(
+        item_summary(
             item,
             content_types=child_types[item.id],
             content_tags=child_tags[item.id],
@@ -524,7 +574,7 @@ def get_collection_contents_page(
     limit: int = 250,
     query: str | None = None,
 ) -> dict | None:
-    """Build one collection page, paging canonical child rows in SQL."""
+    """Build one collection page, paging canonical child rows in SQL without polymorphic N+1."""
     collection = (
         db.query(models.FolderItem)
         .filter(models.FolderItem.id == item_id)
@@ -535,29 +585,22 @@ def get_collection_contents_page(
     safe_offset = max(0, int(offset))
     safe_limit = None if int(limit) <= 0 else min(int(limit), 100000)
     needle = (query or "").strip()
-    manifest_contents = _manifest_contents(collection)
-    manifest_by_path = {
-        _content_path_key(entry.get("relative_path", "")): entry
-        for entry in manifest_contents
-        if entry.get("relative_path")
-    }
+
     folder_ids = [item_id]
-    subfolder_ids = [
+    current_level = [
         row[0] for row in
         db.query(models.Item.id)
         .filter(models.Item.parent_id == item_id, models.Item.type.in_(["folder", "collection"]))
         .all()
     ]
-    current_level = subfolder_ids
     while current_level:
         folder_ids.extend(current_level)
-        next_level = [
+        current_level = [
             row[0] for row in
             db.query(models.Item.id)
             .filter(models.Item.parent_id.in_(current_level), models.Item.type.in_(["folder", "collection"]))
             .all()
         ]
-        current_level = next_level
 
     child_count = (
         db.query(func.count(models.Item.id))
@@ -575,6 +618,13 @@ def get_collection_contents_page(
         or 0
     )
 
+    manifest_contents = _manifest_contents(collection) if (child_count == 0 or getattr(collection, "manifest_json", None) not in (None, "", "[]")) else []
+    manifest_by_path = {
+        _content_path_key(entry.get("relative_path", "")): entry
+        for entry in manifest_contents
+        if entry.get("relative_path")
+    } if manifest_contents else {}
+
     # A missing or partially backfilled child index is a legacy condition.
     # Preserve those manifest-only rows with the complete merge path; normal
     # imported collections use the SQL-paged canonical child path below.
@@ -582,7 +632,10 @@ def get_collection_contents_page(
     if child_count == 0 or partial_index:
         children = [] if child_count == 0 else (
             db.query(models.Item)
-            .options(selectinload(models.Item.tags))
+            .options(
+                selectin_polymorphic(models.Item, ITEM_POLYMORPHIC_TYPES),
+                selectinload(models.Item.tags),
+            )
             .filter(models.Item.parent_id.in_(folder_ids))
             .order_by(models.Item.absolute_path, models.Item.id)
             .all()
@@ -619,7 +672,10 @@ def get_collection_contents_page(
         total = child_query.count()
         query_part = (
             child_query
-            .options(selectinload(models.Item.tags))
+            .options(
+                selectin_polymorphic(models.Item, ITEM_POLYMORPHIC_TYPES),
+                selectinload(models.Item.tags),
+            )
             .order_by(models.Item.absolute_path, models.Item.id)
             .offset(safe_offset)
         )
@@ -647,8 +703,10 @@ def get_collection_contents_page(
             }
         page = []
         for position, child in enumerate(children):
-            relative_path = _child_relative_path(collection, child)
-            existing = manifest_by_path.get(_content_path_key(relative_path))
+            existing = None
+            if manifest_by_path:
+                relative_path = _child_relative_path(collection, child)
+                existing = manifest_by_path.get(_content_path_key(relative_path))
             page.append(_child_content(
                 collection,
                 child,
@@ -690,6 +748,7 @@ def create_item(db: Session, item: schemas.ItemCreate, *, commit: bool = True, f
         "audio": models.AudioItem,
         "track": models.TrackItem,
         "sample": models.SampleItem,
+        "video": models.VideoItem,
         "folder": models.FolderItem,
         "collection": models.CollectionItem,
         "multitrack": models.MultitrackItem,
@@ -746,6 +805,10 @@ def create_item(db: Session, item: schemas.ItemCreate, *, commit: bool = True, f
         db_item.stems_json = json.dumps(stems_list)
         db_item.is_valid_length = getattr(item, "is_valid_length", True)
         db_item.length_variance = getattr(item, "length_variance", 0.0)
+
+    if issubclass(model_class, models.ProjectItem):
+        db_item.project_kind = getattr(item, "project_kind", None) or "audio"
+        db_item.editor_engine = getattr(item, "editor_engine", None) or "sin"
 
     db.add(db_item)
     if commit:

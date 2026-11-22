@@ -543,10 +543,10 @@ def _resolve_node_slots_and_selectors(
     )
     return slots, sample_slot_out, step_slots_out, cycle_seeds_out, section_slots_out
 
-# Must stay in sync with core.fx.FX_PROCESSORS (gain staging only).
-KNOWN_FX_TYPES = frozenset({
-    "gain",
-})
+from core.fx import PROCESSOR_REGISTRY
+
+# Must stay in sync with core.fx.PROCESSOR_REGISTRY (single source of truth).
+KNOWN_FX_TYPES = PROCESSOR_REGISTRY.types()
 
 
 def collect_graph_warnings(doc: Dict[str, Any]) -> List[str]:
@@ -712,6 +712,23 @@ def graph_to_workspace(doc: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _is_auto_bars(value: Any) -> bool:
+    """Return True when total_bars represents unconstrained natural length ('auto', 'free', or <= 0)."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in {"auto", "free"}:
+            return True
+        try:
+            return float(s) <= 0.0
+        except ValueError:
+            return False
+    if isinstance(value, (int, float)):
+        return float(value) <= 0.0
+    return False
+
+
 def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Optional[str] = None) -> AudioNodeModel:
     """Compile a canonical sin-graph document directly to an AudioNodeModel tree."""
     valid, errors = validate_graph(doc)
@@ -725,7 +742,13 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
     settings = doc.get("settings", {"bpm": 120.0, "total_bars": 4.0, "key": "C"})
 
     global_bpm = float(settings.get("bpm", 120.0))
-    global_bars = float(settings.get("total_bars", 4.0))
+    if "total_bars" in settings:
+        raw_global_bars = settings.get("total_bars")
+        global_bars: Optional[float] = (
+            None if (raw_global_bars is None or _is_auto_bars(raw_global_bars)) else float(raw_global_bars)
+        )
+    else:
+        global_bars = 4.0
 
     # Index incoming audio children: target_id -> list of source_ids
     incoming_audio: Dict[str, List[str]] = {}
@@ -801,12 +824,21 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             target_bpm = global_bpm
 
         raw_total_bars = props.get("total_bars")
-        if raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
+        if _is_auto_bars(raw_total_bars):
+            total_bars = None
+        elif raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
             if ntype == "sample":
                 is_loop = props.get("sample_type", "loop") == "loop"
                 total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track")) else None
+            elif ntype == "track":
+                total_bars = parent_total_bars if parent_total_bars is not None else global_bars
             else:
-                total_bars = parent_total_bars if parent_total_bars is not None else (global_bars if ntype in ("sequence", "arrangement", "track") else None)
+                fallback_bars = global_bars if global_bars is not None else 4.0
+                total_bars = (
+                    parent_total_bars
+                    if parent_total_bars is not None
+                    else (fallback_bars if ntype in ("sequence", "arrangement") else None)
+                )
         else:
             total_bars = float(raw_total_bars)
 
@@ -893,7 +925,13 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
     globals_params = extra.get("global_parameters", {"bpm": 120.0, "total_bars": 4.0, "key": "C"})
 
     global_bpm = float(globals_params.get("bpm", 120.0))
-    global_bars = float(globals_params.get("total_bars", 4.0))
+    if "total_bars" in globals_params:
+        raw_global_bars = globals_params.get("total_bars")
+        global_bars: Optional[float] = (
+            None if (raw_global_bars is None or _is_auto_bars(raw_global_bars)) else float(raw_global_bars)
+        )
+    else:
+        global_bars = 4.0
 
     nodes_by_num_id: Dict[int, Dict[str, Any]] = {n["id"]: n for n in nodes if "id" in n}
 
@@ -987,12 +1025,21 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             target_bpm = global_bpm
 
         raw_total_bars = props.get("total_bars")
-        if raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
+        if _is_auto_bars(raw_total_bars):
+            total_bars = None
+        elif raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
             if ntype == "sample":
                 is_loop = props.get("sample_type", "loop") == "loop"
                 total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track")) else None
+            elif ntype == "track":
+                total_bars = parent_total_bars if parent_total_bars is not None else global_bars
             else:
-                total_bars = parent_total_bars if parent_total_bars is not None else (global_bars if ntype in ("sequence", "arrangement", "track") else None)
+                fallback_bars = global_bars if global_bars is not None else 4.0
+                total_bars = (
+                    parent_total_bars
+                    if parent_total_bars is not None
+                    else (fallback_bars if ntype in ("sequence", "arrangement") else None)
+                )
         else:
             total_bars = float(raw_total_bars)
 

@@ -12,11 +12,14 @@ import {
 export class WaveformRenderer extends BaseSignalRenderer {
     private signal: WaveformSignal | null = null;
     private cachedPeaks: Float32Array | null = null;
+    private cachedPeakHashRef: Float32Array | null = null;
+    private cachedPeakHash = '';
     private cachedBuffer: AudioBuffer | null = null;
     private cachedWidth = 0;
     private maskCanvas: HTMLCanvasElement | null = null;
     private tintCanvas: HTMLCanvasElement | null = null;
     private maskFingerprint = '';
+    private tintFingerprint = '';
 
     constructor(options: RendererOptions = {}) {
         super({
@@ -29,15 +32,25 @@ export class WaveformRenderer extends BaseSignalRenderer {
         this.signal = signal;
         if (!signal?.buffer && !signal?.peaks) {
             this.cachedPeaks = null;
+            this.cachedPeakHashRef = null;
+            this.cachedPeakHash = '';
             this.cachedBuffer = null;
             this.maskFingerprint = '';
+            this.tintFingerprint = '';
         } else if (signal.buffer && signal.buffer !== this.cachedBuffer) {
             this.cachedPeaks = null;
+            this.cachedPeakHashRef = null;
+            this.cachedPeakHash = '';
             this.cachedBuffer = signal.buffer;
             this.maskFingerprint = '';
+            this.tintFingerprint = '';
         } else if (signal.peaks && signal.peaks !== this.cachedPeaks) {
             this.cachedPeaks = signal.peaks;
+            this.cachedBuffer = null;
+            this.cachedPeakHashRef = null;
+            this.cachedPeakHash = '';
             this.maskFingerprint = '';
+            this.tintFingerprint = '';
         }
         this.markDirty();
     }
@@ -112,13 +125,18 @@ export class WaveformRenderer extends BaseSignalRenderer {
             const bufferFrontX = hasBufferConstraint ? x + Math.max(0, Math.min(1, bufferedProgress)) * width : null;
             const isInvalidated = Boolean(signal?.isInvalidated);
 
-            let peakChecksum = 0;
-            for (let i = 0; i < peaks.length; i++) {
-                peakChecksum = ((peakChecksum * 31) + Math.round(peaks[i] * 1000)) | 0;
+            if (this.cachedPeakHashRef !== peaks) {
+                let peakChecksum = 0;
+                for (let i = 0; i < peaks.length; i++) {
+                    peakChecksum = ((peakChecksum * 31) + Math.round(peaks[i] * 1000)) | 0;
+                }
+                this.cachedPeakHashRef = peaks;
+                this.cachedPeakHash = `${peaks.length}_${peakChecksum}`;
             }
-            const peakHash = `${peaks.length}_${peakChecksum}`;
             const bufId = signal?.buffer ? `${signal.buffer.length}_${signal.buffer.duration.toFixed(3)}` : 'nobuf';
-            const currentFp = `${bufId}_${peakHash}_${columns}_${Math.floor(width)}_${Math.floor(height)}_${cropStartNorm}_${cropEndNorm}`;
+            const wInt = Math.floor(width);
+            const hInt = Math.floor(height);
+            const currentFp = `${bufId}_${this.cachedPeakHash}_${columns}_${wInt}_${hInt}_${cropStartNorm}_${cropEndNorm}`;
             const mask = getOrCreateOffscreenCanvas(this.maskCanvas, width, height);
             const tint = getOrCreateOffscreenCanvas(this.tintCanvas, width, height);
 
@@ -129,8 +147,10 @@ export class WaveformRenderer extends BaseSignalRenderer {
                 const tCtx = tint.getContext('2d');
 
                 if (mCtx && tCtx) {
-                    if (this.maskFingerprint !== currentFp) {
+                    const maskChanged = this.maskFingerprint !== currentFp;
+                    if (maskChanged) {
                         this.maskFingerprint = currentFp;
+                        this.tintFingerprint = '';
                         mCtx.clearRect(0, 0, width, height);
                         const maskMidY = height * 0.5;
 
@@ -149,18 +169,19 @@ export class WaveformRenderer extends BaseSignalRenderer {
                         }
                     }
 
-                    tCtx.clearRect(0, 0, width, height);
-                    tCtx.drawImage(mask, 0, 0);
-                    tCtx.globalCompositeOperation = 'source-in';
-                    if (isInvalidated) {
-                        tCtx.fillStyle = 'rgba(245, 158, 11, 0.6)';
-                    } else if (isDimmed) {
-                        tCtx.fillStyle = colorWithAlpha(accent, 0.25);
-                    } else {
-                        tCtx.fillStyle = accent;
+                    const tintFill = isInvalidated
+                        ? 'rgba(245, 158, 11, 0.6)'
+                        : (isDimmed ? colorWithAlpha(accent, 0.25) : accent);
+                    const nextTintFp = `${currentFp}_${tintFill}`;
+                    if (this.tintFingerprint !== nextTintFp) {
+                        this.tintFingerprint = nextTintFp;
+                        tCtx.clearRect(0, 0, width, height);
+                        tCtx.drawImage(mask, 0, 0);
+                        tCtx.globalCompositeOperation = 'source-in';
+                        tCtx.fillStyle = tintFill;
+                        tCtx.fillRect(0, 0, width, height);
+                        tCtx.globalCompositeOperation = 'source-over';
                     }
-                    tCtx.fillRect(0, 0, width, height);
-                    tCtx.globalCompositeOperation = 'source-over';
 
                     ctx.drawImage(tint, x, y);
                 }

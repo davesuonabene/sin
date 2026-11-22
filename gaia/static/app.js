@@ -133,26 +133,21 @@ function initializeGaiaLibrary() {
         projectPendingMoveIds: new Set(),
         projectCreationImportContext: null,
         pendingPlacement: null,
-        collectionContents: new Map(),
-        collectionContentsTotal: new Map(),
-        collectionCacheAccessOrder: [],
-        pendingNestedLoads: new Map(),
-        collectionContentPaging: new Map(),
-        collectionContentsLoading: new Set(),
-        collectionContentsErrors: new Map(),
-        collectionContentControllers: new Map(),
-        collectionContentQuery: '',
+        visibleFlatRows: [],
+        filterMatches: null,
         versionSelections: new Map(),
         pendingVersionDeletion: null,
         libraryLoadPromise: null,
-        libraryLoadController: null,
-        libraryLoadQuery: null,
-        searchDebounceTimer: null,
+        searchRafId: null,
         mainColumnOrder: mainColumnPreferences.order,
         mainVisibleColumns: new Set(mainColumnPreferences.visible),
         mainColumnWidths: mainColumnPreferences.widths,
         columnResize: null,
     };
+
+    const catalogStore = new window.GaiaCatalogStore({ cacheKey: 'gaia-manager' });
+    let catalogBooted = false;
+    let virtualList = null;
 
     const assetList = document.getElementById('asset-list');
     const assetPanel = document.querySelector('.asset-panel');
@@ -220,6 +215,8 @@ function initializeGaiaLibrary() {
     const listHeader = document.getElementById('list-header');
     const columnMenu = document.getElementById('column-menu');
     const contextMenu = document.getElementById('context-menu');
+    const contextOpenEditorButton = document.getElementById('context-open-editor');
+    const contextOpenScratchButton = document.getElementById('context-open-scratch');
     const contextSelectAllButton = document.getElementById('context-select-all');
     const copyEntryMenu = document.getElementById('copy-entry-menu');
     const pasteEntryMenu = document.getElementById('paste-entry-menu');
@@ -335,6 +332,9 @@ function initializeGaiaLibrary() {
     const projectDialogClose = document.getElementById('project-dialog-close');
     const projectDialogCancel = document.getElementById('project-dialog-cancel');
     const projectName = document.getElementById('project-name');
+    const projectKindSelect = document.getElementById('project-kind');
+    const projectEngineSelect = document.getElementById('project-engine');
+    const projectEngineHelp = document.getElementById('project-engine-help');
     const projectSourcePreview = document.getElementById('project-source-preview');
     const projectSourceTitle = document.getElementById('project-source-title');
     const projectSourceCount = document.getElementById('project-source-count');
@@ -881,15 +881,14 @@ function initializeGaiaLibrary() {
     }
 
     function filterableEntries() {
-        return allEntries().map(entry => filterableItem(entry));
+        return rootAssetEntries().map(entry => filterableItem(entry));
     }
 
     function compatibleFacets(selection) {
         const vaultKey = selection?.vaultIds ? [...selection.vaultIds].sort().join(',') : '';
         const typesKey = selection?.types ? [...selection.types].sort().join(',') : '';
         const tagsKey = selection?.tags ? [...selection.tags].sort().join(',') : '';
-        const queryKey = state.query || '';
-        const cacheKey = `${catalogFacetVersion}|${vaultKey}|${typesKey}|${tagsKey}|${queryKey}`;
+        const cacheKey = `${catalogFacetVersion}|${vaultKey}|${typesKey}|${tagsKey}`;
         if (cachedFacetsKey === cacheKey && cachedFacetsResult) {
             return cachedFacetsResult;
         }
@@ -897,11 +896,9 @@ function initializeGaiaLibrary() {
         const vaultIds = new Set();
         const types = new Set();
         const tags = new Map();
-        const facetSourceItems = state.query && state.catalogItems.length ? state.catalogItems : state.items;
-        const facetItems = state.query
-            ? facetSourceItems.map(item => item)
-            : filterableEntries();
-        facetItems.forEach(item => {
+        const facetSourceItems = state.catalogItems.length ? state.catalogItems : state.items;
+        for (let i = 0; i < facetSourceItems.length; i++) {
+            const item = facetSourceItems[i];
             if (assetMatchesFilters(item, { types: selection.types, tags: selection.tags })) {
                 assetVaultIds(item).forEach(id => vaultIds.add(id));
             }
@@ -915,41 +912,44 @@ function initializeGaiaLibrary() {
                     if (!tags.has(normalized)) tags.set(normalized, tag);
                 });
             }
-        });
-
-        // Root summaries carry child facets, keeping the filter rail useful
-        // without loading every collapsed collection into the browser.
-        facetSourceItems.filter(item => typeIsContainer(item.type)).forEach(collection => {
-            const contentTypes = Array.isArray(collection.content_types) ? collection.content_types : [];
-            const contentTags = Array.isArray(collection.content_tags) ? collection.content_tags : [];
-            const vaultMatches = !selection.vaultIds?.size || selection.vaultIds.has(Number(collection.vault_id));
-            if (!vaultMatches) return;
-            const tagsMatch = !selection.tags?.size || [...selection.tags].every(selectedTag => (
-                contentTags.some(itemTag => tagMatches(normalizeFacetValue(selectedTag), normalizeFacetValue(itemTag)))
-            ));
-            if (tagsMatch) {
-                contentTypes.forEach(type => {
-                    if (!selection.types?.size || selection.types.has(type)) types.add(type);
-                });
+            if (typeIsContainer(item.type)) {
+                const contentTypes = Array.isArray(item.content_types) ? item.content_types : [];
+                const contentTags = Array.isArray(item.content_tags) ? item.content_tags : [];
+                const vaultMatches = !selection.vaultIds?.size || selection.vaultIds.has(Number(item.vault_id));
+                if (!vaultMatches) continue;
+                const tagsMatch = !selection.tags?.size || [...selection.tags].every(selectedTag => (
+                    contentTags.some(itemTag => tagMatches(normalizeFacetValue(selectedTag), normalizeFacetValue(itemTag)))
+                ));
+                if (tagsMatch) {
+                    for (let j = 0; j < contentTypes.length; j++) {
+                        const ct = contentTypes[j];
+                        if (!selection.types?.size || selection.types.has(ct)) types.add(ct);
+                    }
+                }
+                if (!selection.types?.size || contentTypes.some(ct => selection.types.has(ct))) {
+                    for (let j = 0; j < contentTags.length; j++) {
+                        const ct = contentTags[j];
+                        const normalized = normalizeFacetValue(ct);
+                        if (!tags.has(normalized)) tags.set(normalized, ct);
+                    }
+                }
             }
-            if (!selection.types?.size || contentTypes.some(type => selection.types.has(type))) {
-                contentTags.forEach(tag => {
-                    const normalized = normalizeFacetValue(tag);
-                    if (!tags.has(normalized)) tags.set(normalized, tag);
-                });
-            }
-        });
+        }
         cachedFacetsKey = cacheKey;
         cachedFacetsResult = { vaultIds, types, tags };
         return cachedFacetsResult;
     }
 
     function allEntries() {
+        if (state.visibleFlatRows.length) {
+            const entries = [];
+            for (let i = 0; i < state.visibleFlatRows.length; i++) {
+                const e = state.visibleFlatRows[i].entry;
+                if (e) entries.push(e);
+            }
+            return entries;
+        }
         const entries = rootAssetEntries();
-
-        state.items.filter(item => typeIsContainer(item.type)).forEach(collection => {
-            entries.push(...collectionContentEntries(collection));
-        });
         if (state.subfolderEntries?.size) {
             entries.push(...state.subfolderEntries.values());
         }
@@ -1082,157 +1082,66 @@ function initializeGaiaLibrary() {
     }
 
     function resetNestedLibraryCaches() {
-        state.collectionContentControllers.forEach(controller => controller.abort());
-        state.collectionContents.clear();
-        state.collectionContentsTotal?.clear();
-        state.collectionCacheAccessOrder = [];
-        state.pendingNestedLoads?.clear();
-        state.collectionContentPaging.clear();
-        state.collectionContentsErrors.clear();
-        state.collectionContentsLoading.clear();
-        state.collectionContentControllers.clear();
         invalidateFacetCache();
-
         state.projectReferenceControllers.forEach(controller => controller.abort());
         state.projectReferencedItems.clear();
         state.projectReferencesLoading.clear();
         state.projectReferenceControllers.clear();
     }
 
-    const FIRST_CHUNK_LIMIT = 150;
-    const NEXT_CHUNK_LIMIT = 250;
-    const MAX_CACHED_COLLECTIONS = 100;
+    /** Direct 1-level children (plus project references) straight from in-memory catalogStore (< 0.1 ms). */
+    function directChildEntries(parentContainer, rootCollection = parentContainer) {
+        const parentId = Number(parentContainer?.id);
+        const references = typeIsProject(parentContainer?.type) ? projectReferenceEntries(parentContainer) : [];
+        const referencedItemIds = references.length
+            ? new Set(references.flatMap(entry => [
+                Number(entry.item.id),
+                ...(entry.versions || []).map(version => Number(version.item?.id)),
+            ]))
+            : null;
+        const rawChildren = catalogStore.getDirectChildren(parentId);
+        const folders = [];
+        const files = [];
+        const rootPath = String(rootCollection?.absolute_path || parentContainer?.absolute_path || '').replace(/\\/g, '/').replace(/\/+$/, '');
+        const rootPrefixLower = rootPath ? `${rootPath.toLowerCase()}/` : '';
 
-    function touchCollectionCache(collectionId) {
-        const numericId = Number(collectionId);
-        if (!Number.isFinite(numericId)) return;
-        if (!state.collectionCacheAccessOrder) state.collectionCacheAccessOrder = [];
-        const idx = state.collectionCacheAccessOrder.indexOf(numericId);
-        if (idx >= 0) state.collectionCacheAccessOrder.splice(idx, 1);
-        state.collectionCacheAccessOrder.push(numericId);
-
-        if (state.collectionContents.size > MAX_CACHED_COLLECTIONS) {
-            for (let i = 0; i < state.collectionCacheAccessOrder.length; i++) {
-                const candidateId = state.collectionCacheAccessOrder[i];
-                const isExpanded = state.expandedCollections.has(String(candidateId)) || state.expandedCollections.has(candidateId);
-                if (!isExpanded && !state.collectionContentsLoading.has(candidateId)) {
-                    state.collectionContents.delete(candidateId);
-                    state.collectionContentsTotal?.delete(candidateId);
-                    state.collectionCacheAccessOrder.splice(i, 1);
-                    break;
-                }
+        for (let i = 0; i < rawChildren.length; i++) {
+            const child = rawChildren[i];
+            if (referencedItemIds && referencedItemIds.has(Number(child.id))) continue;
+            const isSub = child.type === 'folder' || child.type === 'collection' || Boolean(child.attributes?.is_folder);
+            if (isSub) {
+                folders.push(child);
+            } else {
+                files.push(child);
             }
         }
-    }
 
-    function queuePendingNestedLoad(parentId, childId) {
-        const pId = Number(parentId);
-        const cId = Number(childId);
-        if (!Number.isFinite(pId) || !Number.isFinite(cId)) return;
-        if (!state.pendingNestedLoads) state.pendingNestedLoads = new Map();
-        if (!state.pendingNestedLoads.has(pId)) {
-            state.pendingNestedLoads.set(pId, new Set());
-        }
-        state.pendingNestedLoads.get(pId).add(cId);
-    }
+        const versionedFiles = groupFileVersions(files, {
+            pathFor: item => item.absolute_path || item.filename,
+            idFor: item => item.id,
+            scope: `folder:${parentId}`,
+        }).map((group, idx) => {
+            const rec = group.record;
+            const rawAbs = String(rec.absolute_path || '').replace(/\\/g, '/');
+            const relPath = (rootPrefixLower && rawAbs.toLowerCase().startsWith(rootPrefixLower))
+                ? rawAbs.slice(rootPrefixLower.length)
+                : (rec.attributes?.folder ? `${rec.attributes.folder}/${rec.filename}` : rec.filename);
+            return registerEntry({
+                kind: 'content',
+                id: group.fileVersionGroup ? `version:${group.fileVersionGroup}` : `${rootCollection.id}:item:${rec.id}`,
+                itemId: Number(rec.id),
+                type: rec.type,
+                title: group.fileVersionDisplayName || rec.title || rec.filename,
+                path: relPath,
+                content: { ...rec, child_id: rec.id, index: idx, relative_path: relPath },
+                item: rec,
+                collection: rootCollection,
+                fileVersionGroup: group.fileVersionGroup,
+                fileVersions: group.fileVersions,
+            });
+        });
 
-    function triggerPendingNestedLoads(parentId) {
-        const pId = Number(parentId);
-        if (!Number.isFinite(pId) || !state.pendingNestedLoads?.has(pId)) return;
-        const childIds = Array.from(state.pendingNestedLoads.get(pId));
-        state.pendingNestedLoads.delete(pId);
-        for (const childId of childIds) {
-            if (state.expandedCollections.has(String(childId)) || state.expandedCollections.has(childId)) {
-                loadCollectionContents(childId);
-            }
-        }
-    }
-
-    async function loadCollectionContents(collectionId, { reset = false } = {}) {
-        const numericId = Number(collectionId);
-        if (!Number.isFinite(numericId)) return;
-        if (!reset && state.collectionContentsLoading.has(numericId)) return;
-
-        touchCollectionCache(numericId);
-
-        let currentContents = reset ? [] : (state.collectionContents.get(numericId) || []);
-        const totalKnown = reset ? undefined : state.collectionContentsTotal?.get(numericId);
-
-        if (!reset && state.collectionContents.has(numericId) && totalKnown !== undefined && currentContents.length >= totalKnown) {
-            return;
-        }
-
-        const requestedQuery = state.collectionContentQuery;
-        state.collectionContentControllers.get(numericId)?.abort();
-        const controller = new AbortController();
-        state.collectionContentControllers.set(numericId, controller);
-        state.collectionContentsLoading.add(numericId);
-        state.collectionContentsErrors.delete(numericId);
-        if (reset) {
-            state.collectionContents.delete(numericId);
-            state.collectionContentsTotal?.delete(numericId);
-        }
-        renderAssets();
-
-        try {
-            let offset = reset ? 0 : currentContents.length;
-            let hasMore = true;
-            let isFirstChunk = (offset === 0);
-
-            while (hasMore && !controller.signal.aborted) {
-                const chunkLimit = isFirstChunk ? FIRST_CHUNK_LIMIT : NEXT_CHUNK_LIMIT;
-                const querySuffix = requestedQuery ? `&query=${encodeURIComponent(requestedQuery)}` : '';
-                const response = await fetch(`/items/${numericId}/contents-page?offset=${offset}&limit=${chunkLimit}${querySuffix}`, { signal: controller.signal });
-                const result = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(result.detail || 'Could not load collection contents');
-                if (requestedQuery !== state.collectionContentQuery || controller.signal.aborted) return;
-
-                const incoming = Array.isArray(result.contents) ? result.contents : [];
-                if (isFirstChunk && offset === 0) {
-                    currentContents = incoming;
-                } else {
-                    currentContents = currentContents.concat(incoming);
-                }
-                state.collectionContents.set(numericId, currentContents);
-                if (typeof result.total === 'number') {
-                    if (!state.collectionContentsTotal) state.collectionContentsTotal = new Map();
-                    state.collectionContentsTotal.set(numericId, result.total);
-                }
-                state.collectionContentPaging.delete(numericId);
-
-                offset = currentContents.length;
-                hasMore = Boolean(result.has_more) && (incoming.length > 0) && (typeof result.total === 'number' ? offset < result.total : true);
-                isFirstChunk = false;
-
-                renderAssets();
-
-                if (!hasMore || incoming.length === 0) {
-                    break;
-                }
-            }
-        } catch (error) {
-            if (error?.name === 'AbortError') return;
-            state.collectionContentsErrors.set(numericId, error.message || 'Could not load collection contents');
-        } finally {
-            if (state.collectionContentControllers.get(numericId) === controller) {
-                state.collectionContentControllers.delete(numericId);
-                state.collectionContentsLoading.delete(numericId);
-                triggerPendingNestedLoads(numericId);
-                scheduleVaultSyncCheck(state.selectedVaultId, 120);
-            }
-            renderFilterUI();
-            renderAssets();
-        }
-    }
-
-    function offloadCollectionContents(collectionId) {
-        const numericId = Number(collectionId);
-        if (!Number.isFinite(numericId)) return;
-        state.collectionContentControllers.get(numericId)?.abort();
-        state.collectionContentControllers.delete(numericId);
-        state.collectionContentsLoading.delete(numericId);
-        state.collectionContentsErrors.delete(numericId);
-        // Preserves loaded contents in memory cache so re-opening is instantaneous
+        return { folders, files: versionedFiles, references };
     }
 
     function collectionContentEntries(collection) {
@@ -1241,11 +1150,9 @@ function initializeGaiaLibrary() {
             Number(entry.item.id),
             ...(entry.versions || []).map(version => Number(version.item?.id)),
         ]));
-        const rawContents = state.collectionContents.has(Number(collection.id))
-            ? state.collectionContents.get(Number(collection.id))
-            : (collection.contents || []);
+        const rawContents = catalogStore.getSubtreeContents(Number(collection.id));
         const contents = groupFileVersions(
-            (rawContents || []).filter(content => !referencedItemIds.has(Number(content.child_id))),
+            rawContents.filter(content => !referencedItemIds.has(Number(content.child_id))),
             {
                 pathFor: content => content.relative_path || content.filename,
                 idFor: content => content.child_id || `${collection.id}:${content.index}`,
@@ -1253,7 +1160,7 @@ function initializeGaiaLibrary() {
             },
         ).map(group => registerEntry({
             kind: 'content',
-            id: group.fileVersionGroup ? `version:${group.fileVersionGroup}` : `${collection.id}:${group.record.index}`,
+            id: group.fileVersionGroup ? `version:${group.fileVersionGroup}` : `${collection.id}:item:${group.record.child_id ?? group.record.index}`,
             itemId: Number(group.record.child_id) || null,
             type: group.record.type,
             title: group.fileVersionDisplayName || group.record.title || group.record.filename,
@@ -1274,6 +1181,13 @@ function initializeGaiaLibrary() {
             tags: state.selectedTags,
         })) return false;
         if (!state.query) return true;
+        const item = entry.item || entry.content;
+        if (item?._search) {
+            const tokens = state.query.split(/\s+/).filter(Boolean);
+            const refTags = (entry.reference?.tags || entry.reference?.attributes?.tags || []).join(' ').toLowerCase();
+            const haystack = refTags ? `${item._search} ${refTags}` : item._search;
+            return tokens.every(tok => haystack.includes(tok));
+        }
         const haystack = [
             entry.title,
             entry.path,
@@ -1287,64 +1201,40 @@ function initializeGaiaLibrary() {
     }
 
     function filteringIsActive() {
-        return Boolean(state.selectedVaultId !== null || state.selectedTypes.size || state.selectedTags.size || state.query);
-    }
-
-    function unloadedCollectionMatches(collection) {
-        if (!typeIsContainer(collection?.type)) return false;
-        // Text search needs actual content rows. Type/tag filters can use the
-        // compact facets returned with the root summary.
-        if (state.query) return Boolean(collection.matches_query);
-        if (state.selectedVaultId !== null && Number(collection.vault_id) !== Number(state.selectedVaultId)) return false;
-        const contentTypes = new Set((collection.content_types || []).map(normalizeFacetValue));
-        if (state.selectedTypes.size && ![...state.selectedTypes].some(type => contentTypes.has(normalizeFacetValue(type)))) return false;
-        const contentTags = (collection.content_tags || []).map(normalizeFacetValue);
-        return [...state.selectedTags].every(selectedTag => contentTags.some(itemTag => (
-            tagMatches(normalizeFacetValue(selectedTag), itemTag)
-        )));
+        return Boolean(state.selectedTypes.size || state.selectedTags.size || state.query);
     }
 
     function visibleEntries() {
         const assets = rootAssetEntries();
-        if (!filteringIsActive()) return assets.sort((a, b) => a.title.localeCompare(b.title));
+        if (!filteringIsActive()) {
+            state.filterMatches = null;
+            return assets.sort((a, b) => a.title.localeCompare(b.title));
+        }
+
+        const fm = catalogStore.computeFilterMatches({
+            roots: state.items,
+            query: state.query,
+            selectedTypes: state.selectedTypes,
+            selectedTags: state.selectedTags,
+        });
+        state.filterMatches = fm;
 
         return assets.filter(entry => {
-            if (entryMatches(entry)) return true;
-            if (!typeIsContainer(entry.type)) return false;
-            if (state.collectionContents.has(Number(entry.item.id))) {
-                return collectionContentEntries(entry.item).some(entryMatches);
+            const id = Number(entry.item?.id);
+            if (fm.matchingBranchIds.has(id)) return true;
+            if (typeIsProject(entry.type) && state.projectReferencedItems.has(id)) {
+                return projectReferenceEntries(entry.item).some(entryMatches);
             }
-            return unloadedCollectionMatches(entry.item);
+            return entryMatches(entry);
         }).sort((a, b) => a.title.localeCompare(b.title));
     }
 
     function selectionEntries() {
         const entries = [];
-        function collectNodeEntries(node, collection) {
-            const sortedSubfolders = Array.from(node.subfolders.values()).sort((a, b) =>
-                a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-            );
-            sortedSubfolders.forEach(subfolder => {
-                const folderEntryId = `subfolder:${collection.id}:${subfolder.fullPath}`;
-                const folderEntry = state.subfolderEntries?.get(folderEntryId);
-                if (folderEntry) entries.push(folderEntry);
-                const subfolderKey = `${collection.id}:${subfolder.fullPath}`;
-                if (state.expandedSubfolders.has(subfolderKey)) {
-                    collectNodeEntries(subfolder, collection);
-                }
-            });
-            node.files.forEach(file => entries.push(file));
+        for (let i = 0; i < state.visibleFlatRows.length; i++) {
+            const e = state.visibleFlatRows[i].entry;
+            if (e) entries.push(e);
         }
-
-        visibleEntries().forEach(entry => {
-            entries.push(entry);
-            if (entry.kind === 'asset' && typeIsContainer(entry.type) && state.expandedCollections.has(entry.id)) {
-                const contents = collectionContentEntries(entry.item);
-                const matchingContents = filteringIsActive() && !entryMatches(entry) ? contents.filter(entryMatches) : contents;
-                const tree = buildCollectionTree(matchingContents);
-                collectNodeEntries(tree, entry.item);
-            }
-        });
         return entries;
     }
 
@@ -1372,7 +1262,12 @@ function initializeGaiaLibrary() {
             state.selectedEntryIds.add(entry.id);
             state.selectionAnchorId = entry.id;
         }
-        window.dispatchEvent(new CustomEvent('gaia:selection', { detail: { entry } }));
+        window.dispatchEvent(new CustomEvent('gaia:selection', {
+            detail: {
+                entry,
+                playable: Boolean(entry && (canPreview(entry) || entry.isContainer || typeIsContainer(entry.type) || entry.type === 'collection')),
+            },
+        }));
     }
 
     function entryPath(entry) {
@@ -1468,6 +1363,12 @@ function initializeGaiaLibrary() {
             case 'type': {
                 const label = record.attributes?.profile_label || entry.reference?.attributes?.profile_label || entry.content?.attributes?.profile_label;
                 if (label) return label;
+                if (entry.type === 'project' || record.type === 'project') {
+                    const kind = record.project_kind || 'audio';
+                    const engine = record.editor_engine || (kind === 'video' ? 'simple_media' : 'sin');
+                    if (kind === 'video') return 'Project · Video';
+                    return engine === 'simple_media' ? 'Project · Audio (Simple)' : 'Project · Audio (SIN)';
+                }
                 if (record.attributes?.is_folder || entry.type === 'collection' || entry.type === 'folder') return 'Folder';
                 return typeLabel(entry.type);
             }
@@ -1570,7 +1471,7 @@ function initializeGaiaLibrary() {
         const item = entry.kind === 'content' ? entry.content : entry.item;
         if ((item?.availability || 'ready') !== 'ready') return false;
         if (entry.kind === 'content') return Boolean(entry.content.streamable);
-        return ['audio', 'track', 'sample', 'multitrack', 'zoom_h4'].includes(entry.type);
+        return ['audio', 'track', 'sample', 'video', 'multitrack', 'zoom_h4'].includes(entry.type);
     }
 
     function itemEntry(item, id) {
@@ -1601,47 +1502,26 @@ function initializeGaiaLibrary() {
     }
 
     function stopPlayback() {
-        if (!state.audio) {
-            window.dispatchEvent(new CustomEvent('gaia:stop'));
-            return;
-        }
-        const audio = state.audio;
-        state.audio = null;
         state.playingKey = null;
-        try {
-            audio.pause();
-            audio.removeAttribute('src');
-            audio.load();
-        } catch (_error) {
-            // The media element is already detached; clearing GAIA state is enough.
+        if (window.gaiaAudioPreview) {
+            window.gaiaAudioPreview.stop();
+            return;
         }
         window.dispatchEvent(new CustomEvent('gaia:stop'));
     }
 
-    function play(entry) {
+    function play(entry, { toggleIfSame = true } = {}) {
         if (window.gaiaTransport?.requestPlay?.(entry)) return;
         const key = entry.id;
-        if (state.audio && state.playingKey === key) {
-            if (state.audio.paused) {
-                state.audio.play();
-            } else {
-                state.audio.pause();
-            }
-            return;
+        if (window.gaiaAudioPreview) {
+            state.playingKey = key;
+            const itemId = numericItemId(entry) || entry.itemId || entry.item?.id || entry.content?.child_id || null;
+            void window.gaiaAudioPreview.play(entry, {
+                streamUrl: streamUrl(entry),
+                itemId,
+                toggleIfSame,
+            });
         }
-
-        if (state.audio) stopPlayback();
-        state.audio = new Audio(streamUrl(entry));
-        state.playingKey = key;
-        state.audio.onended = () => {
-            state.playingKey = null;
-            window.dispatchEvent(new CustomEvent('gaia:stop'));
-        };
-        window.dispatchEvent(new CustomEvent('gaia:play', { detail: { entry, audio: state.audio } }));
-        state.audio.play().catch(() => {
-            state.playingKey = null;
-            window.dispatchEvent(new CustomEvent('gaia:stop'));
-        });
     }
 
     function canEdit(entry, field) {
@@ -1683,17 +1563,9 @@ function initializeGaiaLibrary() {
         if (entry.folderItem) Object.assign(entry.folderItem, result);
 
         if (Number.isFinite(itemId)) {
+            catalogStore.patchItemLocal(itemId, result);
             const index = state.items.findIndex(item => Number(item.id) === itemId);
             if (index >= 0) state.items[index] = { ...state.items[index], ...result };
-        }
-
-        if (entry.collection?.id) {
-            const collectionId = Number(entry.collection.id);
-            const contents = state.collectionContents.get(collectionId);
-            if (contents) {
-                const contentIdx = contents.findIndex(c => (itemId && Number(c.child_id) === itemId) || (c.index !== undefined && c.index === entry.content?.index));
-                if (contentIdx >= 0) contents[contentIdx] = { ...contents[contentIdx], ...result };
-            }
         }
 
         state.projectReferencedItems.forEach(records => {
@@ -1958,15 +1830,11 @@ function initializeGaiaLibrary() {
         if (state.expandedCollections.has(id) || (itemId && state.expandedCollections.has(itemId))) {
             state.expandedCollections.delete(id);
             if (itemId) state.expandedCollections.delete(itemId);
-            if (targetId) {
-                offloadCollectionContents(targetId);
-            }
         } else {
             state.expandedCollections.add(id);
             if (itemId) state.expandedCollections.add(itemId);
-            if (targetId) {
-                loadCollectionContents(targetId);
-                if (typeIsProject(entry.type)) loadProjectReferencedItems(targetId);
+            if (targetId && typeIsProject(entry.type)) {
+                loadProjectReferencedItems(targetId);
             }
         }
         renderAssets();
@@ -2093,15 +1961,13 @@ function initializeGaiaLibrary() {
         return row;
     }
 
-    let titlePreviewTimer = null;
-
-    function previewEntry(entry) {
+    function previewEntry(entry, { toggleIfSame = true } = {}) {
         if (!entry) return;
         selectEntry(entry, { ctrlKey: false, metaKey: false, shiftKey: false });
         if (entry.isContainer || typeIsContainer(entry.type) || entry.type === 'collection') {
             previewContainer(entry);
         } else if (canPreview(entry)) {
-            play(entry);
+            play(entry, { toggleIfSame });
         }
         refreshSelectionPresentation();
     }
@@ -2109,6 +1975,10 @@ function initializeGaiaLibrary() {
     function initAssetListDelegation() {
         if (!assetList || assetList.dataset.delegationInitialized) return;
         assetList.dataset.delegationInitialized = 'true';
+
+        assetList.addEventListener('pointerdown', () => {
+            window.gaiaAudioPreview?.warmUp?.();
+        }, { once: true, passive: true });
 
         assetList.addEventListener('click', async event => {
             const favBtn = event.target.closest('.favourite-toggle-btn');
@@ -2143,15 +2013,7 @@ function initializeGaiaLibrary() {
                         if (folderItemId) state.expandedCollections.delete(String(folderItemId));
                     } else {
                         state.expandedSubfolders.add(subfolderKey);
-                        if (folderItemId) {
-                            state.expandedCollections.add(String(folderItemId));
-                            const parentCollectionId = Number(entry.collection?.id);
-                            if (parentCollectionId && state.collectionContentsLoading.has(parentCollectionId)) {
-                                queuePendingNestedLoad(parentCollectionId, folderItemId);
-                            } else {
-                                loadCollectionContents(folderItemId);
-                            }
-                        }
+                        if (folderItemId) state.expandedCollections.add(String(folderItemId));
                     }
                     renderAssets();
                 } else {
@@ -2166,13 +2028,8 @@ function initializeGaiaLibrary() {
                 const entry = row ? entryById(row.dataset.entryId) : null;
                 if (entry && event.detail === 1) {
                     event.stopPropagation();
-                    if (titlePreviewTimer !== null) {
-                        window.clearTimeout(titlePreviewTimer);
-                    }
-                    titlePreviewTimer = window.setTimeout(() => {
-                        titlePreviewTimer = null;
-                        previewEntry(entry);
-                    }, 220);
+                    // Instant zero-delay preview (< 5ms via native libsin_dsp / Web Audio LRU)
+                    previewEntry(entry);
                 }
                 return;
             }
@@ -2206,12 +2063,9 @@ function initializeGaiaLibrary() {
         assetList.addEventListener('dblclick', event => {
             const titleText = event.target.closest('.asset-title-text');
             if (titleText) {
-                if (titlePreviewTimer !== null) {
-                    window.clearTimeout(titlePreviewTimer);
-                    titlePreviewTimer = null;
-                }
                 event.preventDefault();
                 event.stopPropagation();
+                stopPlayback();
                 const row = titleText.closest('.asset-row');
                 const entry = row ? entryById(row.dataset.entryId) : null;
                 if (entry && canEdit(entry, 'title')) {
@@ -2251,10 +2105,13 @@ function initializeGaiaLibrary() {
 
             const subfolderKey = row.dataset.subfolderKey;
             if (subfolderKey) {
-                if (state.expandedSubfolders.has(subfolderKey)) {
+                const folderItemId = entryFolderItemId(entry);
+                if (state.expandedSubfolders.has(subfolderKey) || (folderItemId && state.expandedCollections.has(String(folderItemId)))) {
                     state.expandedSubfolders.delete(subfolderKey);
+                    if (folderItemId) state.expandedCollections.delete(String(folderItemId));
                 } else {
                     state.expandedSubfolders.add(subfolderKey);
+                    if (folderItemId) state.expandedCollections.add(String(folderItemId));
                 }
                 renderAssets();
                 return;
@@ -2541,144 +2398,7 @@ function initializeGaiaLibrary() {
         return indicator;
     }
 
-    function renderCollectionTree(node, collection, collectionLayout, container, depth = 0) {
-        const collectionId = Number(collection.id);
-
-        const sortedSubfolders = Array.from(node.subfolders.values()).sort((a, b) =>
-            a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-        );
-
-        const fragment = document.createDocumentFragment();
-
-        sortedSubfolders.forEach(subfolder => {
-            const subfolderKey = `${collectionId}:${subfolder.fullPath}`;
-            const folderEntryId = `subfolder:${collectionId}:${subfolder.fullPath}`;
-            const totalFiles = countTreeFiles(subfolder);
-            const isExpanded = state.expandedSubfolders.has(subfolderKey);
-
-            const folderItemId = entryFolderItemId(subfolder.folderItem);
-
-            const folderEntry = registerEntry({
-                id: folderEntryId,
-                kind: 'subfolder',
-                type: 'folder',
-                title: subfolder.name,
-                name: subfolder.name,
-                path: subfolder.fullPath,
-                fullPath: subfolder.fullPath,
-                collection: collection,
-                subfolder: subfolder,
-                folderItem: subfolder.folderItem || null,
-                itemId: folderItemId,
-                item: subfolder.folderItem?.item
-                    || (folderItemId ? { id: Number(folderItemId), vault_id: collection.vault_id, type: 'collection', attributes: { is_folder: true }, title: subfolder.name } : { id: null, vault_id: collection.vault_id, type: 'folder', attributes: { is_folder: true }, title: subfolder.name }),
-                content: subfolder.folderItem?.content || subfolder.folderItem || { child_id: folderItemId ? Number(folderItemId) : null, vault_id: collection.vault_id, attributes: { is_folder: true } },
-                contentCount: totalFiles,
-            });
-            state.subfolderEntries.set(folderEntryId, folderEntry);
-
-            const row = createRow(folderEntry, { nested: true, subfolderDepth: depth, isSubfolder: true, subfolderKey });
-            fragment.appendChild(row);
-
-            if (isExpanded) {
-                const parentLoading = state.collectionContentsLoading.has(collectionId);
-                if (parentLoading) {
-                    fragment.appendChild(createRollingCursorIndicator({ depth: depth + 1 }));
-                } else if (folderItemId && state.collectionContents.has(folderItemId)) {
-                    const nestedContents = collectionContentEntries({ id: folderItemId, vault_id: collection.vault_id, contents: state.collectionContents.get(folderItemId) });
-                    const nestedTree = buildCollectionTree(nestedContents);
-                    renderCollectionTree(nestedTree, { id: folderItemId, vault_id: collection.vault_id }, collectionLayout, fragment, depth + 1);
-                    if (folderItemId && state.collectionContentsLoading.has(folderItemId)) {
-                        fragment.appendChild(createRollingCursorIndicator({ depth: depth + 1 }));
-                    }
-                } else if (subfolder.files.length === 0 && subfolder.subfolders.size === 0) {
-                    if (folderItemId && state.collectionContentsLoading.has(folderItemId)) {
-                        fragment.appendChild(createRollingCursorIndicator({ depth: depth + 1 }));
-                    } else {
-                        const emptyRow = document.createElement('div');
-                        emptyRow.className = 'empty-subfolder-hint';
-                        emptyRow.style.paddingLeft = `${(depth + 1) * 16 + 28}px`;
-                        emptyRow.textContent = 'This folder is empty';
-                        fragment.appendChild(emptyRow);
-                    }
-                } else {
-                    renderCollectionTree(subfolder, collection, collectionLayout, fragment, depth + 1);
-                }
-            }
-        });
-
-        node.files.forEach(content => {
-            fragment.appendChild(createEntry(content, { nested: true, subfolderDepth: depth }));
-        });
-
-        container.appendChild(fragment);
-    }
-
-    function renderLibraryStatus(entries = visibleEntries()) {
-        const current = filteringIsActive()
-            ? entries.reduce((count, entry) => {
-                if (!typeIsContainer(entry.type)) return count + 1;
-                const matchingContents = collectionContentEntries(entry.item).filter(entryMatches).length;
-                return count + (matchingContents || (entryMatches(entry) ? 1 : 0));
-            }, 0)
-            : entries.length;
-        const sourceCount = state.items.length;
-        const vaultName = state.selectedVaultId !== null ? (selectedVault()?.name || 'vault') : 'Show all';
-        const selectionSuffix = state.selectedEntryIds.size ? ` · ${state.selectedEntryIds.size} selected` : '';
-        summary.textContent = (filteringIsActive()
-            ? `${current} assets match the active filter`
-            : `${sourceCount} assets in ${vaultName}`) + selectionSuffix;
-        renderFilterStatus();
-    }
-
-    function renderAssets() {
-        state.subfolderEntries?.clear();
-        const entries = visibleEntries();
-        renderMoveBar();
-
-        const fragment = document.createDocumentFragment();
-
-        if (!entries.length) {
-            const emptyEl = document.createElement('div');
-            emptyEl.className = 'empty';
-            emptyEl.textContent = 'No assets match this view.';
-            fragment.appendChild(emptyEl);
-        } else {
-            entries.forEach(entry => {
-                const wrapper = createEntry(entry);
-
-                const isCollectionExpanded = state.expandedCollections.has(entry.id) || (entry.item?.id && state.expandedCollections.has(String(entry.item.id)));
-                const isContainerItem = typeIsContainer(entry.type) || entry.type === 'collection' || Boolean(entry.item?.attributes?.is_folder || entry.content?.attributes?.is_folder);
-                if (entry.kind === 'asset' && isContainerItem && isCollectionExpanded) {
-                    const contentContainer = document.createElement('div');
-                    const collectionLayout = collectionRowLayout(entry.item);
-                    contentContainer.className = `collection-contents collection-layout-${collectionLayout.id}`;
-                    const collectionId = Number(entry.item.id);
-                    const contents = collectionContentEntries(entry.item);
-                    const displayedContents = filteringIsActive() && !entryMatches(entry) ? contents.filter(entryMatches) : contents;
-                    if (displayedContents.length) contentContainer.appendChild(createCollectionHeader(entry.item));
-                    const tree = buildCollectionTree(displayedContents);
-                    renderCollectionTree(tree, entry.item, collectionLayout, contentContainer, 0);
-                    const loadingReferences = state.projectReferencesLoading.has(Number(entry.item.id));
-                    const loadingContents = state.collectionContentsLoading.has(collectionId);
-                    const error = state.collectionContentsErrors.get(collectionId);
-                    if (!displayedContents.length) {
-                        if (loadingContents || loadingReferences) {
-                            contentContainer.appendChild(createRollingCursorIndicator({ depth: 0 }));
-                        } else if (error) {
-                            contentContainer.innerHTML = `<div class="empty">${escapeHtml(error)}</div>`;
-                        } else {
-                            contentContainer.innerHTML = `<div class="empty">${filteringIsActive() ? 'No files in this collection match the active filter.' : 'This folder is empty.'}</div>`;
-                        }
-                    } else if (loadingContents || loadingReferences) {
-                        contentContainer.appendChild(createRollingCursorIndicator({ depth: 0 }));
-                    }
-                    wrapper.appendChild(contentContainer);
-                }
-                fragment.appendChild(wrapper);
-            });
-        }
-
+    function createEndSpacerElement() {
         const endSpacer = document.createElement('div');
         endSpacer.className = 'asset-list-end-spacer';
         endSpacer.dataset.role = 'table-end-spacer';
@@ -2713,19 +2433,369 @@ function initializeGaiaLibrary() {
                 window.alert('GAIA could not read the dragged items.');
             }
         });
+        return endSpacer;
+    }
 
-        assetList.replaceChildren(fragment, endSpacer);
+    function ensureVirtualList() {
+        if (virtualList || !assetList || !window.GaiaVirtualList) return virtualList;
+        virtualList = new window.GaiaVirtualList(assetList, {
+            overscan: 16,
+            createEndSpacer: createEndSpacerElement,
+            renderItem: renderFlatRow,
+        });
+        return virtualList;
+    }
+
+    function renderFlatRow(spec) {
+        if (!spec) return null;
+        if (spec.kind === 'empty') {
+            const emptyEl = document.createElement('div');
+            emptyEl.className = 'empty';
+            emptyEl.textContent = spec.text || 'No assets match this view.';
+            return emptyEl;
+        }
+        if (spec.kind === 'root') {
+            const el = createEntry(spec.entry);
+            if (spec.isExpanded) {
+                const btn = el.querySelector('.item-expand-toggle-btn');
+                if (btn) {
+                    btn.textContent = '▾';
+                    btn.setAttribute('aria-expanded', 'true');
+                }
+            }
+            return el;
+        }
+        if (spec.kind === 'collection-header') {
+            const header = createCollectionHeader(spec.collection);
+            header.classList.add('virtual-nested-header', `collection-layout-${spec.layout.id}`);
+            return header;
+        }
+        if (spec.kind === 'subfolder') {
+            const wrap = document.createElement('div');
+            wrap.className = `virtual-nested-entry collection-layout-${spec.layout.id}`;
+            if (spec.entry.itemId) wrap.dataset.itemId = String(spec.entry.itemId);
+            const row = createRow(spec.entry, {
+                nested: true,
+                subfolderDepth: spec.depth,
+                isSubfolder: true,
+                subfolderKey: spec.subfolderKey,
+            });
+            if (spec.isExpanded) {
+                const btn = row.querySelector('.item-expand-toggle-btn');
+                if (btn) {
+                    btn.textContent = '▾';
+                    btn.setAttribute('aria-expanded', 'true');
+                }
+            }
+            wrap.appendChild(row);
+            return wrap;
+        }
+        if (spec.kind === 'nested') {
+            const wrapper = createEntry(spec.entry, { nested: true, subfolderDepth: spec.depth });
+            wrapper.classList.add('virtual-nested-entry', `collection-layout-${spec.layout.id}`);
+            if (spec.entry.itemId) wrapper.dataset.itemId = String(spec.entry.itemId);
+            return wrapper;
+        }
+        if (spec.kind === 'loading') {
+            const wrap = document.createElement('div');
+            wrap.className = 'virtual-nested-entry';
+            wrap.appendChild(createRollingCursorIndicator({ depth: spec.depth }));
+            return wrap;
+        }
+        if (spec.kind === 'empty-sub') {
+            const emptyRow = document.createElement('div');
+            emptyRow.className = 'virtual-nested-entry empty-subfolder-hint';
+            emptyRow.style.paddingLeft = `${(spec.depth || 0) * 16 + 28}px`;
+            emptyRow.textContent = spec.text || 'This folder is empty';
+            return emptyRow;
+        }
+        return null;
+    }
+
+    function appendLogicalSubtreeFlatRows(rows, node, collection, layout, depth, parentMatchesFilter, filterActive, autoExpandSearch) {
+        const collectionId = Number(collection.id);
+        const nestedRowHeight = layout.id === 'sample-pack' ? 20 : 28;
+        const sortedSubfolders = Array.from(node.subfolders.values()).sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+        );
+
+        for (let i = 0; i < sortedSubfolders.length; i++) {
+            const subfolder = sortedSubfolders[i];
+            const subfolderKey = `${collectionId}:${subfolder.fullPath}`;
+            const folderEntryId = `subfolder:${collectionId}:${subfolder.fullPath}`;
+            const folderItemId = entryFolderItemId(subfolder.folderItem);
+            const isExpanded = state.expandedSubfolders.has(subfolderKey)
+                || (folderItemId && state.expandedCollections.has(String(folderItemId)))
+                || autoExpandSearch;
+
+            const folderEntry = registerEntry({
+                id: folderEntryId,
+                kind: 'subfolder',
+                type: 'folder',
+                title: subfolder.name,
+                name: subfolder.name,
+                path: subfolder.fullPath,
+                fullPath: subfolder.fullPath,
+                collection,
+                subfolder,
+                folderItem: subfolder.folderItem || null,
+                itemId: folderItemId,
+                item: subfolder.folderItem?.item
+                    || (folderItemId ? { id: Number(folderItemId), vault_id: collection.vault_id, type: 'folder', attributes: { is_folder: true }, title: subfolder.name } : { id: null, vault_id: collection.vault_id, type: 'folder', attributes: { is_folder: true }, title: subfolder.name }),
+                content: subfolder.folderItem?.content || subfolder.folderItem || { child_id: folderItemId ? Number(folderItemId) : null, vault_id: collection.vault_id, attributes: { is_folder: true } },
+                contentCount: countTreeFiles(subfolder),
+            });
+            state.subfolderEntries.set(folderEntryId, folderEntry);
+
+            rows.push({
+                kind: 'subfolder',
+                entry: folderEntry,
+                collection,
+                layout,
+                depth,
+                subfolderKey,
+                isExpanded,
+                height: 24,
+            });
+
+            if (isExpanded) {
+                if (subfolder.files.length === 0 && subfolder.subfolders.size === 0) {
+                    rows.push({ kind: 'empty-sub', depth: depth + 1, text: 'This folder is empty', height: 24 });
+                } else {
+                    appendLogicalSubtreeFlatRows(rows, subfolder, collection, layout, depth + 1, parentMatchesFilter, filterActive, autoExpandSearch);
+                }
+            }
+        }
+
+        for (let i = 0; i < node.files.length; i++) {
+            rows.push({
+                kind: 'nested',
+                entry: node.files[i],
+                collection,
+                layout,
+                depth,
+                height: nestedRowHeight,
+            });
+        }
+    }
+
+    function appendDirectFolderFlatRows(rows, parentItem, rootCollection, layout, depth, pathPrefix, parentMatchesFilter) {
+        const rootId = Number(rootCollection.id);
+        const filterActive = filteringIsActive();
+        const fm = state.filterMatches;
+        const autoExpandSearch = Boolean(state.query && fm);
+        const nestedRowHeight = layout.id === 'sample-pack' ? 20 : 28;
+        const { folders, files } = directChildEntries(parentItem, rootCollection);
+
+        let appendedAny = false;
+        for (let i = 0; i < folders.length; i++) {
+            const sub = folders[i];
+            if (filterActive && !parentMatchesFilter && fm && !fm.matchingBranchIds.has(sub.id)) {
+                continue;
+            }
+            const subTitle = sub.title || sub.filename || 'Folder';
+            const fullPath = pathPrefix ? `${pathPrefix}/${subTitle}` : subTitle;
+            const subfolderKey = `${rootId}:${fullPath}`;
+            const folderEntryId = `subfolder:${rootId}:${fullPath}`;
+            const isExpanded = state.expandedSubfolders.has(subfolderKey)
+                || state.expandedCollections.has(String(sub.id))
+                || (autoExpandSearch && fm.matchingBranchIds.has(sub.id));
+
+            const folderEntry = registerEntry({
+                id: folderEntryId,
+                kind: 'subfolder',
+                type: sub.type || 'folder',
+                title: subTitle,
+                name: subTitle,
+                path: fullPath,
+                fullPath,
+                collection: rootCollection,
+                subfolder: { name: subTitle, fullPath, files: [], subfolders: new Map(), folderItem: { item: sub, content: { ...sub, child_id: sub.id } } },
+                folderItem: { item: sub, content: { ...sub, child_id: sub.id } },
+                itemId: Number(sub.id),
+                item: sub,
+                content: { ...sub, child_id: sub.id },
+                contentCount: sub.content_count ?? catalogStore.getDirectChildren(sub.id).length,
+            });
+            state.subfolderEntries.set(folderEntryId, folderEntry);
+
+            rows.push({
+                kind: 'subfolder',
+                entry: folderEntry,
+                collection: rootCollection,
+                layout,
+                depth,
+                subfolderKey,
+                isExpanded,
+                height: 24,
+            });
+            appendedAny = true;
+
+            if (isExpanded) {
+                const subMatchesSelf = parentMatchesFilter || (fm ? fm.matchingItemIds.has(sub.id) : false);
+                const beforeCount = rows.length;
+                appendDirectFolderFlatRows(rows, sub, rootCollection, layout, depth + 1, fullPath, subMatchesSelf);
+                if (rows.length === beforeCount) {
+                    rows.push({
+                        kind: 'empty-sub',
+                        depth: depth + 1,
+                        text: filterActive ? 'No matching files in this folder' : 'This folder is empty',
+                        height: 24,
+                    });
+                }
+            }
+        }
+
+        for (let i = 0; i < files.length; i++) {
+            const fileEntry = files[i];
+            if (filterActive && !parentMatchesFilter) {
+                const fid = Number(fileEntry.itemId || fileEntry.item?.id);
+                const hit = fm ? fm.matchingItemIds.has(fid) : entryMatches(fileEntry);
+                if (!hit) continue;
+            }
+            rows.push({
+                kind: 'nested',
+                entry: fileEntry,
+                collection: rootCollection,
+                layout,
+                depth,
+                height: nestedRowHeight,
+            });
+            appendedAny = true;
+        }
+        return appendedAny;
+    }
+
+    function renderLibraryStatus(entries = visibleEntries()) {
+        const current = filteringIsActive()
+            ? (state.filterMatches ? state.filterMatches.matchingItemIds.size : entries.length)
+            : entries.length;
+        const sourceCount = state.items.length;
+        const vaultName = state.selectedPlaylistId !== null
+            ? (selectedPlaylist()?.name || 'playlist')
+            : (state.selectedVaultId !== null ? (selectedVault()?.name || 'vault') : 'Show all');
+        const selectionSuffix = state.selectedEntryIds.size ? ` · ${state.selectedEntryIds.size} selected` : '';
+        summary.textContent = (filteringIsActive()
+            ? `${current} assets match the active filter`
+            : `${sourceCount} assets in ${vaultName}`) + selectionSuffix;
+        renderFilterStatus();
+    }
+
+    function renderAssets() {
+        state.subfolderEntries?.clear();
+        const entries = visibleEntries();
+        renderMoveBar();
+
+        const rows = [];
+        const filterActive = filteringIsActive();
+        const fm = state.filterMatches;
+
+        if (!entries.length) {
+            rows.push({ kind: 'empty', height: 48, text: 'No assets match this view.' });
+        } else {
+            for (let i = 0; i < entries.length; i++) {
+                const entry = entries[i];
+                const itemId = Number(entry.item?.id);
+                const isContainerItem = typeIsContainer(entry.type) || entry.type === 'collection' || Boolean(entry.item?.attributes?.is_folder || entry.content?.attributes?.is_folder);
+                const autoExpandedBySearch = Boolean(
+                    state.query && isContainerItem && fm && fm.matchingBranchIds.has(itemId) && !fm.matchingItemIds.has(itemId)
+                );
+                const isCollectionExpanded = Boolean(
+                    entry.kind === 'asset' && isContainerItem && (
+                        state.expandedCollections.has(entry.id)
+                        || (itemId && state.expandedCollections.has(String(itemId)))
+                        || autoExpandedBySearch
+                    )
+                );
+
+                rows.push({ kind: 'root', entry, height: 28, isExpanded: isCollectionExpanded });
+
+                if (isCollectionExpanded) {
+                    const collectionLayout = collectionRowLayout(entry.item);
+                    const loadingReferences = state.projectReferencesLoading.has(itemId);
+                    const rootMatchesSelf = !filterActive || (fm ? fm.matchingItemIds.has(itemId) : entryMatches(entry));
+                    const headerSlot = rows.length;
+                    rows.push({ kind: 'collection-header', collection: entry.item, layout: collectionLayout, height: 26 });
+
+                    let hasVisibleChildren = false;
+                    if (typeIsProject(entry.type)) {
+                        const allProjectContents = collectionContentEntries(entry.item);
+                        const displayed = filterActive && !rootMatchesSelf
+                            ? allProjectContents.filter(entryMatches)
+                            : allProjectContents;
+                        if (displayed.length) {
+                            const tree = buildCollectionTree(displayed);
+                            appendLogicalSubtreeFlatRows(rows, tree, entry.item, collectionLayout, 0, rootMatchesSelf, filterActive, Boolean(state.query));
+                            hasVisibleChildren = true;
+                        }
+                    } else {
+                        hasVisibleChildren = appendDirectFolderFlatRows(rows, entry.item, entry.item, collectionLayout, 0, '', rootMatchesSelf);
+                    }
+
+                    if (!hasVisibleChildren) {
+                        rows.splice(headerSlot, 1);
+                        if (loadingReferences) {
+                            rows.push({ kind: 'loading', depth: 0, height: 24 });
+                        } else {
+                            rows.push({
+                                kind: 'empty-sub',
+                                depth: 0,
+                                text: filterActive ? 'No files in this collection match the active filter.' : 'This folder is empty.',
+                                height: 26,
+                            });
+                        }
+                    } else if (loadingReferences) {
+                        rows.push({ kind: 'loading', depth: 0, height: 24 });
+                    }
+                }
+            }
+        }
+
+        state.visibleFlatRows = rows;
+        const vlist = ensureVirtualList();
+        if (vlist) {
+            vlist.setItems(rows, { force: true, tableWidthPx: mainColumnMinimumWidth() });
+        }
 
         renderLibraryStatus(entries);
     }
 
-    function refreshSelectionPresentation() {
-        assetList.querySelectorAll('.asset-row, .subfolder-row').forEach(row => {
-            const entryId = row.dataset.entryId || row.closest('.asset-entry')?.dataset.entryId;
-            const selected = entryId ? state.selectedEntryIds.has(entryId) : false;
-            row.classList.toggle('selected', selected);
-            row.setAttribute('aria-selected', String(selected));
+    function scrollToEntryOrItem({ entryId = null, itemId = null, highlight = false } = {}) {
+        const vlist = ensureVirtualList();
+        if (!vlist || !state.visibleFlatRows.length) return;
+        const numId = itemId != null ? Number(itemId) : null;
+        const idx = state.visibleFlatRows.findIndex(r => {
+            if (!r.entry) return false;
+            if (entryId && r.entry.id === entryId) return true;
+            if (numId && (Number(r.entry.itemId) === numId || Number(r.entry.item?.id) === numId || Number(r.entry.content?.child_id) === numId)) return true;
+            return false;
         });
+        if (idx < 0) return;
+        vlist.scrollToIndex(idx, { block: 'center' });
+        if (highlight) {
+            requestAnimationFrame(() => {
+                const mounted = (entryId && vlist.findMountedRowByEntryId(entryId))
+                    || (numId && vlist.findMountedRowByItemId(numId));
+                if (mounted) {
+                    mounted.classList.add('highlight-target');
+                    setTimeout(() => mounted.classList.remove('highlight-target'), 2400);
+                }
+            });
+        }
+    }
+
+    function refreshSelectionPresentation() {
+        const vlist = ensureVirtualList();
+        if (vlist) {
+            vlist.refreshSelection(state.selectedEntryIds);
+        } else {
+            assetList.querySelectorAll('.asset-row, .subfolder-row').forEach(row => {
+                const entryId = row.dataset.entryId || row.closest('.asset-entry')?.dataset.entryId;
+                const selected = entryId ? state.selectedEntryIds.has(entryId) : false;
+                row.classList.toggle('selected', selected);
+                row.setAttribute('aria-selected', String(selected));
+            });
+        }
         renderMoveBar();
         renderLibraryStatus();
     }
@@ -2773,7 +2843,12 @@ function initializeGaiaLibrary() {
         state.selectionAnchorId = entries[0]?.id || null;
         state.contextEntry = null;
         refreshSelectionPresentation();
-        window.dispatchEvent(new CustomEvent('gaia:selection', { detail: { entry: entries[0] || null } }));
+        window.dispatchEvent(new CustomEvent('gaia:selection', {
+            detail: {
+                entry: entries[0] || null,
+                playable: Boolean(entries[0] && (canPreview(entries[0]) || entries[0].isContainer || typeIsContainer(entries[0].type) || entries[0].type === 'collection')),
+            },
+        }));
     }
 
     function clearSelection() {
@@ -2782,7 +2857,7 @@ function initializeGaiaLibrary() {
             state.selectionAnchorId = null;
             state.contextEntry = null;
             refreshSelectionPresentation();
-            window.dispatchEvent(new CustomEvent('gaia:selection', { detail: { entry: null } }));
+            window.dispatchEvent(new CustomEvent('gaia:selection', { detail: { entry: null, playable: false } }));
         }
     }
 
@@ -3015,31 +3090,18 @@ function initializeGaiaLibrary() {
 
     function clearAllFilters() {
         state.selectedVaultId = null;
+        state.selectedPlaylistId = null;
         state.selectedTypes.clear();
         state.selectedTags.clear();
         state.query = '';
         searchInput.value = '';
-        state.collectionContentControllers.forEach(controller => controller.abort());
-        state.collectionContentControllers.clear();
-        state.collectionContentsLoading.clear();
-        state.collectionContents.clear();
-        state.collectionContentPaging.clear();
-        state.collectionContentsErrors.clear();
-        state.collectionContentQuery = '';
-        renderVaults();
-        renderFilterUI();
-        renderAssets();
-        loadLibrary({ query: null });
+        syncViewFromCatalog();
     }
 
     function getSelectedEntries() {
-        const entries = allEntries();
         const selected = [];
         state.selectedEntryIds.forEach(id => {
-            let found = entries.find(e => e.id === id);
-            if (!found && state.subfolderEntries?.has(id)) {
-                found = state.subfolderEntries.get(id);
-            }
+            const found = entryById(id) || state.subfolderEntries?.get(id);
             if (found) selected.push(found);
         });
         if (selected.length === 0 && state.contextEntry) {
@@ -3377,14 +3439,58 @@ function initializeGaiaLibrary() {
         renderProjectSourcePreview();
     }
 
+    let pendingProjectInitialSession = null;
+    let pendingProjectOnCreated = null;
+
+    function inferKindFromEntries(entries = []) {
+        for (const source of entries) {
+            if (!source) continue;
+            const item = source.item || source;
+            if (item.type === 'video' || source.type === 'video' || item.project_kind === 'video') return 'video';
+            for (const child of item.contents || source.contents || []) {
+                if (child?.type === 'video') return 'video';
+            }
+        }
+        return 'audio';
+    }
+
+    function syncProjectKindEngineControls({ preserveEngine = false } = {}) {
+        if (!projectKindSelect || !projectEngineSelect) return;
+        const kind = projectKindSelect.value === 'video' ? 'video' : 'audio';
+        const sinOption = projectEngineSelect.querySelector('option[value="sin"]');
+        if (sinOption) sinOption.disabled = kind === 'video';
+        if (kind === 'video') {
+            projectEngineSelect.value = 'simple_media';
+            if (projectEngineHelp) {
+                projectEngineHelp.textContent = 'Video projects use the Simple Media Editor (1-channel cutter & FFmpeg export).';
+            }
+        } else {
+            if (!preserveEngine) projectEngineSelect.value = 'sin';
+            if (projectEngineHelp) {
+                projectEngineHelp.textContent = projectEngineSelect.value === 'simple_media'
+                    ? 'Audio project using Simple Media Editor (lightweight 1-channel cutter, no node graph).'
+                    : 'Audio projects default to the SIN Node Editor (node graph + snapshots).';
+            }
+        }
+    }
+
+    projectKindSelect?.addEventListener('change', () => syncProjectKindEngineControls({ preserveEngine: false }));
+    projectEngineSelect?.addEventListener('change', () => syncProjectKindEngineControls({ preserveEngine: true }));
+
     async function finishProjectCreationImport(context) {
         const sourceIds = [...new Set(context.itemIds)];
-        const payload = { vault_id: context.vaultId, name: context.name };
+        const payload = {
+            vault_id: context.vaultId,
+            name: context.name,
+            project_kind: context.projectKind || 'audio',
+            editor_engine: context.editorEngine || null,
+        };
         const url = sourceIds.length ? '/projects/from-items' : '/projects/';
         if (sourceIds.length) {
             payload.item_ids = sourceIds;
             payload.mode = 'single';
             payload.move_item_ids = [...new Set(context.moveItemIds)];
+            if (context.initialSession) payload.initial_session = context.initialSession;
         }
         try {
             const response = await fetch(url, {
@@ -3394,6 +3500,10 @@ function initializeGaiaLibrary() {
             });
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.detail || 'Could not create Project');
+            const createdProject = Array.isArray(result) ? result[0] : result;
+            const onCreated = context.onCreated || pendingProjectOnCreated;
+            pendingProjectInitialSession = null;
+            pendingProjectOnCreated = null;
             state.selectedEntryIds.clear();
             state.selectionAnchorId = null;
             state.projectDialogSources = [];
@@ -3405,6 +3515,7 @@ function initializeGaiaLibrary() {
             projectDialog.close();
             await loadLibrary();
             await loadVaultImportLog();
+            if (createdProject) onCreated?.(createdProject);
         } catch (error) {
             failProjectCreationImport(error.message);
         }
@@ -3431,9 +3542,11 @@ function initializeGaiaLibrary() {
         }
     }
 
-    function openProjectDialog() {
+    function openProjectDialog(options = {}) {
         if (!projectDialog) return;
-        const selectedSources = getSelectedProjectSourceEntries();
+        const selectedSources = Array.isArray(options.sources) && options.sources.length
+            ? options.sources
+            : getSelectedProjectSourceEntries();
         // New Project becomes selection-aware: selected library items seed
         // the file list and the first selected item supplies the name.
         state.projectDialogSources = selectedSources;
@@ -3444,21 +3557,33 @@ function initializeGaiaLibrary() {
         state.projectImportPickerActive = false;
         state.projectImportInspecting = false;
         state.projectCreationImportContext = null;
+        pendingProjectInitialSession = options.initialSession || null;
+        pendingProjectOnCreated = typeof options.onCreated === 'function' ? options.onCreated : null;
+
+        const inferredKind = options.projectKind || inferKindFromEntries(selectedSources);
+        if (projectKindSelect) {
+            projectKindSelect.value = inferredKind === 'video' ? 'video' : 'audio';
+        }
+        if (projectEngineSelect && options.editorEngine) {
+            projectEngineSelect.value = options.editorEngine;
+        }
+        syncProjectKindEngineControls({ preserveEngine: Boolean(options.editorEngine) });
+
         projectResult.className = 'result hidden';
         projectSubmit.disabled = false;
         projectName.disabled = false;
         projectName.required = true;
         projectName.placeholder = 'e.g. My Project';
-        projectName.value = selectedSources.length ? selectedSources[0].title : '';
+        projectName.value = options.defaultName || (selectedSources.length ? selectedSources[0].title : '');
         if (projectMoveAll) {
             projectMoveAll.checked = false;
             projectMoveAll.indeterminate = false;
         }
-        projectDialogTitle.textContent = 'Create a Project';
+        projectDialogTitle.textContent = options.title || 'Create a Project';
         renderProjectSourcePreview();
         projectDialog.showModal();
         projectName.focus();
-        if (selectedSources.length === 1) projectName.select();
+        if (selectedSources.length === 1 || options.defaultName) projectName.select();
     }
 
     function openProjectFilesDialog(project) {
@@ -3519,33 +3644,28 @@ function initializeGaiaLibrary() {
     }
 
     async function refreshAfterPlacement(contextCollectionId, targetId, isVault, sourceCollectionIds = []) {
-        if (isVault) {
-            await loadLibrary({ force: true, resetNested: true });
-            renderFilterUI();
-            renderAssets();
-            return;
-        }
-
-        const idsToInvalidate = new Set([
+        const idsToRefreshProjects = new Set([
             contextCollectionId,
             targetId,
             ...(sourceCollectionIds || []),
         ].map(Number).filter(id => Number.isFinite(id) && id > 0));
 
-        idsToInvalidate.forEach(id => {
-            state.collectionContents.delete(id);
+        idsToRefreshProjects.forEach(id => {
             state.projectReferencedItems.delete(id);
-            state.collectionContentPaging.delete(id);
-            state.collectionContentsLoading.delete(id);
             state.projectReferencesLoading.delete(id);
         });
 
-        await Promise.all([
-            ...Array.from(idsToInvalidate).map(id => loadCollectionContents(id, { reset: true })),
-            ...Array.from(idsToInvalidate).map(id => loadProjectReferencedItems(id, { reset: true })),
-            loadLibrary({ force: true, resetNested: true }),
-        ]);
+        await loadLibrary({ force: false, resetNested: isVault });
 
+        if (!isVault) {
+            const expandedProjectIds = Array.from(idsToRefreshProjects).filter(id => {
+                const it = catalogStore.getItem(id);
+                return it && typeIsProject(it.type) && state.expandedCollections.has(String(id));
+            });
+            if (expandedProjectIds.length) {
+                await Promise.all(expandedProjectIds.map(id => loadProjectReferencedItems(id, { reset: true })));
+            }
+        }
         renderFilterUI();
         renderAssets();
     }
@@ -3732,22 +3852,17 @@ function initializeGaiaLibrary() {
             }
             const movedItems = await response.json().catch(() => ([]));
             (Array.isArray(movedItems) ? movedItems : []).forEach(moved => {
-                const index = state.items.findIndex(item => Number(item.id) === Number(moved.id));
-                if (index >= 0) state.items[index] = { ...state.items[index], ...moved };
-                state.collectionContents.delete(Number(moved.id));
-                state.collectionContentPaging.delete(Number(moved.id));
+                catalogStore.patchItemLocal(moved.id, moved);
             });
             state.selectedEntryIds.clear();
-            reconcileFilterSelection();
-            renderFilterUI();
-            renderAssets();
+            await loadLibrary({ force: false });
         } catch (error) {
             window.alert(error.message);
         }
     }
 
     function selectedCommandEntries() {
-        return allEntries().filter(entry => state.selectedEntryIds.has(entry.id));
+        return getSelectedEntries();
     }
 
     function renderSelectionTypeActions(selectedEntries) {
@@ -4109,46 +4224,21 @@ function initializeGaiaLibrary() {
             state.projectReferencedItems.set(projectId, remainingRecords);
         });
 
-        state.items = state.items.filter(item => !itemIds.has(Number(item.id)));
-        const contentWasDeleted = (content, collectionId) => (
-            itemIds.has(Number(content?.child_id))
-            || contentKeys.has(collectionContentKey(collectionId, content?.index))
-        );
-        state.items.forEach(collection => {
-            if (!typeIsContainer(collection.type) || !Array.isArray(collection.contents)) return;
-            collection.contents = collection.contents.filter(content => !contentWasDeleted(content, collection.id));
-        });
-        state.items.forEach(collection => {
-            const deletedCount = deletedContentCounts.get(Number(collection.id)) || 0;
-            if (deletedCount && Number.isFinite(Number(collection.content_count))) {
-                collection.content_count = Math.max(0, Number(collection.content_count) - deletedCount);
-            }
-        });
-        state.collectionContents.forEach((contents, collectionId) => {
-            const remaining = contents.filter(content => !contentWasDeleted(content, collectionId));
-            const removed = contents.length - remaining.length;
-            if (!removed) return;
-            state.collectionContents.set(collectionId, remaining);
-            const page = state.collectionContentPaging.get(collectionId);
-            if (page) {
-                const nextOffset = Math.max(remaining.length, page.nextOffset - removed);
-                const total = Math.max(remaining.length, page.total - removed);
-                state.collectionContentPaging.set(collectionId, {
-                    ...page,
-                    nextOffset,
-                    total,
-                    hasMore: page.hasMore && nextOffset < total,
-                });
-            }
-        });
+        if (itemIds.size) {
+            catalogStore._applyDelta({ rev: catalogStore.rev, deleted_ids: Array.from(itemIds) });
+            state.items = catalogStore.getScopedRoots({
+                vaultId: state.selectedVaultId,
+                playlistId: state.selectedPlaylistId,
+                previewMode: 'quick',
+            });
+            state.catalogItems = state.items;
+            invalidateFacetCache();
+        }
         [...state.versionSelections.entries()].forEach(([groupKey, itemId]) => {
             if (itemIds.has(Number(itemId))) state.versionSelections.delete(groupKey);
         });
         itemIds.forEach(id => {
             state.expandedCollections.delete(String(id));
-            state.collectionContents.delete(id);
-            state.collectionContentPaging.delete(id);
-            state.collectionContentsErrors.delete(id);
             state.projectReferencedItems.delete(id);
             state.projectReferencesLoading.delete(id);
             state.projectReferenceControllers.get(id)?.abort();
@@ -4166,18 +4256,6 @@ function initializeGaiaLibrary() {
         reconcileFilterSelection();
         renderVaults();
         renderFilterUI();
-        const filterStateAfter = JSON.stringify({
-            vault: state.selectedVaultId,
-            types: [...state.selectedTypes].sort(),
-            tags: [...state.selectedTags].sort(),
-        });
-        if (filterStateBefore !== filterStateAfter) {
-            renderAssets();
-            return;
-        }
-
-        // Version groups can retain sibling files after their currently shown
-        // version is deleted, so redraw rather than removing one DOM row.
         renderAssets();
     }
 
@@ -4304,30 +4382,21 @@ function initializeGaiaLibrary() {
 
             const targetVaultId = Number(location.vault_id);
             const needsVaultSwitch = state.selectedVaultId !== null && Number(state.selectedVaultId) !== targetVaultId;
-            let needsReload = needsVaultSwitch;
-
             if (needsVaultSwitch) {
                 state.selectedVaultId = targetVaultId;
             }
-
+            if (state.selectedPlaylistId !== null) {
+                state.selectedPlaylistId = null;
+            }
             if (state.query) {
                 state.query = '';
                 if (searchInput) searchInput.value = '';
-                needsReload = true;
             }
 
-            if (needsReload) {
-                await loadLibrary();
-            }
-
-            // Expand all ancestor collections/folders
+            // Expand all ancestor collections/folders directly in RAM (0 network round-trips!)
             if (Array.isArray(location.ancestor_ids) && location.ancestor_ids.length > 0) {
                 for (const ancestorId of location.ancestor_ids) {
-                    const ancestorStr = String(ancestorId);
-                    state.expandedCollections.add(ancestorStr);
-                    if (!state.collectionContents.has(Number(ancestorId))) {
-                        await loadCollectionContents(ancestorId);
-                    }
+                    state.expandedCollections.add(String(ancestorId));
                 }
             }
 
@@ -4342,12 +4411,12 @@ function initializeGaiaLibrary() {
                 }
             }
 
-            renderFilterUI();
-            renderAssets();
+            syncViewFromCatalog();
 
             const resolvedItemId = Number(location.item_id);
             const foundEntry = allEntries().find(e => (
                 Number(e.item?.id) === resolvedItemId
+                || Number(e.itemId) === resolvedItemId
                 || (e.kind === 'content' && Number(e.content?.child_id) === resolvedItemId)
             ));
 
@@ -4358,15 +4427,7 @@ function initializeGaiaLibrary() {
                 refreshSelectionPresentation();
             }
 
-            setTimeout(() => {
-                const row = (foundEntry ? assetList?.querySelector(`[data-entry-id="${foundEntry.id}"]`) : null)
-                    || assetList?.querySelector(`[data-item-id="${resolvedItemId}"]`);
-                if (row) {
-                    row.classList.add('highlight-target');
-                    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                    setTimeout(() => row.classList.remove('highlight-target'), 2400);
-                }
-            }, 80);
+            scrollToEntryOrItem({ entryId: foundEntry?.id || null, itemId: resolvedItemId, highlight: true });
         } catch (error) {
             console.error('Failed to show original file:', error);
             window.alert(error.message || 'Could not locate original file');
@@ -4440,6 +4501,26 @@ function initializeGaiaLibrary() {
 
         const selectedEntries = getSelectedEntries();
         const targetEntry = state.contextEntry || (selectedEntries.length === 1 ? selectedEntries[0] : null);
+        const editorOpenableTypes = new Set(['project', 'audio', 'track', 'sample', 'video', 'multitrack', 'zoom_h4', 'folder']);
+        const targetItemType = targetEntry?.item?.type || targetEntry?.type || '';
+        const isOpenableEntry = Boolean(
+            count === 1
+            && targetEntry
+            && (
+                (targetEntry.kind === 'content' && (targetEntry.content?.streamable || targetEntry.content?.child_id))
+                || editorOpenableTypes.has(targetItemType)
+            )
+        );
+        const isProjectTarget = Boolean(isOpenableEntry && typeIsProject(targetItemType));
+        if (contextOpenEditorButton) {
+            contextOpenEditorButton.classList.toggle('hidden', !isOpenableEntry);
+            contextOpenEditorButton.disabled = !isOpenableEntry;
+            contextOpenEditorButton.textContent = isProjectTarget ? 'Open Project in Editor' : 'Open in Editor';
+        }
+        if (contextOpenScratchButton) {
+            contextOpenScratchButton.classList.toggle('hidden', !isProjectTarget);
+            contextOpenScratchButton.disabled = !isProjectTarget;
+        }
         if (contextGoToLocationButton) {
             const hasLocation = Boolean(targetEntry && (
                 targetEntry.path
@@ -4776,24 +4857,17 @@ function initializeGaiaLibrary() {
         state.selectedPlaylistId = null;
         state.selectedVaultId = value;
         closeVaultMenu();
-        reconcileFilterSelection();
-        renderVaults();
-        renderFilterUI();
-        renderAssets();
-        loadVaultImportLog();
-        loadLibrary({ force: true, resetNested: true });
-        checkVaultSync(value);
+        syncViewFromCatalog();
+        if (assetList) assetList.scrollTop = 0;
+        scheduleVaultSyncCheck(value, 250);
     }
 
     function selectPlaylistOption(playlistId) {
         state.selectedVaultId = null;
         state.selectedPlaylistId = playlistId;
         closeVaultMenu();
-        reconcileFilterSelection();
-        renderVaults();
-        renderFilterUI();
-        renderAssets();
-        loadLibrary({ force: true, resetNested: true });
+        syncViewFromCatalog();
+        if (assetList) assetList.scrollTop = 0;
     }
 
     function renderSidebar() {
@@ -4839,20 +4913,15 @@ function initializeGaiaLibrary() {
                         badgeSpan.className = 'sidebar-mirror-badge';
                         badgeSpan.textContent = '⇄';
                         btn.append(labelSpan, badgeSpan);
-                        btn.addEventListener('click', async event => {
+                        btn.addEventListener('click', event => {
                             event.stopPropagation();
                             if (state.selectedVaultId !== vault.id || state.selectedPlaylistId !== null) {
                                 selectVaultOption(vault.id);
                             }
                             if (mirror.root_item_id) {
-                                const rootStr = String(mirror.root_item_id);
-                                state.expandedCollections.add(rootStr);
-                                loadCollectionContents(mirror.root_item_id);
+                                state.expandedCollections.add(String(mirror.root_item_id));
                                 renderAssets();
-                                setTimeout(() => {
-                                    const row = assetList?.querySelector(`[data-item-id="${mirror.root_item_id}"]`);
-                                    row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                                }, 80);
+                                scrollToEntryOrItem({ itemId: mirror.root_item_id, highlight: true });
                             }
                         });
                         tree.appendChild(btn);
@@ -4878,13 +4947,10 @@ function initializeGaiaLibrary() {
                                     state.expandedCollections.delete(idStr);
                                 } else {
                                     state.expandedCollections.add(idStr);
-                                    loadCollectionContents(folder.id);
+                                    if (typeIsProject(folder.type)) loadProjectReferencedItems(folder.id);
                                 }
                                 renderAssets();
-                                setTimeout(() => {
-                                    const row = assetList?.querySelector(`[data-item-id="${folder.id}"]`);
-                                    row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                                }, 60);
+                                scrollToEntryOrItem({ itemId: folder.id, highlight: true });
                             });
                             tree.appendChild(btn);
                         });
@@ -5296,97 +5362,94 @@ function initializeGaiaLibrary() {
         // Import history is now written per job under gaia/log/imports.
     }
 
+    function syncViewFromCatalog({ resetProjects = false, changedProjectIds = [] } = {}) {
+        if (!catalogStore.ready) return;
+        state.vaults = catalogStore.vaults;
+        state.playlists = catalogStore.playlists;
+        state.types = catalogStore.types;
+        state.items = catalogStore.getScopedRoots({
+            vaultId: state.selectedVaultId,
+            playlistId: state.selectedPlaylistId,
+            previewMode: 'quick',
+        });
+        state.catalogItems = state.items;
+
+        if (resetProjects) {
+            state.projectReferenceControllers.forEach(activeController => activeController.abort());
+            state.projectReferencedItems.clear();
+            state.projectReferencesLoading.clear();
+            state.projectReferenceControllers.clear();
+        } else if (changedProjectIds.length) {
+            changedProjectIds.forEach(pid => {
+                const numId = Number(pid);
+                state.projectReferencedItems.delete(numId);
+                if (state.expandedCollections.has(String(numId))) {
+                    loadProjectReferencedItems(numId, { reset: true });
+                }
+            });
+        }
+
+        invalidateFacetCache();
+        reconcileFilterSelection();
+        renderVaults();
+        renderFilterUI();
+        renderAssets();
+
+        // Keep selection pruned to existing items without rebuilding unused subtrees
+        if (state.selectedEntryIds.size) {
+            const visibleIds = new Set(allEntries().map(e => e.id));
+            let changed = false;
+            state.selectedEntryIds.forEach(id => {
+                if (!visibleIds.has(id)) {
+                    state.selectedEntryIds.delete(id);
+                    changed = true;
+                }
+            });
+            if (state.selectionAnchorId && !visibleIds.has(state.selectionAnchorId)) {
+                state.selectionAnchorId = null;
+            }
+            if (changed) refreshSelectionPresentation();
+        }
+
+        // Load project reference tables only for currently expanded projects
+        for (let i = 0; i < state.items.length; i++) {
+            const item = state.items[i];
+            if (typeIsProject(item.type) && state.expandedCollections.has(String(item.id))) {
+                loadProjectReferencedItems(item.id);
+            }
+        }
+    }
+
+    catalogStore.onChange(({ changedProjectIds }) => {
+        syncViewFromCatalog({ changedProjectIds: changedProjectIds || [] });
+    });
+
     async function loadLibrary({
-        query = state.query || null,
         force = false,
         resetNested = false,
     } = {}) {
-        const requestedQuery = query?.trim().toLowerCase() || null;
-        if (!force && state.libraryLoadPromise && state.libraryLoadQuery === requestedQuery) return state.libraryLoadPromise;
-        if (force) state.libraryLoadController?.abort();
+        if (!force && state.libraryLoadPromise) return state.libraryLoadPromise;
         if (resetNested) resetNestedLibraryCaches();
-        const controller = new AbortController();
-        state.libraryLoadController?.abort();
-        state.libraryLoadController = controller;
-        state.libraryLoadQuery = requestedQuery;
 
         const requestPromise = (async () => {
-            const hasExistingLibrary = state.items.length > 0;
-            if (!hasExistingLibrary) assetList.innerHTML = '<div class="empty">Loading library…</div>';
-            else summary.textContent = 'Updating library…';
+            const hasExistingLibrary = catalogStore.ready && state.items.length > 0;
+            if (!hasExistingLibrary) {
+                summary.textContent = 'Loading library…';
+            }
             try {
-                const vaultsPromise = state.vaults.length
-                    ? Promise.resolve(state.vaults)
-                    : loadVaults({ signal: controller.signal });
-                const playlistsPromise = state.playlists.length
-                    ? Promise.resolve(state.playlists)
-                    : loadPlaylists({ signal: controller.signal });
-                const typesPromise = state.types.length
-                    ? Promise.resolve(state.types)
-                    : fetch('/items/types', { signal: controller.signal }).then(async response => {
-                        if (!response.ok) throw new Error('GAIA could not load item types');
-                        return response.json();
-                    });
-                const vaultScope = state.selectedVaultId === null
-                    ? '&vault_preview=quick'
-                    : `&vault_id=${encodeURIComponent(state.selectedVaultId)}`;
-                const querySuffix = requestedQuery ? `&query=${encodeURIComponent(requestedQuery)}` : '';
-                const itemsPromise = (state.selectedPlaylistId !== null)
-                    ? fetch(`/playlists/${state.selectedPlaylistId}`, { signal: controller.signal }).then(async response => {
-                        if (!response.ok) throw new Error('GAIA could not load the playlist');
-                        const data = await response.json();
-                        return data.items || [];
-                    })
-                    : fetch(`/items/summaries?limit=10000${vaultScope}${querySuffix}`, { signal: controller.signal }).then(async response => {
-                        if (!response.ok) throw new Error('GAIA could not load the library');
-                        return response.json();
-                    });
-                const [loadedTypes, loadedItems] = await Promise.all([typesPromise, itemsPromise, vaultsPromise, playlistsPromise]).then(values => [values[0], values[1]]);
-                if (state.libraryLoadController !== controller) return;
-                state.types = loadedTypes;
-                state.items = loadedItems;
-                if (!requestedQuery) state.catalogItems = loadedItems;
-                const nextCollectionQuery = requestedQuery || '';
-                if (state.collectionContentQuery !== nextCollectionQuery) {
-                    resetNestedLibraryCaches();
+                if (!catalogBooted) {
+                    catalogBooted = true;
+                    await catalogStore.boot({ connectEvents: true });
+                } else {
+                    await catalogStore.sync({ forceSnapshot: Boolean(force) });
                 }
-                state.collectionContentQuery = nextCollectionQuery;
-                const validCollectionIds = new Set(
-                    state.items.filter(item => typeIsContainer(item.type)).map(item => Number(item.id)),
-                );
-                [...state.collectionContents.keys()].forEach(id => {
-                    if (!validCollectionIds.has(Number(id))) {
-                        state.collectionContents.delete(id);
-                        state.collectionContentPaging.delete(id);
-                    }
-                });
-                state.projectReferenceControllers.forEach(activeController => activeController.abort());
-                state.projectReferencedItems.clear();
-                state.projectReferencesLoading.clear();
-                state.projectReferenceControllers.clear();
-                const availableEntryIds = new Set(allEntries().map(entry => entry.id));
-                state.selectedEntryIds = new Set([...state.selectedEntryIds].filter(id => availableEntryIds.has(id)));
-                if (!availableEntryIds.has(state.selectionAnchorId)) state.selectionAnchorId = null;
-                if (!requestedQuery) reconcileFilterSelection();
-                invalidateFacetCache();
-                renderFilterUI();
-                renderAssets();
-                renderVaultMenu();
-                state.items
-                    .filter(item => typeIsContainer(item.type) && (
-                        state.expandedCollections.has(String(item.id)) || (requestedQuery && item.matches_query)
-                    ))
-                    .forEach(item => {
-                        if (!state.collectionContents.has(Number(item.id))) loadCollectionContents(item.id, { reset: true });
-                        loadProjectReferencedItems(item.id);
-                    });
-                scheduleVaultSyncCheck(state.selectedVaultId, 60);
+                syncViewFromCatalog({ resetProjects: Boolean(resetNested) });
             } catch (error) {
                 if (error?.name === 'AbortError') return;
-                if (!hasExistingLibrary) assetList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-                summary.textContent = hasExistingLibrary ? `Library update failed: ${error.message}` : 'Library unavailable';
-            } finally {
-                if (state.libraryLoadController === controller) state.libraryLoadController = null;
+                if (!catalogStore.ready) {
+                    assetList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+                }
+                summary.textContent = catalogStore.ready ? `Library update failed: ${error.message}` : 'Library unavailable';
             }
         })();
         state.libraryLoadPromise = requestPromise;
@@ -5395,7 +5458,6 @@ function initializeGaiaLibrary() {
         } finally {
             if (state.libraryLoadPromise === requestPromise) {
                 state.libraryLoadPromise = null;
-                state.libraryLoadQuery = null;
             }
         }
     }
@@ -5796,33 +5858,26 @@ function initializeGaiaLibrary() {
         if (columnMenu && !columnMenu.contains(event.target) && !listHeader?.contains(event.target)) closeColumnMenu();
     });
     filterStatus?.addEventListener('scroll', () => {
-        if (filterStatus.dataset.syncing === '1') return;
-        assetList.scrollLeft = filterStatus.scrollLeft;
+        if (assetList && assetList.scrollLeft !== filterStatus.scrollLeft) {
+            assetList.scrollLeft = filterStatus.scrollLeft;
+        }
     });
     assetList?.addEventListener('scroll', () => {
-        if (assetList.dataset.syncing === '1') return;
-        filterStatus.dataset.syncing = '1';
-        filterStatus.scrollLeft = assetList.scrollLeft;
-        delete filterStatus.dataset.syncing;
+        if (filterStatus && filterStatus.scrollLeft !== assetList.scrollLeft) {
+            filterStatus.scrollLeft = assetList.scrollLeft;
+        }
     });
 
     renderMainHeader();
 
     searchInput.addEventListener('input', () => {
-        clearTimeout(state.searchDebounceTimer);
-        state.searchDebounceTimer = setTimeout(() => {
+        if (state.searchRafId !== null) cancelAnimationFrame(state.searchRafId);
+        state.searchRafId = requestAnimationFrame(() => {
+            state.searchRafId = null;
             state.query = searchInput.value.trim().toLowerCase();
-            state.collectionContentControllers.forEach(controller => controller.abort());
-            state.collectionContentControllers.clear();
-            state.collectionContentsLoading.clear();
-            state.collectionContents.clear();
-            state.collectionContentPaging.clear();
-            state.collectionContentsErrors.clear();
-            state.collectionContentQuery = state.query;
             renderFilterUI();
             renderAssets();
-            loadLibrary({ query: state.query || null });
-        }, 180);
+        });
     });
     toggleFiltersButton?.addEventListener('click', () => {
         const hidden = !filterControls?.classList.contains('hidden');
@@ -5985,19 +6040,13 @@ function initializeGaiaLibrary() {
             }
             folderDialog?.close();
             state.pendingFolderCreation = null;
-            await loadLibrary({ force: true, resetNested: true });
+            await loadLibrary({ force: false, resetNested: false });
             const refreshId = entryFolderItemId(parentEntry);
-            if (refreshId) {
-                state.collectionContents.delete(refreshId);
-                loadCollectionContents(refreshId, { reset: true });
-                if (typeIsProject(parentEntry.item?.type || parentEntry.type)) {
-                    loadProjectReferencedItems(refreshId, { reset: true });
-                }
+            if (refreshId && typeIsProject(parentEntry.item?.type || parentEntry.type)) {
+                loadProjectReferencedItems(refreshId, { reset: true });
             }
             const collId = Number(parentEntry?.collection?.id);
-            if (collId && collId !== refreshId) {
-                state.collectionContents.delete(collId);
-                loadCollectionContents(collId, { reset: true });
+            if (collId && collId !== refreshId && typeIsProject(parentEntry?.collection?.type)) {
                 loadProjectReferencedItems(collId, { reset: true });
             }
         } catch (err) {
@@ -6037,6 +6086,8 @@ function initializeGaiaLibrary() {
         projectSubmit.disabled = false;
         projectName.disabled = false;
         if (projectImportAdd) projectImportAdd.disabled = false;
+        pendingProjectInitialSession = null;
+        pendingProjectOnCreated = null;
     });
     projectImportAdd?.addEventListener('click', openProjectImportBrowser);
     projectMoveAll?.addEventListener('change', event => {
@@ -6074,12 +6125,18 @@ function initializeGaiaLibrary() {
         const pendingImports = [...state.projectPendingImports];
         const name = projectName.value;
         const vaultId = selectedProjectVaultId();
+        const projectKind = projectKindSelect?.value || 'audio';
+        const editorEngine = projectEngineSelect?.value || (projectKind === 'video' ? 'simple_media' : 'sin');
         projectResult.className = 'result hidden';
 
         if (pendingImports.length) {
             state.projectCreationImportContext = {
                 name,
                 vaultId,
+                projectKind,
+                editorEngine,
+                initialSession: pendingProjectInitialSession,
+                onCreated: pendingProjectOnCreated,
                 itemIds: sourceIds,
                 moveItemIds: [...state.projectMoveIds],
                 pendingImports,
@@ -6093,12 +6150,20 @@ function initializeGaiaLibrary() {
             return;
         }
 
-        const payload = { vault_id: vaultId, name };
+        const payload = {
+            vault_id: vaultId,
+            name,
+            project_kind: projectKind,
+            editor_engine: editorEngine,
+        };
         const url = sourceIds.length ? '/projects/from-items' : '/projects/';
         if (sourceIds.length) {
             payload.item_ids = sourceIds;
             payload.mode = 'single';
             payload.move_item_ids = [...state.projectMoveIds];
+            if (pendingProjectInitialSession) {
+                payload.initial_session = pendingProjectInitialSession;
+            }
         }
         projectSubmit.disabled = true;
         try {
@@ -6109,6 +6174,10 @@ function initializeGaiaLibrary() {
             });
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.detail || 'Could not create Project');
+            const createdProject = Array.isArray(result) ? result[0] : result;
+            const onCreated = pendingProjectOnCreated;
+            pendingProjectInitialSession = null;
+            pendingProjectOnCreated = null;
             state.selectedEntryIds.clear();
             state.selectionAnchorId = null;
             state.projectDialogSources = [];
@@ -6123,6 +6192,7 @@ function initializeGaiaLibrary() {
             projectDialog.close();
             await loadLibrary();
             await loadVaultImportLog();
+            if (createdProject) onCreated?.(createdProject);
         } catch (error) {
             projectResult.textContent = error.message;
             projectResult.className = 'result error';
@@ -6167,6 +6237,22 @@ function initializeGaiaLibrary() {
         };
         pasteEntryMenu.addEventListener('click', handlePaste);
     }
+
+    contextOpenEditorButton?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const entry = state.contextEntry;
+        contextMenu.classList.add('hidden');
+        if (entry) window.gaiaEditorHost?.openForEntry?.(entry, { ephemeral: false });
+    });
+
+    contextOpenScratchButton?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const entry = state.contextEntry;
+        contextMenu.classList.add('hidden');
+        if (entry) window.gaiaEditorHost?.openForEntry?.(entry, { ephemeral: true });
+    });
 
     if (contextGoToLocationButton) {
         contextGoToLocationButton.addEventListener('click', async (event) => {
@@ -6534,6 +6620,93 @@ function initializeGaiaLibrary() {
                 event.preventDefault();
                 await deleteSelectedEntries();
             }
+            return;
+        }
+
+        // Fast DAW-style keyboard browsing (ArrowUp/Down/Left/Right, Space preview, F2 rename)
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            const navRows = [];
+            for (let i = 0; i < state.visibleFlatRows.length; i++) {
+                if (state.visibleFlatRows[i].entry) navRows.push({ flatIdx: i, row: state.visibleFlatRows[i] });
+            }
+            if (!navRows.length) return;
+            event.preventDefault();
+            const anchorId = state.selectionAnchorId || [...state.selectedEntryIds].at(-1);
+            let curPos = navRows.findIndex(item => item.row.entry.id === anchorId);
+            const delta = event.key === 'ArrowDown' ? 1 : -1;
+            const nextPos = curPos < 0
+                ? (delta > 0 ? 0 : navRows.length - 1)
+                : Math.max(0, Math.min(navRows.length - 1, curPos + delta));
+            const target = navRows[nextPos];
+            if (!target) return;
+            const targetEntry = target.row.entry;
+            selectEntry(targetEntry, { ctrlKey: false, metaKey: false, shiftKey: event.shiftKey });
+            ensureVirtualList()?.scrollToIndex(target.flatIdx, { block: 'nearest' });
+            refreshSelectionPresentation();
+            // Prefetch adjacent audio row for zero-latency scrubbing
+            const lookahead = navRows[nextPos + delta]?.row?.entry;
+            if (lookahead && canPreview(lookahead)) {
+                window.gaiaAudioPreview?.prefetch?.(lookahead, streamUrl(lookahead));
+            }
+            // If playback was already active, immediately audition the newly highlighted audio file
+            if (!event.shiftKey && state.playingKey && canPreview(targetEntry)) {
+                play(targetEntry, { toggleIfSame: false });
+            }
+            return;
+        }
+
+        if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+            const anchorId = state.selectionAnchorId || [...state.selectedEntryIds].at(-1);
+            const flatIdx = state.visibleFlatRows.findIndex(r => r.entry?.id === anchorId);
+            if (flatIdx < 0) return;
+            const rowSpec = state.visibleFlatRows[flatIdx];
+            const entry = rowSpec.entry;
+            const isExpandable = rowSpec.kind === 'subfolder' || (rowSpec.kind === 'root' && typeIsContainer(entry.type));
+            if (event.key === 'ArrowRight' && isExpandable) {
+                event.preventDefault();
+                if (rowSpec.kind === 'subfolder') {
+                    if (!rowSpec.isExpanded) {
+                        state.expandedSubfolders.add(rowSpec.subfolderKey);
+                        if (entry.itemId) state.expandedCollections.add(String(entry.itemId));
+                        renderAssets();
+                    }
+                } else if (!rowSpec.isExpanded) {
+                    toggleCollectionExpansion(entry);
+                }
+            } else if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                if (rowSpec.kind === 'subfolder' && rowSpec.isExpanded) {
+                    state.expandedSubfolders.delete(rowSpec.subfolderKey);
+                    if (entry.itemId) state.expandedCollections.delete(String(entry.itemId));
+                    renderAssets();
+                } else if (rowSpec.kind === 'root' && rowSpec.isExpanded) {
+                    toggleCollectionExpansion(entry);
+                } else if (rowSpec.kind === 'nested' || rowSpec.kind === 'subfolder') {
+                    // Jump up to enclosing parent folder/root row
+                    const targetDepth = (rowSpec.depth ?? 0) - 1;
+                    for (let j = flatIdx - 1; j >= 0; j--) {
+                        const cand = state.visibleFlatRows[j];
+                        if ((targetDepth < 0 && cand.kind === 'root') || (cand.kind === 'subfolder' && cand.depth === targetDepth)) {
+                            selectEntry(cand.entry, { ctrlKey: false, metaKey: false, shiftKey: false });
+                            ensureVirtualList()?.scrollToIndex(j, { block: 'nearest' });
+                            refreshSelectionPresentation();
+                            break;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        if (event.key === 'F2') {
+            const anchorId = state.selectionAnchorId || [...state.selectedEntryIds].at(-1);
+            const entry = anchorId ? entryById(anchorId) : null;
+            if (entry && canEdit(entry, 'title')) {
+                event.preventDefault();
+                const mountedRow = ensureVirtualList()?.findMountedRowByEntryId(entry.id);
+                const titleCell = mountedRow?.querySelector('.asset-title-text');
+                if (titleCell) beginCellEdit(titleCell, entry, 'title');
+            }
         }
     });
     assetList?.addEventListener('scroll', () => contextMenu.classList.add('hidden'));
@@ -6680,6 +6853,14 @@ function initializeGaiaLibrary() {
         getVaultDialogMode: () => vaultDialogMode,
     });
 
+    window.gaiaAppBridge = {
+        openProjectDialog,
+        pickDiskFolder: initialPath => importWizard?.pickDiskFolder?.(initialPath),
+        getVaults: () => state.vaults,
+        getActiveVaultId: () => selectedVault()?.id ?? state.vaults[0]?.id ?? null,
+        refreshLibrary: () => loadLibrary(),
+    };
+
     function pollImportJob() {
         return importWizard?.pollImportJob();
     }
@@ -6771,23 +6952,36 @@ function initializeGaiaLibrary() {
         const detail = event.detail || {};
         window.gaiaTransport?.handleCommand?.(detail);
         if (detail.handled) return;
+        if (detail.command === 'play-selected') {
+            const anchorId = state.selectionAnchorId || [...state.selectedEntryIds].at(-1);
+            const entry = anchorId ? entryById(anchorId) : null;
+            if (entry) {
+                previewEntry(entry, { toggleIfSame: true });
+            }
+            return;
+        }
         if (detail.command === 'toggle') {
-            if (!state.audio) return;
-            if (state.audio.paused) state.audio.play();
-            else state.audio.pause();
+            const anchorId = state.selectionAnchorId || [...state.selectedEntryIds].at(-1);
+            const entry = anchorId ? entryById(anchorId) : null;
+            if (entry) previewEntry(entry, { toggleIfSame: true });
         } else if (detail.command === 'stop') {
             stopPlayback();
-        } else if (detail.command === 'seek' && state.audio) {
-            state.audio.currentTime = Math.max(0, Number(detail.value) || 0);
         }
     });
-    window.addEventListener('gaia:library-refresh', () => loadLibrary());
-    window.addEventListener('focus', () => scheduleVaultSyncCheck(state.selectedVaultId, 100));
+    let lastFocusSyncAt = 0;
+    const scheduleThrottledFocusSync = () => {
+        const now = Date.now();
+        if (now - lastFocusSyncAt < 10000) return;
+        lastFocusSyncAt = now;
+        scheduleVaultSyncCheck(state.selectedVaultId, 400);
+    };
+    window.addEventListener('gaia:library-refresh', () => loadLibrary({ force: false }));
+    window.addEventListener('focus', scheduleThrottledFocusSync);
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) scheduleVaultSyncCheck(state.selectedVaultId, 100);
+        if (!document.hidden) scheduleThrottledFocusSync();
     });
     initAssetListDelegation();
-    loadLibrary().then(() => checkVaultSync());
+    loadLibrary().then(() => scheduleVaultSyncCheck(state.selectedVaultId, 800));
 }
 
 

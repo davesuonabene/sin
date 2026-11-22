@@ -208,8 +208,13 @@ export class RandomParamOverlay {
         dest: RandomDestination | undefined,
         colors: { text: string; bg: string; border: string }
     ) {
+        const controller = (slider as any).__sinSliderController;
         if (!dest || !dest.enabled) {
-            slider.style.background = '';
+            if (controller?.setModulationBand) {
+                controller.setModulationBand(null, null);
+            } else {
+                slider.style.background = '';
+            }
             return;
         }
         const minLimit = Number(slider.min || 0);
@@ -224,7 +229,12 @@ export class RandomParamOverlay {
         const startPct = Math.max(0, Math.min(100, ((minVal - minLimit) / span) * 100));
         const endPct = Math.max(0, Math.min(100, ((maxVal - minLimit) / span) * 100));
 
-        slider.style.background = `linear-gradient(to right, #1e293b 0%, #1e293b ${startPct}%, ${colors.border}66 ${startPct}%, ${colors.border}66 ${endPct}%, #1e293b ${endPct}%, #1e293b 100%)`;
+        if (controller?.setModulationBand) {
+            controller.setModulationBand(startPct, endPct, colors.border);
+            slider.style.background = '';
+        } else {
+            slider.style.background = `linear-gradient(to right, #e2e8f0 0%, #e2e8f0 ${startPct}%, ${colors.border}66 ${startPct}%, ${colors.border}66 ${endPct}%, #e2e8f0 ${endPct}%, #e2e8f0 100%)`;
+        }
     }
 
     static startDragOnRow(

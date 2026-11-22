@@ -20,14 +20,124 @@ from . import models, reference_service
 
 
 MANIFEST_SCHEMA = "gaia-project-state"
-MANIFEST_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA_VERSION = 3
 PROJECT_FORMAT = "gaia-project"
-PROJECT_FORMAT_VERSION = 2
+PROJECT_FORMAT_VERSION = 3
 EDITOR_STATE_SCHEMA = "gaia-media-edit"
 MANIFEST_STAGE = "edit"
 MANIFEST_FILENAME = "current.json"
 PROJECT_DOCUMENT_FILENAME = "project.json"
 _KEEP_EDITOR_STATE = object()
+_KEEP_SESSION = object()
+_KEEP_CHECKPOINTS = object()
+
+
+def checkpoints_dir(project: models.ProjectItem) -> Path:
+    """Return the internal GAIA checkpoints directory ignored by vault reconciliation."""
+    return Path(project.absolute_path).resolve() / ".gaia" / "snapshots"
+
+
+def _legacy_v2_to_session(project: models.ProjectItem | None, document: dict[str, Any]) -> dict[str, Any] | None:
+    engine = getattr(project, "editor_engine", None) or document.get("editor_engine") or "sin"
+    if engine == "simple_media":
+        edits = document.get("edits") if isinstance(document.get("edits"), dict) else {}
+        editor = document.get("editor") if isinstance(document.get("editor"), dict) else None
+        targets: dict[str, Any] = {}
+        active_target_id: str | None = None
+        for key, raw_state in edits.items():
+            if isinstance(raw_state, dict):
+                targets[str(key)] = _legacy_media_edit_to_target(str(key), raw_state)
+        if editor and editor.get("target_id"):
+            active_target_id = str(editor["target_id"])
+            if active_target_id not in targets:
+                targets[active_target_id] = _legacy_media_edit_to_target(active_target_id, editor)
+        elif targets:
+            active_target_id = next(iter(targets))
+        if not targets and not editor and not edits:
+            return None
+        return {
+            "engine": "simple_media",
+            "schema_version": 1,
+            "data": {
+                "active_target_id": active_target_id,
+                "targets": targets,
+            },
+        }
+    if isinstance(document.get("graph"), dict) and document["graph"].get("format") == "sin-graph":
+        view = document.get("view") if isinstance(document.get("view"), dict) else {}
+        return {
+            "engine": "sin",
+            "schema_version": 1,
+            "data": {
+                "graph": document["graph"],
+                "workspace": None,
+                "snapshots": list(document.get("snapshots") or []),
+                "active_snapshot_id": view.get("selected_snapshot_id"),
+            },
+        }
+    return None
+
+
+def _legacy_media_edit_to_target(target_id: str, raw: dict[str, Any]) -> dict[str, Any]:
+    item_id = raw.get("source_item_id")
+    layers = raw.get("layers") if isinstance(raw.get("layers"), list) else []
+    primary = next((l for l in layers if isinstance(l, dict) and l.get("item_id") == item_id), None)
+    if primary is None and layers and isinstance(layers[0], dict):
+        primary = layers[0]
+    pre_gain_db = float((primary or {}).get("pre_gain_db") or 0.0)
+    if primary and primary.get("volume") is not None:
+        volume = float(primary["volume"])
+    elif primary and primary.get("gain_db") is not None:
+        volume = 10.0 ** (float(primary["gain_db"]) / 20.0)
+    else:
+        volume = 1.0
+    view = raw.get("view") if isinstance(raw.get("view"), dict) else {}
+    return {
+        "item_id": int(item_id) if item_id is not None else None,
+        "target_id": target_id,
+        "main_start_frame": raw.get("main_start_frame"),
+        "main_end_frame": raw.get("main_end_frame"),
+        "main_start_sec": None,
+        "main_end_sec": None,
+        "cuts": list(raw.get("segments") or []),
+        "pre_gain_db": pre_gain_db,
+        "volume": max(0.0, min(1.0, volume)),
+        "normalize": bool(raw.get("normalize", False)),
+        "target_peak_db": float(raw.get("target_peak_db", -1.0)),
+        "output_format": raw.get("output_format") or "wav",
+        "view": {
+            "waveform_zoom": float(view.get("waveform_zoom") or 1.0),
+            "view_start_frame": int(view.get("view_start_frame") or 0),
+            "selected_cut_id": view.get("selected_segment_id"),
+        },
+    }
+
+
+def read_project_session(project: models.ProjectItem) -> dict[str, Any] | None:
+    """Read the engine-namespaced session document from project.json (with lazy v2 fallback)."""
+    document = _read_document(manifest_path(project))
+    if not document:
+        return None
+    session = document.get("session")
+    if isinstance(session, dict) and session.get("engine"):
+        return dict(session)
+    return _legacy_v2_to_session(project, document)
+
+
+def write_project_session(
+    db: Session,
+    project_id: int,
+    session_envelope: dict[str, Any],
+    *,
+    commit: bool = True,
+) -> dict[str, Any]:
+    """Atomically write the project's engine session envelope inside project.json."""
+    return sync_project_manifest(
+        db,
+        project_id,
+        editor_session=session_envelope,
+        commit=commit,
+    )
 
 
 def manifest_path(project: models.ProjectItem) -> Path:
@@ -309,6 +419,8 @@ def sync_project_manifest(
     project_id: int,
     *,
     editor_state: Any = _KEEP_EDITOR_STATE,
+    editor_session: Any = _KEEP_SESSION,
+    checkpoints: Any = _KEEP_CHECKPOINTS,
     commit: bool = True,
 ) -> dict[str, Any]:
     """Atomically refresh the compact manifest from canonical project rows."""
@@ -340,6 +452,23 @@ def sync_project_manifest(
     else:
         raise ValueError("The project manifest editor state is invalid")
 
+    project_kind = getattr(project, "project_kind", None) or existing_doc.get("project_kind") or "audio"
+    editor_engine = getattr(project, "editor_engine", None) or existing_doc.get("editor_engine") or "sin"
+
+    if editor_session is not _KEEP_SESSION:
+        session_doc = dict(editor_session) if isinstance(editor_session, dict) else None
+    elif isinstance(existing_doc.get("session"), dict) and existing_doc["session"].get("engine"):
+        session_doc = dict(existing_doc["session"])
+    else:
+        session_doc = _legacy_v2_to_session(project, existing_doc)
+
+    if checkpoints is not _KEEP_CHECKPOINTS:
+        checkpoint_list = list(checkpoints or [])
+    elif isinstance(existing_doc.get("checkpoints"), list):
+        checkpoint_list = list(existing_doc["checkpoints"])
+    else:
+        checkpoint_list = []
+
     _remove_legacy_editor_item(db, project, canonical_path)
     _remove_legacy_editor_item(db, project, legacy_path)
     _drop_placeholder_metadata(db, project.id)
@@ -349,44 +478,43 @@ def sync_project_manifest(
         if item:
             references.append(_reference_entry(project, item, reference))
 
-    document = {
+    document: dict[str, Any] = {
         "format": PROJECT_FORMAT,
         "version": PROJECT_FORMAT_VERSION,
         "schema": MANIFEST_SCHEMA,
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "project_id": project.id,
+        "project_kind": project_kind,
+        "editor_engine": editor_engine,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "graph": existing_doc.get("graph") if isinstance(existing_doc, dict) else None,
-        "snapshots": existing_doc.get("snapshots", []) if isinstance(existing_doc, dict) else [],
-        "view": existing_doc.get("view", {}) if isinstance(existing_doc, dict) else {},
-        "editor": editor,
-        "edits": edits,
+        "session": session_doc,
+        "checkpoints": checkpoint_list,
         "references": references,
     }
 
-    from . import graph_builder
-    if not isinstance(document.get("graph"), dict) or document["graph"].get("format") != "sin-graph":
-        try:
-            document["graph"] = graph_builder.build_item_sin_graph(project.id, db)
-        except Exception:
-            pass
+    # Retain legacy media-editor fields only when legacy editor-state paths wrote them,
+    # keeping legacy callers/tests compatible without ever clobbering `session`.
+    if editor is not None or edits:
+        document["editor"] = editor
+        document["edits"] = edits
 
-    if editor and isinstance(editor, dict):
-        try:
-            from . import media_editor
-            playables = media_editor._project_playables(db, project)
-            graph, snapshots = graph_builder.migrate_legacy_editor_state(editor, playables, project=project)
-            document["graph"] = graph
-            if snapshots:
-                existing_snapshots = list(document.get("snapshots") or [])
-                seen_ids = {s.get("id") for s in existing_snapshots if isinstance(s, dict)}
-                for snap in snapshots:
-                    if snap.get("id") not in seen_ids:
-                        existing_snapshots.append(snap)
-                        seen_ids.add(snap.get("id"))
-                document["snapshots"] = existing_snapshots
-        except Exception:
-            pass
+    # Mirror SIN session graph/snapshots at top level only when engine == "sin" and present
+    # in session so older SIN manifest readers stay compatible, without mutating session.
+    if editor_engine == "sin" and isinstance(session_doc, dict) and session_doc.get("engine") == "sin":
+        s_data = session_doc.get("data") or {}
+        if isinstance(s_data.get("graph"), dict):
+            document["graph"] = s_data["graph"]
+        if isinstance(s_data.get("snapshots"), list):
+            document["snapshots"] = s_data["snapshots"]
+        if s_data.get("active_snapshot_id") is not None:
+            document["view"] = {"selected_snapshot_id": s_data.get("active_snapshot_id")}
+    elif editor_engine == "sin":
+        if isinstance(existing_doc.get("graph"), dict):
+            document["graph"] = existing_doc["graph"]
+        if isinstance(existing_doc.get("snapshots"), list):
+            document["snapshots"] = existing_doc["snapshots"]
+        if isinstance(existing_doc.get("view"), dict):
+            document["view"] = existing_doc["view"]
 
     previous = _atomic_write(canonical_path, document)
     if legacy_path.is_file() and canonical_path.is_file():

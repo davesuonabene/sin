@@ -37,7 +37,7 @@ from core.engines import (
     build_node_object,
     get_renderer_for_node,
 )
-from core.fx import process_chain
+from core.fx import DspProcessor, PROCESSOR_REGISTRY, process_chain
 from core.system import System
 from ermes import PoolResolveRequest
 from tests.support import AudioFixtureTestCase, working_directory
@@ -167,7 +167,7 @@ class TestSamplePipeline(AudioFixtureTestCase):
 
         chain = [
             {"type": "gain", "params": {"gain": 0.5}},
-            {"type": "reverb", "params": {"room_size": 0.8, "mix": 0.5}},
+            {"type": "unregistered_noop", "params": {"mix": 0.5}},
             {"type": "gain", "params": {"gain": 2.0}},
         ]
         processed = process_chain(mixed, chain, sample_rate=system.sample_rate)
@@ -770,7 +770,7 @@ class TestApiAudioFlow(AudioFixtureTestCase):
                 preview_response = preview_graph_ram(payload)
                 self.assertTrue(preview_response["runtime_log"])
                 self.assertTrue(any(
-                    "File loaded via SoundFile" in entry["message"]
+                    ("File loaded via SoundFile" in entry["message"] or "Native libsin_dsp" in entry["message"])
                     for entry in preview_response["runtime_log"]
                 ))
                 cached_response = preview_graph_ram(payload)
@@ -1002,6 +1002,19 @@ class TestRenderExportResolution(unittest.TestCase):
         self.assertEqual(len(node_obj.chain), 1)
         self.assertEqual(node_obj.chain[0]["type"], "gain")
         self.assertAlmostEqual(node_obj.chain[0]["params"]["gain_db"], -6.0, places=4)
+
+    def test_dsp_processor_registry_gain_only_and_passthrough(self):
+        from ermes.py.compiler import KNOWN_FX_TYPES
+
+        self.assertEqual(PROCESSOR_REGISTRY.types(), frozenset({"gain"}))
+        self.assertEqual(KNOWN_FX_TYPES, frozenset({"gain"}))
+        proc = PROCESSOR_REGISTRY.get("gain")
+        self.assertIsNotNone(proc)
+        self.assertIsInstance(proc, DspProcessor)
+
+        buf = np.ones((2, 32), dtype=np.float32) * 0.5
+        out = process_chain(buf, [{"type": "unregistered_noop", "params": {"x": 1}}, {"type": "gain", "params": {"gain": 0.5}}], sample_rate=48000)
+        np.testing.assert_allclose(out, 0.25, atol=1e-6)
 
 
 if __name__ == "__main__":

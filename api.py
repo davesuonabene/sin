@@ -6,7 +6,8 @@ import logging
 import re
 from time import perf_counter
 from pathlib import Path
-from fastapi import FastAPI, APIRouter, Request
+from fastapi import FastAPI, APIRouter, Request, WebSocket
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
@@ -16,6 +17,7 @@ import numpy as np
 
 from core.system import System
 from core.audio_object import ItemPoolObject
+from core.realtime_host import RealtimeAudioHost
 from core.runtime_trace import collect_runtime_trace, trace_runtime
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -64,8 +66,11 @@ async def lifespan(app: FastAPI):
     if not (STATIC_DIR / "index.html").is_file():
         logger.warning("SIN frontend is not built. Run: npm --prefix editor run build")
     yield
+    sin_realtime_host.shutdown()
     logger.info("Shutting down SIN server lifespan...")
 
+
+sin_realtime_host = RealtimeAudioHost(name="sin", include_scope=True)
 
 app = FastAPI(
     title="SIN API",
@@ -73,8 +78,19 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=1)
 
 api_router = APIRouter(prefix="/api")
+
+
+@api_router.get("/realtime/status", tags=["Realtime"])
+def realtime_status():
+    return sin_realtime_host.status()
+
+
+@api_router.websocket("/realtime/ws")
+async def realtime_ws(websocket: WebSocket):
+    await sin_realtime_host.handle_websocket(websocket)
 
 
 @api_router.get("/health", tags=["System"])
@@ -843,7 +859,16 @@ def get_temp_renders():
     files = [f for f in os.listdir(temp_dir) if f.endswith(".wav")]
     # Sort files by creation time descending (newest first)
     files.sort(key=lambda x: os.path.getctime(os.path.join(temp_dir, x)), reverse=True)
-    return {"files": [{"filename": f, "url": f"/temp_renders/{f}"} for f in files]}
+    return {
+        "files": [
+            {
+                "filename": f,
+                "url": f"/temp_renders/{f}",
+                "filepath": os.path.abspath(os.path.join(temp_dir, f)),
+            }
+            for f in files
+        ]
+    }
 
 @api_router.post("/renders/export", tags=["System"])
 def export_render(payload: ExportRequest):
@@ -1291,6 +1316,10 @@ def get_library(vault_id: Optional[int] = None):
         pack_roots = []
         for item in items_list:
             item_type = item.get("type", "audio")
+            if item_type == "video":
+                continue
+            if item_type == "project" and item.get("project_kind") == "video":
+                continue
             abs_path = item.get("absolute_path") or ""
             if item_type in folder_types and abs_path:
                 norm_root = os.path.abspath(abs_path).replace("\\", "/").lower()
@@ -1301,6 +1330,10 @@ def get_library(vault_id: Optional[int] = None):
 
         for item in items_list:
             item_type = item.get("type", "audio")
+            if item_type == "video":
+                continue
+            if item_type == "project" and item.get("project_kind") == "video":
+                continue
             abs_path = item.get("absolute_path") or ""
             norm_path = os.path.abspath(abs_path).replace("\\", "/").lower() if abs_path else ""
 
@@ -1324,6 +1357,8 @@ def get_library(vault_id: Optional[int] = None):
                 seen_content_keys = set()
                 for content in contents:
                     if not isinstance(content, dict):
+                        continue
+                    if content.get("type") == "video":
                         continue
                     relative_path = content.get("relative_path") or ""
                     content_abs = content.get("absolute_path")
@@ -1385,191 +1420,214 @@ def get_library(vault_id: Optional[int] = None):
 
         return final_files
 
-    # Try fetching from Gaia API first. SIN exposes only quick-preview vaults;
-    # lazy and hidden vaults are loaded solely when opened in GAIA.
+    # Try fetching from Gaia API first. Prefer the single-shot /catalog/snapshot
+    # endpoint (pre-gzipped in RAM, ~1-15ms for 10k+ items) with automatic
+    # compatibility for legacy list responses.
     try:
-        requested_vault_ids = [vault_id] if vault_id is not None else []
-        if not requested_vault_ids:
-            vault_req = urllib.request.Request("http://127.0.0.1:8001/vaults/?preview=quick", headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(vault_req, timeout=5.0) as response:
-                if response.status == 200:
-                    requested_vault_ids = [vault.get("id") for vault in json.loads(response.read().decode('utf-8'))]
-
-        def _expand_nested_collection_contents(parent_cid: int, items: list[dict], prefix: str = "", visited: set[int] | None = None) -> list[dict]:
-            if visited is None:
-                visited = {parent_cid}
-            res = []
-            for c in items:
-                sub_id = c.get("child_id") or c.get("id")
-                sub_type = c.get("type")
-                sub_title = c.get("title") or c.get("filename") or ""
-                if sub_type in {"collection", "folder", "sample_pack"} and sub_id and sub_id not in visited:
-                    visited.add(sub_id)
-                    try:
-                        sub_req = urllib.request.Request(f"http://127.0.0.1:8001/items/{sub_id}/contents", headers={'Accept': 'application/json'})
-                        with urllib.request.urlopen(sub_req, timeout=8.0) as sub_resp:
-                            if sub_resp.status == 200:
-                                sub_items = json.loads(sub_resp.read().decode('utf-8'))
-                                next_prefix = f"{prefix}/{sub_title}".strip("/") if prefix else sub_title
-                                res.extend(_expand_nested_collection_contents(sub_id, sub_items, next_prefix, visited))
-                                continue
-                    except Exception as sub_err:
-                        logger.debug(f"[API /library] Nested collection query failed for {sub_id}: {sub_err}")
-
-                cur_folder = c.get("folder") or ""
-                if not cur_folder and c.get("relative_path"):
-                    norm_rel = c["relative_path"].replace("\\", "/").strip("/")
-                    if "/" in norm_rel:
-                        cur_folder = os.path.dirname(norm_rel)
-                if prefix:
-                    if cur_folder and (cur_folder == prefix or cur_folder.startswith(prefix + "/") or cur_folder.startswith(sub_title)):
-                        c["folder"] = cur_folder
-                    elif cur_folder:
-                        c["folder"] = f"{prefix}/{cur_folder}"
-                    else:
-                        c["folder"] = prefix
-                elif cur_folder:
-                    c["folder"] = cur_folder
-                res.append(c)
-            return res
-
+        import gzip as _gzip
         from concurrent.futures import ThreadPoolExecutor
 
         def _fetch_url_json(url: str, timeout: float = 6.0):
             try:
-                r = urllib.request.Request(url, headers={'Accept': 'application/json'})
+                r = urllib.request.Request(url, headers={'Accept': 'application/json', 'Accept-Encoding': 'gzip'})
                 with urllib.request.urlopen(r, timeout=timeout) as resp:
                     if resp.status == 200:
-                        return json.loads(resp.read().decode('utf-8'))
+                        raw = resp.read()
+                        headers_obj = getattr(resp, "headers", None)
+                        encoding = (headers_obj.get("Content-Encoding", "") if headers_obj else "").lower()
+                        if "gzip" in encoding or (len(raw) >= 2 and raw[:2] == b"\x1f\x8b"):
+                            raw = _gzip.decompress(raw)
+                        return json.loads(raw.decode('utf-8'))
             except Exception as e:
-                logger.debug(f"[API /library] Parallel query failed for {url}: {e}")
+                logger.debug(f"[API /library] Query failed for {url}: {e}")
             return None
 
-        for requested_vault_id in requested_vault_ids:
-            query = f"?vault_id={requested_vault_id}&limit=10000"
-            req = urllib.request.Request(f"http://127.0.0.1:8001/items/{query}", headers={'Accept': 'application/json'})
-            # Large vaults can take more than a couple of seconds to serialize.
-            # A premature timeout triggers the much slower SQLite/analyzer fallback.
-            with urllib.request.urlopen(req, timeout=15.0) as response:
-                if response.status != 200:
-                    continue
-                vault_items = json.loads(response.read().decode('utf-8'))
+        snap_query = f"?vault_id={vault_id}" if vault_id is not None else "?vault_preview=quick"
+        snap_req = urllib.request.Request(
+            f"http://127.0.0.1:8001/catalog/snapshot{snap_query}",
+            headers={'Accept': 'application/json', 'Accept-Encoding': 'gzip'},
+        )
+        with urllib.request.urlopen(snap_req, timeout=10.0) as response:
+            if response.status == 200:
+                raw_body = response.read()
+                resp_headers = getattr(response, "headers", None)
+                resp_enc = (resp_headers.get("Content-Encoding", "") if resp_headers else "").lower()
+                if "gzip" in resp_enc or (len(raw_body) >= 2 and raw_body[:2] == b"\x1f\x8b"):
+                    raw_body = _gzip.decompress(raw_body)
+                payload = json.loads(raw_body.decode('utf-8'))
+            else:
+                payload = None
 
-                # Pre-fetch project tables and collection contents concurrently in parallel
-                project_ids_to_fetch = [
-                    f["id"] for f in vault_items
-                    if f.get("type") == "project" and f.get("id")
-                ]
-                collection_ids_to_fetch = [
-                    f["id"] for f in vault_items
-                    if f.get("type") in {"collection", "folder"} and f.get("id") and not f.get("contents")
-                ]
+        if isinstance(payload, dict) and payload.get("schema") == "gaia-catalog-v1":
+            tags_map = payload.get("tags") or {}
+            rows = payload.get("rows") or []
+            items_by_id: dict[int, dict[str, Any]] = {}
+            children_by_parent: dict[int, list[dict[str, Any]]] = {}
+            roots: list[dict[str, Any]] = []
 
-                project_tables: dict[int, list[dict]] = {}
-                collection_contents_map: dict[int, list[dict]] = {}
+            for r in rows:
+                iid = int(r[0])
+                vid = int(r[1])
+                pid = int(r[2]) if r[2] is not None else None
+                itype = r[3] or "item"
+                abs_path = r[5] or ""
+                fname = os.path.basename(abs_path.rstrip("/\\"))
+                title = r[4] or fname
+                tag_ids = r[21] if isinstance(r[21], list) else []
+                tags = [{"id": tid, "name": tags_map[str(tid)]} for tid in tag_ids if str(tid) in tags_map]
+                extra = r[23] if isinstance(r[23], dict) else {}
+                attrs: dict[str, Any] = {}
+                if r[14]:
+                    attrs["favourite"] = True
+                if extra.get("folder"):
+                    attrs["folder"] = extra["folder"]
+                if extra.get("is_folder"):
+                    attrs["is_folder"] = True
+                rec = {
+                    "id": iid,
+                    "child_id": iid,
+                    "vault_id": vid,
+                    "parent_id": pid,
+                    "type": itype,
+                    "name": title,
+                    "title": title,
+                    "filename": fname,
+                    "absolute_path": abs_path,
+                    "relative_path": fname,
+                    "folder": extra.get("folder"),
+                    "key": r[12],
+                    "bpm": r[11],
+                    "is_loop": r[13],
+                    "favourite": bool(r[14]),
+                    "duration_seconds": r[15],
+                    "project_kind": r[18],
+                    "editor_engine": r[19],
+                    "tags": tags,
+                    "stems": extra.get("stems"),
+                    "is_valid_length": extra.get("is_valid_length"),
+                    "length_variance": extra.get("length_variance"),
+                    "is_external": (r[8] == "external_reference"),
+                    "attributes": attrs,
+                    "stream_url": f"/api/library/stream/{iid}",
+                }
+                items_by_id[iid] = rec
+                if pid is None:
+                    roots.append(rec)
+                else:
+                    children_by_parent.setdefault(pid, []).append(rec)
 
-                if project_ids_to_fetch or collection_ids_to_fetch:
-                    with ThreadPoolExecutor(max_workers=8) as executor:
-                        proj_futures = {
-                            pid: executor.submit(_fetch_url_json, f"http://127.0.0.1:8001/projects/{pid}/table", 8.0)
-                            for pid in project_ids_to_fetch
-                        }
-                        col_futures = {
-                            cid: executor.submit(_fetch_url_json, f"http://127.0.0.1:8001/items/{cid}/contents", 8.0)
-                            for cid in collection_ids_to_fetch
-                        }
-                        for pid, fut in proj_futures.items():
-                            res = fut.result()
-                            if res and isinstance(res, list):
-                                project_tables[pid] = res
-                        for cid, fut in col_futures.items():
-                            res = fut.result()
-                            if res and isinstance(res, list):
-                                collection_contents_map[cid] = res
+            # Fetch project tables concurrently only for projects in this scope
+            project_ids = [r["id"] for r in roots if r["type"] == "project"]
+            project_tables: dict[int, list[dict]] = {}
+            if project_ids:
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    proj_futs = {
+                        pid: executor.submit(_fetch_url_json, f"http://127.0.0.1:8001/projects/{pid}/table", 6.0)
+                        for pid in project_ids
+                    }
+                    for pid, fut in proj_futs.items():
+                        res = fut.result()
+                        if isinstance(res, list):
+                            project_tables[pid] = res
 
-                for f in vault_items:
-                    abs_path = f.get("absolute_path") or ""
-                    key = f.get("key")
-                    bpm = f.get("bpm")
-                    favourite = bool(f.get("favourite") or (f.get("attributes") or {}).get("favourite", False))
-                    item_type = f.get("type", "audio")
-                    item_id = f.get("id")
-                    contents = f.get("contents", [])
+            def _gather_descendants(cid: int, prefix: str = "", visited: set[int] | None = None) -> list[dict[str, Any]]:
+                if visited is None:
+                    visited = {cid}
+                out: list[dict[str, Any]] = []
+                for ch in children_by_parent.get(cid, []):
+                    ch_id = ch["id"]
+                    ch_type = ch["type"]
+                    if ch_type in {"collection", "folder", "sample_pack"} and ch_id not in visited:
+                        visited.add(ch_id)
+                        ch_title = ch["title"] or ch["filename"] or ""
+                        next_prefix = f"{prefix}/{ch_title}".strip("/") if prefix else ch_title
+                        out.extend(_gather_descendants(ch_id, next_prefix, visited))
+                    else:
+                        ch_copy = dict(ch)
+                        ch_copy["collection_id"] = cid
+                        cur_folder = ch_copy.get("folder") or ""
+                        if prefix:
+                            ch_copy["folder"] = f"{prefix}/{cur_folder}".strip("/") if cur_folder else prefix
+                        out.append(ch_copy)
+                return out
 
-                    # For projects, load full referenced items from pre-fetched project_tables
-                    if item_type == "project" and item_id:
-                        table_rows = project_tables.get(item_id, [])
-                        if table_rows:
-                            merged_contents = []
-                            seen_item_ids = set()
-                            for row in table_rows:
-                                target_item = row.get("item") or {}
-                                ref = row.get("reference") or {}
-                                ref_attrs = ref.get("attributes") or {}
-                                target_attrs = target_item.get("attributes") or {}
-                                tid = target_item.get("id")
-                                if tid in seen_item_ids:
-                                    continue
-                                seen_item_ids.add(tid)
-                                tpath = target_item.get("absolute_path") or ""
-                                folder_name = ref_attrs.get("folder") or target_attrs.get("folder") or None
-                                merged_contents.append({
-                                    "id": tid,
-                                    "child_id": tid,
-                                    "reference_id": ref.get("id"),
-                                    "collection_id": item_id,
-                                    "filename": os.path.basename(tpath),
-                                    "title": target_item.get("title") or os.path.basename(tpath),
-                                    "absolute_path": tpath,
-                                    "relative_path": target_item.get("relative_path") or os.path.basename(tpath),
-                                    "folder": folder_name,
-                                    "type": target_item.get("type", "sample"),
-                                    "tags": ref.get("tags") or target_item.get("tags") or [],
-                                    "key": target_item.get("key"),
-                                    "bpm": target_item.get("bpm"),
-                                    "duration_seconds": target_item.get("duration_seconds"),
-                                    "favourite": bool(target_item.get("favourite") or target_attrs.get("favourite", False)),
-                                    "is_external": bool(row.get("is_external", False)),
-                                    "versions": row.get("versions"),
-                                    "version_group": row.get("version_group"),
-                                    "stream_url": f"/api/library/stream/{tid}" if tid is not None else None,
-                                })
-                            # Preserve any manifest contents that weren't in project_table
-                            for c in contents:
-                                cid = c.get("child_id") or c.get("id")
-                                if cid not in seen_item_ids:
-                                    merged_contents.append(c)
-                            contents = merged_contents
+            for root in roots:
+                rid = root["id"]
+                rtype = root["type"]
+                contents: list[dict[str, Any]] = []
+                if rtype == "project":
+                    table_rows = project_tables.get(rid, [])
+                    seen_ids: set[int] = set()
+                    for row in table_rows:
+                        target_item = row.get("item") or {}
+                        ref = row.get("reference") or {}
+                        ref_attrs = ref.get("attributes") or {}
+                        target_attrs = target_item.get("attributes") or {}
+                        tid = target_item.get("id")
+                        if tid in seen_ids:
+                            continue
+                        seen_ids.add(tid)
+                        tpath = target_item.get("absolute_path") or ""
+                        contents.append({
+                            "id": tid,
+                            "child_id": tid,
+                            "reference_id": ref.get("id"),
+                            "collection_id": rid,
+                            "filename": os.path.basename(tpath),
+                            "title": target_item.get("title") or os.path.basename(tpath),
+                            "absolute_path": tpath,
+                            "relative_path": target_item.get("relative_path") or os.path.basename(tpath),
+                            "folder": ref_attrs.get("folder") or target_attrs.get("folder") or None,
+                            "type": target_item.get("type", "sample"),
+                            "tags": ref.get("tags") or target_item.get("tags") or [],
+                            "key": target_item.get("key"),
+                            "bpm": target_item.get("bpm"),
+                            "duration_seconds": target_item.get("duration_seconds"),
+                            "favourite": bool(target_item.get("favourite") or target_attrs.get("favourite", False)),
+                            "is_external": bool(row.get("is_external", False)),
+                            "versions": row.get("versions"),
+                            "version_group": row.get("version_group"),
+                            "stream_url": f"/api/library/stream/{tid}" if tid is not None else None,
+                        })
+                    for ch in _gather_descendants(rid):
+                        if ch["id"] not in seen_ids:
+                            contents.append(ch)
+                elif rtype in {"collection", "folder"}:
+                    contents = _gather_descendants(rid)
 
-                    # For collections, if contents is empty, populate from pre-fetched collection_contents_map
-                    elif item_type in {"collection", "folder"} and item_id:
-                        if not contents:
-                            contents = collection_contents_map.get(item_id, [])
-                        if contents and any(isinstance(c, dict) and c.get("type") in {"collection", "folder", "sample_pack"} for c in contents):
-                            contents = _expand_nested_collection_contents(item_id, contents)
+                raw_items.append({**root, "contents": contents})
 
-                    display_name = f.get("title") or f.get("name") or os.path.basename(abs_path)
-                    raw_items.append({
-                        "id": item_id,
-                        "vault_id": f.get("vault_id"),
-                        "parent_id": f.get("parent_id"),
-                        "absolute_path": abs_path,
-                        "name": display_name,
-                        "tags": f.get("tags", []),
-                        "type": item_type,
-                        "key": key,
-                        "bpm": bpm,
-                        "duration_seconds": f.get("duration_seconds"),
-                        "stems": f.get("stems"),
-                        "is_valid_length": f.get("is_valid_length"),
-                        "length_variance": f.get("length_variance"),
-                        "contents": contents,
-                        "favourite": favourite,
-                        "attributes": f.get("attributes", {}),
-                    })
-        files = prepare_and_filter_library(raw_items)
-        logger.debug(f"[API /library] Fetched {len(files)} files from Gaia API.")
-        return {"files": files}
+            files = prepare_and_filter_library(raw_items)
+            logger.debug(f"[API /library] Fast catalog snapshot loaded {len(files)} root records.")
+            return {"files": files}
+
+        # Compatibility path for legacy list responses (and unit test mocks)
+        if isinstance(payload, list):
+            for f in payload:
+                abs_path = f.get("absolute_path") or ""
+                display_name = f.get("title") or f.get("name") or os.path.basename(abs_path)
+                raw_items.append({
+                    "id": f.get("id"),
+                    "vault_id": f.get("vault_id"),
+                    "parent_id": f.get("parent_id"),
+                    "absolute_path": abs_path,
+                    "name": display_name,
+                    "tags": f.get("tags", []),
+                    "type": f.get("type", "audio"),
+                    "key": f.get("key"),
+                    "bpm": f.get("bpm"),
+                    "duration_seconds": f.get("duration_seconds"),
+                    "stems": f.get("stems"),
+                    "is_valid_length": f.get("is_valid_length"),
+                    "length_variance": f.get("length_variance"),
+                    "contents": f.get("contents", []),
+                    "favourite": bool(f.get("favourite") or (f.get("attributes") or {}).get("favourite", False)),
+                    "project_kind": f.get("project_kind"),
+                    "editor_engine": f.get("editor_engine"),
+                    "attributes": f.get("attributes", {}),
+                })
+            files = prepare_and_filter_library(raw_items)
+            return {"files": files}
     except Exception as e:
         logger.warning(f"[API /library] Gaia API unreachable ({e}). Falling back to SQLite.")
         raw_items.clear()
@@ -1581,18 +1639,26 @@ def get_library(vault_id: Optional[int] = None):
             conn = sqlite3.connect(str(db_path))
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            query = """
+            project_cols = {
+                column[1] for column in cursor.execute("PRAGMA table_info(project_items)").fetchall()
+            }
+            has_proj_engine = {"project_kind", "editor_engine"}.issubset(project_cols)
+            proj_select = ", p.project_kind, p.editor_engine" if has_proj_engine else ""
+            proj_join = " LEFT JOIN project_items p ON i.id = p.id" if has_proj_engine else ""
+            query = f"""
                 SELECT i.id, i.absolute_path, i.type, i.parent_id,
                        i.vault_id, i.metadata_json,
                        COALESCE(s.key, m.key, mt.key) as key,
                        COALESCE(s.bpm, m.bpm, mt.bpm) as bpm,
                        mt.stems_json, mt.is_valid_length, mt.length_variance,
                        ci.title as collection_title, ci.manifest_json
+                       {proj_select}
                 FROM items i
                 LEFT JOIN sample_items s ON i.id = s.id
                 LEFT JOIN midi_items m ON i.id = m.id
                 LEFT JOIN multitrack_items mt ON i.id = mt.id
                 LEFT JOIN collection_items ci ON i.id = ci.id
+                {proj_join}
             """
             params = []
             if vault_id is not None:
@@ -1795,6 +1861,8 @@ def get_library(vault_id: Optional[int] = None):
                     "length_variance": row["length_variance"],
                     "contents": contents,
                     "favourite": favourite,
+                    "project_kind": row["project_kind"] if has_proj_engine else None,
+                    "editor_engine": row["editor_engine"] if has_proj_engine else None,
                     "attributes": attributes,
                 })
             conn.close()

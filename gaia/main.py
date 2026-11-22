@@ -1,11 +1,13 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
 
 from . import import_jobs, models, database, profiles, vaults, project_manifest
-from .routers import items, media_edits, tags, projects, sin_proposals, vaults as vault_router, playlists
+from .routers import catalog as catalog_router, items, media_edits, tags, projects, sin_proposals, vaults as vault_router, playlists, editor
 
 # Migrate the removed SamplePack subtype before ORM mappings query legacy rows.
 database.migrate_sample_pack_profiles()
@@ -13,7 +15,9 @@ database.migrate_project_links()
 models.Base.metadata.create_all(bind=database.engine)
 database.migrate_vault_locations()
 database.migrate_item_residency()
+database.migrate_project_engines()
 database.migrate_performance_indexes()
+database.migrate_catalog_acceleration()
 with database.SessionLocal() as db:
     vaults.migrate_custom_vault_layouts(db)
     vaults.ensure_default_vault(db)
@@ -23,11 +27,24 @@ with database.SessionLocal() as db:
 import_jobs.cleanup_stale_staging()
 import_jobs.cleanup_abandoned_import_rows()
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    try:
+        editor.gaia_realtime_host.shutdown()
+    except Exception:
+        pass
+
+
 app = FastAPI(
     title="Gaia Archive Manager",
     description="Isolated backend for managing file archives, integrity, and organization without duplicating assets.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
+
+# Fast response compression (skipping already-compressed payloads & SSE streams)
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=1)
 
 # CORS setup
 app.add_middleware(
@@ -39,6 +56,7 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(catalog_router.router)
 app.include_router(items.router)
 app.include_router(media_edits.router)
 app.include_router(tags.router)
@@ -46,6 +64,7 @@ app.include_router(projects.router)
 app.include_router(sin_proposals.router)
 app.include_router(vault_router.router)
 app.include_router(playlists.router)
+app.include_router(editor.router)
 
 # Mount static files
 static_path = os.path.join(os.path.dirname(__file__), "static")

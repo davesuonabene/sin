@@ -147,15 +147,29 @@ def _count_folder_contents(db: Session, folder_id: int, context_project_id: int 
 
 
 def file_schema_for_path(path: Path, vault_id: int, parent_id: int | None = None):
-    """Register files as generic audio until a user classifies them otherwise."""
+    """Register files as generic media until a user classifies them otherwise."""
     extension = path.suffix.lower()
     mime_type = mimetypes.guess_type(str(path))[0]
     size_bytes = path.stat().st_size
     file_hash = integrity.calculate_file_hash(str(path))
     duration = None
-    if extension in collection_importer.AUDIO_EXTENSIONS:
+    video_meta = None
+    if extension in collection_importer.VIDEO_EXTENSIONS:
+        video_meta = collection_importer._video_metadata(path)
+        duration = video_meta.get("duration_seconds")
+    elif extension in collection_importer.AUDIO_EXTENSIONS:
         duration = collection_importer._audio_metadata(path).get("duration_seconds")
     analysis = text_analyzer.analyze_path(str(path), duration_seconds=duration)
+    analysis_attr = {
+        "is_loop": bool(analysis.get("is_loop")),
+        "bpm": analysis.get("bpm"),
+        "key": analysis.get("key"),
+    }
+    if duration is not None:
+        analysis_attr["duration_seconds"] = duration
+    attrs: dict[str, object] = {"analysis": analysis_attr}
+    if video_meta:
+        attrs["video_metadata"] = video_meta
     common = {
         "absolute_path": str(path.resolve()),
         "vault_id": vault_id,
@@ -163,13 +177,7 @@ def file_schema_for_path(path: Path, vault_id: int, parent_id: int | None = None
         "file_hash": file_hash,
         "size_bytes": size_bytes,
         "mime_type": mime_type,
-        "attributes": {
-            "analysis": {
-                "is_loop": bool(analysis.get("is_loop")),
-                "bpm": analysis.get("bpm"),
-                "key": analysis.get("key"),
-            }
-        },
+        "attributes": attrs,
     }
     if extension in collection_importer.MIDI_EXTENSIONS:
         try:
@@ -181,6 +189,8 @@ def file_schema_for_path(path: Path, vault_id: int, parent_id: int | None = None
             bpm=midi_values.get("bpm") or analysis.get("bpm"),
             key=midi_values.get("key") or analysis.get("key"),
         ), analysis.get("tags", [])
+    if extension in collection_importer.VIDEO_EXTENSIONS:
+        return schemas.VideoItemCreate(**common), analysis.get("tags", [])
     if extension in collection_importer.AUDIO_EXTENSIONS:
         return schemas.AudioItemCreate(**common), analysis.get("tags", [])
     return schemas.ItemCreate(**common, type="item"), analysis.get("tags", [])
@@ -212,6 +222,10 @@ def _clone_item_file(
         )
     elif source.type == "track":
         item_schema = schemas.TrackItemCreate(**common)
+    elif source.type == "video":
+        item_schema = schemas.VideoItemCreate(**common)
+    elif source.type == "audio":
+        item_schema = schemas.AudioItemCreate(**common)
     elif source.type == "midi":
         item_schema = schemas.MidiItemCreate(
             **common,
@@ -232,9 +246,17 @@ def _prepare_project(
     name: str,
     project_type: str,
     vault,
+    project_kind: str | None = None,
+    editor_engine: str | None = None,
 ) -> tuple[models.ProjectItem, Path]:
     if not type_registry.is_project_type(project_type):
         raise ValueError(f"Unsupported project type: {project_type}")
+    from .editor import registry as editor_registry
+
+    resolved_kind, resolved_engine = editor_registry.resolve_project_engine(
+        project_kind,
+        editor_engine,
+    )
     title = _safe_name(name, field_name="Project name")
     vault_root = vaults.vault_store(vault).resolve()
     vault_root.mkdir(parents=True, exist_ok=True)
@@ -255,6 +277,8 @@ def _prepare_project(
         title=title,
         source_kind="managed",
         source_path=str(destination),
+        project_kind=resolved_kind,
+        editor_engine=resolved_engine,
         contents=[],
         warnings=[],
     )
@@ -292,14 +316,28 @@ def _run_transaction(
         raise
 
 
-def create_project(db: Session, name: str, project_type: str, vault_id: int | None):
+def create_project(
+    db: Session,
+    name: str,
+    project_type: str,
+    vault_id: int | None,
+    project_kind: str | None = None,
+    editor_engine: str | None = None,
+):
     vault = vaults.ensure_default_vault(db) if vault_id is None else vaults.get_vault(db, vault_id)
     if not vault:
         raise ValueError("Vault not found")
     created_paths: list[Path] = []
 
     def operation():
-        project, path = _prepare_project(db, name, project_type, vault)
+        project, path = _prepare_project(
+            db,
+            name,
+            project_type,
+            vault,
+            project_kind=project_kind or "audio",
+            editor_engine=editor_engine,
+        )
         created_paths.append(path)
         db.flush()
         return project.id
@@ -308,7 +346,10 @@ def create_project(db: Session, name: str, project_type: str, vault_id: int | No
     project = crud.get_item(db, project_id)
     vaults.log_import(db, vault.id, project.absolute_path, "created", "project_created", project.id)
     sync_project_manifest(db, project.id)
-    return project
+    from .editor import session_service as editor_session_service
+
+    editor_session_service.initialize_project_session_on_create(db, project)
+    return crud.get_item(db, project.id)
 
 
 def rename_project(db: Session, project_id: int, name: str):
@@ -1253,6 +1294,9 @@ def create_from_items(
     vault_id: int | None,
     move_files: bool = False,
     move_item_ids: list[int] | None = None,
+    project_kind: str | None = None,
+    editor_engine: str | None = None,
+    initial_session: dict | None = None,
 ):
     unique_ids = list(dict.fromkeys(item_ids))
     if not unique_ids:
@@ -1268,6 +1312,13 @@ def create_from_items(
         raise ValueError("Vault not found")
     if mode not in {"single", "one_per_item"}:
         raise ValueError("Unknown project creation mode")
+    from .editor import registry as editor_registry, session_service as editor_session_service
+
+    resolved_kind, resolved_engine = editor_registry.resolve_project_engine(
+        project_kind,
+        editor_engine,
+        ordered_items,
+    )
     if mode == "single" and not (name or "").strip():
         # The library UI uses the selected item as the natural project
         # name. Keep the API equally useful for callers that omit the name.
@@ -1321,7 +1372,14 @@ def create_from_items(
             else [(Path(item.absolute_path).stem or Path(item.absolute_path).name, [item]) for item in ordered_items]
         )
         for project_name, sources in project_groups:
-            project, path = _prepare_project(db, project_name, project_type, vault)
+            project, path = _prepare_project(
+                db,
+                project_name,
+                project_type,
+                vault,
+                project_kind=resolved_kind,
+                editor_engine=resolved_engine,
+            )
             created_paths.append(path)
             db.flush()
             for source in sources:
@@ -1367,7 +1425,12 @@ def create_from_items(
     for project in result:
         vaults.log_import(db, vault.id, project.absolute_path, "created", "project_created_from_items", project.id)
         sync_project_manifest(db, project.id)
-    return result
+        editor_session_service.initialize_project_session_on_create(
+            db,
+            project,
+            initial_session=initial_session,
+        )
+    return [crud.get_item(db, project_id) for project_id in project_ids]
 
 
 def _artifact_schema_for_type(
@@ -1390,6 +1453,12 @@ def _artifact_schema_for_type(
             key=analysis.get("key"),
             is_loop=bool(analysis.get("is_loop")),
         )
+    elif target_type == "video":
+        common["type"] = "video"
+        item_schema = schemas.VideoItemCreate(**common)
+    elif target_type == "audio":
+        common["type"] = "audio"
+        item_schema = schemas.AudioItemCreate(**common)
     return item_schema, tags
 
 
@@ -1418,6 +1487,12 @@ def register_derived_path(
         and source_path.suffix.lower() not in collection_importer.AUDIO_EXTENSIONS
     ):
         raise ValueError("Audio, track, and sample results must point to an audio file")
+    if (
+        source_path.is_file()
+        and request.target_type == "video"
+        and source_path.suffix.lower() not in collection_importer.VIDEO_EXTENSIONS
+    ):
+        raise ValueError("Video results must point to a video file")
 
     destination_root = project_stage_directory(project, request.stage_name or "derived")
     destination_root.mkdir(parents=True, exist_ok=True)

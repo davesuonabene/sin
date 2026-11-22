@@ -54,12 +54,23 @@ export function serializeNodeSubtree(
         siblings.push([modifierId, modifierData]);
         modulatorsByParent.set(modifierData.parentId, siblings);
     }
+    const isAutoBars = (value: any): boolean => {
+        if (value == null) return false;
+        if (typeof value === 'string') {
+            const s = value.trim().toLowerCase();
+            if (s === 'auto' || s === 'free') return true;
+            const n = Number(s);
+            return Number.isFinite(n) && n <= 0;
+        }
+        return typeof value === 'number' && Number.isFinite(value) && value <= 0;
+    };
+    const isAutoGlobalBars = isAutoBars(globalParameters.total_bars);
     const resolveGlobalNumber = (value: any, key: 'bpm' | 'total_bars', fallback: number) => {
         const candidate = String(value).toLowerCase() === 'global' ? globalParameters[key] : value;
         const numeric = Number(candidate);
         return Number.isFinite(numeric) ? numeric : fallback;
     };
-    const workspaceBars = resolveGlobalNumber(globalParameters.total_bars, 'total_bars', 4.0);
+    const workspaceBars = isAutoGlobalBars ? undefined : resolveGlobalNumber(globalParameters.total_bars, 'total_bars', 4.0);
 
     const findParentWrapperBars = (startNodeId: number): number | undefined => {
         const visited = new Set<number>();
@@ -88,8 +99,9 @@ export function serializeNodeSubtree(
             const pType = pData?.type || pObj?.properties?.node_type || (pObj?.type === 'Audio/Arrangement' ? 'arrangement' : pObj?.type === 'Audio/Track' ? 'track' : '');
             if (pType === 'track' || pType === 'arrangement') {
                 const rawBars = pObj?.properties?.total_bars ?? pData?.total_bars;
+                if (isAutoBars(rawBars)) return undefined;
                 const isGlobal = rawBars == null || String(rawBars).toLowerCase() === 'global' || Boolean(pObj?.properties?.length_inherited);
-                return isGlobal ? workspaceBars : resolveGlobalNumber(rawBars, 'total_bars', workspaceBars);
+                return isGlobal ? workspaceBars : resolveGlobalNumber(rawBars, 'total_bars', workspaceBars ?? 4.0);
             }
             currentId = nextParentId;
         }
@@ -151,18 +163,30 @@ export function serializeNodeSubtree(
         const stepLength = nodeObj?.properties?.step_length ?? data?.step_length ?? (nodeType === "sequence" ? 0.25 : undefined);
         const fadeMs = nodeObj?.properties?.fade_ms ?? data?.fade_ms ?? (nodeType === "sequence" ? 0 : undefined);
         const rawTotalBars = nodeObj?.properties?.total_bars ?? data?.total_bars;
+        const isAutoExplicit = isAutoBars(rawTotalBars);
         const isGlobalOrInherited = rawTotalBars == null
             || String(rawTotalBars).toLowerCase() === 'global'
             || Boolean(nodeObj?.properties?.length_inherited);
         const parentWrapperBars = parentTotalBars ?? findParentWrapperBars(nodeId);
         const fallbackBars = parentWrapperBars ?? workspaceBars;
         const isSampleLoop = (nodeObj?.properties?.sample_type ?? data?.sample_type ?? 'loop') === 'loop';
-        const total_bars = isGlobalOrInherited
-            ? (nodeType === 'sample'
-                ? ((isSampleLoop && (parentNodeType === undefined || parentNodeType === 'track')) ? fallbackBars : undefined)
-                : fallbackBars)
-            : resolveGlobalNumber(rawTotalBars, 'total_bars', fallbackBars);
-        const wrapper_bars = Math.max(Number(total_bars || fallbackBars), Number(parentWrapperBars ?? workspaceBars));
+        let total_bars: number | undefined;
+        if (isAutoExplicit) {
+            total_bars = undefined;
+        } else if (isGlobalOrInherited) {
+            if (nodeType === 'sample') {
+                total_bars = (isSampleLoop && (parentNodeType === undefined || parentNodeType === 'track')) ? fallbackBars : undefined;
+            } else if (nodeType === 'track') {
+                total_bars = fallbackBars;
+            } else {
+                total_bars = fallbackBars ?? 4.0;
+            }
+        } else {
+            total_bars = resolveGlobalNumber(rawTotalBars, 'total_bars', fallbackBars ?? 4.0);
+        }
+        const wrapper_bars = (total_bars != null || parentWrapperBars != null || workspaceBars != null)
+            ? Math.max(Number(total_bars || 0), Number(parentWrapperBars ?? workspaceBars ?? 0)) || undefined
+            : undefined;
         const global_bars = wrapper_bars;
         const section_points = nodeObj?.properties?.section_points ?? data?.section_points ?? (nodeType === "arrangement" ? [] : undefined);
         const section_enabled = nodeObj?.properties?.section_enabled ?? data?.section_enabled ?? (nodeType === "arrangement" ? [] : undefined);

@@ -40,6 +40,7 @@ ASSET_TYPES = (
     AssetTypeDefinition("audio", "Audio", "file", importable=True, description="Raw or unclassified audio."),
     AssetTypeDefinition("track", "Track", "audio"),
     AssetTypeDefinition("sample", "Sample", "audio", description="Audio prepared for sampling; loop state is metadata."),
+    AssetTypeDefinition("video", "Video", "file", importable=True, description="Video media file."),
     AssetTypeDefinition("midi", "MIDI", "file"),
     AssetTypeDefinition("sequence", "Sequence", "file"),
     AssetTypeDefinition(

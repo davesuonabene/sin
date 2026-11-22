@@ -36,6 +36,8 @@ def create_project(req: schemas.ProjectCreateRequest, db: Session = Depends(data
             req.name,
             req.project_type,
             req.vault_id,
+            project_kind=req.project_kind,
+            editor_engine=req.editor_engine,
         )
     except (ValueError, OSError) as exc:
         _bad_request(exc)
@@ -56,6 +58,9 @@ def create_projects_from_items(
             req.vault_id,
             req.move_files,
             req.move_item_ids,
+            project_kind=req.project_kind,
+            editor_engine=req.editor_engine,
+            initial_session=req.initial_session,
         )
     except (ValueError, OSError) as exc:
         _bad_request(exc)

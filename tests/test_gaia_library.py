@@ -1382,11 +1382,15 @@ class TestGaiaLibrary(GaiaTestCase):
         self.assertEqual(status["status"], "completed")
         self.assertEqual((status["completed"], status["failed"]), (2, 0))
 
+        self.db.expire_all()
         refreshed = crud.get_item(self.db, collection.id)
         loop_content = next(entry for entry in refreshed.contents if "Deep Groove" in entry["filename"])
         loop_child = crud.get_item(self.db, loop_content["child_id"])
         self.assertEqual(loop_child.type, "audio")
-        self.assertEqual(loop_child.attributes["analysis"], {"is_loop": True, "bpm": 120, "key": "C#min"})
+        self.assertEqual(
+            loop_child.attributes["analysis"],
+            {"is_loop": True, "bpm": 120, "key": "C#min", "duration_seconds": 0.2},
+        )
 
     def test_individual_file_imports_are_managed_and_conflicts_are_explicit(self):
         source_file = self.write_audio(

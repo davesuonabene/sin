@@ -33,6 +33,7 @@ SUITES = {
     "cli": ["test_cli.py", "test_gaia_metadata_cli.py"],
     "gaia": [
         "test_gaia_library.py",
+        "test_gaia_catalog_fast.py",
         "test_gaia_container_library.py",
         "test_gaia_metadata_cli.py",
         "test_gaia_deletion.py",

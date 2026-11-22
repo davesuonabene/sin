@@ -101,6 +101,15 @@ class SampleItem(AudioItem):
         "polymorphic_identity": "sample",
     }
 
+
+class VideoItem(Item):
+    __tablename__ = "video_items"
+    id = Column(Integer, ForeignKey("items.id"), primary_key=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "video",
+    }
+
 class FolderItem(Item):
     """Base persistence model for typed folders managed by GAIA."""
     __tablename__ = "collection_items"
@@ -152,6 +161,8 @@ class ProjectItem(FolderItem):
     """Base class for user-created project workflows."""
     __tablename__ = "project_items"
     id = Column(Integer, ForeignKey("collection_items.id"), primary_key=True)
+    project_kind = Column(String, nullable=False, default="audio", index=True)
+    editor_engine = Column(String, nullable=False, default="sin", index=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "project",

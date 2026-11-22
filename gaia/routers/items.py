@@ -2,10 +2,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
+import mimetypes
 import os
 import re
 import sys
 import subprocess
+import time
 from pathlib import Path, PurePosixPath
 import uuid
 import json
@@ -13,6 +15,7 @@ import datetime
 from collections import Counter
 
 from .. import (
+    catalog,
     collection_importer,
     crud,
     deletion_service,
@@ -433,6 +436,16 @@ def _analysis_update_request(db_item: models.Item, analysis: dict) -> schemas.It
         values["attributes"] = _analysis_attributes(db_item, analysis)
         if db_item.type == "audio" and analysis.get("type") == "track":
             values["type"] = "track"
+    elif db_item.type == "video":
+        attributes = dict(getattr(db_item, "attributes", {}) or {})
+        if analysis.get("video_metadata"):
+            attributes["video_metadata"] = analysis["video_metadata"]
+        summary = dict(attributes.get("analysis") or {})
+        if analysis.get("duration_seconds") is not None:
+            summary["duration_seconds"] = analysis["duration_seconds"]
+        if summary:
+            attributes["analysis"] = summary
+        values["attributes"] = attributes
     elif db_item.type == "midi":
         existing_bpm = getattr(db_item, "bpm", None)
         if existing_bpm is None and analysis.get("bpm") is not None:
@@ -451,6 +464,8 @@ def _analyze_and_update_item(db: Session, db_item: models.Item):
 
     if path.suffix.casefold() in collection_importer.AUDIO_EXTENSIONS:
         analysis = collection_importer.analyze_audio_file(path)
+    elif path.suffix.casefold() in collection_importer.VIDEO_EXTENSIONS:
+        analysis = collection_importer.analyze_video_file(path)
     else:
         analysis = text_analyzer.analyze_path(db_item.absolute_path)
 
@@ -832,8 +847,17 @@ def delete_drop_session(session_id: str):
 
 
 
+_SOURCE_LOCATIONS_CACHE: tuple[float, list[dict]] | None = None
+_SOURCE_LOCATIONS_TTL_SEC = 15.0
+
+
 def _source_browser_locations() -> list[dict]:
     """Return useful local shortcuts without invoking an operating-system picker."""
+    global _SOURCE_LOCATIONS_CACHE
+    now = time.monotonic()
+    if _SOURCE_LOCATIONS_CACHE is not None and (now - _SOURCE_LOCATIONS_CACHE[0]) < _SOURCE_LOCATIONS_TTL_SEC:
+        return list(_SOURCE_LOCATIONS_CACHE[1])
+
     home = Path.home().resolve()
     candidates = [
         ("Home", home, "home"),
@@ -868,12 +892,13 @@ def _source_browser_locations() -> list[dict]:
             continue
         seen.add(key)
         locations.append({"label": label, "path": str(resolved), "kind": kind})
-    return locations
+    _SOURCE_LOCATIONS_CACHE = (now, locations)
+    return list(locations)
 
 
 @router.get("/import/browse-source")
 def browse_import_source(path: str | None = None):
-    """List one local directory for GAIA's in-app source picker."""
+    """List one local directory for GAIA's in-app source picker using single-pass os.scandir."""
     if path and len(path) == 2 and path[1] == ":" and path[0].isalpha():
         path = f"{path}\\"
     requested = Path(path).expanduser() if path else Path.home()
@@ -888,37 +913,43 @@ def browse_import_source(path: str | None = None):
         raise HTTPException(status_code=400, detail="That location is not a file or folder")
 
     entries = []
+    dir_str = str(directory)
     try:
-        for child in directory.iterdir():
-            try:
-                link_stat = child.lstat()
-                link_attributes = getattr(link_stat, "st_file_attributes", 0)
-                if child.name.startswith(".") or link_attributes & 0x06:
+        with os.scandir(dir_str) as it:
+            for entry in it:
+                name = entry.name
+                if name.startswith("."):
                     continue
-                stat = child.stat()
-                kind = "folder" if child.is_dir() else "file" if child.is_file() else None
-                resolved = child.resolve()
-            except OSError:
-                continue
-            if not kind:
-                continue
-            entries.append({
-                "name": child.name,
-                "path": str(resolved),
-                "kind": kind,
-                "size_bytes": None if kind == "folder" else stat.st_size,
-                "modified_at": datetime.datetime.fromtimestamp(
-                    stat.st_mtime, datetime.timezone.utc
-                ).isoformat(),
-                "is_archive": kind == "file" and child.suffix.casefold() == ".zip",
-            })
+                try:
+                    lstat = entry.stat(follow_symlinks=False)
+                    if getattr(lstat, "st_file_attributes", 0) & 0x06:
+                        continue
+                    is_dir = entry.is_dir(follow_symlinks=True)
+                    is_file = False if is_dir else entry.is_file(follow_symlinks=True)
+                    if not is_dir and not is_file:
+                        continue
+                    stat = entry.stat(follow_symlinks=True) if entry.is_symlink() else lstat
+                    entry_path = os.path.realpath(entry.path) if entry.is_symlink() else os.path.normpath(entry.path)
+                except OSError:
+                    continue
+                kind = "folder" if is_dir else "file"
+                entries.append({
+                    "name": name,
+                    "path": entry_path,
+                    "kind": kind,
+                    "size_bytes": None if is_dir else stat.st_size,
+                    "modified_at": datetime.datetime.fromtimestamp(
+                        stat.st_mtime, datetime.timezone.utc
+                    ).isoformat(),
+                    "is_archive": is_file and name.casefold().endswith(".zip"),
+                })
         entries.sort(key=lambda entry: (entry["kind"] != "folder", entry["name"].casefold()))
     except (OSError, PermissionError) as exc:
         raise HTTPException(status_code=403, detail="GAIA cannot read that location") from exc
 
     parent = directory.parent
     return {
-        "path": str(directory),
+        "path": dir_str,
         "parent": None if parent == directory else str(parent),
         "selected_path": selected_path,
         "entries": entries,
@@ -1224,6 +1255,12 @@ def cancel_batch_analysis(task_id: str):
     return {"status": "cancelled", "task_id": task_id}
 
 
+@router.get("/{item_id}/children")
+def get_item_direct_children(item_id: int, db: Session = Depends(database.get_db)):
+    """Return 1-level direct children of a folder/collection via a single zero-ORM SQL query."""
+    return catalog.get_direct_children_rows(db, item_id)
+
+
 @router.get("/{item_id}/contents", response_model=List[schemas.CollectionContent])
 def get_collection_contents(item_id: int, db: Session = Depends(database.get_db)):
     db_item = crud.get_item(db, item_id=item_id)
@@ -1261,7 +1298,15 @@ def update_collection_content(item_id: int, content_index: int, req: schemas.Col
     content, _ = _get_collection_content(db_item, content_index, db=db)
     fields = _request_fields(req)
     extension = Path(content.get("filename", "")).suffix.lower()
-    allowed_types = {"midi"} if extension in collection_importer.MIDI_EXTENSIONS else {"audio", "sample", "track"} if extension in collection_importer.AUDIO_EXTENSIONS else {"file"}
+    allowed_types = (
+        {"midi"}
+        if extension in collection_importer.MIDI_EXTENSIONS
+        else {"video"}
+        if extension in collection_importer.VIDEO_EXTENSIONS
+        else {"audio", "sample", "track"}
+        if extension in collection_importer.AUDIO_EXTENSIONS
+        else {"file"}
+    )
     if "type" in fields and req.type not in allowed_types:
         raise HTTPException(status_code=400, detail="The selected type is not valid for this file")
     if "bpm" in fields and req.bpm is not None and not 20 <= req.bpm <= 400:
@@ -1355,13 +1400,18 @@ def analyze_collection_content(item_id: int, content_index: int, db: Session = D
 
 @router.get("/{item_id}/contents/{content_index}/stream")
 def stream_collection_content(item_id: int, content_index: int, db: Session = Depends(database.get_db)):
-    db_item = crud.get_item(db, item_id=item_id)
-    if not db_item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    content, content_path = _get_collection_content(db_item, content_index, db=db)
-    if content.get("availability", "ready") != "ready":
+    target = catalog.resolve_collection_content_stream_target(db, item_id, content_index)
+    if not target:
+        raise HTTPException(status_code=404, detail="Collection content not found")
+    if target.get("availability", "ready") != "ready":
         raise HTTPException(status_code=409, detail="Asset transfer is not ready")
-    return FileResponse(path=content_path, media_type=content.get("mime_type") or "application/octet-stream")
+    content_path = target["path"]
+    mime = target.get("mime_type") or mimetypes.guess_type(content_path)[0] or "application/octet-stream"
+    return FileResponse(
+        path=content_path,
+        media_type=mime,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 @router.get("/{item_id}/stems")
 def get_item_stems(item_id: int, db: Session = Depends(database.get_db)):
@@ -1390,23 +1440,38 @@ def stream_stem_item(item_id: int, stem_index: int, db: Session = Depends(databa
     if not stem_path or not os.path.exists(stem_path):
         raise HTTPException(status_code=404, detail="Stem file missing on disk")
         
-    return FileResponse(path=stem_path, media_type="audio/wav")
+    return FileResponse(
+        path=stem_path,
+        media_type="audio/wav",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 @router.get("/{item_id}/stream")
 def stream_item(item_id: int, db: Session = Depends(database.get_db)):
-    db_item = crud.get_item(db, item_id=item_id)
-    if not db_item:
+    target = catalog.resolve_stream_target(db, item_id)
+    if not target:
         raise HTTPException(status_code=404, detail="Item not found")
-    if db_item.availability != "ready":
+    if target["availability"] != "ready":
         raise HTTPException(status_code=409, detail="Asset transfer is not ready")
-    
-    if db_item.type in {"multitrack", "zoom_h4"}:
-        stems = getattr(db_item, "stems", []) or []
-        if stems and stems[0].get("absolute_path") and os.path.exists(stems[0]["absolute_path"]):
-            return FileResponse(path=stems[0]["absolute_path"], media_type="audio/wav")
-    
-    if not os.path.exists(db_item.absolute_path):
+
+    target_path = target["absolute_path"]
+    if not target_path or not os.path.exists(target_path):
         raise HTTPException(status_code=404, detail="File physically missing on disk")
-    
-    mime = db_item.mime_type or ("audio/midi" if db_item.type == "midi" else "audio/wav")
-    return FileResponse(path=db_item.absolute_path, media_type=mime)
+
+    item_type = target["type"]
+    mime = (
+        target["mime_type"]
+        or mimetypes.guess_type(target_path)[0]
+        or (
+            "audio/midi"
+            if item_type == "midi"
+            else "video/mp4"
+            if item_type == "video"
+            else "audio/wav"
+        )
+    )
+    return FileResponse(
+        path=target_path,
+        media_type=mime,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )

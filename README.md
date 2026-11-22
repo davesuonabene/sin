@@ -24,29 +24,21 @@ npm run build:editor
 python run.py
 ```
 
-On Windows, double-click `start-all.cmd`. It performs one SIN build, starts
-the two stable services, waits for both health checks, and opens SIN and GAIA
-in the default browser. Keep its launcher window open; press Ctrl+C there to
-stop both services. Service logs are written under `.runtime/`.
-
-The launcher invokes `.venv/Scripts/python.exe` directly and verifies that its
-Python prefix is exactly the project `.venv`. It never activates or falls back
-to a system Python environment.
-
-On Linux or macOS, use:
-
-```bash
-bash start-all.sh
-```
-
-Stable mode is the default. For explicit development hot reload on Windows, use:
+On Windows, run the single entry point:
 
 ```powershell
-.\start-all-dev.ps1 -Reload
+.\start_win.ps1
 ```
 
-On Linux or macOS, pass `--reload` to `start-all.sh`. Reload mode adds the
-SIN build watcher; stable mode has only the SIN and GAIA server processes.
+It builds the native C++ audio engine (`engine/bin/sin_dsp.dll`) if missing/updated, builds SIN, starts both SIN (`:8000`) and GAIA (`:8001`) using `.venv`, waits for health checks, and opens both in the default browser. Pass `-Reload` for development hot reload. Press `Ctrl+C` to stop both services; logs are written under `.runtime/`.
+
+On macOS (or Linux), run the single entry point:
+
+```bash
+./start_mac.sh
+```
+
+It compiles `engine/bin/libsin_dsp.dylib` automatically using Apple Clang + CoreAudio if missing (or falls back gracefully if no compiler is installed), builds SIN, and starts both services. Pass `--reload` for development hot reload.
 
 The standalone Vite server is still available for isolated frontend debugging with `npm --prefix editor run dev:standalone`; it is not part of the normal stack.
 
@@ -81,6 +73,11 @@ gaia.db
 - Audio is the base audio asset type. `track` and `sample` are its children; sample looping is the `sample.is_loop` metadata field. Folder types such as multitrack and sample pack only describe how people interpret a folder's contents.
 
 The `assets/`, `.gaia/`, and `gaia.db` paths are local library data and are intentionally not source-controlled.
+
+## Documentation
+
+- [Documentation Home](docs/README.md) — User guides and reference index for SIN and GAIA.
+- [Beginner First Start Guide](docs/start/README.md) — Step-by-step onboarding workshop and starter patches.
 
 ## Repository structure
 

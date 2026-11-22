@@ -5,6 +5,7 @@ import { SampleNode } from '../src/nodes/SampleNode.ts';
 import { SequenceNode } from '../src/nodes/SequenceNode.ts';
 import { ArrangementNode } from '../src/nodes/ArrangementNode.ts';
 import {
+    TransportClock,
     extractRealtimeSliceFromSignal,
     sampleSignalAmplitude,
     computeLogSpectrum,
@@ -186,4 +187,22 @@ test('extractRealtimeSliceFromSignal and computeLogSpectrum isolate per-node aud
     assert.ok(bassPeakIdx < 30, `Expected 100Hz peak in lower third of log spectrum, got idx=${bassPeakIdx}`);
     assert.ok(treblePeakIdx > 60, `Expected 4000Hz peak in upper third of log spectrum, got idx=${treblePeakIdx}`);
 });
+
+test('TransportClock exposes master RMS and peak levels while playing and resets on stop', () => {
+    const clock = new TransportClock();
+    clock.setMasterLevels(0.45, 0.92);
+    clock.update(1.0, 4.0, true);
+
+    const playingTel = clock.getTelemetry();
+    assert.equal(playingTel.isPlaying, true);
+    assert.equal(playingTel.masterRms, 0.45);
+    assert.equal(playingTel.masterPeak, 0.92);
+
+    clock.update(1.0, 4.0, false);
+    const stoppedTel = clock.getTelemetry();
+    assert.equal(stoppedTel.isPlaying, false);
+    assert.equal(stoppedTel.masterRms, 0);
+    assert.equal(stoppedTel.masterPeak, 0);
+});
+
 

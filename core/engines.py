@@ -9,10 +9,32 @@ from core.audio_object import AudioObject, SampleObject, SequenceObject, ItemPoo
 class NodeRenderer(ABC):
     """
     Base Class for node-specific rendering engines.
+    Packs the node graph into a flat `SinRenderPlan` via `core.plan_packer` and executes
+    mixing/resampling/gain staging natively in `libsin_dsp` whenever available.
     """
 
     def render(self, node_data: Any, system: System) -> np.ndarray:
-        return build_node_object(node_data).render(system=system)
+        root_obj = build_node_object(node_data)
+        from core.audio_engine import is_native_engine_available, render_plan_offline
+        if is_native_engine_available():
+            from core.plan_packer import pack_audio_object
+            plan = pack_audio_object(root_obj, system)
+            tap_ids = None
+            if system is not None and system.render_mode == "preview":
+                tap_ids = [
+                    b.bus_id for b in plan.buses
+                    if b.node_type in ("track", "master", "bus", "arrangement", "sequence")
+                    and b.node_key.isdigit()
+                ]
+            audio_out, taps = render_plan_offline(plan, sample_rate=system.sample_rate, bus_tap_ids=tap_ids)
+            if system is not None and system.render_mode == "preview":
+                for b in plan.buses:
+                    if b.bus_id in taps and b.node_key.isdigit():
+                        stem_arr = taps[b.bus_id]
+                        dur = float(stem_arr.shape[-1]) / float(system.sample_rate)
+                        system.record_node_stem(int(b.node_key), b.node_type, b.node_name, stem_arr, dur)
+            return audio_out
+        return root_obj.render(system=system)
 
 
 class TrackRenderer(NodeRenderer):
@@ -69,7 +91,7 @@ def build_node_object(node_data: Any) -> AudioObject:
     sample_type = _get_val(node_data, "sample_type", None) or _get_val(node_data, "sample_mode", "loop")
     original_bpm = _get_val(node_data, "original_bpm", None)
     raw_chain = _get_val(node_data, "chain", None) or []
-    chain_list = [dict(c.dict() if hasattr(c, 'dict') else (c.model_dump() if hasattr(c, 'model_dump') else c)) for c in raw_chain]
+    chain_list = [dict(c.model_dump() if hasattr(c, "model_dump") else (c.dict() if hasattr(c, "dict") else c)) for c in raw_chain]
     top_gain_db = _get_val(node_data, "gain", None)
     if top_gain_db is not None and not chain_list:
         try:

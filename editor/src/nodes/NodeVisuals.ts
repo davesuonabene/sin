@@ -82,38 +82,6 @@ export function traceNodeShape(
     ctx.closePath();
 }
 
-export function getNodeShapePerimeter(shape: NodeShape, width: number, height: number = width): number {
-    const { leftR, rightR } = resolveBorderRadii(shape, width, height);
-    return 2 * (width + height) - (4 - Math.PI) * (leftR + rightR);
-}
-
-export function drawPerimeterProgressAccent(
-    ctx: CanvasRenderingContext2D,
-    shape: NodeShape,
-    x: number,
-    y: number,
-    size: number,
-    progress: number,
-    color: string,
-    lineWidth = 2.25
-): void {
-    const clamped = Math.max(0, Math.min(1, progress));
-    if (clamped <= 0.001) return;
-
-    ctx.save();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    const perimeter = getNodeShapePerimeter(shape, size, size);
-    ctx.setLineDash?.([perimeter * clamped, perimeter]);
-    traceNodeShape(ctx, shape, x, y, size, size);
-    ctx.stroke();
-    ctx.setLineDash?.([]);
-    ctx.restore();
-}
-
 export function drawNeonIcon(
     ctx: CanvasRenderingContext2D,
     iconValue: unknown,

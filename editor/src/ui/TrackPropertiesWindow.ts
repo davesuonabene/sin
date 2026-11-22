@@ -1,4 +1,5 @@
 import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from './ParameterWheelMenu';
+import { renderIcon } from '../../../packages/ui/src/icons.js';
 
 export class TrackPropertiesWindow {
     container: HTMLElement;
@@ -101,7 +102,7 @@ export class TrackPropertiesWindow {
                         <span class="node-title">Track Parameters</span>
                     </div>
                     <div style="display: flex; align-items: center; gap: 4px;">
-                        <button class="close-btn" id="track-close-btn" title="Close Panel">✕</button>
+                        <button type="button" class="ui-btn ui-btn--icon close-btn" id="track-close-btn" title="Close Panel" aria-label="Close Panel">${renderIcon('close')}</button>
                     </div>
                 </div>
 

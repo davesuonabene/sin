@@ -334,6 +334,14 @@ def _build_leaf_item(
         )
     elif ext == ".seq":
         schema = schemas.ItemCreate(**common, type="sequence")
+    elif ext in collection_importer.VIDEO_EXTENSIONS:
+        video_meta = collection_importer._video_metadata(file_path)
+        if video_meta:
+            attrs["video_metadata"] = video_meta
+            if video_meta.get("duration_seconds") is not None:
+                attrs["analysis"]["duration_seconds"] = video_meta["duration_seconds"]
+        common["attributes"] = attrs
+        schema = schemas.VideoItemCreate(**common)
     elif ext in collection_importer.AUDIO_EXTENSIONS:
         schema = schemas.SampleItemCreate(
             **common,

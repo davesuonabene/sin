@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from . import crud, models, project_service, reference_service, schemas, vaults
+from . import collection_importer, crud, models, project_service, reference_service, schemas, vaults
 
 
 IGNORE_EXTENSIONS = {
@@ -226,8 +226,10 @@ def _establish_project_reference(
 def infer_file_type(filename: str) -> str:
     """Infer the default GAIA item polymorphic type from the file extension."""
     ext = Path(filename).suffix.lower()
-    if ext in {".wav", ".mp3", ".flac", ".ogg", ".aif", ".aiff", ".m4a", ".aac"}:
+    if ext in collection_importer.AUDIO_EXTENSIONS:
         return "sample"
+    if ext in collection_importer.VIDEO_EXTENSIONS:
+        return "video"
     if ext in {".mid", ".midi"}:
         return "midi"
     if ext == ".seq":
@@ -708,7 +710,11 @@ def reconcile_vault(
             size_bytes=file_size,
             storage_mode="managed",
             availability="ready",
-            mime_type=mime_type or ("audio/wav" if item_type in {"audio", "sample", "track"} else None),
+            mime_type=mime_type or (
+                "audio/wav" if item_type in {"audio", "sample", "track"}
+                else "video/mp4" if item_type == "video"
+                else None
+            ),
         )
 
         new_item = crud.create_item(db, schema, commit=False)

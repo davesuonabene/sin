@@ -1,4 +1,5 @@
 import { getSharedAudioContext } from './audioBufferCache.ts';
+import { computeGainMultiplier } from './dsp/processorRegistry.ts';
 import { hashSeed, mulberry32, wrapSlotIndex } from '../../ermes/ts/slotLanguage.ts';
 
 /**
@@ -11,34 +12,7 @@ import { hashSeed, mulberry32, wrapSlotIndex } from '../../ermes/ts/slotLanguage
  */
 
 export function getNodeGainMultiplier(node: any): number {
-    if (!node || !node.properties) return 1.0;
-    let multiplier = 1.0;
-
-    const chain = Array.isArray(node.properties.chain) ? node.properties.chain : [];
-
-    // Direct property gain (dB) only when chain is empty (prevent double-application when normalized into chain)
-    if (chain.length === 0 && typeof node.properties.gain === 'number') {
-        const db = node.properties.gain;
-        if (db <= -35.9) return 0;
-        multiplier *= Math.pow(10, db / 20);
-    }
-
-    // FX Chain modules (Pre Gain, Post Gain)
-    for (const mod of chain) {
-        if (!mod || mod.enabled === false) continue;
-        const modType = String(mod.type || '').toLowerCase();
-        if (modType === 'gain' && mod.params) {
-            if (typeof mod.params.gain === 'number') {
-                multiplier *= mod.params.gain;
-            } else if (typeof mod.params.gain_db === 'number') {
-                const db = mod.params.gain_db;
-                if (db <= -35.9) return 0;
-                multiplier *= Math.pow(10, db / 20);
-            }
-        }
-    }
-
-    return multiplier;
+    return computeGainMultiplier(node);
 }
 
 export function applyGainToBuffer(buffer: AudioBuffer, gain: number): AudioBuffer {

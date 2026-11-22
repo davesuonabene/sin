@@ -1,5 +1,4 @@
 import './style.css';
-import '../../gaia/static/menu-system.css';
 import { DockviewComponent, type IDockviewPanel } from 'dockview-core';
 import { LGraph, LGraphCanvas, LiteGraph } from 'litegraph.js';
 import './nodes/TrackNode';
@@ -15,6 +14,7 @@ import { PropertiesWindow } from './ui/PropertiesWindow';
 import { TrackPropertiesWindow } from './ui/TrackPropertiesWindow';
 import { NodePopupMenu } from './ui/NodePopupMenu';
 import { NodeContextMenu } from './ui/NodeContextMenu';
+import { NodeContextToolbar } from './ui/NodeContextToolbar';
 import { isLibraryPreviewEnabled, LibraryPanel, setLibraryPreviewEnabled } from './ui/LibraryPanel';
 import { MasterWaveform } from './ui/MasterWaveform';
 import { RuntimeLogPanel } from './ui/RuntimeLogPanel';
@@ -59,10 +59,32 @@ import {
     refreshArmedSeeds
 } from '../../ermes/ts/randomResolver';
 import { defaultTransportClock } from '../../packages/iride/src/index.ts';
+import { RealtimeAudioClient } from '../../packages/media-client/src/realtime-client.js';
 import { clearAudioBufferCache, fetchAudioBuffer, getSharedAudioContext } from './audioBufferCache';
 import { globalAudioScheduler } from './audioScheduler';
 import { getNodeGainMultiplier } from './audioCompositor';
 import { applySignalFlowColors } from './graphColorEngine';
+
+const sinRealtime = new RealtimeAudioClient('/api/realtime/ws', { ownerId: 'sin-node-editor' });
+let sinRealtimeLoaded = false;
+let sinRealtimePlaying = false;
+let sinRealtimeDurationSec = 0;
+let sinRealtimeBpm = 120;
+let sinRealtimeTargetMode: 'graph' | 'file' = 'graph';
+let sinRealtimeSeekHoldSec = 0;
+let sinRealtimeSeekHoldUntil = 0;
+let sinRealtimeLastSeekSentAt = 0;
+let sinRealtimePendingSeekSec: number | null = null;
+let sinRealtimeSeekBreathTimer: number | null = null;
+const sinRealtimeScopeBuf = new Float32Array(128);
+function getRealtimeMonitorBusId(): string | null {
+    if (!sinRealtime.available || !sinRealtimeLoaded) return null;
+    return sinRealtimeTargetMode === 'file' ? 'preview' : '__monitor__';
+}
+void sinRealtime.connect();
+window.addEventListener('pagehide', () => {
+    sinRealtime.disconnect();
+});
 
 export { syncAllModifierPositions, syncNodesDistanceStage, updateModifiersForParent };
 
@@ -158,7 +180,7 @@ function setGlobalParameters(values: Partial<GlobalParameters>, graph?: LGraph) 
     }
     window.dispatchEvent(new CustomEvent('global-parameters-changed', { detail: { ...globalParameters } }));
     fetch('/api/preview/invalidate', { method: 'POST' }).catch(() => { });
-    if (globalAudioScheduler.getIsPlaying()) {
+    if (globalAudioScheduler.getIsPlaying() || isRealtimeAudioPlaying()) {
         const targetId = (activeRamPreviewNodeId != null && targetGraph?.getNodeById(activeRamPreviewNodeId))
             ? activeRamPreviewNodeId
             : resolveMainPreviewNode(targetGraph)?.id;
@@ -247,8 +269,14 @@ function syncGlobalSeedControlsUI(graph?: LGraph) {
 (window as any).loadGlobalFreezeFromGraph = (data: any, graph?: LGraph) => loadGlobalFreezeFromGraph(data, graph);
 (window as any).syncGlobalSeedControlsUI = (graph?: LGraph) => syncGlobalSeedControlsUI(graph);
 
+function isRealtimeAudioPlaying(): boolean {
+    return Boolean(sinRealtime.available && sinRealtimePlaying);
+}
+
 function updatePlaybackControls() {
-    const isPlaying = globalAudioScheduler.getIsPlaying() || (loopEnabled ? loopSource !== null || !masterPlayer.paused && !masterPlayer.ended : !masterPlayer.paused && !masterPlayer.ended);
+    const isPlaying = isRealtimeAudioPlaying()
+        || globalAudioScheduler.getIsPlaying()
+        || (!masterPlayer.paused && !masterPlayer.ended);
     masterPlayBtn.innerHTML = isPlaying ? pauseIcon : playIcon;
     masterPlayBtn.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
     masterPlayBtn.title = isPlaying ? 'Pause' : 'Play';
@@ -269,23 +297,158 @@ function updatePlaybackControls() {
     masterMuteBtn.title = isMuted ? 'Unmute' : 'Mute';
 }
 
+let latestRealtimeTelemetry: any = null;
+let realtimeTelemetryRaf: number | null = null;
+let lastRealtimeUiPlayhead = -1;
+let lastRealtimeUiPlaying = false;
+
+function flushRealtimeTelemetryFrame() {
+    realtimeTelemetryRaf = null;
+    const tel = latestRealtimeTelemetry;
+    if (!tel) return;
+    latestRealtimeTelemetry = null;
+
+    const wasPlaying = sinRealtimePlaying;
+    sinRealtimePlaying = Boolean(tel.is_playing);
+    if (Number.isFinite(tel.duration_sec) && tel.duration_sec > 0) {
+        sinRealtimeDurationSec = Number(tel.duration_sec);
+    }
+    if (Number.isFinite(tel.bpm) && tel.bpm > 0) {
+        sinRealtimeBpm = Number(tel.bpm);
+    }
+    const rawTime = Number(tel.playhead_sec) || 0;
+    const dur = sinRealtimeDurationSec || masterWaveform.duration;
+    const now = performance.now();
+    const holdingSeek = now < sinRealtimeSeekHoldUntil && Math.abs(rawTime - sinRealtimeSeekHoldSec) > 0.12;
+    const curTime = holdingSeek ? (dur > 0 ? Math.min(dur, sinRealtimeSeekHoldSec) : sinRealtimeSeekHoldSec) : rawTime;
+    const stateChanged = wasPlaying !== sinRealtimePlaying || lastRealtimeUiPlaying !== sinRealtimePlaying;
+    const timeChanged = Math.abs(curTime - lastRealtimeUiPlayhead) > 1e-4;
+
+    if (!sinRealtimePlaying && !stateChanged && !timeChanged) {
+        return;
+    }
+    lastRealtimeUiPlayhead = curTime;
+    lastRealtimeUiPlaying = sinRealtimePlaying;
+
+    if (dur > 0) {
+        masterWaveform.setPlayback(curTime, dur);
+    }
+    if (sinRealtimePlaying && Array.isArray(tel.scope) && tel.scope.length > 0) {
+        const len = Math.min(sinRealtimeScopeBuf.length, tel.scope.length);
+        for (let i = 0; i < len; i++) {
+            sinRealtimeScopeBuf[i] = Number(tel.scope[i]) || 0;
+        }
+        defaultTransportClock.setRealtimeScopeData(sinRealtimeScopeBuf);
+    } else if (!sinRealtimePlaying) {
+        defaultTransportClock.setRealtimeScopeData(null);
+    }
+    if (sinRealtimePlaying) {
+        const rmsL = Number(tel.master_rms_l) || 0;
+        const rmsR = Number(tel.master_rms_r) || 0;
+        const peakL = Number(tel.master_peak_l) || 0;
+        const peakR = Number(tel.master_peak_r) || 0;
+        defaultTransportClock.setMasterLevels(
+            Math.sqrt(0.5 * (rmsL * rmsL + rmsR * rmsR)),
+            Math.max(peakL, peakR)
+        );
+    } else {
+        defaultTransportClock.setMasterLevels(0, 0);
+    }
+    defaultTransportClock.setBpm(sinRealtimeBpm || globalParameters.bpm);
+    defaultTransportClock.update(curTime, dur, sinRealtimePlaying);
+    (window as any).editorCanvas?.setDirty?.(true, false);
+    if (wasPlaying !== sinRealtimePlaying) {
+        updatePlaybackControls();
+    }
+}
+
+sinRealtime.onTelemetry((tel) => {
+    latestRealtimeTelemetry = tel;
+    if (realtimeTelemetryRaf === null) {
+        realtimeTelemetryRaf = requestAnimationFrame(flushRealtimeTelemetryFrame);
+    }
+});
+
+function applyRealtimePeaksToGraph(masterPeaks: number[] | null, busPeaks: Record<string, number[]> | null, dur: number) {
+    if (Array.isArray(masterPeaks) && masterPeaks.length > 0) {
+        (window as any).activeRealtimeMasterPeaks = new Float32Array(masterPeaks);
+        (window as any).activeRealtimeMasterDuration = dur;
+        masterWaveform.setPeaks(masterPeaks, dur);
+    }
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    if (graph && busPeaks && typeof busPeaks === 'object') {
+        const nodes = (((graph as any)._nodes || []) as any[]);
+        for (const node of nodes) {
+            if (!node) continue;
+            const raw = busPeaks[String(node.id)];
+            if (Array.isArray(raw) && raw.length >= 2) {
+                node.realtimePeaks = new Float32Array(raw);
+                node.realtimePeaksDuration = dur;
+            }
+        }
+    }
+    (window as any).editorCanvas?.setDirty?.(true, false);
+}
+
+sinRealtime.onMasterPeaks((res) => {
+    const dur = Number(res?.duration_sec) || sinRealtimeDurationSec;
+    if (dur > 0) sinRealtimeDurationSec = dur;
+    const mPeaks = Array.isArray(res?.master_peaks) && res.master_peaks.length > 0 ? res.master_peaks : null;
+    const bPeaks = (res?.bus_peaks && typeof res.bus_peaks === 'object') ? res.bus_peaks : null;
+    if (mPeaks || bPeaks) {
+        applyRealtimePeaksToGraph(mPeaks, bPeaks, dur);
+    }
+});
+
 function updatePlaybackTrackPresentation() {
     tempFilesSelect.classList.toggle('is-ram-preview', tempFilesSelect.value === 'RAM_PREVIEW');
 }
 
 let pendingMasterSeek: number | null = null;
 let loopEnabled = false;
-let loopBuffer: AudioBuffer | null = null;
-let loopBufferRequestId = 0;
-let loopLoad: Promise<AudioBuffer | null> = Promise.resolve(null);
-let loopSource: AudioBufferSourceNode | null = null;
-let loopContext: AudioContext | null = null;
-let loopGain: GainNode | null = null;
-let loopStartedAt = 0;
-let loopOffset = 0;
-let loopAnimationFrame: number | null = null;
+
+function dispatchRealtimeSeek(sec: number) {
+    sinRealtimeLastSeekSentAt = performance.now();
+    sinRealtimePendingSeekSec = null;
+    if (sinRealtimeSeekBreathTimer !== null) {
+        window.clearTimeout(sinRealtimeSeekBreathTimer);
+        sinRealtimeSeekBreathTimer = null;
+    }
+    sinRealtimeSeekHoldSec = sec;
+    sinRealtimeSeekHoldUntil = performance.now() + 130;
+    sinRealtime.setTransport({
+        playing: sinRealtimePlaying,
+        seekSec: sec,
+        bpm: sinRealtimeBpm || globalParameters.bpm,
+        loop: loopEnabled,
+    });
+}
 
 const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
+    if (sinRealtime.available && sinRealtimeLoaded) {
+        const dur = sinRealtimeDurationSec || masterWaveform.duration;
+        if (dur <= 0) return;
+        const maxSeek = (sinRealtimePlaying && dur > 0.05) ? Math.max(0, dur - 0.02) : dur;
+        const targetTime = Math.max(0, Math.min(maxSeek, progress * dur));
+        masterWaveform.setPlayback(targetTime, dur);
+        const elapsed = performance.now() - sinRealtimeLastSeekSentAt;
+        if (elapsed >= 42) {
+            dispatchRealtimeSeek(targetTime);
+        } else {
+            sinRealtimePendingSeekSec = targetTime;
+            if (sinRealtimeSeekBreathTimer === null) {
+                sinRealtimeSeekBreathTimer = window.setTimeout(() => {
+                    sinRealtimeSeekBreathTimer = null;
+                    if (sinRealtimePendingSeekSec !== null) {
+                        const next = sinRealtimePendingSeekSec;
+                        sinRealtimePendingSeekSec = null;
+                        dispatchRealtimeSeek(next);
+                    }
+                }, Math.max(8, 42 - elapsed));
+            }
+        }
+        return;
+    }
     const isSchedPlaying = globalAudioScheduler.getIsPlaying();
     const duration = isSchedPlaying
         ? globalAudioScheduler.getTotalDuration()
@@ -293,19 +456,13 @@ const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
             ? masterPlayer.duration
             : masterWaveform.duration);
     if (duration <= 0) return;
-    const targetTime = Math.max(0, Math.min(duration, progress * duration));
+    const maxSeek = (isSchedPlaying && duration > 0.05) ? Math.max(0, duration - 0.02) : duration;
+    const targetTime = Math.max(0, Math.min(maxSeek, progress * duration));
     pendingMasterSeek = targetTime;
     masterWaveform.setPlayback(targetTime, duration);
     if (activeRamPreviewNodeId != null && globalAudioScheduler.getTotalDuration() > 0) {
         globalAudioScheduler.seek(targetTime);
         if (isSchedPlaying) return;
-    }
-    if (loopEnabled) {
-        const wasPlaying = loopSource !== null || !masterPlayer.paused;
-        loopOffset = targetTime;
-        stopLoop(false);
-        masterPlayer.pause();
-        if (wasPlaying) void playLoop(targetTime);
     }
     try {
         masterPlayer.currentTime = targetTime;
@@ -315,103 +472,15 @@ const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
     }
 });
 
-function loopTime() {
-    if (!loopSource || !loopContext || !loopBuffer?.duration) return Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : loopOffset;
-    return (loopOffset + Math.max(0, loopContext.currentTime - loopStartedAt)) % loopBuffer.duration;
-}
-
-function animateLoop() {
-    if (!loopSource || !loopBuffer) return;
-    masterWaveform.setPlayback(loopTime(), loopBuffer.duration);
-    loopAnimationFrame = requestAnimationFrame(animateLoop);
-}
-
-function stopLoop(savePosition: boolean) {
+function stopMasterFallbackAudio() {
     globalAudioScheduler.stop();
-    if (loopSource) {
-        if (savePosition) loopOffset = loopTime();
-        try { loopSource.stop(); } catch { /* already stopped */ }
-        loopSource.disconnect();
-        loopSource = null;
-    }
-    if (loopAnimationFrame !== null) cancelAnimationFrame(loopAnimationFrame);
-    loopAnimationFrame = null;
     stopPlaybackTelemetry();
-}
-
-function syncLoopGain() {
-    if (loopGain) loopGain.gain.value = masterPlayer.muted ? 0 : masterPlayer.volume;
-}
-
-function playNativeLoop(offset: number) {
-    masterPlayer.loop = true;
-    try { masterPlayer.currentTime = Math.max(0, offset); } catch { /* metadata is still loading */ }
-    masterPlayer.play().catch(error => console.error('Play failed', error));
-}
-
-async function playLoop(offset: number, requestId = loopBufferRequestId) {
-    const buffer = loopBuffer || await loopLoad;
-    if (!loopEnabled || requestId !== loopBufferRequestId) return;
-    if (!buffer || !masterWaveform.playbackContext) {
-        playNativeLoop(offset);
-        return;
-    }
-
-    const context = masterWaveform.playbackContext;
-    try {
-        await context.resume();
-    } catch {
-        playNativeLoop(offset);
-        return;
-    }
-    if (!loopEnabled || requestId !== loopBufferRequestId) return;
-    stopLoop(false);
-    if (!loopGain || loopContext !== context) {
-        loopGain?.disconnect();
-        loopGain = context.createGain();
-        const analyser = getOrCreateMasterAnalyser(context);
-        if (analyser) {
-            loopGain.connect(analyser);
-            analyser.connect(context.destination);
-        } else {
-            loopGain.connect(context.destination);
-        }
-    }
-    loopContext = context;
-    syncLoopGain();
-    const source = context.createBufferSource();
-    source.buffer = buffer;
-    source.loop = true;
-    source.loopEnd = buffer.duration;
-    source.connect(loopGain);
-    loopOffset = ((offset % buffer.duration) + buffer.duration) % buffer.duration;
-    loopStartedAt = context.currentTime;
-    source.start(0, loopOffset);
-    loopSource = source;
-    masterPlayer.loop = false;
-    animateLoop();
-    startPlaybackTelemetry();
-    updatePlaybackControls();
-}
-
-function loadLoopBuffer(source: string) {
-    const requestId = ++loopBufferRequestId;
-    loopBuffer = null;
-    loopLoad = masterWaveform.load(source).then(buffer => {
-        if (requestId === loopBufferRequestId) {
-            loopBuffer = buffer;
-            (window as any).activeRamPreviewBuffer = buffer;
-            (window as any).editorCanvas?.setDirty?.(true, true);
-        }
-        return buffer;
-    });
-    return requestId;
 }
 
 function setMasterPlayerSource(source: string, autoplay: boolean = false) {
     pendingMasterSeek = null;
-    stopLoop(false);
-    masterPlayer.loop = false;
+    stopMasterFallbackAudio();
+    masterPlayer.loop = loopEnabled;
     masterPlayer.pause();
     masterPlayer.removeAttribute('aria-disabled');
     // Render filenames and RAM-preview URLs are content-versioned by the
@@ -422,24 +491,57 @@ function setMasterPlayerSource(source: string, autoplay: boolean = false) {
     masterPlayBtn.disabled = false;
     masterLoopBtn.disabled = false;
     masterPlayer.load();
-    const requestId = loadLoopBuffer(source);
+    void masterWaveform.load(source).then(buffer => {
+        if (buffer) {
+            (window as any).activeRamPreviewBuffer = buffer;
+            (window as any).editorCanvas?.setDirty?.(true, true);
+        }
+    }).catch(() => { });
     updatePlaybackControls();
     if (autoplay) {
-        if (loopEnabled) {
-            void playLoop(0, requestId);
-        } else {
-            masterPlayer.play().catch(error => console.error('Play failed', error));
+        masterPlayer.play().catch(error => console.error('Play failed', error));
+    }
+}
+
+async function activateExportedWavSource(url: string, filepath: string | undefined, autoplay: boolean) {
+    if (filepath && await sinRealtime.connect()) {
+        stopMasterFallbackAudio();
+        if (!masterPlayer.paused) masterPlayer.pause();
+        const pv = await sinRealtime.previewFile(filepath, {
+            play: autoplay,
+            computePeaks: true,
+            peakColumns: 512,
+        });
+        if (pv?.ok) {
+            sinRealtimeLoaded = true;
+            sinRealtimeTargetMode = 'file';
+            sinRealtimePlaying = Boolean(pv.is_playing);
+            sinRealtimeDurationSec = Number(pv.duration_sec || 0);
+            sinRealtimeSeekHoldUntil = 0;
+            if (Array.isArray(pv.master_peaks) && pv.master_peaks.length > 0) {
+                masterWaveform.setPeaks(pv.master_peaks, sinRealtimeDurationSec);
+            }
+            if (sinRealtimeDurationSec > 0) {
+                masterWaveform.setPlayback(0, sinRealtimeDurationSec);
+            }
+            if (masterPlayer.muted || masterPlayer.volume !== 1) {
+                sinRealtime.setParam('preview', 'volume', masterPlayer.volume, 0);
+                sinRealtime.setParam('preview', 'mute', masterPlayer.muted ? 1 : 0, 0);
+            }
+            masterPlayBtn.disabled = false;
+            masterLoopBtn.disabled = false;
+            updatePlaybackControls();
+            return;
         }
     }
+    sinRealtimeTargetMode = 'file';
+    setMasterPlayerSource(url, autoplay);
 }
 
 function setPreviewCalculatingState(isHotSwap: boolean = false) {
     if (isHotSwap) return;
     EngineSyncManager.getInstance().setState('dsp_rendering');
-    ++loopBufferRequestId;
-    loopBuffer = null;
-    loopLoad = Promise.resolve(null);
-    stopLoop(false);
+    stopMasterFallbackAudio();
     masterPlayer.loop = false;
     if (!masterPlayer.paused) {
         masterPlayer.pause();
@@ -461,16 +563,12 @@ function setPreviewFailedState() {
 }
 
 masterPlayer.addEventListener('timeupdate', () => {
-    if (!globalAudioScheduler.getIsPlaying() && !loopEnabled && pendingMasterSeek === null && Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
+    if (!globalAudioScheduler.getIsPlaying() && pendingMasterSeek === null && Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
         masterWaveform.setPlayback(masterPlayer.currentTime, masterPlayer.duration);
     }
 });
 masterPlayer.addEventListener('loadedmetadata', () => {
     runtimeLog(`Audio stream metadata loaded (${masterPlayer.duration.toFixed(3)} s)`, 'debug');
-    if (loopEnabled) {
-        masterWaveform.setPlayback(loopTime(), masterPlayer.duration);
-        return;
-    }
     if (pendingMasterSeek !== null) {
         const targetTime = Math.min(pendingMasterSeek, masterPlayer.duration);
         masterPlayer.currentTime = targetTime;
@@ -491,7 +589,7 @@ const spectrumDataBuffer = new Uint8Array(128);
 
 function getOrCreateMasterAnalyser(ctx?: AudioContext | null): AnalyserNode | null {
     if (masterAudioAnalyser) return masterAudioAnalyser;
-    const targetCtx = ctx || masterWaveform.playbackContext || loopContext;
+    const targetCtx = ctx || masterWaveform.playbackContext;
     if (!targetCtx) return null;
     try {
         const analyser = targetCtx.createAnalyser();
@@ -506,7 +604,7 @@ function getOrCreateMasterAnalyser(ctx?: AudioContext | null): AnalyserNode | nu
 
 function attachMasterMediaElementSource(): void {
     if (mediaElementSourceAttached) return;
-    const ctx = masterWaveform.playbackContext || loopContext || getSharedAudioContext();
+    const ctx = masterWaveform.playbackContext || getSharedAudioContext();
     if (!ctx) return;
     if (ctx.state === 'suspended') {
         ctx.resume().catch(() => { });
@@ -535,9 +633,6 @@ function syncPlaybackAnchor(audioTime?: number) {
 }
 
 function getSmoothPlaybackTime(dur: number): number {
-    if (loopEnabled) {
-        return loopTime();
-    }
     if (masterPlayer.paused || masterPlayer.ended) {
         return Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : 0;
     }
@@ -549,9 +644,23 @@ function getSmoothPlaybackTime(dur: number): number {
     return Math.max(0, estimated);
 }
 
+function publishScopeMasterLevels(buf: Float32Array) {
+    let sumSq = 0;
+    let peak = 0;
+    let count = 0;
+    for (let i = 0; i < buf.length; i += 2) {
+        const v = buf[i];
+        const av = v < 0 ? -v : v;
+        if (av > peak) peak = av;
+        sumSq += v * v;
+        count++;
+    }
+    defaultTransportClock.setMasterLevels(count > 0 ? Math.sqrt(sumSq / count) : 0, peak);
+}
+
 function tickPlaybackTelemetry() {
     const isSchedulerPlaying = globalAudioScheduler.getIsPlaying();
-    const isPlaying = isSchedulerPlaying || (loopEnabled ? Boolean(loopSource) : (!masterPlayer.paused && !masterPlayer.ended));
+    const isPlaying = isSchedulerPlaying || (!masterPlayer.paused && !masterPlayer.ended);
     let dur = 0;
     let curTime = 0;
 
@@ -563,8 +672,9 @@ function tickPlaybackTelemetry() {
         globalAudioScheduler.getByteFrequencyData(spectrumDataBuffer);
         defaultTransportClock.setRealtimeScopeData(scopeDataBuffer);
         defaultTransportClock.setRealtimeSpectrumData(spectrumDataBuffer);
+        publishScopeMasterLevels(scopeDataBuffer);
     } else {
-        dur = loopEnabled && loopBuffer?.duration ? loopBuffer.duration : (Number.isFinite(masterPlayer.duration) ? masterPlayer.duration : 0);
+        dur = Number.isFinite(masterPlayer.duration) ? masterPlayer.duration : 0;
         curTime = getSmoothPlaybackTime(dur);
 
         if (isPlaying && !masterAudioAnalyser) {
@@ -576,9 +686,11 @@ function tickPlaybackTelemetry() {
             masterAudioAnalyser.getByteFrequencyData(spectrumDataBuffer);
             defaultTransportClock.setRealtimeScopeData(scopeDataBuffer);
             defaultTransportClock.setRealtimeSpectrumData(spectrumDataBuffer);
+            publishScopeMasterLevels(scopeDataBuffer);
         } else {
             defaultTransportClock.setRealtimeScopeData(null);
             defaultTransportClock.setRealtimeSpectrumData(null);
+            defaultTransportClock.setMasterLevels(0, 0);
         }
     }
 
@@ -614,9 +726,10 @@ function stopPlaybackTelemetry() {
         cancelAnimationFrame(telemetryAnimationFrame);
         telemetryAnimationFrame = null;
     }
-    const dur = loopEnabled && loopBuffer?.duration ? loopBuffer.duration : (Number.isFinite(masterPlayer.duration) ? masterPlayer.duration : 0);
-    const curTime = loopEnabled ? loopTime() : (Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : 0);
+    const dur = Number.isFinite(masterPlayer.duration) ? masterPlayer.duration : 0;
+    const curTime = Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : 0;
     defaultTransportClock.setRealtimeScopeData(null);
+    defaultTransportClock.setMasterLevels(0, 0);
     defaultTransportClock.update(curTime, dur, false);
     (window as any).editorCanvas?.setDirty?.(true, true);
 }
@@ -624,7 +737,7 @@ function stopPlaybackTelemetry() {
 masterPlayer.addEventListener('seeked', () => {
     pendingMasterSeek = null;
     syncPlaybackAnchor(masterPlayer.currentTime);
-    if (!loopEnabled && Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
+    if (Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0) {
         masterWaveform.setPlayback(masterPlayer.currentTime, masterPlayer.duration);
     }
 });
@@ -648,23 +761,51 @@ masterPlayer.addEventListener('ended', () => {
 });
 
 async function toggleTransportPlayback(): Promise<void> {
-    const isPlaying = globalAudioScheduler.getIsPlaying()
-        || (!masterPlayer.paused && !masterPlayer.ended)
-        || (loopEnabled && Boolean(loopSource));
+    const isPlaying = isRealtimeAudioPlaying()
+        || globalAudioScheduler.getIsPlaying()
+        || (!masterPlayer.paused && !masterPlayer.ended);
 
     if (isPlaying) {
+        if (isRealtimeAudioPlaying()) {
+            sinRealtimePlaying = false;
+            sinRealtime.setTransport({ playing: false });
+        }
         if (globalAudioScheduler.getIsPlaying()) {
             globalAudioScheduler.pause();
         }
         if (!masterPlayer.paused) {
             masterPlayer.pause();
         }
-        if (loopEnabled && loopSource) {
-            stopLoop(true);
-        }
         updatePlaybackControls();
         stopPlaybackTelemetry();
         return;
+    }
+
+    // Exported WAV selected in footer selector takes priority over graph preview
+    const isExportedWavSelected = Boolean(tempFilesSelect.value && tempFilesSelect.value !== 'RAM_PREVIEW');
+    if (isExportedWavSelected) {
+        if (sinRealtime.available && sinRealtimeLoaded && sinRealtimeTargetMode === 'file' && sinRealtimeDurationSec > 0) {
+            const cur = Number(sinRealtime.lastTelemetry.playhead_sec || 0);
+            const restart = cur >= sinRealtimeDurationSec - 0.02;
+            sinRealtimePlaying = true;
+            sinRealtime.setTransport({
+                playing: true,
+                seekSec: restart ? 0 : cur,
+                loop: loopEnabled,
+            });
+            updatePlaybackControls();
+            return;
+        }
+        const selectedOpt = tempFilesSelect.options[tempFilesSelect.selectedIndex];
+        if (sinRealtime.available && selectedOpt?.dataset?.filepath) {
+            await activateExportedWavSource(tempFilesSelect.value, selectedOpt.dataset.filepath, true);
+            return;
+        }
+        if (masterPlayer.src && masterPlayer.src !== window.location.href) {
+            masterPlayer.loop = loopEnabled;
+            masterPlayer.play().catch(error => console.error('Play failed', error));
+            return;
+        }
     }
 
     // If a preview is currently buffering to auto-play and user toggles transport again, cancel auto-play
@@ -687,6 +828,30 @@ async function toggleTransportPlayback(): Promise<void> {
             || Boolean(dspInvalidateTimer);
         const isInvalidated = isGraphPreviewInvalidated(graph, target.id);
         const isPreviewInFlight = previewWorker != null || pendingPreviewRequest != null;
+
+        // 0. If native libsin_dsp already holds the synced plan for this target, resume device audio instantly!
+        if (
+            sinRealtime.available &&
+            sinRealtimeLoaded &&
+            sinRealtimeTargetMode === 'graph' &&
+            activeRamPreviewNodeId === target.id &&
+            sinRealtimeDurationSec > 0 &&
+            !isInvalidated &&
+            !hasPendingInvalidation &&
+            !isPreviewInFlight
+        ) {
+            const cur = Number(sinRealtime.lastTelemetry.playhead_sec || 0);
+            const restart = cur >= sinRealtimeDurationSec - 0.02;
+            sinRealtimePlaying = true;
+            sinRealtime.setTransport({
+                playing: true,
+                seekSec: restart ? 0 : cur,
+                bpm: sinRealtimeBpm || globalParameters.bpm,
+                loop: loopEnabled,
+            });
+            updatePlaybackControls();
+            return;
+        }
 
         // 1. If the complete buffer for the target node is already rendered, valid, and synced,
         // start/resume playback immediately in lockstep with visuals.
@@ -741,15 +906,9 @@ async function toggleTransportPlayback(): Promise<void> {
         return;
     }
 
-    // 4. Fallback when there is NO graph target (empty workspace / standalone render playback):
-    if (loopEnabled && loopBuffer) {
-        void playLoop(loopTime());
-        return;
-    }
-
     if (tempFilesSelect.value && tempFilesSelect.value !== 'RAM_PREVIEW' && masterPlayer.src && masterPlayer.src !== window.location.href) {
+        masterPlayer.loop = loopEnabled;
         masterPlayer.play().catch(error => console.error('Play failed', error));
-        return;
     }
 }
 
@@ -760,25 +919,14 @@ masterPlayBtn.addEventListener('click', () => {
 masterLoopBtn.addEventListener('click', () => {
     loopEnabled = !loopEnabled;
     globalAudioScheduler.setLoop(loopEnabled);
-    if (loopEnabled) {
-        const currentTime = Number.isFinite(masterPlayer.currentTime) ? masterPlayer.currentTime : 0;
-        const wasPlaying = !masterPlayer.paused && !masterPlayer.ended;
-        masterPlayer.loop = false;
-        masterPlayer.pause();
-        loopOffset = currentTime;
-        if (wasPlaying && !globalAudioScheduler.getIsPlaying()) void playLoop(currentTime);
-    } else {
-        const currentTime = loopTime();
-        const wasPlaying = loopSource !== null || !masterPlayer.paused && !masterPlayer.ended;
-        stopLoop(false);
-        masterPlayer.loop = false;
-        pendingMasterSeek = currentTime;
-        try {
-            masterPlayer.currentTime = currentTime;
-        } catch (error) {
-            console.error('Could not restore native playback position', error);
-        }
-        if (wasPlaying && !globalAudioScheduler.getIsPlaying()) masterPlayer.play().catch(error => console.error('Play failed', error));
+    masterPlayer.loop = loopEnabled;
+    if (sinRealtime.available && sinRealtimeLoaded) {
+        sinRealtime.setTransport({
+            playing: sinRealtimePlaying,
+            seekSec: -1,
+            bpm: sinRealtimeBpm || globalParameters.bpm,
+            loop: loopEnabled,
+        });
     }
     updatePlaybackControls();
 });
@@ -786,7 +934,11 @@ masterLoopBtn.addEventListener('click', () => {
 masterVolume.addEventListener('input', () => {
     masterPlayer.volume = Number(masterVolume.value);
     masterPlayer.muted = false;
-    syncLoopGain();
+    const monBus = getRealtimeMonitorBusId();
+    if (monBus) {
+        sinRealtime.setParam(monBus, 'volume', masterPlayer.volume, 5);
+        sinRealtime.setParam(monBus, 'mute', 0, 5);
+    }
     updatePlaybackControls();
 });
 
@@ -798,7 +950,11 @@ masterMuteBtn.addEventListener('click', () => {
     } else {
         masterPlayer.muted = !masterPlayer.muted;
     }
-    syncLoopGain();
+    const monBus = getRealtimeMonitorBusId();
+    if (monBus) {
+        sinRealtime.setParam(monBus, 'volume', masterPlayer.volume, 5);
+        sinRealtime.setParam(monBus, 'mute', masterPlayer.muted ? 1 : 0, 5);
+    }
     updatePlaybackControls();
 });
 
@@ -1014,7 +1170,7 @@ function graphResolutionNodes(graph: LGraph, rootNodeId?: number): any[] {
     return nodes;
 }
 
-function markNodeAndAncestorsInvalidated(graph: LGraph, nodeId: number) {
+function markNodeAndAncestorsInvalidated(graph: LGraph, nodeId: number, clearVisualBuffers: boolean = false) {
     const visited = new Set<number>();
     const pending = [nodeId];
     const allNodes = (((graph as any)._nodes || []) as any[]);
@@ -1025,11 +1181,13 @@ function markNodeAndAncestorsInvalidated(graph: LGraph, nodeId: number) {
         const node = graph.getNodeById(currId);
         if (node) {
             (node as any).isInvalidated = true;
-            (node as any)._cachedMixedInput = null;
-            (node as any)._cachedCompositedBuffer = null;
-            (node as any)._lastRenderedBuffer = null;
-            delete (node as any).manifestStemBuffer;
-            (node as any).setDirtyCanvas?.(true, true);
+            if (clearVisualBuffers) {
+                (node as any)._cachedMixedInput = null;
+                (node as any)._cachedCompositedBuffer = null;
+                (node as any)._lastRenderedBuffer = null;
+                delete (node as any).manifestStemBuffer;
+                (node as any).setDirtyCanvas?.(true, true);
+            }
         }
         // Invalidate any ghost nodes linked to this source node
         for (const candidate of allNodes) {
@@ -1808,6 +1966,42 @@ window.addEventListener('open-node-properties', (e: Event) => {
     }
 });
 
+// Exclusive global Spacebar transport toggle (capture phase so sliders/buttons/selects/canvases never misfire).
+function isSinTextEntryElement(el: Element | null): boolean {
+    if (!el) return false;
+    const htmlEl = el as HTMLElement;
+    if (htmlEl.isContentEditable || htmlEl.classList?.contains('node-title-editor')) return true;
+    const tag = htmlEl.tagName;
+    if (tag === 'TEXTAREA') return true;
+    if (tag === 'INPUT') {
+        const type = String((htmlEl as HTMLInputElement).type || 'text').toLowerCase();
+        return !['range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'file'].includes(type);
+    }
+    return false;
+}
+
+function hasOpenSinModal(el: Element | null): boolean {
+    return Boolean(document.querySelector('dialog[open]') || el?.closest?.('.dialog-modal, .sin-modal'));
+}
+
+window.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.code !== 'Space' && e.key !== ' ') return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (isSinTextEntryElement(document.activeElement) || hasOpenSinModal(document.activeElement)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return;
+    void toggleTransportPlayback();
+}, { capture: true });
+
+window.addEventListener('keyup', (e: KeyboardEvent) => {
+    if (e.code !== 'Space' && e.key !== ' ') return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (isSinTextEntryElement(document.activeElement) || hasOpenSinModal(document.activeElement)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+}, { capture: true });
+
 window.addEventListener('keydown', (e: KeyboardEvent) => {
     const activeEl = document.activeElement as HTMLElement | null;
     const isTyping = Boolean(activeEl && (
@@ -1887,14 +2081,6 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
             e.stopPropagation();
             return;
         }
-    }
-    if (e.code === 'Space' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
-        if (activeEl && (activeEl.tagName === 'SELECT' || activeEl.closest('.dialog-modal') || activeEl.closest('.sin-modal'))) {
-            return;
-        }
-        e.preventDefault();
-        void toggleTransportPlayback();
-        return;
     }
     if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey) && !e.altKey) {
         e.preventDefault();
@@ -2044,7 +2230,12 @@ previewRecalculateBtn.addEventListener('click', async () => {
             scheduleStageSave();
         }
 
-        await previewNode(nodeId, false, false, false);
+        // Release refresh button immediately and run backend re-pack asynchronously so GUI never blocks!
+        previewRecalculateBtn.disabled = false;
+        void previewNode(nodeId, false, false, false).catch((err) => {
+            const isAbort = (err as any)?.name === 'AbortError' || String(err).toLowerCase().includes('abort');
+            if (!isAbort) console.error('Recalculate preview error:', err);
+        });
     } catch (err) {
         const isAbort = (err as any)?.name === 'AbortError' || String(err).toLowerCase().includes('abort');
         if (!isAbort) {
@@ -2057,13 +2248,21 @@ previewRecalculateBtn.addEventListener('click', async () => {
 });
 
 tempFilesSelect.addEventListener('change', (e) => {
-    const val = (e.target as HTMLSelectElement).value;
+    const selectEl = e.target as HTMLSelectElement;
+    const val = selectEl.value;
     updatePlaybackTrackPresentation();
     if (val === 'RAM_PREVIEW') {
-        if (activeRamPreviewSource) setMasterPlayerSource(activeRamPreviewSource, true);
-        else masterPlayer.play().catch(error => console.error('Play failed', error));
+        sinRealtimeTargetMode = 'graph';
+        if (sinRealtime.available && activeRamPreviewNodeId != null) {
+            void previewNode(activeRamPreviewNodeId, true, false, false);
+        } else if (activeRamPreviewSource) {
+            setMasterPlayerSource(activeRamPreviewSource, true);
+        } else {
+            masterPlayer.play().catch(error => console.error('Play failed', error));
+        }
     } else if (val) {
-        setMasterPlayerSource(val, true);
+        const selectedOpt = selectEl.options[selectEl.selectedIndex];
+        void activateExportedWavSource(val, selectedOpt?.dataset?.filepath, true);
     }
 });
 
@@ -2079,6 +2278,19 @@ export function getActiveWorkspaceManifest(): any {
 }
 
 function clearActiveWorkspaceManifest() {
+    if (sinRealtime.available && (sinRealtimeLoaded || sinRealtimePlaying)) {
+        sinRealtime.setTransport({ playing: false, seekSec: 0 });
+    }
+    if (sinRealtimeSeekBreathTimer !== null) {
+        window.clearTimeout(sinRealtimeSeekBreathTimer);
+        sinRealtimeSeekBreathTimer = null;
+    }
+    sinRealtimePendingSeekSec = null;
+    sinRealtimeSeekHoldUntil = 0;
+    sinRealtimeLoaded = false;
+    sinRealtimePlaying = false;
+    sinRealtimeDurationSec = 0;
+    sinRealtimeTargetMode = 'graph';
     activeWorkspaceManifest = null;
     (window as any).activeWorkspaceManifest = null;
     activeRamPreviewNodeId = null;
@@ -2086,6 +2298,8 @@ function clearActiveWorkspaceManifest() {
     activeRamPreviewPayload = null;
     activeRamPreviewSource = null;
     (window as any).activeRamPreviewBuffer = null;
+    (window as any).activeRealtimeMasterPeaks = undefined;
+    (window as any).activeRealtimeMasterDuration = 0;
     globalAudioScheduler.reset();
     clearAudioBufferCache();
     fetch('/api/preview/clear', { method: 'POST' }).catch(() => { });
@@ -2097,6 +2311,8 @@ function clearActiveWorkspaceManifest() {
             delete node.manifestStemUrl;
             delete node.manifestEvents;
             delete node.manifestStemBuffer;
+            delete node.realtimePeaks;
+            delete node.realtimePeaksDuration;
             node.setDirtyCanvas?.(true, true);
         }
         updateMainPreviewTarget(graph);
@@ -2179,6 +2395,7 @@ async function updateTempRendersList(selectFilename?: string) {
                 const opt = document.createElement('option');
                 opt.value = f.url;
                 opt.textContent = f.filename;
+                if (f.filepath) opt.dataset.filepath = f.filepath;
                 tempFilesSelect.appendChild(opt);
             });
 
@@ -2195,7 +2412,7 @@ async function updateTempRendersList(selectFilename?: string) {
                 const selectedOpt = tempFilesSelect.options[selectedIndex];
                 if (selectedOpt && selectedOpt.value) {
                     tempFilesSelect.value = selectedOpt.value;
-                    setMasterPlayerSource(selectedOpt.value, true);
+                    void activateExportedWavSource(selectedOpt.value, selectedOpt.dataset?.filepath, true);
                 }
             } else if (activeRamPreviewNodeId != null) {
                 const ramOpt = Array.from(tempFilesSelect.options).find(o => o.value === 'RAM_PREVIEW');
@@ -2216,10 +2433,7 @@ async function updateTempRendersList(selectFilename?: string) {
         } else {
             // No files left
             tempFilesSelect.innerHTML = '<option value="" disabled selected>No renders available</option>';
-            ++loopBufferRequestId;
-            loopBuffer = null;
-            loopLoad = Promise.resolve(null);
-            stopLoop(false);
+            stopMasterFallbackAudio();
             masterPlayer.loop = false;
             masterPlayer.pause();
             masterPlayer.removeAttribute('src');
@@ -3039,9 +3253,9 @@ function updateMainPreviewTarget(graph?: LGraph): any | null {
     const targetName = target?.properties?.node_name || target?.title || '';
     globalPreviewBtn.disabled = !target;
     previewRecalculateBtn.disabled = !target && activeRamPreviewNodeId == null;
-    const isPlaying = globalAudioScheduler.getIsPlaying()
-        || (!masterPlayer.paused && !masterPlayer.ended)
-        || (loopEnabled && Boolean(loopSource));
+    const isPlaying = isRealtimeAudioPlaying()
+        || globalAudioScheduler.getIsPlaying()
+        || (!masterPlayer.paused && !masterPlayer.ended);
     globalPreviewBtn.title = target
         ? (isPlaying ? 'Pause transport (Space)' : `Play transport (Space) · ${targetName} (${state.mode === 'manual' ? 'manual' : 'automatic'})`)
         : 'Add an audio node to enable main preview';
@@ -3205,6 +3419,7 @@ function syncLengthInheritance(graph?: LGraph) {
         const parentData = trackNodes.get(data.parentId);
         const parentNode = targetGraph.getNodeById(data.parentId);
         const parentSetting = parentNode?.properties?.total_bars ?? parentData?.total_bars;
+        if (parentSetting === 'auto' || parentSetting === 'free') continue;
         const parentBars = (parentSetting === 'global' || parentSetting == null)
             ? globalParameters.total_bars
             : Number(parentSetting);
@@ -3326,6 +3541,12 @@ window.addEventListener('graph-connections-changed', () => {
     }, 150);
 });
 
+let nodeContextToolbar: NodeContextToolbar | null = null;
+
+function syncNodeContextToolbar() {
+    nodeContextToolbar?.syncFromCanvas((window as any).editorCanvas);
+}
+
 function updateGraphNodeCollapsing() {
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
@@ -3346,6 +3567,7 @@ function updateGraphNodeCollapsing() {
     if ((window as any).editorCanvas) {
         (window as any).editorCanvas.setDirty(true, true);
     }
+    syncNodeContextToolbar();
 }
 
 function isFloatingPanel(panel: IDockviewPanel | undefined): boolean {
@@ -3453,6 +3675,7 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
             setActiveParamNodeId(node.id);
         }
         panel.api.setActive();
+        node.onParametersOpened?.();
         updateGraphNodeCollapsing();
         updatePanelToggleButtons();
         return;
@@ -3461,6 +3684,8 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
     if (!options?.forceOpen && dockedPropertyPanels().length === 0) {
         return;
     }
+
+    node.onParametersOpened?.();
 
     const width = 380;
     const graphPanel = dv.getGroupPanel('graph_panel');
@@ -4697,6 +4922,13 @@ const STAGE_SAVE_ERROR_COOLDOWN_MS = 8000;
 let lastStageSaveErrorAt = 0;
 let lastStageSaveErrorMessage: string | null = null;
 
+const GAIA_API_BASE = 'http://127.0.0.1:8001';
+let linkedGaiaProjectId: number | null = null;
+let linkedGaiaProjectTitle: string | null = null;
+let linkedGaiaCanonicalGraph: any = null;
+let linkedGaiaSnapshots: any[] = [];
+let linkedGaiaActiveSnapshotId: string | null = null;
+
 function setStageSaveState(state: StageSaveState, title?: string) {
     if (!stageSaveStatus) return;
     const labels: Record<StageSaveState, string> = {
@@ -4785,21 +5017,48 @@ async function saveCurrentStage() {
     runtimeLog('Saving current stage started', 'debug');
     let saveFailed = false;
     try {
-        const response = await fetch('/api/stage', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ stage: current.stage })
-        });
-        if (!response.ok) {
-            const data = await response.json().catch(() => ({}));
-            throw new Error(data.detail || `Could not save current stage (${response.status})`);
+        if (linkedGaiaProjectId !== null) {
+            const response = await fetch(`${GAIA_API_BASE}/projects/${linkedGaiaProjectId}/editor-session`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    engine: 'sin',
+                    data: {
+                        ...(linkedGaiaCanonicalGraph ? { graph: linkedGaiaCanonicalGraph } : {}),
+                        workspace: current.stage,
+                        snapshots: linkedGaiaSnapshots,
+                        active_snapshot_id: linkedGaiaActiveSnapshotId,
+                    }
+                })
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.detail || `Could not save GAIA project session (${response.status})`);
+            }
+            lastSavedStageFingerprint = current.fingerprint;
+            lastStageSaveErrorAt = 0;
+            lastStageSaveErrorMessage = null;
+            const latest = createCurrentStage(graph).fingerprint;
+            const savedTitle = linkedGaiaProjectTitle ? `GAIA: ${linkedGaiaProjectTitle}` : `GAIA Project #${linkedGaiaProjectId}`;
+            setStageSaveState(latest === lastSavedStageFingerprint ? 'saved' : 'unsaved', savedTitle);
+            runtimeLog(`Saved GAIA project #${linkedGaiaProjectId} session (${Math.round(performance.now() - saveStartedAt)} ms)`, 'debug');
+        } else {
+            const response = await fetch('/api/stage', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stage: current.stage })
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.detail || `Could not save current stage (${response.status})`);
+            }
+            lastSavedStageFingerprint = current.fingerprint;
+            lastStageSaveErrorAt = 0;
+            lastStageSaveErrorMessage = null;
+            const latest = createCurrentStage(graph).fingerprint;
+            setStageSaveState(latest === lastSavedStageFingerprint ? 'saved' : 'unsaved');
+            runtimeLog(`Saving current stage complete (${Math.round(performance.now() - saveStartedAt)} ms)`, 'debug');
         }
-        lastSavedStageFingerprint = current.fingerprint;
-        lastStageSaveErrorAt = 0;
-        lastStageSaveErrorMessage = null;
-        const latest = createCurrentStage(graph).fingerprint;
-        setStageSaveState(latest === lastSavedStageFingerprint ? 'saved' : 'unsaved');
-        runtimeLog(`Saving current stage complete (${Math.round(performance.now() - saveStartedAt)} ms)`, 'debug');
     } catch (error) {
         saveFailed = true;
         lastStageSaveErrorAt = performance.now();
@@ -4833,41 +5092,52 @@ async function restoreCurrentStage(graph: LGraph, canvas: LGraphCanvas): Promise
         const gaiaProjectId = urlParams.get('gaia_project');
         const targetId = urlParams.get('target_id');
         if (gaiaProjectId) {
-            runtimeLog(`Loading GAIA linked project #${gaiaProjectId} (read-only copy)`, 'common');
-            try {
-                const targetQuery = targetId ? `?target_id=${encodeURIComponent(targetId)}` : '';
-                const gaiaRes = await fetch(`http://127.0.0.1:8001/items/${gaiaProjectId}/graph${targetQuery}`);
-                if (gaiaRes.ok) {
-                    const gaiaData = await gaiaRes.json();
-                    if (gaiaData?.graph) {
-                        const convertRes = await fetch('/api/graph/convert', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ graph: gaiaData.graph })
-                        });
-                        if (convertRes.ok) {
-                            const workspace = await convertRes.json();
-                            if (workspace?.graph) {
-                                closeAllParamWindows();
-                                activeParamNodeId = null;
-                                graph.configure(prepareWorkspaceGraph(workspace.graph));
-                                loadGlobalFreezeFromGraph(workspace, graph);
-                                rebuildTrackNodesFromGraph(graph);
-                                loadGlobalParametersFromGraph(graph);
-                                updateGraphNodeCollapsing();
-                                canvas.setDirty(true, true);
-                                void preloadSubtreeAssets(graph);
-                                lastSavedStageFingerprint = JSON.stringify(workspace.graph);
-                                setStageSaveState('saved', `GAIA Project #${gaiaProjectId} (Read-Only)`);
-                                runtimeLog(`Loaded GAIA project #${gaiaProjectId} into SIN canvas`, 'common');
-                                return true;
-                            }
-                        }
-                    }
-                }
-            } catch (err) {
-                console.error('Failed loading GAIA project', err);
+            runtimeLog(`Loading GAIA project #${gaiaProjectId} editor session`, 'common');
+            const targetQuery = targetId ? `?target_id=${encodeURIComponent(targetId)}` : '';
+            const gaiaRes = await fetch(`${GAIA_API_BASE}/editor/sessions/${encodeURIComponent(gaiaProjectId)}${targetQuery}`);
+            const gaiaSession = await gaiaRes.json().catch(() => ({}));
+            if (!gaiaRes.ok) {
+                throw new Error(gaiaSession.detail || `Could not load GAIA project #${gaiaProjectId}`);
             }
+            if (gaiaSession.persistence !== 'project' || gaiaSession.editor_engine !== 'sin') {
+                throw new Error(`GAIA item #${gaiaProjectId} is not a SIN-engine project`);
+            }
+
+            let workspace = gaiaSession.session_data?.workspace;
+            if (!workspace?.graph && gaiaSession.session_data?.graph) {
+                const convertRes = await fetch('/api/graph/convert', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ graph: gaiaSession.session_data.graph })
+                });
+                if (!convertRes.ok) {
+                    throw new Error('Could not convert canonical GAIA graph to SIN workspace');
+                }
+                workspace = await convertRes.json();
+            }
+            if (!workspace?.graph) {
+                throw new Error('GAIA SIN session contains no graph workspace');
+            }
+
+            linkedGaiaProjectId = Number(gaiaSession.project_id || gaiaProjectId);
+            linkedGaiaProjectTitle = gaiaSession.title || `Project #${linkedGaiaProjectId}`;
+            linkedGaiaCanonicalGraph = gaiaSession.session_data?.graph || null;
+            linkedGaiaSnapshots = Array.isArray(gaiaSession.session_data?.snapshots) ? gaiaSession.session_data.snapshots : [];
+            linkedGaiaActiveSnapshotId = gaiaSession.session_data?.active_snapshot_id ?? null;
+
+            closeAllParamWindows();
+            activeParamNodeId = null;
+            graph.configure(prepareWorkspaceGraph(workspace.graph));
+            loadGlobalFreezeFromGraph(workspace, graph);
+            rebuildTrackNodesFromGraph(graph);
+            loadGlobalParametersFromGraph(graph);
+            updateGraphNodeCollapsing();
+            canvas.setDirty(true, true);
+            void preloadSubtreeAssets(graph);
+            lastSavedStageFingerprint = createCurrentStage(graph).fingerprint;
+            setStageSaveState('saved', `GAIA: ${linkedGaiaProjectTitle}`);
+            runtimeLog(`Loaded GAIA project #${linkedGaiaProjectId} (${linkedGaiaProjectTitle})`, 'common');
+            return true;
         }
 
         const response = await fetch('/api/stage');
@@ -4956,6 +5226,24 @@ window.addEventListener('pagehide', () => {
     if (!graph) return;
     const current = createCurrentStage(graph);
     if (current.fingerprint === lastSavedStageFingerprint) return;
+    if (linkedGaiaProjectId !== null) {
+        const gaiaBody = JSON.stringify({
+            engine: 'sin',
+            data: {
+                ...(linkedGaiaCanonicalGraph ? { graph: linkedGaiaCanonicalGraph } : {}),
+                workspace: current.stage,
+                snapshots: linkedGaiaSnapshots,
+                active_snapshot_id: linkedGaiaActiveSnapshotId,
+            }
+        });
+        void fetch(`${GAIA_API_BASE}/projects/${linkedGaiaProjectId}/editor-session`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: gaiaBody,
+            keepalive: true
+        });
+        return;
+    }
     const payload = JSON.stringify({ stage: current.stage });
     // Browsers impose a 64KB limit on sendBeacon. Only attempt beacon when within quota.
     if (payload.length <= 65536) {
@@ -4983,6 +5271,13 @@ const dockview = new DockviewComponent(dockviewContainer, {
                 canvas.style.backgroundColor = '#ffffff';
                 canvas.setAttribute('tabindex', '0');
                 element.appendChild(canvas);
+                nodeContextToolbar?.dispose();
+                nodeContextToolbar = new NodeContextToolbar();
+                element.appendChild(nodeContextToolbar.element);
+                disposeComponent = () => {
+                    nodeContextToolbar?.dispose();
+                    nodeContextToolbar = null;
+                };
                 element.addEventListener('contextmenu', (e: MouseEvent) => {
                     e.preventDefault();
                 });
@@ -5786,6 +6081,103 @@ async function calculatePreview(
     const keyName = `export_${nodeId}`;
     payload.filename = keyName;
 
+    // Fast path: Native in-process C++ libsin_dsp real-time device audio (zero WAV streaming!)
+    try {
+        const rtAvailable = await sinRealtime.connect();
+        if (rtAvailable) {
+            const rtRes = await sinRealtime.loadNodeModel({
+                model: payload,
+                computePeaks: true,
+                peakColumns: 512,
+                signal: abortController.signal,
+            });
+            if (rtRes?.aborted || requestVersion !== previewRequestVersion || sessionId !== currentPreviewSessionId) {
+                runtimeLog(`Discarded superseded realtime preview for node ${nodeId}`, 'warning');
+                return;
+            }
+            if (rtRes?.ok) {
+                sinRealtimeLoaded = true;
+                sinRealtimeTargetMode = 'graph';
+                sinRealtimeDurationSec = Number(rtRes.duration_sec || 0);
+                sinRealtimeBpm = Number(rtRes.bpm || payload.bpm || globalParameters.bpm || 120);
+                activeRamPreviewNodeId = nodeId;
+                (window as any).activeRamPreviewNodeId = nodeId;
+                activeRamPreviewPayload = payload;
+                activeRamPreviewSource = `/api/preview/stream/${keyName}`;
+
+                // Keep master footer volume/mute targeted strictly at transparent __monitor__ bus
+                if (masterPlayer.muted || masterPlayer.volume !== 1) {
+                    sinRealtime.setParam('__monitor__', 'volume', masterPlayer.volume, 0);
+                    sinRealtime.setParam('__monitor__', 'mute', masterPlayer.muted ? 1 : 0, 0);
+                }
+
+                const inlineMasterPeaks = Array.isArray(rtRes.master_peaks) && rtRes.master_peaks.length > 0 ? rtRes.master_peaks : null;
+                const inlineBusPeaks = (rtRes.bus_peaks && typeof rtRes.bus_peaks === 'object') ? rtRes.bus_peaks : null;
+                if (inlineMasterPeaks || inlineBusPeaks) {
+                    applyRealtimePeaksToGraph(inlineMasterPeaks, inlineBusPeaks, sinRealtimeDurationSec);
+                }
+                if (rtRes.manifest && typeof rtRes.manifest === 'object') {
+                    await distributeWorkspaceManifest(graph, rtRes.manifest);
+                }
+                clearSubtreeInvalidated(graph, nodeId);
+                if (targetNode) {
+                    (targetNode as any).bufferedProgress = 1.0;
+                    (targetNode as any).setDirtyCanvas?.(true, true);
+                }
+
+                previewRecalculateBtn.disabled = false;
+                masterPlayBtn.disabled = false;
+                masterLoopBtn.disabled = false;
+
+                const shouldStartPlayback = activePreviewAutoplay;
+                activePreviewAutoplay = false;
+                if (shouldStartPlayback) {
+                    sinRealtimePlaying = true;
+                    sinRealtime.setTransport({
+                        playing: true,
+                        seekSec: 0,
+                        bpm: sinRealtimeBpm,
+                        loop: loopEnabled,
+                    });
+                }
+
+                updatePlaybackControls();
+                (window as any).editorCanvas?.setDirty?.(true, true);
+
+                let ramOpt = Array.from(tempFilesSelect.options).find(o => o.value === 'RAM_PREVIEW');
+                if (!ramOpt) {
+                    ramOpt = document.createElement('option');
+                    ramOpt.value = 'RAM_PREVIEW';
+                    ramOpt.className = 'ram-preview-option';
+                    ramOpt.textContent = `LIVE · ${payload.node_name}`;
+                    tempFilesSelect.insertBefore(ramOpt, tempFilesSelect.firstChild);
+                } else {
+                    ramOpt.className = 'ram-preview-option';
+                    ramOpt.textContent = `LIVE · ${payload.node_name}`;
+                }
+                tempFilesSelect.value = 'RAM_PREVIEW';
+                updatePlaybackTrackPresentation();
+
+                const totalDurationMs = Math.round(performance.now() - previewStartedAt);
+                engineSync.setState('idle_synced', {
+                    lastRenderDurationMs: Math.round(rtRes.pack_ms ?? totalDurationMs),
+                    nodeId,
+                    nodeName,
+                });
+                updateEngineTelemetry({
+                    renderMs: Math.round(rtRes.pack_ms ?? totalDurationMs),
+                    streamMs: 0,
+                    totalMs: totalDurationMs,
+                    bufferedPercent: 100,
+                });
+                runtimeLog(`Live libsin_dsp ready for node ${nodeId} (${totalDurationMs} ms)`, 'common');
+                return;
+            }
+        }
+    } catch (rtErr) {
+        console.warn('[SIN Realtime] Falling back to HTTP progressive preview:', rtErr);
+    }
+
     try {
         const res = await loggedTask('Connect to progressive preview stream', () =>
             fetch('/api/preview/stream-progressive?format=binary', {
@@ -5989,10 +6381,11 @@ async function distributeWorkspaceManifest(graph: LGraph, manifest: any): Promis
                 typeof gNode.properties.filepath === 'string' &&
                 gNode.properties.filepath.trim().length > 0
             );
-            if (hasMultiSlots && typeof gNode.preloadAllSlotBuffers === 'function') {
+            const nativeRealtimeActive = Boolean(sinRealtime.available && sinRealtimeLoaded);
+            if (!nativeRealtimeActive && hasMultiSlots && typeof gNode.preloadAllSlotBuffers === 'function') {
                 pendingLoads.push(gNode.preloadAllSlotBuffers().catch(() => { }));
             }
-            if (Array.isArray(manifestEntry.pool_filepaths)) {
+            if (!nativeRealtimeActive && Array.isArray(manifestEntry.pool_filepaths)) {
                 for (const poolFp of manifestEntry.pool_filepaths) {
                     if (typeof poolFp === 'string' && poolFp.trim().length > 0) {
                         pendingLoads.push(fetchAudioBuffer(poolFp).catch(() => { }));
@@ -6099,7 +6492,7 @@ function previewNode(
         dspInvalidateTimer = null;
     }
     const effectiveAutoplay = autoplay
-        || (activePreviewAutoplay && !globalAudioScheduler.getIsPlaying() && activePreviewNodeIdInFlight === nodeId)
+        || (activePreviewAutoplay && !isRealtimeAudioPlaying() && !globalAudioScheduler.getIsPlaying() && activePreviewNodeIdInFlight === nodeId)
         || Boolean(pendingPreviewRequest?.autoplay && pendingPreviewRequest.nodeId === nodeId);
 
     if (pendingPreviewRequest) {
@@ -6112,7 +6505,7 @@ function previewNode(
     pendingPreviewRequest = { nodeId, autoplay: effectiveAutoplay, globalPreview, refreshModifiers };
     previewRequestVersion++;
     runtimeLog(`Preview queued for node ${nodeId}`, 'common');
-    setPreviewCalculatingState(globalAudioScheduler.getIsPlaying() || !effectiveAutoplay);
+    setPreviewCalculatingState(isRealtimeAudioPlaying() || sinRealtimeLoaded || globalAudioScheduler.getIsPlaying() || !effectiveAutoplay);
     if (!previewWorker) previewWorker = runPreviewQueue();
     return previewWorker;
 }
@@ -6152,11 +6545,12 @@ let dspInvalidateTimer: any = null;
 const pendingInvalidatedNodes = new Set<number>();
 let isPointerManipulatingParam = false;
 let pendingGlobalParamInvalidation = false;
+let pendingHasHeavyOfflineCook = false;
 
 function flushPendingParameterUpdate() {
     if (isPointerManipulatingParam || isGraphEvaluating()) {
         if (pendingGlobalParamInvalidation || pendingInvalidatedNodes.size > 0) {
-            scheduleSettledParameterUpdate(150);
+            scheduleSettledParameterUpdate(pendingHasHeavyOfflineCook ? 420 : 180);
         }
         return;
     }
@@ -6169,6 +6563,7 @@ function flushPendingParameterUpdate() {
     const hadPending = pendingGlobalParamInvalidation || pendingInvalidatedNodes.size > 0;
     pendingInvalidatedNodes.clear();
     pendingGlobalParamInvalidation = false;
+    pendingHasHeavyOfflineCook = false;
 
     if (!hadPending) return;
 
@@ -6180,10 +6575,8 @@ function flushPendingParameterUpdate() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ node_ids: idsToInvalidate })
     }).catch(() => { }).finally(() => {
-        // Parameter changes occur after the edit completes, rendering Stage 2 in the background
-        // and swapping atomically via GaplessAudioScheduler.commitSession() without interrupting playback.
         if (targetId != null) {
-            if (globalAudioScheduler.getIsPlaying()) {
+            if (isRealtimeAudioPlaying() || globalAudioScheduler.getIsPlaying()) {
                 EngineSyncManager.getInstance().setState('hot_swapping');
             }
             void previewNode(targetId, false, false, false);
@@ -6209,11 +6602,82 @@ const handlePointerFinish = () => {
     if (!isPointerManipulatingParam) return;
     isPointerManipulatingParam = false;
     if (pendingGlobalParamInvalidation || pendingInvalidatedNodes.size > 0) {
-        scheduleSettledParameterUpdate(150);
+        scheduleSettledParameterUpdate(pendingHasHeavyOfflineCook ? 420 : 180);
     }
 };
 window.addEventListener('pointerup', handlePointerFinish, { passive: true, capture: true });
 window.addEventListener('pointercancel', handlePointerFinish, { passive: true, capture: true });
+
+function tryPushRealtimeParam(graph: LGraph | null, nodeId: number, propertyKey?: string): boolean {
+    if (!sinRealtime.available || !sinRealtimeLoaded || !graph || !propertyKey) return false;
+    const node = graph.getNodeById(nodeId) as any;
+    const props = node?.properties;
+    if (!props) return false;
+
+    const nid = String(nodeId);
+    if (propertyKey === 'gain' || propertyKey === 'chain') {
+        const mult = getNodeGainMultiplier(node);
+        sinRealtime.setParam(nid, 'pre_gain_db', 0, 0);
+        sinRealtime.setParam(nid, 'post_gain_db', 0, 0);
+        sinRealtime.setParam(nid, 'volume', mult, 5);
+        return true;
+    }
+    if (propertyKey === 'pan') {
+        sinRealtime.setParam(nid, 'pan', Number(props.pan) || 0, 5);
+        return true;
+    }
+    if (propertyKey === 'muted' || propertyKey === 'mute') {
+        sinRealtime.setParam(nid, 'mute', props[propertyKey] ? 1 : 0, 5);
+        return true;
+    }
+    if (propertyKey === 'solo') {
+        sinRealtime.setParam(nid, 'solo', props.solo ? 1 : 0, 5);
+        return true;
+    }
+    if (propertyKey === 'crop_start') {
+        sinRealtime.setParam(nid, 'crop_start', Number(props.crop_start) || 0, 0);
+        return false; // also let waveform/manifest sync after release if needed
+    }
+    if (propertyKey === 'crop_end') {
+        sinRealtime.setParam(nid, 'crop_end', props.crop_end != null ? Number(props.crop_end) : 1, 0);
+        return false;
+    }
+    if (propertyKey === 'transpose' || propertyKey === 'cents' || propertyKey === 'stretch_factor' || propertyKey === 'original_bpm' || propertyKey === 'target_bpm' || propertyKey === 'sample_type' || propertyKey === 'sample_mode') {
+        const mode = String(props.stretch_mode || '').toLowerCase();
+        if (mode === 'pitch_shift' || mode === 'repitch' || mode === 'varispeed') {
+            const semis = (Number(props.transpose) || 0) + (Number(props.cents) || 0) / 100;
+            const pitchRate = Math.pow(2, semis / 12);
+            const rawFactor = Number(props.stretch_factor);
+            const factor = (Number.isFinite(rawFactor) && rawFactor > 0) ? rawFactor : 1;
+            let bpmRate = 1;
+            const sampleType = String(props.sample_type || props.sample_mode || 'one_shot').toLowerCase();
+            const origBpm = Number(props.original_bpm);
+            const rawTarget = props.target_bpm;
+            const targetBpm = (rawTarget != null && String(rawTarget).toLowerCase() !== 'global' && Number(rawTarget) > 0)
+                ? Number(rawTarget)
+                : Number(globalParameters.bpm || 120);
+            if (sampleType !== 'one_shot' && sampleType !== 'oneshot' && Number.isFinite(origBpm) && origBpm > 0 && targetBpm > 0) {
+                bpmRate = targetBpm / origBpm;
+            }
+            const rate = Math.max(0.05, pitchRate * factor * bpmRate);
+            sinRealtime.setParam(nid, 'playback_rate', rate, 5);
+            return true;
+        }
+    }
+    return false;
+}
+
+const HEAVY_OFFLINE_COOK_PROPERTIES = new Set([
+    'cents',
+    'transpose',
+    'stretch_factor',
+    'stretch_mode',
+    'stretch_algorithm',
+    'original_bpm',
+    'target_bpm',
+    'key_match_mode',
+    'key_match_algorithm',
+]);
 
 window.addEventListener('node-property-changed', (e: any) => {
     if (isGraphEvaluating()) return;
@@ -6227,18 +6691,39 @@ window.addEventListener('node-property-changed', (e: any) => {
     }
 
     const graph = (window as any).editorGraph as LGraph;
+
+    // Push Tier-0 live DSP parameters straight to native libsin_dsp (< 5ms on device audio!)
+    const handledPureRealtime = tryPushRealtimeParam(graph, changedNodeId, propertyKey);
+    if (handledPureRealtime) {
+        EngineSyncManager.getInstance().setState('idle_synced');
+        return;
+    }
+
+    const isHeavyCook = Boolean(propertyKey && HEAVY_OFFLINE_COOK_PROPERTIES.has(propertyKey));
     if (graph) {
-        markNodeAndAncestorsInvalidated(graph, changedNodeId);
+        // Never wipe cached JS visual buffers during active drags or offline-cook param edits (like Fine Tune),
+        // which would otherwise force synchronous main-thread AudioBuffer recompositing on every drag frame!
+        const shouldClearVisuals = !isPointerManipulatingParam && !isHeavyCook;
+        markNodeAndAncestorsInvalidated(graph, changedNodeId, shouldClearVisuals);
     }
 
     EngineSyncManager.getInstance().setState('dirty_pending');
     pendingInvalidatedNodes.add(changedNodeId);
+    if (isHeavyCook) {
+        pendingHasHeavyOfflineCook = true;
+    }
 
     if (propertyKey === 'active_slot') {
         isPointerManipulatingParam = false;
-        scheduleSettledParameterUpdate(50);
+        scheduleSettledParameterUpdate(80);
+    } else if (isHeavyCook) {
+        // Leave comfortable breathing room while adjusting non-realtime Tier-2 params (e.g. Fine Tune / Rubber Band)
+        // so the GUI stays 100% fluid and only cooks once the user settles on a value.
+        if (!isPointerManipulatingParam) {
+            scheduleSettledParameterUpdate(480);
+        }
     } else if (!isPointerManipulatingParam) {
-        scheduleSettledParameterUpdate(300);
+        scheduleSettledParameterUpdate(320);
     }
 });
 

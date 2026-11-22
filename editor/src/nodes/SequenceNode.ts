@@ -1,5 +1,5 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode } from './BaseNode.ts';
+import { BaseNode, type NodeToolbarControl } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { SequenceRenderer, type RenderBox, type SignalTelemetry, type SequenceStep, type VisualizationTypeId } from '../../../packages/iride/src/index.ts';
@@ -92,6 +92,10 @@ export class SequenceNode extends BaseNode {
     static tabs = ["SEQUENCE", "CHAIN", "COMMON"];
     static override defaultVisualizationType: VisualizationTypeId = 'sequence';
     static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['sequence', 'loop', 'realtime', 'spectrum'];
+
+    override get supportsStepLighting(): boolean {
+        return true;
+    }
 
     getStepParameterFields(): FieldSchema[] {
         return SequenceNode.stepParameterKeys
@@ -1221,7 +1225,47 @@ export class SequenceNode extends BaseNode {
         const stepCount = SequenceNode.stepCount;
         const stepLength = Number(this.properties?.step_length) || 0.25;
         const currentStep = (((Math.floor(telemetry.beat / stepLength) % stepCount) + stepCount) % stepCount);
-        const rawSeq = Array.isArray(this.properties?.sequence) ? this.properties.sequence : [];
+        let rawSeq: any[] | null = null;
+        const win = (typeof window !== 'undefined') ? (window as any) : undefined;
+        const manifestEvents = ((this as any).manifestEvents as Array<{ time: number; duration: number; slot?: number; sequence?: number[] }> | undefined)
+            || (win?.activeWorkspaceManifest?.nodes?.[String(this.id)]?.events as Array<{ time: number; duration: number; slot?: number; sequence?: number[] }> | undefined);
+        if (manifestEvents && manifestEvents.length > 0) {
+            const totalTrackDur = telemetry.duration > 0
+                ? telemetry.duration
+                : Number(win?.activeWorkspaceManifest?.total_duration || 0);
+            const curTime = totalTrackDur > 0 ? ((telemetry.time % totalTrackDur) + totalTrackDur) % totalTrackDur : telemetry.time;
+            let activeEvt: { time: number; duration: number; slot?: number; sequence?: number[] } | undefined;
+            for (let i = 0; i < manifestEvents.length; i++) {
+                const e = manifestEvents[i];
+                if (curTime >= e.time && curTime < (e.time + Math.max(0.02, e.duration))) {
+                    activeEvt = e;
+                    break;
+                }
+            }
+            if (!activeEvt) {
+                for (let i = manifestEvents.length - 1; i >= 0; i--) {
+                    if (manifestEvents[i].time <= curTime) {
+                        activeEvt = manifestEvents[i];
+                        break;
+                    }
+                }
+            }
+            if (activeEvt) {
+                if (Array.isArray(activeEvt.sequence) && activeEvt.sequence.length > 0) {
+                    rawSeq = activeEvt.sequence;
+                } else if (typeof activeEvt.slot === 'number' && Array.isArray(this.properties?.slots) && this.properties.slots.length > 0) {
+                    const slotCount = this.properties.slots.length;
+                    const slotIdx = ((Math.trunc(activeEvt.slot) % slotCount) + slotCount) % slotCount;
+                    const slotSeq = this.properties.slots[slotIdx]?.sequence;
+                    if (Array.isArray(slotSeq) && slotSeq.length > 0) {
+                        rawSeq = slotSeq;
+                    }
+                }
+            }
+        }
+        if (!rawSeq) {
+            rawSeq = Array.isArray(this.properties?.sequence) ? this.properties.sequence : [];
+        }
         const rawVal = rawSeq[currentStep];
         const isGateOn = typeof rawVal === 'number'
             ? rawVal > 0
@@ -1239,13 +1283,24 @@ export class SequenceNode extends BaseNode {
     private _cachedCompositedBuffer: AudioBuffer | null = null;
     private _lastSampleBufferRef: AudioBuffer | null = null;
     private _lastSeqFingerprint: string = '';
+    private _cachedSlotBuffersMap: Map<number, AudioBuffer> | null = null;
+    private _lastSlotMapFingerprint: string = '';
+    private _lastSlotMapInputRef: any = null;
 
     public getSlotBuffersMap(visited?: Set<number>): Map<number, AudioBuffer> {
-        this.syncActiveSlotFromProperties();
         const slots = this.getSlots();
-        if (slots.length <= 1 && (this as any).manifestStemBuffer) {
-            return new Map([[0, (this as any).manifestStemBuffer]]);
+        // Fast path: single-slot SequenceNode reuses cached getAudioBuffer() (ZERO per-frame re-compositing!)
+        if (slots.length <= 1) {
+            const single = (this as any).manifestStemBuffer || this.getAudioBuffer(visited);
+            if (!single) return new Map();
+            if (this._cachedSlotBuffersMap && this._cachedSlotBuffersMap.size === 1 && this._cachedSlotBuffersMap.get(0) === single) {
+                return this._cachedSlotBuffersMap;
+            }
+            const m = new Map<number, AudioBuffer>([[0, single]]);
+            this._cachedSlotBuffersMap = m;
+            return m;
         }
+
         const out = new Map<number, AudioBuffer>();
         const cycleSet = visited ? new Set(visited) : new Set<number>();
         if (cycleSet.has(this.id)) return out;
@@ -1254,7 +1309,8 @@ export class SequenceNode extends BaseNode {
         const inputNodes = this.getInputNodes();
         let sampleSlotsMap: Map<number, AudioBuffer> | AudioBuffer | null = null;
         for (const inputNode of inputNodes) {
-            if (typeof (inputNode as any)?.getSlotBuffersMap === 'function') {
+            const hasMultiSlots = typeof (inputNode as any)?.getSlots === 'function' && (inputNode as any).getSlots().length > 1;
+            if (hasMultiSlots && typeof (inputNode as any)?.getSlotBuffersMap === 'function') {
                 const map = (inputNode as any).getSlotBuffersMap(cycleSet);
                 if (map && map.size > 0) {
                     sampleSlotsMap = map;
@@ -1283,6 +1339,11 @@ export class SequenceNode extends BaseNode {
         const seedSalt = Number(this.properties?.seed_salt || 0) * 9973;
         const cycleSeeds = resolveCycleSeeds(this.properties?.seed ?? 42, 8, (this.id || 1) + seedSalt);
 
+        const multiFp = `${slots.length}_${this.activeSlotIndex}_${totalBars}_${bpm}_${nodeGain}_${upstreamCount}_${upstreamActive}_${cycleSeeds[0]}_${this.properties?.play_mode}_${this.properties?.release}_${this.properties?.fade_ms}_${slots.map(s => (Array.isArray(s?.sequence) ? s.sequence.join('') : '')).join('|')}`;
+        if (this._cachedSlotBuffersMap && this._lastSlotMapInputRef === sampleSlotsMap && this._lastSlotMapFingerprint === multiFp) {
+            return this._cachedSlotBuffersMap;
+        }
+
         for (let s = 0; s < slots.length; s++) {
             const slotObj = slots[s];
             const seq = Array.isArray(slotObj?.sequence) ? slotObj.sequence : (Array.isArray(this.properties?.sequence) ? this.properties.sequence : []);
@@ -1309,6 +1370,9 @@ export class SequenceNode extends BaseNode {
             );
             if (buf) out.set(s, buf);
         }
+        this._cachedSlotBuffersMap = out;
+        this._lastSlotMapInputRef = sampleSlotsMap;
+        this._lastSlotMapFingerprint = multiFp;
         return out;
     }
 
@@ -1324,7 +1388,8 @@ export class SequenceNode extends BaseNode {
         let inputSampleBuffer: AudioBuffer | null = null;
         let sampleSlotsMap: Map<number, AudioBuffer> | null = null;
         for (const inputNode of inputNodes) {
-            if (typeof (inputNode as any)?.getSlotBuffersMap === 'function') {
+            const hasMultiSlots = typeof (inputNode as any)?.getSlots === 'function' && (inputNode as any).getSlots().length > 1;
+            if (hasMultiSlots && typeof (inputNode as any)?.getSlotBuffersMap === 'function') {
                 const map = (inputNode as any).getSlotBuffersMap(cycleSet);
                 if (map && map.size > 0) {
                     sampleSlotsMap = map;
@@ -1356,7 +1421,16 @@ export class SequenceNode extends BaseNode {
         const cycleSeeds = resolveCycleSeeds(this.properties?.seed ?? 42, 8, (this.id || 1) + seedSalt);
 
         const nodeGain = getNodeGainMultiplier(this);
-        const fp = `${this.activeSlotIndex}_${totalBars}_${bpm}_${stepLength}_${seq.join(',')}_${JSON.stringify(params)}_${stepSlots.join(',')}_${cycleSeeds.join(',')}_${nodeGain}`;
+        let paramsKey = '';
+        for (let i = 0; i < params.length; i++) {
+            const p = params[i];
+            if (!p) {
+                paramsKey += ';';
+                continue;
+            }
+            paramsKey += `${p.velocity ?? ''},${p.probability ?? ''},${p.offset ?? ''},${p.sample_start ?? ''},${p.gate_length ?? ''},${p.subdivision_enabled ?? ''},${p.subdivisions ?? ''};`;
+        }
+        const fp = `${this.activeSlotIndex}_${totalBars}_${bpm}_${stepLength}_${seq.join(',')}_${paramsKey}_${stepSlots.join(',')}_${cycleSeeds.join(',')}_${nodeGain}_${this.properties?.play_mode ?? ''}_${this.properties?.release ?? ''}_${this.properties?.fade_ms ?? ''}`;
         if (this._cachedCompositedBuffer && this._lastSampleBufferRef === inputSampleBuffer && this._lastSeqFingerprint === fp) {
             return this._cachedCompositedBuffer;
         }
@@ -1382,6 +1456,96 @@ export class SequenceNode extends BaseNode {
         this._lastSampleBufferRef = inputSampleBuffer;
         this._lastSeqFingerprint = fp;
         return composited;
+    }
+
+    override getToolbarControls(): NodeToolbarControl[] {
+        const slots = this.getSlots();
+        const notifyRefresh = () => {
+            this.setDirtyCanvas(true, true);
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
+            }
+        };
+        return [
+            {
+                kind: 'slot-strip',
+                id: 'slots',
+                count: slots.length,
+                activeIndex: this.activeSlotIndex,
+                selectedIndices: this.getSelectedSlotIndices(),
+                onSelect: (idx) => {
+                    this.selectSlot(idx);
+                    notifyRefresh();
+                },
+                onAdd: () => {
+                    const nextIdx = this.addSlot();
+                    this.selectSlot(nextIdx);
+                    notifyRefresh();
+                },
+                onRemove: slots.length > 1
+                    ? () => {
+                        this.removeSlot(this.activeSlotIndex);
+                        notifyRefresh();
+                    }
+                    : undefined
+            },
+            {
+                kind: 'segmented',
+                id: 'play_mode',
+                value: String(this.properties?.play_mode || 'gate'),
+                options: [
+                    { value: 'gate', label: 'Mono', title: 'Mono voice (cuts previous note)' },
+                    { value: 'trigger', label: 'Multi', title: 'Multivoice overlap' }
+                ],
+                onChange: (val) => {
+                    this.updateProperty('play_mode', val);
+                    notifyRefresh();
+                }
+            },
+            {
+                kind: 'toggle',
+                id: 'pool',
+                label: 'Pool',
+                icon: 'layers',
+                title: 'Toggle Sequence Pool view',
+                active: Boolean(this.isPoolViewOpen),
+                tone: 'sky',
+                onToggle: () => {
+                    if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
+                            detail: { nodeId: this.id, toggleInline: true }
+                        }));
+                    }
+                }
+            },
+            {
+                kind: 'button',
+                id: 'save_sequence',
+                label: 'Save',
+                icon: 'save',
+                title: 'Save sequence to the default GAIA vault',
+                onClick: () => {
+                    if (typeof fetch !== 'function' || typeof window === 'undefined') return;
+                    void (async () => {
+                        try {
+                            const response = await fetch('/api/sequence/save', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(this.toSequenceDocument())
+                            });
+                            const result = await response.json().catch(() => ({}));
+                            if (!response.ok) return;
+                            if (result.absolute_path) this.updateProperty('filepath', result.absolute_path);
+                            if (result.id != null) this.updateProperty('library_item_id', result.id);
+                            window.dispatchEvent(new CustomEvent('library-content-changed'));
+                            notifyRefresh();
+                        } catch {
+                            // Errors are handled inside the Sequence inspector save flow
+                        }
+                    })();
+                }
+            }
+        ];
     }
 }
 

@@ -1,36 +1,12 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode } from './BaseNode.ts';
+import { BaseNode, type NodeToolbarControl } from './BaseNode.ts';
 import { CanvasButton } from '../ui/CanvasButton.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 
-export function getDefaultModulatorChain() {
-    return [
-        {
-            id: "lfo_" + Math.random().toString(36).substring(2, 8),
-            type: "lfo",
-            name: "LFO Generator",
-            enabled: true,
-            params: {
-                shape: "sine",
-                rate: 1.0,
-                depth: 1.0,
-                phase: 0.0
-            }
-        }
-    ];
-}
-
 export class ModulatorNode extends BaseNode {
     static panelSchema: NodePanelSchema = {
         tabs: [
-            {
-                id: 'MODULATOR',
-                label: 'Modulator',
-                sections: [
-                    { type: 'fx_chain', chainKey: 'chain' }
-                ]
-            },
             {
                 id: 'COMMON',
                 label: 'Common',
@@ -49,8 +25,8 @@ export class ModulatorNode extends BaseNode {
     static defaultIcon = "pulse";
     static badgeLabel = "MOD";
     static nodeType = "modulator";
-    static defaultTab = "MODULATOR";
-    static tabs = ["MODULATOR", "COMMON"];
+    static defaultTab = "COMMON";
+    static tabs = ["COMMON"];
 
     constructor() {
         super();
@@ -68,9 +44,6 @@ export class ModulatorNode extends BaseNode {
         this.properties.node_name = this.properties.node_name || "Modulator";
         this.properties.color = this.properties.color || "#7e22ce";
         this.properties.icon = this.properties.icon || "pulse";
-        if (!this.properties.chain || !Array.isArray(this.properties.chain) || this.properties.chain.length === 0) {
-            this.properties.chain = getDefaultModulatorChain();
-        }
 
         // A modulator cannot own another modulator, but its preview action can
         // preview the audio node it controls.
@@ -111,6 +84,52 @@ export class ModulatorNode extends BaseNode {
 
     override get modifierKind(): string {
         return 'modulator';
+    }
+
+    override getToolbarControls(): NodeToolbarControl[] {
+        const parentId = this.properties?.parentId;
+        const controls: NodeToolbarControl[] = [];
+        if (parentId != null) {
+            controls.push({
+                kind: 'button',
+                id: 'parent_node',
+                label: 'Node',
+                icon: 'arrowLeft',
+                title: 'Select and inspect parent node',
+                onClick: () => {
+                    if (typeof window === 'undefined') return;
+                    const graph = (window as any).editorGraph;
+                    const canvas = (window as any).editorCanvas;
+                    const parentNode = graph?.getNodeById?.(parentId);
+                    if (parentNode && canvas?.selectNode) {
+                        canvas.selectNode(parentNode);
+                    }
+                    window.dispatchEvent(new CustomEvent('open-node-properties', { detail: { nodeId: parentId } }));
+                }
+            });
+        }
+        controls.push({
+            kind: 'button',
+            id: 'delete_mod',
+            label: 'Remove',
+            icon: 'trash',
+            tone: 'danger',
+            title: 'Remove this Modifier',
+            onClick: () => {
+                if (typeof window === 'undefined') return;
+                window.dispatchEvent(new CustomEvent('delete-node', { detail: { nodeId: this.id } }));
+                if (parentId != null) {
+                    const graph = (window as any).editorGraph;
+                    const canvas = (window as any).editorCanvas;
+                    const parentNode = graph?.getNodeById?.(parentId);
+                    if (parentNode && canvas?.selectNode) {
+                        canvas.selectNode(parentNode);
+                    }
+                    window.dispatchEvent(new CustomEvent('open-node-properties', { detail: { nodeId: parentId } }));
+                }
+            }
+        });
+        return controls;
     }
 }
 

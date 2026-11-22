@@ -1,9 +1,15 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode, DEFAULT_SAMPLE_INPUT_GAIN_DB, getDefaultFxChain } from './BaseNode.ts';
+import { BaseNode, DEFAULT_SAMPLE_INPUT_GAIN_DB, getDefaultFxChain, type NodeToolbarControl } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import { findLibraryFileForSnapshot, resolveLibraryAssets, submitLibraryMetadataProposal, type LibraryFile } from '../api.ts';
-import { type SignalTelemetry, type WaveformSignal, type VisualizationTypeId } from '../../../packages/iride/src/index.ts';
+import {
+    drawClosedSlotIndex,
+    drawHeaderSlotPill,
+    type SignalTelemetry,
+    type WaveformSignal,
+    type VisualizationTypeId
+} from '../../../packages/iride/src/index.ts';
 import { fetchAudioBuffer, getCachedAudioBufferSync } from '../audioBufferCache.ts';
 import { getNodeGainMultiplier, applyGainToBuffer } from '../audioCompositor.ts';
 import { globalAudioScheduler } from '../audioScheduler.ts';
@@ -748,6 +754,9 @@ export class SampleNode extends BaseNode {
     private _cachedGainedBuffer: AudioBuffer | null = null;
     private _lastRawBufferRef: AudioBuffer | null = null;
     private _lastNodeGain: number = 1.0;
+    private _cachedSlotBuffersMap: Map<number, AudioBuffer> | null = null;
+    private _lastSlotMapGain: number = 1.0;
+    private _lastSlotMapKey: string = '';
 
     private applySampleNodeGain(rawBuf: AudioBuffer | null): AudioBuffer | null {
         if (!rawBuf) return null;
@@ -772,10 +781,20 @@ export class SampleNode extends BaseNode {
         if (Math.abs(nodeGain - 1.0) < 1e-4) {
             return this.slotBuffers;
         }
+        let mapKey = `${this.slotBuffers.size}_${this.activeSlotIndex}`;
+        for (const [idx, buf] of this.slotBuffers.entries()) {
+            mapKey += `|${idx}:${buf.length}`;
+        }
+        if (this._cachedSlotBuffersMap && this._lastSlotMapKey === mapKey && Math.abs(this._lastSlotMapGain - nodeGain) < 1e-4) {
+            return this._cachedSlotBuffersMap;
+        }
         const gainedMap = new Map<number, AudioBuffer>();
         for (const [idx, buf] of this.slotBuffers.entries()) {
             gainedMap.set(idx, idx === this.activeSlotIndex ? (this.applySampleNodeGain(buf) || buf) : applyGainToBuffer(buf, nodeGain));
         }
+        this._cachedSlotBuffersMap = gainedMap;
+        this._lastSlotMapKey = mapKey;
+        this._lastSlotMapGain = nodeGain;
         return gainedMap;
     }
 
@@ -1613,9 +1632,23 @@ export class SampleNode extends BaseNode {
         };
     }
 
-    override getLiveActivityState(telemetry?: SignalTelemetry): { isTriggered: boolean; progress?: number } {
-        if (!telemetry?.isPlaying) return { isTriggered: false };
-        const isPreviewTarget = typeof window !== 'undefined' && this.id === (window as any).activeRamPreviewNodeId;
+    override get supportsStepLighting(): boolean {
+        return true;
+    }
+
+    private resolveLiveSlotState(telemetry?: SignalTelemetry): { slotIndex: number; isTriggered: boolean; progress: number } {
+        const rawSlots = this.properties?.slots;
+        const slotCount = Array.isArray(rawSlots) && rawSlots.length > 0 ? rawSlots.length : 1;
+        const rawActive = Number.isFinite(this.activeSlotIndex) ? Math.trunc(this.activeSlotIndex) : 0;
+        const fallbackSlot = ((rawActive % slotCount) + slotCount) % slotCount;
+
+        if (!telemetry?.isPlaying) {
+            return { slotIndex: fallbackSlot, isTriggered: false, progress: 0 };
+        }
+
+        const win = (typeof window !== 'undefined') ? (window as any) : undefined;
+        const isPreviewTarget = this.id != null && win && this.id === win.activeRamPreviewNodeId;
+
         const sampleDur = this.audioBuffer?.duration || Number(this.properties?.duration_seconds) || 2.0;
         const cropStart = Number(this.properties?.crop_start ?? 0);
         const cropEnd = Number(this.properties?.crop_end ?? 1);
@@ -1625,22 +1658,122 @@ export class SampleNode extends BaseNode {
         const curTime = dur > 0 ? ((telemetry.time % dur) + dur) % dur : 0;
 
         if (isPreviewTarget) {
+            const progress = sampleActiveDuration > 0 ? Math.max(0, Math.min(1, (curTime % sampleActiveDuration) / sampleActiveDuration)) : 0;
+            return { slotIndex: fallbackSlot, isTriggered: true, progress };
+        }
+
+        const manifestEvents = ((this as any).manifestEvents as Array<{ time: number; duration: number; slot?: number }> | undefined)
+            || (win?.activeWorkspaceManifest?.nodes?.[String(this.id)]?.events as Array<{ time: number; duration: number; slot?: number }> | undefined);
+
+        if (manifestEvents && manifestEvents.length > 0) {
+            const totalTrackDur = telemetry.duration > 0
+                ? telemetry.duration
+                : Number(win?.activeWorkspaceManifest?.total_duration || sampleActiveDuration);
+            const wrappedTime = totalTrackDur > 0 ? ((telemetry.time % totalTrackDur) + totalTrackDur) % totalTrackDur : telemetry.time;
+
+            let activeEvent: { time: number; duration: number; slot?: number } | undefined;
+            let triggerTime = wrappedTime;
+            for (let i = 0; i < manifestEvents.length; i++) {
+                const e = manifestEvents[i];
+                if (wrappedTime >= e.time && wrappedTime < (e.time + Math.max(0.02, e.duration))) {
+                    activeEvent = e;
+                    break;
+                }
+            }
+
+            if (!activeEvent && totalTrackDur > 0) {
+                let lastEventEnd = (manifestEvents as any).__maxEnd as number | undefined;
+                if (lastEventEnd === undefined) {
+                    lastEventEnd = 0;
+                    for (let i = 0; i < manifestEvents.length; i++) {
+                        const end = manifestEvents[i].time + Math.max(0.02, manifestEvents[i].duration);
+                        if (end > lastEventEnd) lastEventEnd = end;
+                    }
+                    (manifestEvents as any).__maxEnd = lastEventEnd;
+                }
+                if (lastEventEnd > 0 && lastEventEnd < totalTrackDur * 0.85) {
+                    const rawTargetBpm = Number(this.properties?.target_bpm);
+                    const targetBpm = (Number.isFinite(rawTargetBpm) && rawTargetBpm > 0)
+                        ? rawTargetBpm
+                        : (Number(win?.activeWorkspaceManifest?.bpm || win?.getGlobalParameter?.('bpm')) || 120);
+                    const barSec = 4 * (60 / targetBpm);
+                    const patternBars = Math.max(1, Math.round(lastEventEnd / barSec));
+                    const patternDur = Math.max(0.05, patternBars * barSec);
+                    const timeInPattern = ((wrappedTime % patternDur) + patternDur) % patternDur;
+                    for (let i = 0; i < manifestEvents.length; i++) {
+                        const e = manifestEvents[i];
+                        if (timeInPattern >= e.time && timeInPattern < (e.time + Math.max(0.02, e.duration))) {
+                            activeEvent = e;
+                            triggerTime = timeInPattern;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            let recentEvent = activeEvent;
+            if (!recentEvent) {
+                for (let i = manifestEvents.length - 1; i >= 0; i--) {
+                    if (manifestEvents[i].time <= triggerTime) {
+                        recentEvent = manifestEvents[i];
+                        break;
+                    }
+                }
+            }
+
+            let liveSlot = fallbackSlot;
+            if (recentEvent && typeof recentEvent.slot === 'number') {
+                liveSlot = ((Math.trunc(recentEvent.slot) % slotCount) + slotCount) % slotCount;
+            }
+
+            const progress = activeEvent
+                ? Math.max(0, Math.min(1, (triggerTime - activeEvent.time) / Math.max(0.02, activeEvent.duration)))
+                : 0;
             return {
-                isTriggered: true,
-                progress: sampleActiveDuration > 0 ? Math.max(0, Math.min(1, (curTime % sampleActiveDuration) / sampleActiveDuration)) : 0
+                slotIndex: liveSlot,
+                isTriggered: Boolean(activeEvent),
+                progress
             };
         }
 
         const isLoop = this.properties?.sample_type === 'loop';
         if (isLoop && sampleActiveDuration > 0) {
             return {
+                slotIndex: fallbackSlot,
                 isTriggered: true,
                 progress: Math.max(0, Math.min(1, (curTime % sampleActiveDuration) / sampleActiveDuration))
             };
         }
 
         const progress = dur > 0 ? Math.max(0, Math.min(1, curTime / dur)) : 0;
-        return { isTriggered: true, progress };
+        return { slotIndex: fallbackSlot, isTriggered: true, progress };
+    }
+
+    public getLiveDisplayedSlotIndex(telemetry?: SignalTelemetry): number {
+        return this.resolveLiveSlotState(telemetry).slotIndex;
+    }
+
+    override getLiveActivityState(telemetry?: SignalTelemetry): { isTriggered: boolean; progress?: number } {
+        const state = this.resolveLiveSlotState(telemetry);
+        return { isTriggered: state.isTriggered, progress: state.progress };
+    }
+
+    protected override drawClosedIconOverlay(ctx: CanvasRenderingContext2D, telemetry?: SignalTelemetry): boolean {
+        const center = BaseNode.visualSize * 0.5;
+        drawClosedSlotIndex(ctx, center, center, this.getLiveDisplayedSlotIndex(telemetry));
+        return true;
+    }
+
+    protected override drawPanelHeaderDecorations(
+        ctx: CanvasRenderingContext2D,
+        _width: number,
+        headerHeight: number,
+        titleX: number,
+        telemetry?: SignalTelemetry
+    ): void {
+        const pillY = Math.round((headerHeight - 14) * 0.5);
+        const pillW = drawHeaderSlotPill(ctx, titleX, pillY, 14, this.getLiveDisplayedSlotIndex(telemetry), this.nodeColor);
+        this._headerDeco.titleOffsetX = pillW + 5;
     }
 
     override onVisualizationToggled(enabled: boolean): void {
@@ -1650,6 +1783,69 @@ export class SampleNode extends BaseNode {
                 void this.ensureAudioLoaded();
             }
         }
+    }
+
+    override getToolbarControls(): NodeToolbarControl[] {
+        const slots = this.getSlots();
+        const notifyRefresh = () => {
+            this.setDirtyCanvas(true, true);
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
+            }
+        };
+        return [
+            {
+                kind: 'slot-strip',
+                id: 'slots',
+                count: slots.length,
+                activeIndex: this.activeSlotIndex,
+                selectedIndices: this.getSelectedSlotIndices(),
+                onSelect: (idx) => {
+                    this.selectSlot(idx);
+                    notifyRefresh();
+                },
+                onAdd: () => {
+                    const nextIdx = this.addSlot();
+                    this.selectSlot(nextIdx);
+                    notifyRefresh();
+                },
+                onRemove: slots.length > 1
+                    ? () => {
+                        this.removeSlot(this.activeSlotIndex);
+                        notifyRefresh();
+                    }
+                    : undefined
+            },
+            {
+                kind: 'segmented',
+                id: 'sample_type',
+                value: String(this.properties?.sample_type || 'loop'),
+                options: [
+                    { value: 'loop', label: 'Loop', title: 'Loop mode' },
+                    { value: 'one_shot', label: '1-Shot', title: 'One-Shot mode' }
+                ],
+                onChange: (val) => {
+                    this.updateProperty('sample_type', val);
+                    notifyRefresh();
+                }
+            },
+            {
+                kind: 'toggle',
+                id: 'pool',
+                label: 'Pool',
+                icon: 'layers',
+                title: 'Toggle Asset Pool view',
+                active: Boolean(this.isPoolViewOpen),
+                tone: 'sky',
+                onToggle: () => {
+                    if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
+                            detail: { nodeId: this.id, toggleInline: true }
+                        }));
+                    }
+                }
+            }
+        ];
     }
 }
 

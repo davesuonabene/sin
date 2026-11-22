@@ -3,6 +3,7 @@ import { type ArrangementNode, type ArrangementSectionStructure } from '../../no
 import { ArrangementVisualizer, type ArrangementAnchor } from '../ArrangementVisualizer.ts';
 import { resolveArrangementSourceVisual } from '../arrangementSourceVisual.ts';
 import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from '../ParameterWheelMenu.ts';
+import { enhanceSelect } from '../../../../packages/ui/src/dropdown.js';
 
 const QUANT_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'auto', label: 'Continuous' },
@@ -180,6 +181,7 @@ export class ArrangementTimelineSection {
                 visualizer.setSectionQuant(index, quantSelect.value);
                 windowContext.refreshAudioPreview();
             });
+            if (quantSelect) enhanceSelect(quantSelect);
 
             anchorSelect?.addEventListener('change', () => {
                 const anchor: ArrangementAnchor = anchorSelect.value === 'end' ? 'end' : 'start';
@@ -187,6 +189,7 @@ export class ArrangementTimelineSection {
                 visualizer.setSectionQuantAnchor(index, anchor);
                 windowContext.refreshAudioPreview();
             });
+            if (anchorSelect) enhanceSelect(anchorSelect);
 
             windowContext?.applyOverlays?.();
         };
@@ -232,18 +235,37 @@ export class ArrangementTimelineSection {
             }
         });
 
-        if (modeToggleBtn) {
-            modeToggleBtn.addEventListener('click', () => {
-                const isCurrentlyEdit = visualizer.getMode() === 'edit';
-                const nextMode = isCurrentlyEdit ? 'select' : 'edit';
-                visualizer.setMode(nextMode);
-                modeToggleBtn.classList.toggle('is-edit-active', nextMode === 'edit');
+        const applyEditModeUi = (editMode: boolean) => {
+            const nextMode = editMode ? 'edit' : 'select';
+            arrangementNode._arrangementEditMode = editMode;
+            visualizer.setMode(nextMode);
+            if (modeToggleBtn) {
+                modeToggleBtn.classList.toggle('is-edit-active', editMode);
                 const label = modeToggleBtn.querySelector('.arr-mode-label');
                 if (label) {
-                    label.textContent = nextMode === 'edit' ? 'Done' : 'Edit';
+                    label.textContent = editMode ? 'Done' : 'Edit';
                 }
+            }
+        };
+
+        if (arrangementNode._arrangementEditMode) {
+            applyEditModeUi(true);
+        }
+
+        if (modeToggleBtn) {
+            modeToggleBtn.addEventListener('click', () => {
+                const nextEditMode = visualizer.getMode() !== 'edit';
+                applyEditModeUi(nextEditMode);
+                window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
             });
         }
+
+        const onToggleEditMode = (event: Event) => {
+            const detail = (event as CustomEvent).detail;
+            if (detail?.nodeId === node.id) {
+                applyEditModeUi(Boolean(detail.editMode));
+            }
+        };
 
         const onPropChanged = (event: Event) => {
             const detail = (event as CustomEvent).detail;
@@ -264,10 +286,12 @@ export class ArrangementTimelineSection {
                 visualizer.setNodeColor(getNodeColor());
             }
         };
+        window.addEventListener('toggle-arrangement-edit-mode', onToggleEditMode);
         window.addEventListener('node-property-changed', onPropChanged);
         window.addEventListener('node-properties-refreshed', onNodeRefreshed);
         const origDestroy = visualizer.destroy.bind(visualizer);
         visualizer.destroy = () => {
+            window.removeEventListener('toggle-arrangement-edit-mode', onToggleEditMode);
             window.removeEventListener('node-property-changed', onPropChanged);
             window.removeEventListener('node-properties-refreshed', onNodeRefreshed);
             origDestroy();

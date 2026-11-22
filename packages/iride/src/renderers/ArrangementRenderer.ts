@@ -50,6 +50,9 @@ export class ArrangementRenderer extends BaseSignalRenderer {
     private maskCanvas: HTMLCanvasElement | null = null;
     private tintCanvas: HTMLCanvasElement | null = null;
     private maskFingerprint: string = '';
+    private tintFingerprint: string = '';
+    private cachedSectionsRef: ArrangementSignal['sections'] | null = null;
+    private cachedSectionsKey: string = '';
 
     constructor(options: RendererOptions = {}) {
         super({
@@ -97,7 +100,16 @@ export class ArrangementRenderer extends BaseSignalRenderer {
             drawRoundRect(ctx, x + padding, y + padding, availWidth, height - padding * 2, 2);
             ctx.fill();
         } else {
-            const currentFp = `${totalBars}_${Math.floor(availWidth)}_${Math.floor(height)}_${JSON.stringify(sections)}`;
+            if (this.cachedSectionsRef !== sections) {
+                this.cachedSectionsRef = sections;
+                let sKey = '';
+                for (let i = 0; i < sections.length; i++) {
+                    const sec = sections[i];
+                    sKey += `${sec.startBar},${sec.lengthBars},${sec.probability ?? 1},${sec.slotIndex ?? 0};`;
+                }
+                this.cachedSectionsKey = sKey;
+            }
+            const currentFp = `${totalBars}_${Math.floor(availWidth)}_${Math.floor(height)}_${this.cachedSectionsKey}`;
             const mask = getOrCreateOffscreenCanvas(this.maskCanvas, availWidth, height - padding * 2);
             const tint = getOrCreateOffscreenCanvas(this.tintCanvas, availWidth, height - padding * 2);
 
@@ -110,6 +122,7 @@ export class ArrangementRenderer extends BaseSignalRenderer {
                 if (mCtx && tCtx) {
                     if (this.maskFingerprint !== currentFp) {
                         this.maskFingerprint = currentFp;
+                        this.tintFingerprint = '';
                         mCtx.clearRect(0, 0, availWidth, height - padding * 2);
 
                         for (let i = 0; i < sections.length; i++) {
@@ -129,13 +142,17 @@ export class ArrangementRenderer extends BaseSignalRenderer {
                         }
                     }
 
-                    // Tint the cached mask with accent color
-                    tCtx.clearRect(0, 0, availWidth, height - padding * 2);
-                    tCtx.drawImage(mask, 0, 0);
-                    tCtx.globalCompositeOperation = 'source-in';
-                    tCtx.fillStyle = accent;
-                    tCtx.fillRect(0, 0, availWidth, height - padding * 2);
-                    tCtx.globalCompositeOperation = 'source-over';
+                    // Tint the cached mask with accent color only when mask or accent changes
+                    const nextTintFp = `${currentFp}_${accent}`;
+                    if (this.tintFingerprint !== nextTintFp) {
+                        this.tintFingerprint = nextTintFp;
+                        tCtx.clearRect(0, 0, availWidth, height - padding * 2);
+                        tCtx.drawImage(mask, 0, 0);
+                        tCtx.globalCompositeOperation = 'source-in';
+                        tCtx.fillStyle = accent;
+                        tCtx.fillRect(0, 0, availWidth, height - padding * 2);
+                        tCtx.globalCompositeOperation = 'source-over';
+                    }
 
                     ctx.drawImage(tint, x + padding, y + padding);
                 }

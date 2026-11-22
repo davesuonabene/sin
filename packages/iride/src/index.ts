@@ -1,6 +1,7 @@
 export * from './types.ts';
 export * from './utils/peakExtractor.ts';
 export * from './utils/drawingUtils.ts';
+export * from './utils/iconVisuals.ts';
 export * from './utils/fft.ts';
 export * from './telemetry/TransportClock.ts';
 export * from './renderers/BaseSignalRenderer.ts';

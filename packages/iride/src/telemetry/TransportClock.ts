@@ -14,6 +14,8 @@ export class TransportClock {
     private activeNodeIds = new Set<number | string>();
     private realtimeScopeData: Float32Array | null = null;
     private realtimeSpectrumData: Uint8Array | null = null;
+    private masterRms = 0;
+    private masterPeak = 0;
     private readonly listeners = new Set<TelemetryListener>();
 
     setBpm(bpm: number): void {
@@ -34,10 +36,19 @@ export class TransportClock {
         this.realtimeSpectrumData = data;
     }
 
+    setMasterLevels(rms: number, peak: number): void {
+        this.masterRms = Number.isFinite(rms) && rms > 0 ? rms : 0;
+        this.masterPeak = Number.isFinite(peak) && peak > 0 ? peak : 0;
+    }
+
     update(time: number, duration: number, isPlaying: boolean, activeNodeIds?: Set<number | string>): void {
         this.time = Math.max(0, time);
         this.duration = Math.max(0, duration);
         this.isPlaying = isPlaying;
+        if (!isPlaying) {
+            this.masterRms = 0;
+            this.masterPeak = 0;
+        }
         if (activeNodeIds) {
             this.activeNodeIds = activeNodeIds;
         }
@@ -69,7 +80,9 @@ export class TransportClock {
             isPlaying: this.isPlaying,
             activeNodeIds: this.activeNodeIds,
             realtimeScope: this.realtimeScopeData,
-            realtimeSpectrum: this.realtimeSpectrumData
+            realtimeSpectrum: this.realtimeSpectrumData,
+            masterRms: this.isPlaying ? this.masterRms : 0,
+            masterPeak: this.isPlaying ? this.masterPeak : 0
         };
     }
 

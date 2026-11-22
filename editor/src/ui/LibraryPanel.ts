@@ -12,6 +12,7 @@ import { drawNeonIcon, type NeonIcon } from '../nodes/NodeVisuals';
 import { clearLibraryCache, fetchLibrary as fetchCachedLibrary, submitLibraryMetadataProposal } from '../api';
 import { groupFileVersions, type GroupedFileVersion } from '../libraryVersioning';
 import { attachLibraryDragData, clearActiveLibraryDragData } from './dragPayload';
+import { enhanceSelect } from '../../../packages/ui/src/dropdown.js';
 
 type LibraryTypeVisual = {
     icon: NeonIcon;
@@ -215,16 +216,16 @@ export class LibraryPanel {
         [this.vaultChipsContainer, this.typeChipsContainer, this.tagChipsContainer]
             .forEach(rail => this.enableHorizontalDragScroll(rail));
 
-        let searchDebounceTimer: number | null = null;
+        let searchRafId: number | null = null;
         this.searchInput.addEventListener('input', () => {
-            if (searchDebounceTimer !== null) {
-                window.clearTimeout(searchDebounceTimer);
+            if (searchRafId !== null) {
+                window.cancelAnimationFrame(searchRafId);
             }
-            searchDebounceTimer = window.setTimeout(() => {
-                searchDebounceTimer = null;
+            searchRafId = window.requestAnimationFrame(() => {
+                searchRafId = null;
                 this.renderLimit = LibraryPanel.INITIAL_RENDER_LIMIT;
                 this.renderList();
-            }, 150);
+            });
         });
         window.addEventListener('library-metadata-changed', (event: Event) => {
             const { filepath, bpm } = (event as CustomEvent).detail || {};
@@ -597,16 +598,13 @@ export class LibraryPanel {
             select.appendChild(option);
         }
 
-        const chevron = document.createElement('span');
-        chevron.className = 'td-library-file-version-chevron';
-        chevron.setAttribute('aria-hidden', 'true');
-        chevron.textContent = '⌄';
-        control.append(select, chevron);
+        control.appendChild(select);
+        enhanceSelect(select, { size: 'sm' });
 
         // A version choice is a view interaction, not an asset preview or a
         // library mutation. Re-rendering swaps only the exposed GAIA record.
-        select.addEventListener('mousedown', event => event.stopPropagation());
-        select.addEventListener('click', event => event.stopPropagation());
+        control.addEventListener('pointerdown', event => event.stopPropagation());
+        control.addEventListener('click', event => event.stopPropagation());
         select.addEventListener('change', event => {
             event.stopPropagation();
             this.fileVersionSelections.set(versionedItem.fileVersionGroup!, select.value);
@@ -729,29 +727,42 @@ export class LibraryPanel {
         subfolderContents.className = 'td-library-subfolder-contents';
         subfolderContents.style.display = isExpanded ? 'block' : 'none';
 
+        const populateSubfolder = () => {
+            if (subfolderContents.dataset.populated === '1') return;
+            subfolderContents.dataset.populated = '1';
+            const childFolders = Array.from(folder.folders.values()).sort((a, b) =>
+                a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+            );
+            const frag = document.createDocumentFragment();
+            for (const childFolder of childFolders) {
+                this.renderSubfolder(childFolder, frag as unknown as HTMLElement, isSearchActive, parentOrganizerItem, depth + 1);
+            }
+            for (const file of folder.files) {
+                frag.appendChild(this.createOrganizerFileRow(file, parentOrganizerItem));
+            }
+            subfolderContents.appendChild(frag);
+        };
+
+        if (isExpanded) {
+            populateSubfolder();
+        }
+
         subfolderRow.onclick = (e) => {
             e.stopPropagation();
             const willExpand = subfolderContents.style.display === 'none';
-            subfolderContents.style.display = willExpand ? 'block' : 'none';
-            toggleSpan.textContent = willExpand ? '▾' : '▸';
             if (willExpand) {
+                populateSubfolder();
+                subfolderContents.style.display = 'block';
+                toggleSpan.textContent = '▾';
                 this.expandedSubfolderKeys.add(folder.fullPath);
             } else {
+                subfolderContents.style.display = 'none';
+                subfolderContents.replaceChildren();
+                delete subfolderContents.dataset.populated;
+                toggleSpan.textContent = '▸';
                 this.expandedSubfolderKeys.delete(folder.fullPath);
             }
         };
-
-        const childFolders = Array.from(folder.folders.values()).sort((a, b) =>
-            a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-        );
-        for (const childFolder of childFolders) {
-            this.renderSubfolder(childFolder, subfolderContents, isSearchActive, parentOrganizerItem, depth + 1);
-        }
-
-        for (const file of folder.files) {
-            const fileRow = this.createOrganizerFileRow(file, parentOrganizerItem);
-            subfolderContents.appendChild(fileRow);
-        }
 
         subfolderWrapper.append(subfolderRow, subfolderContents);
         container.appendChild(subfolderWrapper);
@@ -1088,15 +1099,20 @@ export class LibraryPanel {
                 }
                 if (target.classList.contains('td-library-folder-toggle') || isAssetOrganizer(item)) {
                     e.stopPropagation();
-                    const packContainer = itemWrapper.querySelector('.pack-content-container') as HTMLElement;
+                    const packContainer = itemWrapper.querySelector('.pack-content-container') as (HTMLElement & { __populate?: () => void }) | null;
                     if (packContainer) {
-                        const isHidden = packContainer.style.display === 'none';
-                        packContainer.style.display = isHidden ? 'block' : 'none';
+                        const willExpand = packContainer.style.display === 'none';
                         const toggleBtn = itemWrapper.querySelector('.td-library-folder-toggle') as HTMLElement | null;
-                        if (toggleBtn) toggleBtn.innerText = isHidden ? '▾' : '▸';
-                        if (isHidden) {
+                        if (willExpand) {
+                            packContainer.__populate?.();
+                            packContainer.style.display = 'block';
+                            if (toggleBtn) toggleBtn.innerText = '▾';
                             this.expandedOrganizerKeys.add(itemKey);
                         } else {
+                            packContainer.style.display = 'none';
+                            packContainer.replaceChildren();
+                            delete packContainer.dataset.populated;
+                            if (toggleBtn) toggleBtn.innerText = '▸';
                             this.expandedOrganizerKeys.delete(itemKey);
                         }
                     }
@@ -1188,22 +1204,29 @@ export class LibraryPanel {
             }
 
             if (isAssetOrganizer(item) && versionedOrganizerContents.length > 0) {
-                const packContainer = document.createElement('div');
+                const packContainer = document.createElement('div') as HTMLDivElement & { __populate?: () => void };
                 packContainer.className = 'pack-content-container multitrack-stem-container';
                 packContainer.style.display = isOrganizerExpanded ? 'block' : 'none';
 
-                const { rootFiles, subfolders } = this.buildContainerTree(
-                    itemKey,
-                    versionedOrganizerContents,
-                );
+                packContainer.__populate = () => {
+                    if (packContainer.dataset.populated === '1') return;
+                    packContainer.dataset.populated = '1';
+                    const { rootFiles, subfolders } = this.buildContainerTree(
+                        itemKey,
+                        versionedOrganizerContents,
+                    );
+                    const frag = document.createDocumentFragment();
+                    for (const subfolder of subfolders) {
+                        this.renderSubfolder(subfolder, frag as unknown as HTMLElement, isSearchActive, item);
+                    }
+                    for (const versionedContent of rootFiles) {
+                        frag.appendChild(this.createOrganizerFileRow(versionedContent, item));
+                    }
+                    packContainer.appendChild(frag);
+                };
 
-                for (const subfolder of subfolders) {
-                    this.renderSubfolder(subfolder, packContainer, isSearchActive, item);
-                }
-
-                for (const versionedContent of rootFiles) {
-                    const contentRow = this.createOrganizerFileRow(versionedContent, item);
-                    packContainer.appendChild(contentRow);
+                if (isOrganizerExpanded) {
+                    packContainer.__populate();
                 }
 
                 itemWrapper.appendChild(packContainer);

@@ -5,6 +5,9 @@ import { groupFileVersions } from '../libraryVersioning.ts';
 import { RadioGroup } from './components/RadioGroup.ts';
 import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from './ParameterWheelMenu.ts';
 import { isFieldOperatorExpression } from '../../../ermes/ts/slotLanguage.ts';
+import { renderIcon } from '../../../packages/ui/src/icons.js';
+import { enhanceSelect } from '../../../packages/ui/src/dropdown.js';
+import { enhanceRangeSlider } from '../../../packages/ui/src/slider.js';
 
 function formatDb(db: number): string {
     if (db <= -35.9) return "-inf dB";
@@ -94,6 +97,9 @@ export class WidgetFactory {
 
         const widget = this.createWidget(field, node, onChange);
         controlEl.appendChild(widget);
+        if (field.type === 'select' && widget instanceof HTMLSelectElement) {
+            enhanceSelect(widget);
+        }
 
         if (field.nestedFields?.length) {
             const nestedFields = field.nestedFields
@@ -264,6 +270,7 @@ export class WidgetFactory {
 
         wrapper.appendChild(select);
         wrapper.appendChild(poolBtn);
+        enhanceSelect(select);
         return wrapper;
     }
 
@@ -273,15 +280,11 @@ export class WidgetFactory {
         onChange: (key: string, val: any, previousValue: any) => void
     ): HTMLElement {
         const wrapper = document.createElement('div');
-        wrapper.style.display = 'flex';
-        wrapper.style.gap = '6px';
-        wrapper.style.alignItems = 'center';
-        wrapper.style.width = '100%';
+        wrapper.className = 'td-slider-widget';
 
         const range = document.createElement('input');
         range.type = 'range';
         range.className = 'td-param-input';
-        range.style.flex = '1';
         const currentVal = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
         range.value = String(currentVal);
         if (field.min !== undefined) range.min = String(field.min);
@@ -290,17 +293,25 @@ export class WidgetFactory {
 
         const valDisplay = document.createElement('span');
         valDisplay.className = 'td-slider-val';
-        valDisplay.style.fontSize = '10px';
-        valDisplay.style.fontWeight = '600';
-        valDisplay.style.minWidth = '36px';
-        valDisplay.style.textAlign = 'right';
-        valDisplay.style.cursor = 'text';
         valDisplay.title = 'Click to type value or Field Operator (rand, min..max, list)';
+
+        wrapper.appendChild(range);
+        wrapper.appendChild(valDisplay);
+
+        const isBipolar = field.min !== undefined && field.max !== undefined && field.min < 0 && field.max > 0;
+        const sliderController = enhanceRangeSlider(range, {
+            defaultValue: typeof field.default === 'number' ? field.default : undefined,
+            bipolar: isBipolar,
+            compact: true,
+            showValue: false
+        });
+        (range as any).__sinSliderController = sliderController;
 
         const syncSliderDisplay = () => {
             const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
             const latest = Number(this.getFieldValue(node, field) ?? field.default ?? 0);
             range.value = String(latest);
+            sliderController?.sync();
             valDisplay.textContent = isMixed ? '' : `${latest}${field.unit || ''}`;
             valDisplay.classList.toggle('is-pool-computed', !isMixed && this.isFieldCalculated(node, field.key));
         };
@@ -316,6 +327,7 @@ export class WidgetFactory {
             }
             if (!this.mayEditField(node, field, newVal)) {
                 range.value = String(previousValue ?? field.default ?? 0);
+                sliderController?.sync();
                 return;
             }
             const updated = this.setFieldValue(node, field, newVal);
@@ -378,13 +390,14 @@ export class WidgetFactory {
         range.addEventListener('input', () => {
             update(parseFloat(range.value));
         });
-        registerParameterWheelControl(range, {
+        const wheelTarget = sliderController?.element || range;
+        registerParameterWheelControl(wheelTarget, {
             isInteger: field.type === 'int',
             getValue: () => Number(this.getFieldValue(node, field) ?? field.default ?? 0),
             setValue: (nextVal) => update(nextVal),
             formatValue: (val) => `${val}${field.unit || ''}`,
         });
-        range.addEventListener('wheel', event => {
+        wheelTarget.addEventListener('wheel', event => {
             event.preventDefault();
             if (event.altKey || range.disabled) return;
             const direction = event.deltaY < 0 ? 1 : -1;
@@ -393,8 +406,6 @@ export class WidgetFactory {
             update(roundStepValue(currentValue + direction * step, step));
         }, { passive: false });
 
-        wrapper.appendChild(range);
-        wrapper.appendChild(valDisplay);
         return wrapper;
     }
 
@@ -792,8 +803,8 @@ export class WidgetFactory {
 
         const scope = document.createElement('button');
         scope.type = 'button';
-        scope.className = 'td-global-toggle';
-        scope.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.2 2.35 3.3 5.18 3.3 8.5S14.2 18.15 12 20.5c-2.2-2.35-3.3-5.18-3.3-8.5S9.8 5.85 12 3.5z"></path></svg>';
+        scope.className = 'td-global-toggle ui-btn ui-btn--icon ui-btn--bordered';
+        scope.innerHTML = renderIcon('globe');
         scope.title = `Use global ${field.label.toLowerCase()}`;
         scope.setAttribute('aria-label', `Use global ${field.label.toLowerCase()}`);
         scope.setAttribute('aria-pressed', 'false');
@@ -1059,7 +1070,7 @@ export class WidgetFactory {
     ): HTMLInputElement {
         const input = document.createElement('input');
         input.type = 'checkbox';
-        input.className = 'td-param-checkbox';
+        input.className = 'td-param-checkbox ui-checkbox';
         input.checked = Boolean(this.getFieldValue(node, field));
 
         input.addEventListener('change', () => {
@@ -1082,16 +1093,27 @@ export class WidgetFactory {
 
         const currentDb = Number(this.getFieldValue(node, field) ?? 0.0);
 
+        const fillBar = document.createElement('span');
+        fillBar.className = 'td-float-fill';
+        fillBar.setAttribute('aria-hidden', 'true');
+
         const labelText = document.createElement('span');
         labelText.className = 'float-val-text';
         labelText.innerText = formatDb(currentDb);
-        container.appendChild(labelText);
+        container.append(fillBar, labelText);
 
         let activeDb = currentDb;
 
         const updateUI = (db: number) => {
             activeDb = Math.max(-36.0, Math.min(12.0, db));
             labelText.innerText = formatDb(activeDb);
+            const valPct = ((activeDb + 36.0) / 48.0) * 100;
+            const zeroPct = 75.0;
+            const leftPct = Math.min(zeroPct, valPct);
+            const widthPct = Math.abs(valPct - zeroPct);
+            fillBar.style.left = `${leftPct}%`;
+            fillBar.style.width = `${widthPct}%`;
+            fillBar.dataset.polarity = activeDb >= 0 ? 'pos' : 'neg';
             const isCalc = this.isFieldCalculated(node, field.key);
             container.classList.toggle('is-pool-computed', isCalc);
             labelText.classList.toggle('is-pool-computed', isCalc);
@@ -1143,7 +1165,7 @@ export class WidgetFactory {
                     }
                 }
                 container.innerHTML = '';
-                container.appendChild(labelText);
+                container.append(fillBar, labelText);
                 updateUI(activeDb);
             };
 
@@ -1154,7 +1176,7 @@ export class WidgetFactory {
                 } else if (evt.key === 'Escape') {
                     committed = true;
                     container.innerHTML = '';
-                    container.appendChild(labelText);
+                    container.append(fillBar, labelText);
                     updateUI(activeDb);
                 }
             });
@@ -1285,13 +1307,8 @@ export class WidgetFactory {
 
         const refreshToggle = document.createElement('button');
         refreshToggle.type = 'button';
-        refreshToggle.className = 'td-seed-refresh-toggle td-param-action-btn';
-        refreshToggle.style.padding = '2px 7px';
-        refreshToggle.style.height = '26px';
-        refreshToggle.style.fontSize = '12px';
-        refreshToggle.style.fontWeight = '700';
-        refreshToggle.style.lineHeight = '1';
-        refreshToggle.textContent = '↻';
+        refreshToggle.className = 'td-seed-refresh-toggle ui-btn ui-btn--icon ui-btn--bordered';
+        refreshToggle.innerHTML = renderIcon('refresh');
 
         const syncToggleUI = () => {
             const armed = isArmed();
@@ -1301,9 +1318,6 @@ export class WidgetFactory {
             refreshToggle.title = armed
                 ? 'Armed for Refresh: global Refresh will roll this seed (click to lock)'
                 : 'Locked from Refresh: global Refresh will keep this seed (click to arm)';
-            refreshToggle.style.borderColor = armed ? '#0284c7' : '#cbd5e1';
-            refreshToggle.style.background = armed ? '#e0f2fe' : '#f8fafc';
-            refreshToggle.style.color = armed ? '#0369a1' : '#94a3b8';
         };
         syncToggleUI();
 

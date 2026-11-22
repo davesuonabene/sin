@@ -4,6 +4,7 @@ import { ArrangementVisualizer } from './ArrangementVisualizer';
 import { getGhostSource, isGhostFieldLinked, isGhostNode, relinkGhostField, syncGhostTrackData, unlinkGhostField } from '../ghosts';
 import { SectionRendererFactory } from './SectionRendererFactory';
 import { RandomParamOverlay } from './RandomParamOverlay';
+import { renderIcon } from '../../../packages/ui/src/icons.js';
 
 export class PropertiesWindow {
     container: HTMLElement;
@@ -46,12 +47,6 @@ export class PropertiesWindow {
                 if (!(this.node as any).isModifier) {
                     RandomParamOverlay.getOrCreateRandomModifier(this.node as any);
                 }
-                const randomDiceBtn = this.container.querySelector('#td-random-dice-btn');
-                if (randomDiceBtn) {
-                    randomDiceBtn.classList.add('active');
-                    randomDiceBtn.classList.add('is-active');
-                    randomDiceBtn.setAttribute('title', 'Random Mapping Active (Click to open drag ranges)');
-                }
                 void this.render();
             }
         };
@@ -66,6 +61,7 @@ export class PropertiesWindow {
             onClose();
         };
         this.activeTab = this.getDefaultTab();
+        (this.node as any).onParametersOpened?.();
     }
 
     dispose() {
@@ -328,13 +324,8 @@ export class PropertiesWindow {
             return p?.group?.api?.location?.type === 'floating';
         };
         const dockTitle = isFloating() ? 'Dock to Right Side' : 'Float Window';
-        const dockIcon = isFloating() ? '📌' : '↗';
-        const isRenderEnabled = this.node.properties?.render_enabled !== false;
-        const isFreezeProtected = this.node.properties?.freeze_refresh !== false;
-        const isViewerCookEnabled = this.node.properties?.visualization_enabled !== false;
-        const hasRandomMod = typeof (this.node as any).hasAttachedRandomMod === 'function'
-            ? (this.node as any).hasAttachedRandomMod()
-            : Boolean(RandomParamOverlay.getAttachedRandomModifier(this.node as any));
+        const dockIcon = renderIcon(isFloating() ? 'dock' : 'float');
+        const closeIcon = renderIcon('close');
 
         this.container.innerHTML = `
             <div class="td-param-container">
@@ -344,20 +335,9 @@ export class PropertiesWindow {
                         <span class="node-badge">${this.getNodeBadge()}</span>
                         <span class="node-title" id="td-title-display"></span>
                     </div>
-                    <div style="display: flex; align-items: center; gap: 4px;">
-                        ${!(this.node as any).isModifier ? `
-                            <button type="button" class="close-btn" id="td-viewer-cook-btn" title="Viewer Cook: ${isViewerCookEnabled ? 'ON (Click to shut Iride)' : 'OFF (Click to enable Iride)'}" style="opacity: ${isViewerCookEnabled ? '1' : '0.45'}; color: ${isViewerCookEnabled ? '#38bdf8' : 'inherit'};">👁</button>
-                            <button type="button" class="close-btn" id="td-render-toggle-btn" title="Include in Global Render: ${isRenderEnabled ? 'ON' : 'OFF'}" style="opacity: ${isRenderEnabled ? '1' : '0.45'}; color: ${isRenderEnabled ? '#10b981' : 'inherit'}; font-weight: 700;">R</button>
-                            <button type="button" class="close-btn" id="td-freeze-toggle-btn" title="Freeze Protection: ${isFreezeProtected ? 'ON' : 'OFF'}" style="opacity: ${isFreezeProtected ? '1' : '0.45'}; color: ${isFreezeProtected ? '#38bdf8' : 'inherit'};">❄</button>
-                            <button type="button" class="close-btn td-random-dice-btn ${hasRandomMod ? 'is-attached' : ''} ${this.isRandomMappingMode ? 'active is-active' : ''}" id="td-random-dice-btn" title="${hasRandomMod ? 'Random Modifier (drag ranges)' : 'Add Random Modifier'}" style="opacity: ${hasRandomMod ? '1' : '0.45'}; color: ${hasRandomMod ? '#a855f7' : 'inherit'};">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display: block;"><rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect><circle cx="8" cy="8" r="1.5" fill="currentColor"></circle><circle cx="16" cy="8" r="1.5" fill="currentColor"></circle><circle cx="12" cy="12" r="1.5" fill="currentColor"></circle><circle cx="8" cy="16" r="1.5" fill="currentColor"></circle><circle cx="16" cy="16" r="1.5" fill="currentColor"></circle></svg>
-                            </button>
-                        ` : `
-                            <button type="button" class="td-param-btn" id="td-parent-node-btn" title="Return to Parent Node" style="padding: 2px 7px; font-size: 10px;">← Node</button>
-                            <button type="button" class="close-btn" id="td-delete-mod-btn" title="Remove this Modifier" style="color: #ef4444;">🗑</button>
-                        `}
-                        <button class="close-btn" id="td-dock-btn" title="${dockTitle}">${dockIcon}</button>
-                        <button class="close-btn" id="td-close-btn" title="Close Panel">✕</button>
+                    <div class="td-param-header-actions">
+                        <button type="button" class="ui-btn ui-btn--icon close-btn" id="td-dock-btn" title="${dockTitle}" aria-label="${dockTitle}">${dockIcon}</button>
+                        <button type="button" class="ui-btn ui-btn--icon close-btn" id="td-close-btn" title="Close Panel" aria-label="Close Panel">${closeIcon}</button>
                     </div>
                 </div>
 
@@ -387,45 +367,6 @@ export class PropertiesWindow {
 
         const titleDisplay = this.container.querySelector('#td-title-display') as HTMLSpanElement;
         this.setupInlineTitleEditor(titleDisplay, titleText);
-
-        this.container.querySelector('#td-viewer-cook-btn')?.addEventListener('click', () => {
-            if (typeof (this.node as any).toggleVisualization === 'function') {
-                (this.node as any).toggleVisualization();
-                void this.render();
-            }
-        });
-        this.container.querySelector('#td-render-toggle-btn')?.addEventListener('click', () => {
-            const current = this.node.properties?.render_enabled !== false;
-            (this.node as any).updateProperty?.('render_enabled', !current);
-            void this.render();
-        });
-        this.container.querySelector('#td-freeze-toggle-btn')?.addEventListener('click', () => {
-            const current = this.node.properties?.freeze_refresh !== false;
-            (this.node as any).updateProperty?.('freeze_refresh', !current);
-            void this.render();
-        });
-
-        const randomDiceBtn = this.container.querySelector('#td-random-dice-btn');
-        randomDiceBtn?.addEventListener('click', () => {
-            this.isRandomMappingMode = false;
-            window.dispatchEvent(new CustomEvent('add-random-node', { detail: { parentId: this.node.id } }));
-        });
-
-        this.container.querySelector('#td-parent-node-btn')?.addEventListener('click', () => {
-            const parentId = this.node.properties?.parentId;
-            if (parentId != null) {
-                window.dispatchEvent(new CustomEvent('open-node-properties', { detail: { nodeId: parentId } }));
-            }
-        });
-        this.container.querySelector('#td-delete-mod-btn')?.addEventListener('click', () => {
-            const parentId = this.node.properties?.parentId;
-            window.dispatchEvent(new CustomEvent('delete-node', { detail: { nodeId: this.node.id } }));
-            if (parentId != null) {
-                window.dispatchEvent(new CustomEvent('open-node-properties', { detail: { nodeId: parentId } }));
-            } else {
-                this.onClose();
-            }
-        });
 
         this.container.querySelector('#td-dock-btn')?.addEventListener('click', () => {
             window.dispatchEvent(new CustomEvent('toggle-properties-dock', { detail: { nodeId: this.node.id } }));
@@ -494,13 +435,6 @@ export class PropertiesWindow {
 
         const contentContainer = this.container.querySelector('#td-tab-content') as HTMLElement;
         if (!contentContainer) return;
-
-        // Update random dice button state in header if present
-        const randomDiceBtn = this.container.querySelector('#td-random-dice-btn');
-        if (randomDiceBtn) {
-            randomDiceBtn.classList.toggle('active', this.isRandomMappingMode);
-            randomDiceBtn.classList.toggle('is-active', this.isRandomMappingMode);
-        }
 
         const finish = () => {
             if (token === this.renderToken) {

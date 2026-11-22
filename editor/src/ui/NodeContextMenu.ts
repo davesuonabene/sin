@@ -1,4 +1,5 @@
 import { APPEARANCE_COLOR_PRESETS } from '../config/appearance.ts';
+import { enhanceSelect } from '../../../packages/ui/src/dropdown.js';
 
 export interface NodeContextMenuItem {
     id: string;
@@ -212,6 +213,7 @@ export class NodeContextMenu {
 
                 vizContainer.appendChild(vizSelect);
                 this.menuElement.appendChild(vizContainer);
+                enhanceSelect(vizSelect, { size: 'sm' });
             }
         }
 

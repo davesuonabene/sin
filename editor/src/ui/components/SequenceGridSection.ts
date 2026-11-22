@@ -6,6 +6,7 @@ import { getDroppedSequenceItems, hasSequenceDragPayload } from '../dragPayload.
 import { isFieldOperatorExpression } from '../../../../ermes/ts/slotLanguage.ts';
 import { resolvePoolItemByQuery } from '../../../../ermes/ts/assetResolver.ts';
 import { SlotStrip } from './SlotStrip.ts';
+import { renderIcon } from '../../../../packages/ui/src/icons.js';
 
 type StepParameters = Record<string, number | boolean> & {
     subdivision_enabled: boolean;
@@ -255,7 +256,7 @@ export class SequenceGridSection {
         const saveButton = document.createElement('button');
         saveButton.type = 'button';
         saveButton.className = 'waveform-asset-button td-seq-header-button td-seq-save-button';
-        saveButton.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>';
+        saveButton.innerHTML = renderIcon('save');
         saveButton.title = 'Save sequence to the default GAIA vault';
         saveButton.setAttribute('aria-label', saveButton.title);
 

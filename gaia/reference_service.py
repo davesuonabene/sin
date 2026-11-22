@@ -381,9 +381,30 @@ def project_table(db: Session, project_id: int) -> list[dict]:
     if new_refs_created:
         db.commit()
 
+    # Bulk-load all referenced items in one polymorphic query instead of 2x N+1 crud.get_item() loops.
+    from sqlalchemy.orm import selectin_polymorphic, selectinload
+
+    target_ids = list({ref.to_item_id for ref in expanded_refs})
+    loaded_items = (
+        db.query(models.Item)
+        .options(
+            selectin_polymorphic(models.Item, crud.ITEM_POLYMORPHIC_TYPES),
+            selectinload(models.Item.tags),
+        )
+        .filter(models.Item.id.in_(target_ids))
+        .all()
+        if target_ids
+        else []
+    )
+    leaves_map = crud._bulk_load_subtrees(db, loaded_items)
+    items_by_id = {
+        item.id: crud._populate_item_fields(item, preloaded_leaves=leaves_map.get(item.id))
+        for item in loaded_items
+    }
+
     groups: dict[str, list[tuple[models.ItemReference, models.Item, dict]]] = {}
     for reference in expanded_refs:
-        item = _item(db, reference.to_item_id)
+        item = items_by_id.get(reference.to_item_id) or _item(db, reference.to_item_id)
         info = file_version_info(item.absolute_path)
         groups.setdefault(str(info["group"]), []).append((reference, item, info))
 
@@ -410,7 +431,7 @@ def project_table(db: Session, project_id: int) -> list[dict]:
                 label = "Original"
             is_ext = _is_path_external(item.absolute_path, project_root)
             versions.append({
-                "item": crud.get_item(db, item.id),
+                "item": item,
                 "reference": _reference_payload(reference),
                 "label": str(label),
                 "is_external": is_ext,
@@ -418,7 +439,7 @@ def project_table(db: Session, project_id: int) -> list[dict]:
         sel_item = selected[1]
         sel_is_ext = _is_path_external(sel_item.absolute_path, project_root)
         rows.append({
-            "item": crud.get_item(db, sel_item.id),
+            "item": sel_item,
             "reference": _reference_payload(selected[0]),
             "version_group": group,
             "is_external": sel_is_ext,
@@ -613,7 +634,7 @@ def resolve_item_preview(
             candidate = _item(db, resolved_id)
             if isinstance(candidate, models.ProjectItem):
                 return resolve_item_preview(db, candidate.id, visited)
-            return candidate if candidate.type in {"audio", "track", "sample"} else None
+            return candidate if candidate.type in {"audio", "track", "sample", "video"} else None
 
         # A newly-created project may not have an explicit master yet. Keep
         # the row useful by previewing its first referenced playable source.
@@ -630,7 +651,7 @@ def resolve_item_preview(
         if profile_preview:
             return profile_preview
         for child in sorted(item.children, key=lambda value: value.absolute_path.casefold()):
-            if child.type in {"audio", "track", "sample"}:
+            if child.type in {"audio", "track", "sample", "video"}:
                 return child
             if isinstance(child, models.FolderItem):
                 nested = resolve_item_preview(db, child.id, visited)
@@ -638,7 +659,7 @@ def resolve_item_preview(
                     return nested
         return None
 
-    return item if item.type in {"audio", "track", "sample"} else None
+    return item if item.type in {"audio", "track", "sample", "video"} else None
 
 
 def graph_for_item(db: Session, item_id: int, project_id: int | None = None) -> dict:

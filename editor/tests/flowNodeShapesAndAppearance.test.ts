@@ -8,10 +8,15 @@ import { ArrangementNode } from '../src/nodes/ArrangementNode.ts';
 import { DisabledNode } from '../src/nodes/DisabledNode.ts';
 import { ModulatorNode } from '../src/nodes/ModulatorNode.ts';
 import {
-    traceNodeShape,
-    getNodeShapePerimeter,
-    drawPerimeterProgressAccent
+    traceNodeShape
 } from '../src/nodes/NodeVisuals.ts';
+import {
+    CLIP_FILL_COLOR,
+    drawRadialLoopProgress,
+    getQuantizedRmsColor,
+    getQuantizedRmsHeaderStyle,
+    rmsToMeterLevel
+} from '../../packages/iride/src/index.ts';
 import { SectionRendererFactory } from '../src/ui/SectionRendererFactory.ts';
 
 // Minimal DOM stub for headless test environment
@@ -98,7 +103,6 @@ test('Unified Icon Dimensions: all node types have identical 44x44 icon dimensio
         assert.equal(node.getBodySize(), 44, `${node.constructor.name} must have getBodySize() === 44`);
         node.properties.visualization_enabled = false;
         assert.deepEqual(Array.from(node.computeSize()), [44, 44], `${node.constructor.name} icon computeSize() must be [44, 44]`);
-        assert.ok(getNodeShapePerimeter(node.nodeShape, 44) > 0, `${node.constructor.name} must have positive shape perimeter`);
     }
 });
 
@@ -191,4 +195,63 @@ test('SectionRendererFactory: Appearance section drops icon and shape editabilit
     assert.equal(sample.nodeColor, '#10b981', 'Selecting color updates node.nodeColor');
     assert.equal(sample.properties.user_color, true, 'User color flag is armed');
 });
+
+test('IRIDE iconVisuals: quantized RMS color modulation, clip warning color, and radial loop drawing', () => {
+    assert.equal(rmsToMeterLevel(0), 0);
+    assert.equal(rmsToMeterLevel(1e-5), 0);
+    assert.ok(rmsToMeterLevel(0.25) > 0.6 && rmsToMeterLevel(0.25) < 0.85);
+    assert.equal(rmsToMeterLevel(1.0), 1);
+
+    // Silence preserves exact baseColor; active RMS brightens within the node's own hue; clip turns vivid red
+    const baseDark = '#0f172a';
+    assert.equal(getQuantizedRmsColor(baseDark, 0, false), baseDark);
+    const midDark = getQuantizedRmsColor(baseDark, 0.5, false);
+    const hotDark = getQuantizedRmsColor(baseDark, 1.0, false);
+    assert.notEqual(midDark, baseDark);
+    assert.notEqual(hotDark, midDark);
+    assert.equal(getQuantizedRmsColor(baseDark, 0.8, true), CLIP_FILL_COLOR);
+
+    const baseEmerald = '#10b981';
+    assert.equal(getQuantizedRmsColor(baseEmerald, 0, false), baseEmerald);
+    assert.notEqual(getQuantizedRmsColor(baseEmerald, 0.9, false), baseEmerald);
+
+    const idleHeader = getQuantizedRmsHeaderStyle(baseDark, 0, false);
+    assert.equal(idleHeader.bg, '');
+    assert.equal(idleHeader.fg, '#0f172a');
+
+    const activeHeader = getQuantizedRmsHeaderStyle(baseDark, 0.6, false);
+    assert.ok(activeHeader.bg.startsWith('rgba('));
+    assert.equal(activeHeader.fg, '#0f172a');
+    assert.ok(activeHeader.border.length > 0);
+
+    const clipHeader = getQuantizedRmsHeaderStyle(baseDark, 0.6, true);
+    assert.equal(clipHeader.bg, CLIP_FILL_COLOR);
+    assert.equal(clipHeader.fg, '#ffffff');
+    assert.equal(clipHeader.border, CLIP_FILL_COLOR);
+
+    const arcs: Array<{ cx: number; cy: number; r: number; sa: number; ea: number }> = [];
+    const lines: Array<{ x: number; y: number }> = [];
+    const mockCtx = {
+        save: () => {},
+        restore: () => {},
+        beginPath: () => {},
+        closePath: () => {},
+        moveTo: (x: number, y: number) => lines.push({ x, y }),
+        lineTo: (x: number, y: number) => lines.push({ x, y }),
+        arc: (cx: number, cy: number, r: number, sa: number, ea: number) => arcs.push({ cx, cy, r, sa, ea }),
+        fill: () => {},
+        stroke: () => {},
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1,
+        globalAlpha: 1
+    } as unknown as CanvasRenderingContext2D;
+
+    drawRadialLoopProgress(mockCtx, 22, 22, 14, 0.5, { dividerFractions: [0.5] });
+    assert.equal(arcs.length, 2); // Track circle + 50% wedge arc
+    assert.equal(arcs[0].r, 14);
+    assert.ok(Math.abs(arcs[1].ea - Math.PI * 0.5) < 1e-6);
+    assert.ok(lines.length >= 3, 'Should draw wedge center vertex plus section divider line');
+});
+
 

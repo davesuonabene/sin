@@ -121,10 +121,6 @@ class AudioObject(BaseObject):
             return buffer.astype(np.float32, copy=False)
         return (buffer * self.volume).astype(np.float32, copy=False)
 
-        # Calculate original_bpm if not explicitly provided
-        if self._original_bpm is None:
-            self.detect_and_set_bpm()
-
     @property
     def original_bpm(self) -> Optional[float]:
         return self._original_bpm

@@ -1,79 +1,111 @@
 import { type BaseNode, getDefaultFxChain } from '../../nodes/BaseNode.ts';
+import {
+    type DspProcessorDef,
+    type ProcessorParamDef,
+    dbToLinear,
+    formatDb,
+    getProcessorDef,
+    isRegisteredProcessor,
+    linearToDb,
+} from '../../dsp/processorRegistry.ts';
 import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from '../ParameterWheelMenu.ts';
 
-function linearToDb(gain: number): number {
-    if (gain <= 0.0001) return -36;
-    return Math.max(-36, Math.min(12, 20 * Math.log10(gain)));
+function readParamValue(module: any, param: ProcessorParamDef): number {
+    const p = module.params || {};
+    if (param.kind === 'db') {
+        if (p[param.key] !== undefined) return Number(p[param.key]);
+        if (p.gain !== undefined) return linearToDb(Number(p.gain));
+        return param.defaultValue;
+    }
+    return p[param.key] !== undefined ? Number(p[param.key]) : param.defaultValue;
 }
 
-function dbToLinear(db: number): number {
-    return db <= -35.9 ? 0 : Math.pow(10, db / 20);
+function formatParamValue(param: ProcessorParamDef, val: number): string {
+    if (param.kind === 'db') return formatDb(val);
+    const unit = param.unit ? ` ${param.unit}` : '';
+    return `${val.toFixed(1)}${unit}`;
 }
 
-function formatDb(db: number): string {
-    if (db <= -35.9) return '-inf dB';
-    if (Math.abs(db) < 0.05) return '0.0 dB';
-    return `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`;
-}
-
-function makeGainControl(
+function makeProcessorParamControl(
     module: any,
     label: string,
+    param: ProcessorParamDef,
     node: BaseNode,
     chain: any[]
 ): HTMLElement {
     const box = document.createElement('div');
     box.className = 'td-interactive-float-box';
     box.title = `${label} (drag to adjust, double-click to type)`;
-    box.innerHTML = `<span class="float-label">${label}</span><span class="float-val-text"></span>`;
+    box.innerHTML = `<span class="td-float-fill" aria-hidden="true"></span><span class="float-label">${label}</span><span class="float-val-text"></span>`;
 
-    let currentDb = module.params?.gain_db !== undefined
-        ? Number(module.params.gain_db)
-        : linearToDb(Number(module.params?.gain ?? 1));
     module.params = module.params || {};
-    if (module.params.gain_db === undefined) {
-        module.params.gain_db = currentDb;
-        module.params.gain = dbToLinear(currentDb);
+    let currentVal = readParamValue(module, param);
+    if (param.kind === 'db' && module.params[param.key] === undefined) {
+        module.params[param.key] = currentVal;
+        module.params.gain = dbToLinear(currentVal);
     }
+
     const renderValue = () => {
         const valueEl = box.querySelector('.float-val-text') as HTMLElement | null;
-        if (valueEl) valueEl.textContent = formatDb(currentDb);
+        if (valueEl) valueEl.textContent = formatParamValue(param, currentVal);
+        const fillEl = box.querySelector('.td-float-fill') as HTMLElement | null;
+        if (fillEl) {
+            const span = (param.max - param.min) || 1;
+            const valPct = Math.max(0, Math.min(100, ((currentVal - param.min) / span) * 100));
+            if (param.min < 0 && param.max > 0) {
+                const zeroPct = Math.max(0, Math.min(100, ((0 - param.min) / span) * 100));
+                const leftPct = Math.min(zeroPct, valPct);
+                const widthPct = Math.abs(valPct - zeroPct);
+                fillEl.style.left = `${leftPct}%`;
+                fillEl.style.width = `${widthPct}%`;
+                fillEl.dataset.polarity = currentVal >= 0 ? 'pos' : 'neg';
+            } else {
+                fillEl.style.left = '0%';
+                fillEl.style.width = `${valPct}%`;
+                delete fillEl.dataset.polarity;
+            }
+        }
     };
-    const commit = (db: number) => {
-        const rounded = Math.max(-36, Math.min(12, Math.round(db * 10) / 10));
-        if (rounded === currentDb && module.params?.gain_db !== undefined) return;
-        currentDb = rounded;
+
+    const commit = (nextRaw: number) => {
+        const clamped = Math.max(param.min, Math.min(param.max, Math.round(nextRaw * 10) / 10));
+        if (clamped === currentVal && module.params?.[param.key] !== undefined) return;
+        currentVal = clamped;
         renderValue();
+        const extra = param.kind === 'db' ? { gain: dbToLinear(currentVal) } : {};
         module.params = {
             ...(module.params || {}),
-            gain: dbToLinear(currentDb),
-            gain_db: currentDb,
+            [param.key]: currentVal,
+            ...extra,
         };
-        node.updateProperty('chain', chain.map((m: any) => (m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m)));
+        node.updateProperty(
+            'chain',
+            chain.map((m: any) => (m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m))
+        );
     };
     renderValue();
 
     let dragging = false;
     let startX = 0;
-    let startDb = currentDb;
+    let startVal = currentVal;
     let pendingRaf = 0;
     box.addEventListener('pointerdown', event => {
         if (event.button !== 0) return;
         dragging = true;
         startX = event.clientX;
-        startDb = currentDb;
+        startVal = currentVal;
         box.setPointerCapture?.(event.pointerId);
         box.classList.add('dragging');
         event.preventDefault();
     });
     box.addEventListener('pointermove', event => {
         if (!dragging) return;
-        const targetDb = startDb + (event.clientX - startX) * 0.15;
+        const targetVal = startVal + (event.clientX - startX) * 0.15;
         if (pendingRaf) return;
         pendingRaf = requestAnimationFrame(() => {
             pendingRaf = 0;
             if (dragging) {
-                commit(targetDb);
+                commit(targetVal);
             }
         });
     });
@@ -86,7 +118,7 @@ function makeGainControl(
         }
         const delta = (event.clientX - startX) * 0.15;
         if (Math.abs(delta) >= 0.05) {
-            commit(startDb + delta);
+            commit(startVal + delta);
         }
         box.classList.remove('dragging');
         box.releasePointerCapture?.(event.pointerId);
@@ -96,16 +128,16 @@ function makeGainControl(
 
     registerParameterWheelControl(box, {
         isInteger: false,
-        getValue: () => currentDb,
-        setValue: (db) => commit(db),
-        formatValue: (db) => formatDb(Math.max(-36, Math.min(12, db))),
+        getValue: () => currentVal,
+        setValue: (v) => commit(v),
+        formatValue: (v) => formatParamValue(param, Math.max(param.min, Math.min(param.max, v))),
     });
     box.addEventListener('wheel', event => {
         event.preventDefault();
         if (event.altKey) return;
         const direction = event.deltaY < 0 ? 1 : -1;
         const step = getParameterWheelStep(false);
-        commit(roundStepValue(currentDb + direction * step, step));
+        commit(roundStepValue(currentVal + direction * step, step));
     }, { passive: false });
 
     box.addEventListener('dblclick', event => {
@@ -113,22 +145,28 @@ function makeGainControl(
         const input = document.createElement('input');
         input.type = 'number';
         input.className = 'td-float-direct-input';
-        input.min = '-36';
-        input.max = '12';
-        input.step = '0.1';
-        input.value = currentDb.toFixed(1);
+        input.min = String(param.min);
+        input.max = String(param.max);
+        input.step = String(param.step);
+        input.value = currentVal.toFixed(1);
         box.replaceChildren(input);
         input.focus();
         input.select();
         const finish = () => {
             const parsed = Number(input.value);
-            box.innerHTML = `<span class="float-label">${label}</span><span class="float-val-text"></span>`;
-            commit(Number.isFinite(parsed) ? parsed : currentDb);
+            box.innerHTML = `<span class="td-float-fill" aria-hidden="true"></span><span class="float-label">${label}</span><span class="float-val-text"></span>`;
+            const next = Number.isFinite(parsed) ? parsed : currentVal;
+            if (next === currentVal) {
+                renderValue();
+            } else {
+                commit(next);
+            }
         };
         input.addEventListener('keydown', event => {
             if (event.key === 'Enter') finish();
             if (event.key === 'Escape') {
-                box.innerHTML = `<span class="float-label">${label}</span><span class="float-val-text">${formatDb(currentDb)}</span>`;
+                box.innerHTML = `<span class="td-float-fill" aria-hidden="true"></span><span class="float-label">${label}</span><span class="float-val-text"></span>`;
+                renderValue();
             }
         });
         input.addEventListener('blur', finish, { once: true });
@@ -147,7 +185,7 @@ export class FxChainSection {
         }
 
         const rawChain: any[] = node.properties.chain;
-        const chain = rawChain.filter((m: any) => m && String(m.type || 'gain').toLowerCase() === 'gain');
+        const chain = rawChain.filter((m: any) => m && isRegisteredProcessor(m.type));
         if (chain.length === 0) {
             chain.push(...getDefaultFxChain());
         }
@@ -171,12 +209,19 @@ export class FxChainSection {
         if (!listContainer) return;
 
         chain.forEach((module: any, index: number) => {
+            const def: DspProcessorDef | undefined = getProcessorDef(module.type);
+            if (!def) return;
+            const isPreGain = index === 0 && def.type === 'gain';
+            const isPostGain = index === chain.length - 1 && index > 0 && def.type === 'gain';
             const card = document.createElement('div');
-            const isPreGain = index === 0;
-            const isPostGain = index === chain.length - 1 && index > 0;
-            const label = isPreGain ? 'Pre Gain' : (isPostGain ? 'Post Gain' : (module.name || 'Gain'));
             card.className = `fx-module-card fixed ${isPreGain ? 'pre-gain' : ''} ${isPostGain ? 'post-gain' : ''}`;
-            card.appendChild(makeGainControl(module, label, node, chain));
+            const stageLabel = isPreGain ? 'Pre Gain' : (isPostGain ? 'Post Gain' : (module.name || def.label));
+            def.params.forEach((paramDef, pIdx) => {
+                const ctrlLabel = def.params.length === 1 ? stageLabel : `${stageLabel} · ${paramDef.label}`;
+                if (pIdx >= 0) {
+                    card.appendChild(makeProcessorParamControl(module, ctrlLabel, paramDef, node, chain));
+                }
+            });
             listContainer.appendChild(card);
         });
     }

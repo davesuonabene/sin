@@ -5,10 +5,12 @@ from __future__ import annotations
 import mimetypes
 import os
 from pathlib import Path, PurePosixPath
+import json
 import re
 import shutil
 import stat
 import struct
+import subprocess
 import zipfile
 from typing import Any
 
@@ -20,9 +22,13 @@ from . import midi_parser, text_analyzer
 
 AUDIO_EXTENSIONS = {
     ".wav", ".wave", ".flac", ".mp3", ".ogg", ".oga", ".aif", ".aiff", ".aifc",
-    ".m4a", ".m4b", ".m4p", ".mp4", ".aac", ".adts", ".opus", ".spx",
-    ".webm", ".mka", ".ape", ".wv", ".mpc", ".mp+", ".tta", ".wma", ".asf",
+    ".m4a", ".m4b", ".m4p", ".aac", ".adts", ".opus", ".spx",
+    ".mka", ".ape", ".wv", ".mpc", ".mp+", ".tta", ".wma",
     ".caf", ".amr", ".au", ".snd", ".voc", ".shn", ".ac3", ".eac3",
+}
+VIDEO_EXTENSIONS = {
+    ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".asf",
+    ".flv", ".mpeg", ".mpg", ".ts", ".m2ts", ".ogv", ".3gp",
 }
 MIDI_EXTENSIONS = {".mid", ".midi"}
 AUDIO_METADATA_FIELDS = (
@@ -289,6 +295,98 @@ def _audio_metadata(file_path: Path) -> dict[str, Any]:
     return metadata
 
 
+def _parse_fps(rate_str: str | None) -> float | None:
+    if not rate_str or "/" not in str(rate_str):
+        try:
+            val = float(rate_str)
+            return round(val, 3) if val > 0 else None
+        except (TypeError, ValueError):
+            return None
+    num_s, den_s = str(rate_str).split("/", 1)
+    try:
+        num = float(num_s)
+        den = float(den_s)
+        if den > 0 and num > 0:
+            return round(num / den, 3)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _video_metadata(file_path: Path) -> dict[str, Any]:
+    """Probe video duration, resolution, frame rate, and codec summary via ffprobe when available."""
+    executable = shutil.which("ffprobe")
+    if not executable:
+        return {}
+    try:
+        proc = subprocess.run(
+            [
+                executable,
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_format",
+                "-show_streams",
+                str(file_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if proc.returncode != 0 or not proc.stdout:
+            return {}
+        payload = json.loads(proc.stdout)
+    except Exception:
+        return {}
+
+    fmt = payload.get("format") or {}
+    streams = payload.get("streams") or []
+    video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+    duration = None
+    for raw_dur in (fmt.get("duration"), (video_stream or {}).get("duration")):
+        if raw_dur is not None:
+            try:
+                val = float(raw_dur)
+                if val > 0:
+                    duration = round(val, 4)
+                    break
+            except (TypeError, ValueError):
+                pass
+
+    meta: dict[str, Any] = {}
+    if duration is not None:
+        meta["duration_seconds"] = duration
+    if video_stream:
+        if video_stream.get("width"):
+            meta["width"] = int(video_stream["width"])
+        if video_stream.get("height"):
+            meta["height"] = int(video_stream["height"])
+        fps = _parse_fps(video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate"))
+        if fps is not None:
+            meta["fps"] = fps
+        if video_stream.get("codec_name"):
+            meta["video_codec"] = str(video_stream["codec_name"])
+    meta["has_audio"] = bool(audio_stream)
+    if audio_stream and audio_stream.get("codec_name"):
+        meta["audio_codec"] = str(audio_stream["codec_name"])
+    return meta
+
+
+def analyze_video_file(file_path: Path, duration_seconds: float | None = None) -> dict[str, Any]:
+    """Analyze video file path and probed container metadata."""
+    video_info = _video_metadata(file_path)
+    duration = duration_seconds if duration_seconds is not None else video_info.get("duration_seconds")
+    analysis = text_analyzer.analyze_path(str(file_path), duration_seconds=duration)
+    analysis.update(
+        duration_seconds=duration,
+        video_metadata=video_info,
+        type="video",
+    )
+    return analysis
+
+
 def infer_audio_item_type(
     filename: str,
     duration_seconds: float | None,
@@ -344,9 +442,20 @@ def analyze_manifest_entry(root: Path, entry: dict[str, Any]) -> dict[str, Any]:
     if extension in AUDIO_EXTENSIONS:
         analysis = analyze_audio_file(file_path, duration_seconds=duration)
         duration = analysis.get("duration_seconds")
+    elif extension in VIDEO_EXTENSIONS:
+        analysis = analyze_video_file(file_path, duration_seconds=duration)
+        duration = analysis.get("duration_seconds")
     else:
         analysis = text_analyzer.analyze_path(str(file_path), duration_seconds=duration)
-    item_type = analysis["type"] if extension in AUDIO_EXTENSIONS else "midi" if extension in MIDI_EXTENSIONS else "file"
+    item_type = (
+        analysis["type"]
+        if extension in AUDIO_EXTENSIONS
+        else "video"
+        if extension in VIDEO_EXTENSIONS
+        else "midi"
+        if extension in MIDI_EXTENSIONS
+        else "file"
+    )
     bpm = analysis.get("bpm")
     key = analysis.get("key")
     if extension in MIDI_EXTENSIONS:
@@ -417,9 +526,11 @@ def analyze_manifest_entry(root: Path, entry: dict[str, Any]) -> dict[str, Any]:
         "key": final_key,
         "is_loop": final_is_loop,
         "tags": final_tags,
-        "streamable": final_type in {"audio", "track", "sample"},
+        "streamable": final_type in {"audio", "track", "sample", "video"},
         "audio_metadata": merged_metadata,
     }
+    if analysis.get("video_metadata"):
+        result["video_metadata"] = analysis["video_metadata"]
     for field in AUDIO_METADATA_FIELDS:
         result[field] = merged_metadata.get(field)
     return result
@@ -439,7 +550,15 @@ def build_manifest(root: Path) -> list[dict[str, Any]]:
                 "index": len(contents),
                 "filename": filename,
                 "relative_path": relative_path,
-                "type": "midi" if extension in MIDI_EXTENSIONS else "audio" if extension in AUDIO_EXTENSIONS else "file",
+                "type": (
+                    "midi"
+                    if extension in MIDI_EXTENSIONS
+                    else "video"
+                    if extension in VIDEO_EXTENSIONS
+                    else "audio"
+                    if extension in AUDIO_EXTENSIONS
+                    else "file"
+                ),
                 "mime_type": mimetypes.guess_type(str(file_path))[0],
                 "size_bytes": file_path.stat().st_size,
                 "duration_seconds": None,

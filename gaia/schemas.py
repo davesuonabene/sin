@@ -202,6 +202,8 @@ class ItemSummary(BaseModel):
     favourite: bool = False
     source_kind: Optional[str] = None
     source_path: Optional[str] = None
+    project_kind: Optional[str] = None
+    editor_engine: Optional[str] = None
     content_count: Optional[int] = None
     content_types: List[str] = Field(default_factory=list)
     content_tags: List[str] = Field(default_factory=list)
@@ -234,6 +236,8 @@ class Item(ItemBase):
     length_variance: Optional[float] = None
     source_kind: Optional[str] = None
     source_path: Optional[str] = None
+    project_kind: Optional[str] = None
+    editor_engine: Optional[str] = None
     content_count: Optional[int] = None
     contents: Optional[List[CollectionContent]] = None
     warnings: List[str] = Field(default_factory=list)
@@ -287,6 +291,12 @@ class SampleItem(AudioItem):
     key: Optional[str] = None
     bpm: Optional[int] = None
     is_loop: bool = False
+
+class VideoItemCreate(ItemCreate):
+    type: str = "video"
+
+class VideoItem(Item):
+    pass
 
 class MidiItemCreate(ItemCreate):
     type: str = "midi"
@@ -351,10 +361,13 @@ class ZoomH4Item(MultitrackItem):
 class ProjectItemCreate(CollectionItemCreate):
     type: str = "project"
     source_kind: str = "managed"
+    project_kind: str = "audio"
+    editor_engine: str = "sin"
 
 
 class ProjectItem(CollectionItem):
-    pass
+    project_kind: Optional[str] = None
+    editor_engine: Optional[str] = None
 
 # Requests
 class ImportPreviewRequest(BaseModel):
@@ -395,6 +408,8 @@ class ProjectCreateRequest(BaseModel):
     name: str
     project_type: str = "project"
     vault_id: Optional[int] = None
+    project_kind: Optional[str] = None
+    editor_engine: Optional[str] = None
 
 
 class ProjectAddItemsRequest(BaseModel):
@@ -460,6 +475,9 @@ class ProjectFromItemsRequest(BaseModel):
     vault_id: Optional[int] = None
     move_files: bool = False
     move_item_ids: List[int] = Field(default_factory=list)
+    project_kind: Optional[str] = None
+    editor_engine: Optional[str] = None
+    initial_session: Optional[dict[str, Any]] = None
 
 
 ReferenceKind = Literal["component", "use", "derived", "supersedes"]
@@ -523,7 +541,7 @@ class ProjectDerivedPathRequest(BaseModel):
     stage_name: Optional[str] = None
     revision_label: Optional[str] = None
     is_master: bool = False
-    target_type: Literal["audio", "track", "sample", "multitrack"] = "audio"
+    target_type: Literal["audio", "track", "sample", "video", "multitrack"] = "audio"
 
 
 class ProjectProfileApplyRequest(BaseModel):
@@ -825,4 +843,42 @@ class PlaylistDetail(BaseModel):
     updated_at: datetime
     items: List[PlaylistItemSummary] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectSessionSaveRequest(BaseModel):
+    engine: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectCheckpointCreateRequest(BaseModel):
+    label: Optional[str] = None
+
+
+class MediaExportDestination(BaseModel):
+    mode: Literal["vault", "external_folder", "project"] = "vault"
+    vault_id: Optional[int] = None
+    folder_id: Optional[int] = None
+    directory_path: Optional[str] = None
+    project_id: Optional[int] = None
+    filename: Optional[str] = None
+    existing_output: Literal["cancel", "new_version"] = "cancel"
+    set_master: bool = True
+    bitrate_kbps: int = 192
+
+
+class MediaExportRequest(BaseModel):
+    source_item_id: int
+    target_id: Optional[str] = None
+    main_start_frame: Optional[int] = None
+    main_end_frame: Optional[int] = None
+    main_start_sec: Optional[float] = None
+    main_end_sec: Optional[float] = None
+    segments: List[MediaEditSegment] = Field(default_factory=list)
+    pre_gain_db: float = 0.0
+    volume: float = 1.0
+    normalize: bool = False
+    target_peak_db: float = -1.0
+    output_format: Literal["wav", "mp3", "mp4", "mkv", "webm", "mov"] = "wav"
+    destination: MediaExportDestination = Field(default_factory=MediaExportDestination)
+
 

@@ -52,6 +52,7 @@ FOLDER_TYPE_ASSIGNMENTS = {
 }
 FILE_FAMILY_TYPES = {
     "audio": ("audio", "track", "sample"),
+    "video": ("video",),
     "midi": ("midi",),
     "sequence": ("sequence",),
     "file": ("item",),
@@ -129,6 +130,8 @@ def _file_family(path: str) -> tuple[str, str]:
     extension = Path(path).suffix.casefold()
     if extension in collection_importer.AUDIO_EXTENSIONS:
         return "audio", "audio"
+    if extension in collection_importer.VIDEO_EXTENSIONS:
+        return "video", "video"
     if extension in collection_importer.MIDI_EXTENSIONS:
         return "midi", "midi"
     if extension == ".seq":
@@ -1427,6 +1430,13 @@ def _item_schema_for_manifest(
         if audio_metadata:
             attributes["audio_metadata"] = audio_metadata
         return schemas.AudioItemCreate(**common, attributes=attributes)
+    if forced_type == "video":
+        attributes = {}
+        if entry.get("video_metadata"):
+            attributes["video_metadata"] = entry["video_metadata"]
+        if entry.get("duration_seconds") is not None:
+            attributes["analysis"] = {"duration_seconds": entry.get("duration_seconds")}
+        return schemas.VideoItemCreate(**common, attributes=attributes)
     if forced_type == "midi":
         return schemas.MidiItemCreate(**common, bpm=entry.get("bpm"), key=entry.get("key"))
     return schemas.ItemCreate(**common, type=forced_type if forced_type in {"sequence", "item"} else "item")

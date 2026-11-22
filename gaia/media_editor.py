@@ -807,6 +807,8 @@ def _artifact_schema(path: Path, vault_id: int, parent_id: int, target_type: str
             key=analysis.get("key"),
             is_loop=bool(analysis.get("is_loop")),
         )
+    elif target_type == "video":
+        schema = schemas.VideoItemCreate(**common)
     elif target_type == "audio":
         schema = schemas.AudioItemCreate(**common)
     else:

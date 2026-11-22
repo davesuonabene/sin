@@ -110,7 +110,9 @@ def render_media_edit(
 
 @router.get("/media-jobs/{job_id}")
 def read_media_job(job_id: str):
-    job = media_editor.media_job_manager.get(job_id)
+    from ..editor.engines import simple_media
+
+    job = media_editor.media_job_manager.get(job_id) or simple_media.export_job_manager.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Media job not found")
     return job
@@ -148,28 +150,50 @@ def read_item_graph(
 
     owning_proj = project_service._find_owning_project(db, item)
     effective_item = owning_proj if (owning_proj and owning_proj.id != item.id) else item
+    if isinstance(effective_item, models.ProjectItem):
+        engine_id = getattr(effective_item, "editor_engine", None) or "sin"
+        if engine_id != "sin":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Graph view is only available for SIN projects (this project uses '{engine_id}')",
+            )
 
     try:
         from .. import graph_builder, project_manifest
         from ermes.py.compiler import compute_auto_layout_positions
 
-        graph = graph_builder.build_item_sin_graph(
-            item.id,
-            db,
-            target_id=target_id,
-            master_only=True,
-        )
+        if isinstance(effective_item, models.ProjectItem):
+            graph = graph_builder.build_item_sin_graph(
+                effective_item.id,
+                db,
+                target_id=None,
+                master_only=False,
+            )
+        else:
+            graph = graph_builder.build_item_sin_graph(
+                item.id,
+                db,
+                target_id=target_id,
+                master_only=True,
+            )
         control_map = graph_builder.get_control_map(graph)
         positions = compute_auto_layout_positions(graph)
 
         snapshots = []
         view = {}
-        owning_proj = project_service._find_owning_project(db, item)
         proj_item = owning_proj or (item if isinstance(item, models.ProjectItem) else None)
         if proj_item:
+            session_env = project_manifest.read_project_session(proj_item)
             doc = project_manifest.read_project_manifest(proj_item)
-            snapshots = doc.get("snapshots", [])
-            view = doc.get("view", {})
+            if isinstance(session_env, dict) and isinstance(session_env.get("data"), dict):
+                sdata = session_env["data"]
+                snapshots = list(sdata.get("snapshots") or [])
+                view = dict(doc.get("view") or {})
+                if sdata.get("active_snapshot_id") is not None:
+                    view["selected_snapshot_id"] = sdata.get("active_snapshot_id")
+            else:
+                snapshots = list(doc.get("snapshots") or [])
+                view = dict(doc.get("view") or {})
 
         return {
             "item_id": item.id,
@@ -195,6 +219,13 @@ def update_item_graph_params(
 
     owning_proj = project_service._find_owning_project(db, item)
     effective_item = owning_proj if (owning_proj and owning_proj.id != item.id) else item
+    if isinstance(effective_item, models.ProjectItem):
+        engine_id = getattr(effective_item, "editor_engine", None) or "sin"
+        if engine_id != "sin":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Graph editing is only available for SIN projects (this project uses '{engine_id}')",
+            )
 
     try:
         from .. import graph_builder, project_manifest
@@ -203,9 +234,21 @@ def update_item_graph_params(
         updated_graph, applied = graph_builder.apply_control_updates(graph, request.updates)
 
         if isinstance(effective_item, models.ProjectItem):
-            doc = project_manifest.read_project_manifest(effective_item)
-            doc["graph"] = updated_graph
-            project_manifest.write_project_manifest(effective_item, doc)
+            from ..editor.engines.sin_engine import sin_engine
+            from ..editor import session_service
+
+            env = session_service.get_or_init_project_session_envelope(db, effective_item)
+            merged = sin_engine.validate_and_merge_session(
+                db,
+                effective_item,
+                {"graph": updated_graph},
+                dict(env.get("data") or {}),
+            )
+            project_manifest.write_project_session(
+                db,
+                effective_item.id,
+                {"engine": "sin", "schema_version": 1, "data": merged},
+            )
 
         return {
             "status": "ok",
@@ -286,28 +329,34 @@ def save_item_snapshot(
     effective_project = owning_proj if owning_proj else (item if isinstance(item, models.ProjectItem) else None)
     if not effective_project:
         raise HTTPException(status_code=400, detail="Snapshots are only supported on projects")
+    engine_id = getattr(effective_project, "editor_engine", None) or "sin"
+    if engine_id != "sin":
+        raise HTTPException(status_code=400, detail="SIN snapshots are only supported on SIN projects")
 
     snap = request.snapshot
     if not isinstance(snap, dict) or not snap.get("id"):
         raise HTTPException(status_code=400, detail="Snapshot must have an 'id'")
 
     from .. import project_manifest
+    from ..editor.engines.sin_engine import sin_engine
+
+    try:
+        merged = sin_engine.save_snapshot(
+            db,
+            effective_project,
+            snap,
+            make_active=request.make_active,
+        )
+    except ValueError as exc:
+        _bad_request(exc)
 
     doc = project_manifest.read_project_manifest(effective_project)
-    snapshots = doc.setdefault("snapshots", [])
+    doc["snapshots"] = list(merged.get("snapshots") or [])
     view = doc.setdefault("view", {})
-
-    existing_idx = next((i for i, s in enumerate(snapshots) if s.get("id") == snap["id"]), -1)
-    if existing_idx >= 0:
-        snapshots[existing_idx] = snap
-    else:
-        snapshots.append(snap)
-
     if request.make_active:
         view["selected_snapshot_id"] = snap["id"]
-
     project_manifest.write_project_manifest(effective_project, doc)
-    return {"status": "ok", "snapshots": snapshots, "view": view}
+    return {"status": "ok", "snapshots": doc["snapshots"], "view": view}
 
 
 @router.delete("/items/{item_id}/snapshots/{snapshot_id}")
@@ -324,17 +373,23 @@ def delete_item_snapshot(
     effective_project = owning_proj if owning_proj else (item if isinstance(item, models.ProjectItem) else None)
     if not effective_project:
         raise HTTPException(status_code=400, detail="Snapshots are only supported on projects")
+    engine_id = getattr(effective_project, "editor_engine", None) or "sin"
+    if engine_id != "sin":
+        raise HTTPException(status_code=400, detail="SIN snapshots are only supported on SIN projects")
 
     from .. import project_manifest
+    from ..editor.engines.sin_engine import sin_engine
+
+    try:
+        merged = sin_engine.delete_snapshot(db, effective_project, snapshot_id)
+    except ValueError as exc:
+        _bad_request(exc)
 
     doc = project_manifest.read_project_manifest(effective_project)
-    snapshots = doc.setdefault("snapshots", [])
+    doc["snapshots"] = list(merged.get("snapshots") or [])
     view = doc.setdefault("view", {})
-
-    doc["snapshots"] = [s for s in snapshots if s.get("id") != snapshot_id]
     if view.get("selected_snapshot_id") == snapshot_id:
         view.pop("selected_snapshot_id", None)
-
     project_manifest.write_project_manifest(effective_project, doc)
     return {"status": "ok", "snapshots": doc["snapshots"], "view": view}
 
@@ -369,12 +424,18 @@ def render_item_preview(
     graph = graph_builder.build_item_sin_graph(effective_item.id, db)
 
     snapshot = None
-    if request.snapshot_id and isinstance(effective_item, models.ProjectItem):
-        doc = project_manifest.read_project_manifest(effective_item)
-        for s in doc.get("snapshots", []):
-            if s.get("id") == request.snapshot_id:
-                snapshot = s
-                break
+    workspace = None
+    if isinstance(effective_item, models.ProjectItem):
+        session_env = project_manifest.read_project_session(effective_item)
+        sdata = session_env.get("data") if (isinstance(session_env, dict) and isinstance(session_env.get("data"), dict)) else {}
+        workspace = sdata.get("workspace") if isinstance(sdata.get("workspace"), dict) else None
+        if request.snapshot_id:
+            session_snaps = sdata.get("snapshots", []) or []
+            doc = project_manifest.read_project_manifest(effective_item)
+            for s in [*session_snaps, *(doc.get("snapshots") or [])]:
+                if isinstance(s, dict) and s.get("id") == request.snapshot_id:
+                    snapshot = s
+                    break
 
     try:
         audio_out, sr, qa = resolve_and_render_graph(
@@ -382,7 +443,22 @@ def render_item_preview(
             snapshot=snapshot,
             transient_overrides=request.transient_overrides,
             project_root=project_root,
+            workspace=workspace,
         )
+
+        # Compute downsampled stereo-merged peak envelope for horizontal timeline preview
+        frames = int(audio_out.shape[-1]) if audio_out.size > 0 else 0
+        peaks: list[list[float]] = []
+        if frames > 0:
+            mono = np.mean(audio_out, axis=0) if audio_out.ndim > 1 else audio_out
+            buckets = min(1200, frames)
+            edges = np.linspace(0, frames, num=buckets + 1, dtype=np.int64)
+            for b_idx in range(buckets):
+                seg = mono[edges[b_idx] : edges[b_idx + 1]]
+                if seg.size > 0:
+                    peaks.append([float(np.min(seg)), float(np.max(seg))])
+                else:
+                    peaks.append([0.0, 0.0])
 
         buf = io.BytesIO()
         sf.write(
@@ -403,6 +479,10 @@ def render_item_preview(
             "status": "success",
             "preview_id": preview_key,
             "audio_url": f"/items/{item_id}/preview/stream/{preview_key}",
+            "duration_seconds": round(frames / float(sr), 6) if sr > 0 else 0.0,
+            "sample_rate": int(sr),
+            "frames": frames,
+            "peaks": peaks,
             "qa": qa,
         }
     except Exception as exc:

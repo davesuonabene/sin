@@ -1,8 +1,16 @@
 import { LiteGraph } from 'litegraph.js';
-import { BaseNode } from './BaseNode.ts';
+import { BaseNode, type NodeToolbarControl } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
-import { ArrangementRenderer, type RenderBox, type SignalTelemetry, type ArrangementSection, type VisualizationTypeId } from '../../../packages/iride/src/index.ts';
+import {
+    ArrangementRenderer,
+    colorWithAlpha,
+    drawRadialLoopProgress,
+    type RenderBox,
+    type SignalTelemetry,
+    type ArrangementSection,
+    type VisualizationTypeId
+} from '../../../packages/iride/src/index.ts';
 import { compositeArrangementBuffer, getNodeGainMultiplier, applyGainToBuffer } from '../audioCompositor.ts';
 import { resolveCycleSeeds, resolveSectionSlot } from '../../../ermes/ts/slotLanguage.ts';
 
@@ -445,7 +453,7 @@ export class ArrangementNode extends BaseNode {
         const totalBars = Math.max(0.25, Number(this.properties?.total_bars) || 4.0);
         const structure = this.getSectionStructure();
         const resolvedSlots = this.getResolvedSectionSlots();
-        const fingerprint = `${totalBars}:${JSON.stringify(structure)}:${resolvedSlots.join(',')}`;
+        const fingerprint = `${totalBars}|${structure.points.join(',')}|${structure.probability.join(',')}|${structure.quant.join(',')}|${structure.quantAnchor.join(',')}|${resolvedSlots.join(',')}`;
 
         let sections = this._cachedVisualSections;
         if (!sections || this._cachedVisualFingerprint !== fingerprint) {
@@ -486,17 +494,65 @@ export class ArrangementNode extends BaseNode {
         this.arrangementRenderer.render(ctx, bounds, telemetry);
     }
 
+    private _cachedLiveTotalBars = -1;
+    private _cachedLivePointsKey = '';
+    private _cachedLiveBoundaries: number[] = [0, 4];
+    private _cachedDividerFractions: readonly number[] = [];
+
+    private ensureCachedSectionGeometry(totalBars: number): { boundaries: number[]; dividerFractions: readonly number[] } {
+        const rawPoints = Array.isArray(this.properties?.section_points) ? this.properties.section_points : null;
+        let pointsKey = '';
+        if (rawPoints && rawPoints.length > 0) {
+            for (let i = 0; i < rawPoints.length; i++) {
+                pointsKey += (i > 0 ? ',' : '') + rawPoints[i];
+            }
+        }
+        if (this._cachedLiveTotalBars === totalBars && this._cachedLivePointsKey === pointsKey) {
+            return { boundaries: this._cachedLiveBoundaries, dividerFractions: this._cachedDividerFractions };
+        }
+        this._cachedLiveTotalBars = totalBars;
+        this._cachedLivePointsKey = pointsKey;
+        const pts: number[] = [];
+        if (rawPoints) {
+            for (let i = 0; i < rawPoints.length; i++) {
+                const p = Number(rawPoints[i]);
+                if (Number.isFinite(p) && p > 0 && p < totalBars && !pts.includes(p)) {
+                    pts.push(p);
+                }
+            }
+            pts.sort((a, b) => a - b);
+        }
+        const boundaries = [0, ...pts, totalBars];
+        const fractions: number[] = new Array(pts.length);
+        for (let i = 0; i < pts.length; i++) {
+            fractions[i] = pts[i] / totalBars;
+        }
+        this._cachedLiveBoundaries = boundaries;
+        this._cachedDividerFractions = fractions;
+        return { boundaries, dividerFractions: fractions };
+    }
+
     override getLiveActivityState(telemetry?: SignalTelemetry): { isTriggered: boolean; progress?: number } {
         if (!telemetry?.isPlaying) return { isTriggered: false };
         const totalBars = Math.max(0.25, Number(this.properties?.total_bars) || 4.0);
         const currentBar = ((telemetry.bar % totalBars) + totalBars) % totalBars;
-        const structure = this.getSectionStructure();
-        const cutPoints = Array.isArray(structure.points) ? [...structure.points].sort((a, b) => a - b) : [];
-        const boundaries = [0, ...cutPoints.filter(p => p > 0 && p < totalBars), totalBars];
+        const { boundaries } = this.ensureCachedSectionGeometry(totalBars);
+        const probs = Array.isArray(this.properties?.section_probability) ? this.properties.section_probability : null;
+        const enabledArr = Array.isArray(this.properties?.section_enabled) ? this.properties.section_enabled : null;
+        const fallbackProb = Number.isFinite(Number(this.properties?.probability))
+            ? Math.max(0, Math.min(1, Number(this.properties.probability)))
+            : 1.0;
+
         let activeProb = 1.0;
         for (let i = 0; i < boundaries.length - 1; i++) {
             if (currentBar >= boundaries[i] && currentBar < boundaries[i + 1]) {
-                activeProb = typeof structure.probability[i] === 'number' ? structure.probability[i] : 1.0;
+                if (enabledArr && enabledArr[i] === false) {
+                    activeProb = 0;
+                } else if (probs && probs[i] !== undefined) {
+                    activeProb = Math.max(0, Math.min(1, Number(probs[i]) || 0));
+                } else {
+                    activeProb = fallbackProb;
+                }
                 break;
             }
         }
@@ -506,9 +562,52 @@ export class ArrangementNode extends BaseNode {
         };
     }
 
+    protected override drawClosedIconOverlay(ctx: CanvasRenderingContext2D, telemetry?: SignalTelemetry): boolean {
+        if (!telemetry?.isPlaying) return false;
+        const totalBars = Math.max(0.25, Number(this.properties?.total_bars) || 4.0);
+        const activity = this.getLiveActivityState(telemetry);
+        const { dividerFractions } = this.ensureCachedSectionGeometry(totalBars);
+        const center = BaseNode.visualSize * 0.5;
+        drawRadialLoopProgress(ctx, center, center, 14, activity.progress ?? 0, {
+            dividerFractions,
+            dimmed: !activity.isTriggered
+        });
+        return true;
+    }
+
+    protected override drawPanelHeaderDecorations(
+        ctx: CanvasRenderingContext2D,
+        _width: number,
+        headerHeight: number,
+        titleX: number,
+        telemetry?: SignalTelemetry
+    ): void {
+        const cx = titleX + 6;
+        const cy = headerHeight * 0.5;
+        const color = this.nodeColor;
+        if (telemetry?.isPlaying) {
+            const activity = this.getLiveActivityState(telemetry);
+            drawRadialLoopProgress(ctx, cx, cy, 5.5, activity.progress ?? 0, {
+                fillColor: color,
+                trackFill: colorWithAlpha(color, 0.14),
+                trackStroke: colorWithAlpha(color, 0.45),
+                dimmed: !activity.isTriggered
+            });
+        } else {
+            drawRadialLoopProgress(ctx, cx, cy, 5.5, 0, {
+                fillColor: color,
+                trackFill: colorWithAlpha(color, 0.08),
+                trackStroke: colorWithAlpha(color, 0.35)
+            });
+        }
+        this._headerDeco.titleOffsetX = 16;
+    }
+
     private _cachedCompositedBuffer: AudioBuffer | null = null;
     private _lastInputBufferRef: AudioBuffer | null = null;
     private _lastArrangementFingerprint: string = '';
+
+    public _arrangementEditMode = false;
 
     override shouldRefreshTabOnGraphChange(tab: string): boolean {
         return tab === 'ARRANGEMENT';
@@ -518,6 +617,28 @@ export class ArrangementNode extends BaseNode {
         return {
             'probability': ['section_probability']
         };
+    }
+
+    override getToolbarControls(): NodeToolbarControl[] {
+        return [
+            {
+                kind: 'toggle',
+                id: 'arrangement_edit',
+                label: 'Edit Sections',
+                icon: 'pencil',
+                title: 'Toggle Arrangement section split/cut edit mode',
+                active: Boolean(this._arrangementEditMode),
+                tone: 'amber',
+                onToggle: () => {
+                    this._arrangementEditMode = !this._arrangementEditMode;
+                    if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('toggle-arrangement-edit-mode', {
+                            detail: { nodeId: this.id, editMode: this._arrangementEditMode }
+                        }));
+                    }
+                }
+            }
+        ];
     }
 
     override getAudioBuffer(visited?: Set<number>): AudioBuffer | null {
@@ -532,7 +653,8 @@ export class ArrangementNode extends BaseNode {
         let inputBuffer: AudioBuffer | null = null;
         let inputSlotsMap: Map<number, AudioBuffer> | null = null;
         for (const inputNode of inputNodes) {
-            if (typeof (inputNode as any)?.getSlotBuffersMap === 'function') {
+            const hasMultiSlots = typeof (inputNode as any)?.getSlots === 'function' && (inputNode as any).getSlots().length > 1;
+            if (hasMultiSlots && typeof (inputNode as any)?.getSlotBuffersMap === 'function') {
                 const map = (inputNode as any).getSlotBuffersMap(cycleSet);
                 if (map && map.size > 0) {
                     inputSlotsMap = map;

@@ -601,6 +601,7 @@
                 state.importTransferMode = event.target.value;
                 renderImportPreview();
             });
+            window.sinUI?.enhanceAllSelects?.(importPreviewStep, { size: 'sm' });
             importPreviewStep.querySelector('#import-skip-track-analysis')?.addEventListener('change', event => {
                 state.skipTrackAnalysis = event.target.checked;
                 renderImportPreview();
@@ -1597,6 +1598,8 @@
             updateSourcePickerSelection();
         }
 
+        let pendingExportDirResolve = null;
+
         function updateSourcePickerSelection() {
             sourcePickerList.querySelectorAll('.source-picker-row').forEach(row => {
                 row.setAttribute('aria-selected', String(row.dataset.path === state.sourcePickerSelection));
@@ -1605,7 +1608,9 @@
                 sourcePickerSelection.textContent = state.sourcePickerDirectory || 'No folder selected.';
                 sourcePickerChoose.textContent = state.vaultPathPickerMode === 'migrate'
                     ? 'Migrate to this root'
-                    : (state.vaultPathPickerMode === 'mirror' ? 'Mirror this folder' : 'Use this root');
+                    : (state.vaultPathPickerMode === 'mirror'
+                        ? 'Mirror this folder'
+                        : (state.vaultPathPickerMode === 'export_dir' ? 'Export to this folder' : 'Use this root'));
             } else if (state.sourcePickerSelection) {
                 sourcePickerSelection.textContent = state.sourcePickerSelection;
                 sourcePickerChoose.textContent = 'Choose file';
@@ -1647,26 +1652,43 @@
             await loadSourcePicker(sourcePath.value.trim() || null);
         }
 
-        async function openVaultPathPicker(mode) {
+        async function openVaultPathPicker(mode, initialOverride = null) {
             const activeVault = selectedVault();
             state.vaultPathPickerMode = mode;
             state.projectImportPickerActive = false;
             if (sourcePickerTitle) {
                 sourcePickerTitle.textContent = mode === 'migrate'
                     ? 'Migrate vault'
-                    : (mode === 'mirror' ? 'Choose folder to mirror' : 'Choose vault storage');
+                    : (mode === 'mirror'
+                        ? 'Choose folder to mirror'
+                        : (mode === 'export_dir' ? 'Choose export destination folder' : 'Choose vault storage'));
             }
             if (sourcePickerSubtitle) {
                 sourcePickerSubtitle.textContent = mode === 'mirror'
                     ? 'Select an external folder to mirror in this vault.'
-                    : 'Choose the asset-store folder that should contain this vault.';
+                    : (mode === 'export_dir'
+                        ? 'Select any folder on disk to write exported media without adding it to GAIA.'
+                        : 'Choose the asset-store folder that should contain this vault.');
             }
             if (!sourcePickerDialog.open) sourcePickerDialog.showModal();
             const mirrorSourceInput = document.getElementById('vault-mirror-source-input');
-            const initialPath = mode === 'migrate'
-                ? activeVault?.root_path
-                : (mode === 'mirror' ? mirrorSourceInput?.value.trim() : vaultPathInput?.value.trim());
+            const initialPath = initialOverride
+                || (mode === 'migrate'
+                    ? activeVault?.root_path
+                    : (mode === 'mirror' ? mirrorSourceInput?.value.trim() : vaultPathInput?.value.trim()));
             await loadSourcePicker(initialPath || null);
+        }
+
+        function pickDiskFolder(initialPath = null) {
+            return new Promise(resolve => {
+                if (pendingExportDirResolve) {
+                    const prev = pendingExportDirResolve;
+                    pendingExportDirResolve = null;
+                    prev(null);
+                }
+                pendingExportDirResolve = resolve;
+                void openVaultPathPicker('export_dir', initialPath || null);
+            });
         }
 
         function chooseSourcePickerPath() {
@@ -1674,6 +1696,13 @@
                 const mode = state.vaultPathPickerMode;
                 const path = state.sourcePickerDirectory;
                 state.vaultPathPickerMode = null;
+                if (mode === 'export_dir' && pendingExportDirResolve) {
+                    const resolve = pendingExportDirResolve;
+                    pendingExportDirResolve = null;
+                    sourcePickerDialog.close();
+                    resolve(path || null);
+                    return;
+                }
                 sourcePickerDialog.close();
                 if (!path) return;
                 if (mode === 'migrate') migrateActiveVault(path);
@@ -1739,6 +1768,11 @@
         sourcePickerDialog?.addEventListener('close', () => {
             state.projectImportPickerActive = false;
             state.vaultPathPickerMode = null;
+            if (pendingExportDirResolve) {
+                const resolve = pendingExportDirResolve;
+                pendingExportDirResolve = null;
+                resolve(null);
+            }
         });
         sourcePickerUp?.addEventListener('click', () => {
             const target = state.sourcePickerParent || getParentDirectoryPath(state.sourcePickerDirectory || sourcePickerLocation?.value?.trim());
@@ -1814,6 +1848,7 @@
             handleExternalFileDrop,
             openSourcePicker,
             openVaultPathPicker,
+            pickDiskFolder,
             chooseSourcePickerPath,
             inspectImportSource,
             loadSourcePicker,
