@@ -228,6 +228,22 @@ class TestSinNativeEngine(unittest.TestCase):
             self.assertIn("10", nm_res["bus_peaks"])
             self.assertGreater(max(abs(v) for v in nm_res["bus_peaks"]["10"]), 0.4)
 
+            # Live gain changes via set_param must mirror onto _active_plan so bus/master peaks recompute accurately
+            orig_bus_max = max(abs(v) for v in nm_res["bus_peaks"]["10"])
+            orig_master_max = max(abs(v) for v in nm_res["master_peaks"])
+            self.assertTrue(host.set_param("10", "volume", 2.0, 0.0))
+            with host._lock:
+                plan_snap = host._snapshot_active_plan_locked()
+            self.assertIsNotNone(plan_snap)
+            updated_master_peaks, updated_bus_peaks = host._compute_plan_peaks(plan_snap, host._engine.sample_rate, 64)
+            self.assertIn("10", updated_bus_peaks)
+            self.assertGreater(max(abs(v) for v in updated_bus_peaks["10"]), orig_bus_max * 1.8)
+            self.assertGreater(max(abs(v) for v in updated_master_peaks), orig_master_max * 1.8)
+
+            tel_snap = host.read_telemetry()
+            self.assertIn("bus_rms", tel_snap)
+            self.assertIn("bus_peaks", tel_snap)
+
             # Sequence & Arrangement buses must also produce C++ bus_peaks
             seq_res = host.load_node_model_plan({
                 "node_id": 20,

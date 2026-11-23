@@ -10,8 +10,8 @@ import {
     type NodeShape
 } from './NodeVisuals.ts';
 import {
-    colorWithAlpha,
     defaultTransportClock,
+    deriveMatteNodePalette,
     WaveformRenderer,
     OscilloscopeRenderer,
     SpectrumRenderer,
@@ -154,6 +154,12 @@ export abstract class BaseNode extends LGraphNode {
     static readonly visualPanelHeight = 76;
     static readonly minVisualWidth = 140;
     static readonly minVisualHeight = 56;
+    static readonly distanceCollapseScaleRef = 0.40;
+    static readonly distanceExpandScaleRef = 0.44;
+    static readonly distanceHysteresisRatio = BaseNode.distanceExpandScaleRef / BaseNode.distanceCollapseScaleRef;
+    static readonly distanceCollapseScreenDim = Math.sqrt(BaseNode.visualPanelWidth * BaseNode.visualPanelHeight) * BaseNode.distanceCollapseScaleRef;
+    static readonly distanceMinScreenWidth = 48;
+    static readonly distanceMinScreenHeight = 18;
     buttons: CanvasButton[] = [];
     previewBtn: CanvasButton;
     renderBtn: CanvasButton;
@@ -286,6 +292,50 @@ export abstract class BaseNode extends LGraphNode {
     protected updateLiveVisualState(_telemetry?: SignalTelemetry): void { }
 
     onParametersOpened(): void { }
+
+    protected isParametersPanelOpen(): boolean {
+        if (typeof window === 'undefined') return false;
+        const win = window as any;
+        if (win.activeParamNodeId === this.id) return true;
+        return Boolean(win.dockview?.getGroupPanel?.(`properties_${this.id}`));
+    }
+
+    public invalidateDownstreamVisualCaches(): void {
+        const graph = this.graph || (typeof window !== 'undefined' ? (window as any).editorGraph : null);
+        if (!graph) return;
+        const win = typeof window !== 'undefined' ? (window as any) : undefined;
+        const nativeRealtimeLoaded = Boolean(win?.__sinRealtimeLoaded);
+        const visited = new Set<number>([this.id]);
+        const queue: any[] = [this];
+        while (queue.length > 0) {
+            const curr = queue.pop();
+            if (!curr || !curr.outputs) continue;
+            for (const out of curr.outputs) {
+                for (const linkId of out?.links || []) {
+                    const link = (graph as any).links?.[linkId];
+                    const targetId = Array.isArray(link) ? link[3] : link?.target_id;
+                    if (targetId == null || visited.has(targetId)) continue;
+                    visited.add(targetId);
+                    const target = graph.getNodeById?.(targetId) as any;
+                    if (!target) continue;
+                    target._cachedMixedInput = null;
+                    if (Array.isArray(target._lastMixedSources)) {
+                        target._lastMixedSources = [];
+                    }
+                    target._cachedCompositedBuffer = null;
+                    target._cachedGainedBuffer = null;
+                    target._cachedSlotBuffersMap = null;
+                    if (!nativeRealtimeLoaded) {
+                        target._lastRenderedBuffer = null;
+                        delete target.manifestStemBuffer;
+                        delete target.realtimePeaks;
+                    }
+                    target.setDirtyCanvas?.(true, true);
+                    queue.push(target);
+                }
+            }
+        }
+    }
 
     protected drawClosedIconOverlay(_ctx: CanvasRenderingContext2D, _telemetry?: SignalTelemetry): boolean {
         return false;
@@ -499,6 +549,7 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     private _distanceStage: 1 | 2 | 3 = 1;
+    private _distanceCollapseOffset: [number, number] | null = null;
 
     get currentDistanceStage(): 1 | 2 | 3 {
         return this._distanceStage;
@@ -512,31 +563,83 @@ export abstract class BaseNode extends LGraphNode {
         return Boolean(this.is_selected);
     }
 
+    getExpandedPanelSize(): [number, number] {
+        const rawW = Number(this.properties?.visual_width);
+        const rawH = Number(this.properties?.visual_height);
+        const w = Math.max(
+            BaseNode.minVisualWidth,
+            Math.round(Number.isFinite(rawW) && rawW > 0 ? rawW : this.visualPanelWidth)
+        );
+        const h = Math.max(
+            BaseNode.minVisualHeight,
+            Math.round(Number.isFinite(rawH) && rawH > 0 ? rawH : this.visualPanelHeight)
+        );
+        return [w, h];
+    }
+
+    getDistanceThresholds(): { collapseScale: number; expandScale: number } {
+        const [w, h] = this.getExpandedPanelSize();
+        const effectiveDim = Math.sqrt(w * h);
+        const collapseScale = Math.max(
+            BaseNode.distanceCollapseScreenDim / effectiveDim,
+            BaseNode.distanceMinScreenWidth / w,
+            BaseNode.distanceMinScreenHeight / h
+        );
+        return {
+            collapseScale,
+            expandScale: collapseScale * BaseNode.distanceHysteresisRatio
+        };
+    }
+
     /**
-     * Evaluates the distance tier from canvas zoom scale with hysteresis
-     * to prevent flickering near the boundary:
-     * - Stage 1 (Close): scale >= 0.42 (drops at < 0.40, rises at >= 0.44)
-     * - Stage 3 (Far / Max Distance): scale < 0.42 (viewer force-shut)
+     * Evaluates the distance tier from canvas zoom scale relative to this node's
+     * expanded panel dimensions, with hysteresis to prevent flickering near the boundary.
      */
     resolveDistanceStage(scale: number): 1 | 2 | 3 {
         if (!Number.isFinite(scale) || scale <= 0) return 1;
-        const current = this._distanceStage;
-        if (current === 3) {
-            return scale >= 0.44 ? 1 : 3;
+        const { collapseScale, expandScale } = this.getDistanceThresholds();
+        if (this._distanceStage === 3) {
+            return scale >= expandScale ? 1 : 3;
         }
-        return scale < 0.40 ? 3 : 1;
+        return scale < collapseScale ? 3 : 1;
     }
 
-    syncDistanceStage(scale: number): boolean {
+    syncDistanceStage(scale: number, options?: { deferCollapse?: boolean }): boolean {
         const nextStage = this.resolveDistanceStage(scale);
+        if (options?.deferCollapse && this._distanceStage !== 3 && nextStage === 3) {
+            return false;
+        }
         if (nextStage === this._distanceStage) return false;
+
         const prevActive = this.isVisualizationActive;
+        const [expandedW, expandedH] = this.getExpandedPanelSize();
+        const prevW = Number(this.size?.[0]) || (prevActive ? expandedW : BaseNode.visualSize);
+        const prevH = Number(this.size?.[1]) || (prevActive ? expandedH : BaseNode.visualSize);
+
         this._distanceStage = nextStage;
         const nextActive = this.isVisualizationActive;
         if (prevActive !== nextActive) {
             this.resizable = nextActive;
-            this.size = this.computeSize();
+            const nextSize = this.computeSize();
+            if (this.pos && this.pos.length >= 2) {
+                if (prevActive && !nextActive) {
+                    const dx = (prevW - nextSize[0]) * 0.5;
+                    const dy = (prevH - nextSize[1]) * 0.5;
+                    this.pos[0] += dx;
+                    this.pos[1] += dy;
+                    this._distanceCollapseOffset = [dx, dy];
+                } else if (!prevActive && nextActive && this._distanceCollapseOffset) {
+                    const dx = (nextSize[0] - prevW) * 0.5;
+                    const dy = (nextSize[1] - prevH) * 0.5;
+                    this.pos[0] -= dx;
+                    this.pos[1] -= dy;
+                    this._distanceCollapseOffset = null;
+                }
+            }
+            this.size = nextSize;
             this.updateButtonLayout();
+        } else if (nextStage !== 3 && this._distanceCollapseOffset) {
+            this._distanceCollapseOffset = null;
         }
         return true;
     }
@@ -934,6 +1037,21 @@ export abstract class BaseNode extends LGraphNode {
         }
 
         (this as any)._cachedCompositedBuffer = null;
+        if (key === 'chain' || key === 'gain' || key === 'muted' || key === 'mute') {
+            (this as any)._cachedMixedInput = null;
+            if (Array.isArray((this as any)._lastMixedSources)) {
+                (this as any)._lastMixedSources = [];
+            }
+            (this as any)._cachedGainedBuffer = null;
+            (this as any)._cachedSlotBuffersMap = null;
+            const win = typeof window !== 'undefined' ? (window as any) : undefined;
+            if (!win?.__sinRealtimeLoaded || this.type === 'Audio/Sample') {
+                (this as any)._lastRenderedBuffer = null;
+                delete (this as any).manifestStemBuffer;
+                delete (this as any).realtimePeaks;
+            }
+            this.invalidateDownstreamVisualCaches();
+        }
         if (typeof this.computeSize === 'function') {
             this.size = this.computeSize();
         }
@@ -968,17 +1086,25 @@ export abstract class BaseNode extends LGraphNode {
     drawCanvas(ctx: CanvasRenderingContext2D, canvas: any): void {
         if ((this.flags as any)?.hidden || (this as any).collapsedDotMode || this.isModifier) return;
 
-        if (canvas?.ds?.scale != null) {
-            this.syncDistanceStage(Number(canvas.ds.scale));
-        }
+        const prevX = this.pos?.[0] ?? 0;
+        const prevY = this.pos?.[1] ?? 0;
+        const stageChanged = canvas?.ds?.scale != null
+            ? this.syncDistanceStage(Number(canvas.ds.scale), { deferCollapse: canvas?.resizing_node === this })
+            : false;
+        const shiftX = stageChanged && this.pos ? (this.pos[0] - prevX) : 0;
+        const shiftY = stageChanged && this.pos ? (this.pos[1] - prevY) : 0;
 
         if (!this.size || this.size[0] === 0) {
             this.size = this.computeSize();
             this.updateButtonLayout();
         }
-        const isSelected = canvas?.selected_nodes
+        const dragPreview = canvas?.__sinDragSelectPreview as { ids: Set<any>; additive: boolean } | null | undefined;
+        const isExistingSelected = canvas?.selected_nodes
             ? Boolean(canvas.selected_nodes[this.id] || canvas.selected_nodes[String(this.id)])
             : Boolean(this.is_selected);
+        const isSelected = dragPreview
+            ? (dragPreview.additive ? (isExistingSelected || dragPreview.ids.has(this.id)) : dragPreview.ids.has(this.id))
+            : isExistingSelected;
         const isHovered = canvas?.node_over === this;
         const isLibraryDropTarget = canvas?.library_drop_node === this;
         const isMainPreview = Boolean(this.properties?.is_main_preview);
@@ -986,8 +1112,19 @@ export abstract class BaseNode extends LGraphNode {
         this.updateLiveVisualState(telemetry);
 
         ctx.save();
+        if ((shiftX !== 0 || shiftY !== 0) && typeof ctx.translate === 'function') {
+            ctx.translate(shiftX, shiftY);
+        }
         if (this.isVisualizationActive) {
-            this.drawPanelFrame(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview, telemetry);
+            this.drawPanelFrame(
+                ctx,
+                isSelected,
+                isHovered,
+                isLibraryDropTarget,
+                isMainPreview,
+                telemetry,
+                Number(canvas?.ds?.scale) || 1
+            );
             if (!this.isModifier) {
                 this.drawSlots(ctx);
             }
@@ -1002,9 +1139,11 @@ export abstract class BaseNode extends LGraphNode {
             };
             this.drawVisualization(ctx, viewport, telemetry);
         } else {
-            this.drawSelectionRing(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview);
             if (!this.isModifier) {
                 this.drawBody(ctx, telemetry);
+            }
+            this.drawSelectionRing(ctx, isSelected, isHovered, isLibraryDropTarget, isMainPreview);
+            if (!this.isModifier) {
                 this.drawMinimalBorderFeedback(ctx, telemetry, isSelected, isMainPreview);
             }
             const drewCustomCenter = !this.isModifier && this.drawClosedIconOverlay(ctx, telemetry);
@@ -1019,11 +1158,11 @@ export abstract class BaseNode extends LGraphNode {
                 this.drawNameBadge(ctx, isSelected, isHovered, canvas);
             }
         }
-        ctx.restore();
 
         if (!this.isModifier) {
             this.onDrawForeground?.(ctx, canvas);
         }
+        ctx.restore();
     }
 
     get defaultVisualizationType(): VisualizationTypeId {
@@ -1136,9 +1275,13 @@ export abstract class BaseNode extends LGraphNode {
             : undefined;
         const resolvedPeaks = nodeRealtimePeaks || realtimeMasterPeaks;
 
-        let displayBuffer = isPreviewTarget
-            ? (schedulerBuf || masterBuf || manifestStem || lastRenderedBuf)
-            : (manifestStem || lastRenderedBuf || (isMainPreview && activePreviewId == null && !isInvalidated ? masterBuf : undefined));
+        const nativeRealtimeLoaded = Boolean(win?.__sinRealtimeLoaded);
+        const preferRealtimePeaks = nativeRealtimeLoaded && Boolean(resolvedPeaks) && this.getVisualizationType() === 'loop';
+        let displayBuffer = preferRealtimePeaks
+            ? undefined
+            : (isPreviewTarget
+                ? (schedulerBuf || masterBuf || manifestStem || lastRenderedBuf)
+                : (manifestStem || lastRenderedBuf || (isMainPreview && activePreviewId == null && !isInvalidated ? masterBuf : undefined)));
 
         // Only evaluate JS client-side buffer synthesis if we don't already have rendered buffer or native C++ peaks!
         if (!displayBuffer && !resolvedPeaks) {
@@ -1165,10 +1308,7 @@ export abstract class BaseNode extends LGraphNode {
             playbackProgress = curTime / expectedDuration;
         }
 
-        const isMaster = isMainPreview || this.properties?.role === 'master' || this.title === 'Master Track' || this.title === 'Master Output';
-        const accent = (isMaster && (!this.properties?.user_color || this.nodeColor === '#0f172a'))
-            ? (this.boxcolor || '#f59e0b')
-            : (this.nodeColor || this.boxcolor || '#4f46e5');
+        const accent = '#111111';
 
         const slots = typeof (this as any).getSlots === 'function' ? (this as any).getSlots() : undefined;
         const activeSlot = typeof (this as any).activeSlotIndex === 'number' ? (this as any).activeSlotIndex : undefined;
@@ -1192,7 +1332,8 @@ export abstract class BaseNode extends LGraphNode {
             const signal = this.resolveVisualizationSignal(telemetry);
             const scopeGain = Number(this.properties?.scope_gain) || 1.0;
             this.sharedOscilloscopeRenderer.setOptions({
-                accentColor: signal.accentColor,
+                accentColor: '#111111',
+                backgroundColor: 'transparent',
                 minified: this.isMinifiedStage,
                 scopeGain
             });
@@ -1204,7 +1345,8 @@ export abstract class BaseNode extends LGraphNode {
             const signal = this.resolveVisualizationSignal(telemetry);
             const scopeGain = Number(this.properties?.scope_gain) || 1.0;
             this.sharedSpectrumRenderer.setOptions({
-                accentColor: signal.accentColor,
+                accentColor: '#111111',
+                backgroundColor: 'transparent',
                 minified: this.isMinifiedStage,
                 scopeGain
             });
@@ -1215,7 +1357,8 @@ export abstract class BaseNode extends LGraphNode {
         if (vizType === 'loop') {
             const signal = this.resolveVisualizationSignal(telemetry);
             this.sharedWaveformRenderer.setOptions({
-                accentColor: signal.accentColor,
+                accentColor: '#111111',
+                backgroundColor: 'transparent',
                 minified: this.isMinifiedStage
             });
             this.sharedWaveformRenderer.setSignal(signal);
@@ -1228,7 +1371,8 @@ export abstract class BaseNode extends LGraphNode {
     protected drawDedicatedVisualization(ctx: CanvasRenderingContext2D, bounds: RenderBox, telemetry?: SignalTelemetry): void {
         const signal = this.resolveVisualizationSignal(telemetry);
         this.sharedWaveformRenderer.setOptions({
-            accentColor: signal.accentColor,
+            accentColor: '#111111',
+            backgroundColor: 'transparent',
             minified: this.isMinifiedStage
         });
         this.sharedWaveformRenderer.setSignal(signal);
@@ -1275,35 +1419,32 @@ export abstract class BaseNode extends LGraphNode {
         isSelected: boolean,
         isHovered: boolean,
         isLibraryDropTarget: boolean,
-        isMainPreview: boolean,
-        telemetry?: SignalTelemetry
+        _isMainPreview: boolean,
+        telemetry?: SignalTelemetry,
+        scale: number = 1
     ): void {
         const [width, height] = this.size;
         const shape = this.nodeShape;
+        const invScale = scale > 0 && scale < 0.75 ? Math.min(3.0, 0.75 / Math.max(0.15, scale)) : 1;
+        const palette = deriveMatteNodePalette(this.nodeColor);
         const deco = this._headerDeco;
-        deco.titleColor = '#0f172a';
+        deco.titleColor = '#111111';
         deco.titleOffsetX = 0;
         deco.borderColor = '';
         deco.borderWidth = 0;
 
-        // Selection / hover / main-preview outer ring
-        if (isMainPreview || isSelected || isLibraryDropTarget || isHovered) {
+        // Library drop target indicator only (no out-of-tone blue/amber selection outer ring)
+        if (isLibraryDropTarget) {
             ctx.save();
-            ctx.lineWidth = isSelected ? 2 : 1.5;
-            ctx.strokeStyle = isMainPreview
-                ? "#f59e0b"
-                : isSelected
-                    ? "#38bdf8"
-                    : isLibraryDropTarget
-                        ? "#22c55e"
-                        : "rgba(148, 163, 184, 0.55)";
+            ctx.lineWidth = 1.75 * invScale;
+            ctx.strokeStyle = "#22c55e";
             traceNodeShape(ctx, shape, -2, -2, width + 4, height + 4);
             ctx.stroke();
             ctx.restore();
         }
 
-        // Solid light panel background
-        ctx.fillStyle = "#ffffff";
+        // Matte native-tone panel background
+        ctx.fillStyle = palette.panelBg;
         traceNodeShape(ctx, shape, 0, 0, width, height);
         ctx.fill();
 
@@ -1314,21 +1455,30 @@ export abstract class BaseNode extends LGraphNode {
         traceNodeShape(ctx, shape, 0, 0, width, height);
         ctx.clip?.();
         if (telemetry?.isPlaying && this.supportsStepLighting && this.getLiveActivityState(telemetry).isTriggered) {
-            ctx.fillStyle = colorWithAlpha(this.nodeColor, 0.16);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.07)';
             ctx.fillRect(0, 0, width, headerHeight);
-            deco.borderColor = this.nodeColor;
-            deco.borderWidth = isSelected ? 2 : 1.5;
         }
         this.drawPanelHeaderDecorations(ctx, width, headerHeight, baseTitleX, telemetry);
         ctx.restore();
 
-        // Single peripheral border around everything
-        ctx.strokeStyle = deco.borderColor || this.boxcolor || this.nodeColor;
-        ctx.lineWidth = deco.borderWidth || (isSelected ? 1.5 : 1);
+        // Border matches background when deselected; highlights in native tone when selected/hovered
+        if (isSelected) {
+            ctx.strokeStyle = palette.borderSelected;
+            ctx.lineWidth = 2 * invScale;
+        } else if (isHovered) {
+            ctx.strokeStyle = palette.borderHover;
+            ctx.lineWidth = 1.25 * invScale;
+        } else if (deco.borderColor) {
+            ctx.strokeStyle = deco.borderColor;
+            ctx.lineWidth = (deco.borderWidth || 1.25) * invScale;
+        } else {
+            ctx.strokeStyle = palette.panelBg;
+            ctx.lineWidth = 1 * invScale;
+        }
         traceNodeShape(ctx, shape, 0, 0, width, height);
         ctx.stroke();
 
-        // Node Title (clean dark slate text with no header background or icon, dynamically truncated before buttons)
+        // Node Title (clean black/dark text with no header background or icon, dynamically truncated before buttons)
         const nodeName = this.properties?.node_name || this.title || "Node";
         ctx.font = "600 11px Inter, system-ui, sans-serif";
         ctx.fillStyle = deco.titleColor;
@@ -1344,13 +1494,16 @@ export abstract class BaseNode extends LGraphNode {
 
         // Subtle resize grip at bottom-right corner when selected
         if (isSelected && this.isVisualizationActive) {
-            ctx.strokeStyle = "rgba(100, 116, 139, 0.45)";
-            ctx.lineWidth = 1.25;
+            const gripNear = Math.min(18, Math.round(9 * invScale));
+            const gripFar = Math.min(10, Math.round(5 * invScale));
+            const gripPad = Math.min(5, Math.round(3 * invScale));
+            ctx.strokeStyle = "rgba(0, 0, 0, 0.30)";
+            ctx.lineWidth = 1.25 * invScale;
             ctx.beginPath();
-            ctx.moveTo(width - 9, height - 3);
-            ctx.lineTo(width - 3, height - 9);
-            ctx.moveTo(width - 5, height - 3);
-            ctx.lineTo(width - 3, height - 5);
+            ctx.moveTo(width - gripNear, height - gripPad);
+            ctx.lineTo(width - gripPad, height - gripNear);
+            ctx.moveTo(width - gripFar, height - gripPad);
+            ctx.lineTo(width - gripPad, height - gripFar);
             ctx.stroke();
         }
 
@@ -1362,51 +1515,43 @@ export abstract class BaseNode extends LGraphNode {
         isSelected: boolean,
         isHovered: boolean,
         isLibraryDropTarget: boolean,
-        isMainPreview: boolean
+        _isMainPreview: boolean
     ): void {
         const size = BaseNode.visualSize;
-        if (isMainPreview) {
-            traceNodeShape(ctx, this.nodeShape, -4, -4, size + 8);
+        const palette = deriveMatteNodePalette(this.nodeColor);
+        if (isLibraryDropTarget) {
+            traceNodeShape(ctx, this.nodeShape, -2, -2, size + 4);
             ctx.lineWidth = 2;
-            ctx.strokeStyle = "#f59e0b";
+            ctx.strokeStyle = "#22c55e";
             ctx.stroke();
         }
+        traceNodeShape(ctx, this.nodeShape, 0, 0, size);
         if (isSelected) {
-            traceNodeShape(ctx, this.nodeShape, -3, -3, size + 6);
-            ctx.fillStyle = "rgba(56, 189, 248, 0.14)";
-            ctx.fill();
             ctx.lineWidth = 2;
-            ctx.strokeStyle = "#38bdf8";
-            ctx.stroke();
-        } else if (isHovered || isLibraryDropTarget) {
-            traceNodeShape(ctx, this.nodeShape, -2.5, -2.5, size + 5);
-            ctx.lineWidth = isLibraryDropTarget ? 2.25 : 1.5;
-            ctx.strokeStyle = isLibraryDropTarget ? "#22c55e" : (this.isModifier ? "rgba(126, 34, 206, 0.45)" : "rgba(148, 163, 184, 0.65)");
-            ctx.stroke();
+            ctx.strokeStyle = palette.borderSelected;
+        } else if (isHovered) {
+            ctx.lineWidth = 1.25;
+            ctx.strokeStyle = palette.borderHover;
+        } else {
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = palette.iconBg;
         }
+        ctx.stroke();
     }
 
     protected drawBody(ctx: CanvasRenderingContext2D, telemetry?: SignalTelemetry): void {
         const size = BaseNode.visualSize;
         const activity = this.getLiveActivityState(telemetry);
         const shouldDim = Boolean(telemetry?.isPlaying && !activity.isTriggered);
+        const palette = deriveMatteNodePalette(this.nodeColor);
 
         ctx.save();
         if (shouldDim) {
             ctx.globalAlpha = 0.65;
         }
         traceNodeShape(ctx, this.nodeShape, 0, 0, size);
-        ctx.fillStyle = this.nodeColor;
+        ctx.fillStyle = palette.iconBg;
         ctx.fill();
-        if (telemetry?.isPlaying && activity.isTriggered && this.supportsStepLighting) {
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
-            ctx.fill();
-        }
-        if (this.boxcolor && this.boxcolor !== this.nodeColor) {
-            ctx.lineWidth = 1.5;
-            ctx.strokeStyle = this.boxcolor;
-            ctx.stroke();
-        }
         ctx.restore();
     }
 
@@ -1440,7 +1585,7 @@ export abstract class BaseNode extends LGraphNode {
 
     protected drawIcon(ctx: CanvasRenderingContext2D): void {
         const center = BaseNode.visualSize / 2;
-        const iconColor = this.isModifier ? (this.nodeColor || '#7e22ce') : '#f8fafc';
+        const iconColor = this.isModifier ? (this.nodeColor || '#7e22ce') : '#111111';
         drawNeonIcon(ctx, this.nodeIcon, center, center, this.isModifier ? 24 : 21, iconColor);
     }
 
@@ -1649,6 +1794,8 @@ export abstract class BaseNode extends LGraphNode {
 
     onConfigure(_info: any): void {
         this.resetPropertySnapshots();
+        this._distanceStage = 1;
+        this._distanceCollapseOffset = null;
         if (this.properties.visualization_enabled === undefined && this.isVisualizationSupported) {
             this.properties.visualization_enabled = true;
         }
@@ -1661,6 +1808,16 @@ export abstract class BaseNode extends LGraphNode {
         this.size = this.computeSize();
         this.resizable = this.isVisualizationActive;
         this.updateButtonLayout();
+    }
+
+    onSerialize(o: any): void {
+        if (this._distanceCollapseOffset && this.pos && this.pos.length >= 2) {
+            o.pos = [
+                this.pos[0] - this._distanceCollapseOffset[0],
+                this.pos[1] - this._distanceCollapseOffset[1]
+            ];
+            o.size = this.getExpandedPanelSize();
+        }
     }
 
     updateButtonLayout(): void {
@@ -1732,11 +1889,7 @@ export abstract class BaseNode extends LGraphNode {
             if (activeCanvas?.resizing_node === this) {
                 return [BaseNode.minVisualWidth, BaseNode.minVisualHeight];
             }
-            const customW = Number(this.properties?.visual_width);
-            const customH = Number(this.properties?.visual_height);
-            const w = Math.max(BaseNode.minVisualWidth, customW > 0 ? customW : this.visualPanelWidth);
-            const h = Math.max(BaseNode.minVisualHeight, customH > 0 ? customH : this.visualPanelHeight);
-            return [w, h];
+            return this.getExpandedPanelSize();
         }
         this.resizable = false;
         return [BaseNode.visualSize, BaseNode.visualSize];

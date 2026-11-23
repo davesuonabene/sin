@@ -1206,13 +1206,15 @@ export class SequenceNode extends BaseNode {
         }
 
         this.sequenceRenderer.setOptions({
-            minified: this.isMinifiedStage
+            minified: this.isMinifiedStage,
+            backgroundColor: 'transparent',
+            accentColor: '#111111'
         });
         this.sequenceRenderer.setSignal({
             stepCount,
             steps,
             stepLength: Number(this.properties?.step_length) || 0.25,
-            accentColor: this.nodeColor || '#ec4899',
+            accentColor: '#111111',
             slotCount: slots.length,
             activeSlot: irideActiveSlot
         });

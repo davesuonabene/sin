@@ -4,6 +4,74 @@ import { type SignalTelemetry, type WaveformSignal } from '../types.ts';
  * Clean 2D canvas drawing and signal helpers for IRIDE visualizations.
  */
 
+export interface MatteNodePalette {
+    readonly panelBg: string;
+    readonly borderHover: string;
+    readonly borderSelected: string;
+    readonly iconBg: string;
+    readonly iconSelectedRing: string;
+    readonly iconSelectedHalo: string;
+}
+
+const MATTE_PALETTE_CACHE = new Map<string, MatteNodePalette>();
+const MAX_MATTE_CACHE_SIZE = 48;
+
+function parseColorRgb(color: string): [number, number, number] {
+    if (color && color.startsWith('#')) {
+        let c = color.slice(1).trim();
+        if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
+        if (c.length >= 6) {
+            const num = parseInt(c.slice(0, 6), 16);
+            if (!Number.isNaN(num)) {
+                return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+            }
+        }
+    }
+    const match = String(color || '').match(/^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)/i);
+    if (match) {
+        return [
+            Math.max(0, Math.min(255, Math.round(Number(match[1])))),
+            Math.max(0, Math.min(255, Math.round(Number(match[2])))),
+            Math.max(0, Math.min(255, Math.round(Number(match[3]))))
+        ];
+    }
+    return [100, 116, 139];
+}
+
+function mixRgbWithWhite(r: number, g: number, b: number, alpha: number): string {
+    const mr = Math.round(255 * (1 - alpha) + r * alpha);
+    const mg = Math.round(255 * (1 - alpha) + g * alpha);
+    const mb = Math.round(255 * (1 - alpha) + b * alpha);
+    return `rgb(${mr}, ${mg}, ${mb})`;
+}
+
+export function deriveMatteNodePalette(baseColor: string): MatteNodePalette {
+    const key = String(baseColor || '#64748b').trim().toLowerCase();
+    const cached = MATTE_PALETTE_CACHE.get(key);
+    if (cached) return cached;
+
+    const [r, g, b] = parseColorRgb(key);
+    const surfaceBg = mixRgbWithWhite(r, g, b, 0.16);
+    const borderHover = mixRgbWithWhite(r, g, b, 0.45);
+    const borderSelected = `rgb(${r}, ${g}, ${b})`;
+
+    const palette: MatteNodePalette = {
+        panelBg: surfaceBg,
+        borderHover,
+        borderSelected,
+        iconBg: surfaceBg,
+        iconSelectedRing: borderSelected,
+        iconSelectedHalo: 'transparent'
+    };
+
+    if (MATTE_PALETTE_CACHE.size >= MAX_MATTE_CACHE_SIZE) {
+        const oldest = MATTE_PALETTE_CACHE.keys().next().value;
+        if (oldest !== undefined) MATTE_PALETTE_CACHE.delete(oldest);
+    }
+    MATTE_PALETTE_CACHE.set(key, palette);
+    return palette;
+}
+
 export function colorWithAlpha(color: string, alpha: number): string {
     if (!color) return `rgba(5, 150, 105, ${alpha})`;
     if (color.startsWith('#')) {
@@ -84,7 +152,7 @@ export function drawPlayhead(
     x: number,
     topY: number,
     bottomY: number,
-    color = '#38bdf8'
+    color = '#000000'
 ): void {
     ctx.save();
     ctx.strokeStyle = color;
@@ -115,7 +183,7 @@ export function drawSlotBadge(
     const textW = ctx.measureText(label).width;
     const pillW = textW + 6;
     const pillH = 11;
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
     drawRoundRect(ctx, x + 3, y + 3, pillW, pillH, 2.5);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
@@ -272,4 +340,97 @@ export function sampleSignalAmplitude(
     }
 
     return { min: 0, max: 0, rms: 0, active: false };
+}
+
+/**
+ * Computes un-clamped stereo RMS and true peak over a trailing window of an AudioBuffer
+ * at the given playhead time. Preserves values >= 1.0 so clipping is detected accurately.
+ */
+export function sampleBufferMeterLevels(
+    buffer: AudioBuffer | null | undefined,
+    timeSec: number,
+    durationSec: number,
+    windowSeconds = 0.045
+): { rms: number; peak: number; active: boolean } {
+    if (!buffer || buffer.length <= 0) {
+        return { rms: 0, peak: 0, active: false };
+    }
+    const sr = buffer.sampleRate || 44100;
+    const totalSamples = buffer.length;
+    const dur = durationSec > 0 ? durationSec : (buffer.duration > 0 ? buffer.duration : totalSamples / sr);
+    if (dur <= 0) {
+        return { rms: 0, peak: 0, active: false };
+    }
+    const wrappedTime = ((timeSec % dur) + dur) % dur;
+    const normPos = Math.max(0, Math.min(1, wrappedTime / dur));
+    const windowSamples = Math.max(32, Math.min(4096, Math.floor(windowSeconds * sr)));
+    const endSample = Math.min(totalSamples, Math.max(1, Math.floor(normPos * totalSamples)));
+    const startSample = Math.max(0, endSample - windowSamples);
+    const count = Math.max(1, endSample - startSample);
+
+    const ch0 = buffer.getChannelData(0);
+    const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : null;
+    let peak = 0;
+    let sumSq = 0;
+
+    if (ch1) {
+        for (let i = startSample; i < endSample; i++) {
+            const l = ch0[i];
+            const r = ch1[i];
+            const al = l < 0 ? -l : l;
+            const ar = r < 0 ? -r : r;
+            if (al > peak) peak = al;
+            if (ar > peak) peak = ar;
+            sumSq += 0.5 * (l * l + r * r);
+        }
+    } else {
+        for (let i = startSample; i < endSample; i++) {
+            const v = ch0[i];
+            const av = v < 0 ? -v : v;
+            if (av > peak) peak = av;
+            sumSq += v * v;
+        }
+    }
+
+    return {
+        rms: Math.sqrt(sumSq / count),
+        peak,
+        active: true
+    };
+}
+
+/**
+ * Estimates RMS and peak meter levels around normalized progress [0..1] from interleaved [min, max] peaks.
+ */
+export function samplePeaksMeterLevels(
+    peaks: Float32Array | null | undefined,
+    progress: number,
+    windowFraction = 0.025
+): { rms: number; peak: number; active: boolean } {
+    if (!peaks || peaks.length < 2) {
+        return { rms: 0, peak: 0, active: false };
+    }
+    const cols = Math.floor(peaks.length / 2);
+    if (cols <= 0) return { rms: 0, peak: 0, active: false };
+    const p = Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 0));
+    const endCol = Math.min(cols, Math.max(1, Math.ceil(p * cols)));
+    const span = Math.max(1, Math.min(cols, Math.ceil(cols * windowFraction)));
+    const startCol = Math.max(0, endCol - span);
+    let peak = 0;
+    let sumSq = 0;
+    let count = 0;
+    for (let i = startCol; i < endCol; i++) {
+        const mn = Math.abs(peaks[i * 2]);
+        const mx = Math.abs(peaks[i * 2 + 1]);
+        const colPeak = mn > mx ? mn : mx;
+        if (colPeak > peak) peak = colPeak;
+        const estRms = colPeak * 0.7071;
+        sumSq += estRms * estRms;
+        count++;
+    }
+    return {
+        rms: count > 0 ? Math.sqrt(sumSq / count) : 0,
+        peak,
+        active: true
+    };
 }

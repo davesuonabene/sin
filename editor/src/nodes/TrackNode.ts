@@ -3,11 +3,15 @@ import { BaseNode, type NodeToolbarControl } from './BaseNode.ts';
 import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import {
+    CLIP_FILL_COLOR,
     CLIP_MARKER_COLOR,
     MASTER_CLIP_THRESHOLD,
-    getQuantizedRmsColor,
-    getQuantizedRmsHeaderStyle,
+    deriveMatteNodePalette,
+    drawHeaderRmsMeter,
+    drawIconRmsFill,
     rmsToMeterLevel,
+    sampleBufferMeterLevels,
+    samplePeaksMeterLevels,
     type SignalTelemetry,
     type VisualizationTypeId
 } from '../../../packages/iride/src/index.ts';
@@ -21,7 +25,10 @@ export class TrackNode extends BaseNode {
     private _lastMixedSources: AudioBuffer[] = [];
     private _lastMixedGain: number = 1.0;
     public hasClipWarning = false;
-    private _smoothedMasterRms = 0;
+    private _smoothedRms = 0;
+    private _smoothedPeak = 0;
+    private _peakHoldUntil = 0;
+    private _lastVisualUpdateMs = 0;
     private _clipFlashUntil = 0;
     private _isActivelyClipping = false;
 
@@ -172,49 +179,95 @@ export class TrackNode extends BaseNode {
     }
 
     protected override updateLiveVisualState(telemetry?: SignalTelemetry): void {
-        if (!this.isMasterNode) return;
         const isPlaying = Boolean(telemetry?.isPlaying);
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const dt = this._lastVisualUpdateMs > 0
+            ? Math.max(0.008, Math.min(0.08, (now - this._lastVisualUpdateMs) / 1000))
+            : 0.016;
+        this._lastVisualUpdateMs = now;
+
         let rawRms = 0;
         let rawPeak = 0;
 
         if (isPlaying && telemetry) {
-            if (typeof telemetry.masterRms === 'number' && Number.isFinite(telemetry.masterRms)) {
+            const busLevel = telemetry.busLevels?.get(String(this.id));
+            if (busLevel) {
+                rawRms = Math.max(0, busLevel.rms);
+                rawPeak = Math.max(0, busLevel.peak);
+            } else if (telemetry.busLevels && telemetry.busLevels.size > 0) {
+                if (this.isMasterNode && typeof telemetry.masterRms === 'number' && Number.isFinite(telemetry.masterRms)) {
+                    rawRms = Math.max(0, telemetry.masterRms);
+                    rawPeak = typeof telemetry.masterPeak === 'number' && Number.isFinite(telemetry.masterPeak)
+                        ? Math.max(0, telemetry.masterPeak)
+                        : rawRms;
+                }
+            } else if (this.isMasterNode && typeof telemetry.masterRms === 'number' && Number.isFinite(telemetry.masterRms)
+                && (telemetry.masterRms > 0 || (telemetry.masterPeak ?? 0) > 0)) {
                 rawRms = Math.max(0, telemetry.masterRms);
                 rawPeak = typeof telemetry.masterPeak === 'number' && Number.isFinite(telemetry.masterPeak)
                     ? Math.max(0, telemetry.masterPeak)
                     : rawRms;
-            } else if (telemetry.realtimeScope && telemetry.realtimeScope.length > 0) {
-                const scope = telemetry.realtimeScope;
-                let sumSq = 0;
-                let count = 0;
-                for (let i = 0; i < scope.length; i += 2) {
-                    const v = scope[i];
-                    const av = v < 0 ? -v : v;
-                    if (av > rawPeak) rawPeak = av;
-                    sumSq += v * v;
-                    count++;
+            } else {
+                const buf = this.getAudioBuffer();
+                if (buf && buf.length > 0) {
+                    const dur = buf.duration > 0 ? buf.duration : (telemetry.duration || 1);
+                    const sampled = sampleBufferMeterLevels(buf, telemetry.time, dur, 0.045);
+                    rawRms = sampled.rms;
+                    rawPeak = sampled.peak;
+                } else if ((this as any).realtimePeaks) {
+                    const dur = Number((this as any).realtimePeaksDuration || telemetry.duration || 1);
+                    const progress = dur > 0 ? (((telemetry.time % dur) + dur) % dur) / dur : 0;
+                    const sampled = samplePeaksMeterLevels((this as any).realtimePeaks as Float32Array, progress, 0.025);
+                    rawRms = sampled.rms;
+                    rawPeak = sampled.peak;
+                } else if (this.isMasterNode && telemetry.realtimeScope && telemetry.realtimeScope.length > 0) {
+                    const scope = telemetry.realtimeScope;
+                    let sumSq = 0;
+                    let count = 0;
+                    for (let i = 0; i < scope.length; i += 2) {
+                        const v = scope[i];
+                        const av = v < 0 ? -v : v;
+                        if (av > rawPeak) rawPeak = av;
+                        sumSq += v * v;
+                        count++;
+                    }
+                    rawRms = count > 0 ? Math.sqrt(sumSq / count) : 0;
                 }
-                rawRms = count > 0 ? Math.sqrt(sumSq / count) : 0;
             }
         }
 
         if (!isPlaying) {
-            this._smoothedMasterRms *= 0.72;
-            if (this._smoothedMasterRms < 0.001) {
-                this._smoothedMasterRms = 0;
-            }
+            const decay = Math.exp(-dt / 0.090);
+            this._smoothedRms *= decay;
+            this._smoothedPeak *= decay;
+            if (this._smoothedRms < 0.001) this._smoothedRms = 0;
+            if (this._smoothedPeak < 0.001) this._smoothedPeak = 0;
         } else {
-            const coeff = rawRms > this._smoothedMasterRms ? 0.55 : 0.18;
-            this._smoothedMasterRms += (rawRms - this._smoothedMasterRms) * coeff;
+            const tauRms = rawRms > this._smoothedRms ? 0.024 : 0.220;
+            const alphaRms = 1 - Math.exp(-dt / tauRms);
+            this._smoothedRms += (rawRms - this._smoothedRms) * alphaRms;
+            if (this._smoothedRms < 0.0005 && rawRms === 0) this._smoothedRms = 0;
+
+            if (rawPeak >= this._smoothedPeak) {
+                this._smoothedPeak = rawPeak;
+                this._peakHoldUntil = now + 180;
+            } else if (now >= this._peakHoldUntil) {
+                const peakDecay = Math.exp(-dt / 0.240);
+                this._smoothedPeak = Math.max(rawPeak, this._smoothedPeak * peakDecay);
+                if (this._smoothedPeak < 0.001) this._smoothedPeak = 0;
+            }
         }
 
-        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-        if (isPlaying && rawPeak >= MASTER_CLIP_THRESHOLD) {
-            this.hasClipWarning = true;
-            this._clipFlashUntil = now + 220;
+        const isParamOpen = this.isParametersPanelOpen();
+        const hitClip = isPlaying && rawPeak >= MASTER_CLIP_THRESHOLD;
+        if (hitClip) {
+            this._clipFlashUntil = now + 260;
+            if (!isParamOpen) {
+                this.hasClipWarning = true;
+            }
         }
         this._isActivelyClipping = Boolean(
-            isPlaying && (rawPeak >= MASTER_CLIP_THRESHOLD || now < this._clipFlashUntil)
+            isPlaying && (hitClip || now < this._clipFlashUntil)
         );
     }
 
@@ -226,24 +279,26 @@ export class TrackNode extends BaseNode {
     }
 
     protected override drawBody(ctx: CanvasRenderingContext2D, telemetry?: SignalTelemetry): void {
-        if (!this.isMasterNode) {
-            super.drawBody(ctx, telemetry);
-            return;
-        }
         const size = BaseNode.visualSize;
-        const level = rmsToMeterLevel(this._smoothedMasterRms);
-        const fillColor = getQuantizedRmsColor(this.nodeColor, level, this._isActivelyClipping);
+        const level = rmsToMeterLevel(this._smoothedRms);
+        const peakLevel = telemetry?.isPlaying ? rmsToMeterLevel(this._smoothedPeak) : 0;
+        const baseFill = deriveMatteNodePalette(this.nodeColor).iconBg;
+        const fillColor = this._isActivelyClipping ? CLIP_FILL_COLOR : baseFill;
         ctx.save();
         traceNodeShape(ctx, this.nodeShape, 0, 0, size);
         ctx.fillStyle = fillColor;
         ctx.fill();
+        if (level > 0.005 || peakLevel > 0.01 || this._isActivelyClipping) {
+            ctx.save();
+            traceNodeShape(ctx, this.nodeShape, 0, 0, size);
+            ctx.clip?.();
+            drawIconRmsFill(ctx, size, level, peakLevel, baseFill, this._isActivelyClipping);
+            ctx.restore();
+        }
         if (this._isActivelyClipping) {
+            traceNodeShape(ctx, this.nodeShape, 0, 0, size);
             ctx.lineWidth = 1.75;
             ctx.strokeStyle = CLIP_MARKER_COLOR;
-            ctx.stroke();
-        } else if (this.boxcolor && this.boxcolor !== this.nodeColor) {
-            ctx.lineWidth = 1.5;
-            ctx.strokeStyle = this.boxcolor;
             ctx.stroke();
         }
         ctx.restore();
@@ -256,22 +311,26 @@ export class TrackNode extends BaseNode {
         _titleX: number,
         telemetry?: SignalTelemetry
     ): void {
-        if (!this.isMasterNode) return;
-        const level = telemetry?.isPlaying ? rmsToMeterLevel(this._smoothedMasterRms) : 0;
-        const style = getQuantizedRmsHeaderStyle(this.nodeColor, level, this._isActivelyClipping);
-        if (style.bg) {
-            ctx.fillStyle = style.bg;
-            ctx.fillRect(0, 0, width, headerHeight);
-        }
+        const level = telemetry?.isPlaying ? rmsToMeterLevel(this._smoothedRms) : 0;
+        const peakLevel = telemetry?.isPlaying ? rmsToMeterLevel(this._smoothedPeak) : 0;
+        const style = drawHeaderRmsMeter(
+            ctx,
+            width,
+            headerHeight,
+            level,
+            peakLevel,
+            '#111111',
+            this._isActivelyClipping
+        );
         this._headerDeco.titleColor = style.fg;
-        if (style.border) {
+        if (this._isActivelyClipping && style.border) {
             this._headerDeco.borderColor = style.border;
-            this._headerDeco.borderWidth = this._isActivelyClipping ? 1.75 : 1.25;
+            this._headerDeco.borderWidth = 1.75;
         }
     }
 
     protected override drawAlertBorder(ctx: CanvasRenderingContext2D, isOpenedPanel: boolean): void {
-        if (!this.isMasterNode || !this.hasClipWarning) return;
+        if (!this.hasClipWarning && !this._isActivelyClipping) return;
         ctx.save();
         ctx.strokeStyle = CLIP_MARKER_COLOR;
         ctx.lineWidth = 2.5;

@@ -7,7 +7,7 @@ export class SequenceRenderer extends BaseSignalRenderer {
 
     constructor(options: RendererOptions = {}) {
         super({
-            accentColor: '#f43f5e',
+            accentColor: '#111111',
             ...options
         });
     }
@@ -31,14 +31,16 @@ export class SequenceRenderer extends BaseSignalRenderer {
         drawRoundRect(ctx, x, y, width, height, 4);
         ctx.clip();
 
-        // 2. Background: clean light background matching theme
-        ctx.fillStyle = this.options.backgroundColor || '#ffffff';
-        ctx.fillRect(x, y, width, height);
+        // 2. Background: only paint if explicitly opaque
+        if (this.options.backgroundColor && this.options.backgroundColor !== 'transparent') {
+            ctx.fillStyle = this.options.backgroundColor;
+            ctx.fillRect(x, y, width, height);
+        }
 
         const signal = this.signal;
         const stepCount = signal?.stepCount || 16;
         const steps = signal?.steps || [];
-        const accent = signal?.accentColor || this.options.accentColor || '#f43f5e';
+        const dataColor = '#111111';
         const isMinified = Boolean(this.options.minified);
 
         // 3. Spacing & Beat Grouping (4 beats of 4 steps)
@@ -86,40 +88,40 @@ export class SequenceRenderer extends BaseSignalRenderer {
             const isCurrent = i === currentStep;
             const isDownbeat = stepInBeat === 0;
 
-            // Pad Background: colored ONLY if active, inactive steps are just borders
+            // Pad Background: monochrome black active step, white flash on trigger hit
             if (isGateOn) {
                 if (isCurrent) {
-                    ctx.fillStyle = '#ffffff'; // White flash on trigger hit
+                    ctx.fillStyle = '#ffffff';
                 } else {
-                    ctx.fillStyle = accent;    // Bright vivid neon active step
+                    ctx.fillStyle = dataColor;
                 }
                 drawRoundRect(ctx, stepX, stepY, stepWidth, stepHeight, 2.5);
                 ctx.fill();
             }
 
-            // Velocity indicator bar (inside active steps)
+            // Velocity indicator bar (inside active black steps)
             if (isGateOn && !isCurrent && velocity < 0.95) {
                 const velEmptyH = stepHeight * (1 - velocity);
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.68)';
                 ctx.fillRect(stepX, stepY, stepWidth, velEmptyH);
             }
 
             // Gate length duty-cycle indicator bar (at bottom of active steps)
             if (isGateOn && !isCurrent && gateLength < 0.98) {
                 const gateW = Math.max(2, (stepWidth - 2) * gateLength);
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
                 ctx.fillRect(stepX + 1, stepY + stepHeight - 2, gateW, 1);
             }
 
             // Pad Border
             if (isCurrent) {
-                ctx.strokeStyle = isGateOn ? '#ffffff' : '#38bdf8';
+                ctx.strokeStyle = '#000000';
                 ctx.lineWidth = 1.75;
             } else if (isGateOn) {
-                ctx.strokeStyle = '#fbcfe8';
+                ctx.strokeStyle = '#000000';
                 ctx.lineWidth = 1;
             } else {
-                ctx.strokeStyle = isDownbeat ? '#94a3b8' : '#cbd5e1';
+                ctx.strokeStyle = isDownbeat ? 'rgba(0, 0, 0, 0.38)' : 'rgba(0, 0, 0, 0.20)';
                 ctx.lineWidth = 0.75;
             }
             drawRoundRect(ctx, stepX, stepY, stepWidth, stepHeight, 2.5);
@@ -133,7 +135,7 @@ export class SequenceRenderer extends BaseSignalRenderer {
 
             // Per-step sample slot index indicator when non-zero (omitted in minified stage)
             if (!isMinified && isGateOn && stepData?.slotIndex != null && stepData.slotIndex > 0 && stepWidth >= 5) {
-                ctx.fillStyle = isCurrent ? '#0f172a' : '#ffffff';
+                ctx.fillStyle = isCurrent ? '#000000' : '#ffffff';
                 ctx.font = 'bold 6.5px Inter, monospace';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'top';
@@ -162,7 +164,7 @@ export class SequenceRenderer extends BaseSignalRenderer {
             const textW = ctx.measureText(label).width;
             const pillW = textW + 5;
             const pillH = 10;
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
             drawRoundRect(ctx, x + width - pillW - 2, y + height - pillH - 1, pillW, pillH, 2);
             ctx.fill();
             ctx.fillStyle = '#ffffff';

@@ -18,6 +18,11 @@ export interface RenderBox {
     height: number;
 }
 
+export interface NodeLevelTelemetry {
+    rms: number;
+    peak: number;
+}
+
 export interface SignalTelemetry {
     time: number;             // Elapsed playback time in seconds
     duration: number;         // Master audio duration in seconds
@@ -30,6 +35,7 @@ export interface SignalTelemetry {
     realtimeSpectrum?: Uint8Array | null; // Real-time FFT frequency spectrum buffer
     masterRms?: number;       // Combined stereo master RMS amplitude (0..1+)
     masterPeak?: number;      // Instantaneous pre-clamp master peak (0..1+; >= 0.999 = clip)
+    busLevels?: ReadonlyMap<string, NodeLevelTelemetry>; // Per-node/bus RMS & peak telemetry
 }
 
 export interface WaveformSignal {

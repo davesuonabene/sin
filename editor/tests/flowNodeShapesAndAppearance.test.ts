@@ -12,10 +12,14 @@ import {
 } from '../src/nodes/NodeVisuals.ts';
 import {
     CLIP_FILL_COLOR,
+    CLIP_MARKER_COLOR,
+    drawHeaderRmsMeter,
+    drawIconRmsFill,
     drawRadialLoopProgress,
     getQuantizedRmsColor,
     getQuantizedRmsHeaderStyle,
-    rmsToMeterLevel
+    rmsToMeterLevel,
+    sampleBufferMeterLevels
 } from '../../packages/iride/src/index.ts';
 import { SectionRendererFactory } from '../src/ui/SectionRendererFactory.ts';
 
@@ -252,6 +256,50 @@ test('IRIDE iconVisuals: quantized RMS color modulation, clip warning color, and
     assert.equal(arcs[0].r, 14);
     assert.ok(Math.abs(arcs[1].ea - Math.PI * 0.5) < 1e-6);
     assert.ok(lines.length >= 3, 'Should draw wedge center vertex plus section divider line');
+
+    // Mid-luminance indigo (#4f46e5) modulates monotonically without dark step-1 discontinuity
+    const baseIndigo = '#4f46e5';
+    assert.equal(getQuantizedRmsColor(baseIndigo, 0, false), baseIndigo);
+    const step1Indigo = getQuantizedRmsColor(baseIndigo, 1 / 15, false);
+    const hotIndigo = getQuantizedRmsColor(baseIndigo, 1.0, false);
+    assert.notEqual(step1Indigo, baseIndigo);
+    assert.notEqual(hotIndigo, step1Indigo);
+
+    // drawIconRmsFill & drawHeaderRmsMeter render bottom-up / horizontal RMS curves and peak markers
+    const fillRects: Array<{ x: number; y: number; w: number; h: number; fillStyle: string }> = [];
+    const meterCtx = {
+        fillRect: function (x: number, y: number, w: number, h: number) {
+            fillRects.push({ x, y, w, h, fillStyle: this.fillStyle });
+        },
+        fillStyle: ''
+    } as unknown as CanvasRenderingContext2D;
+
+    drawIconRmsFill(meterCtx, 44, 0.6, 0.85, baseIndigo, false);
+    assert.ok(fillRects.length >= 3, 'Icon RMS fill should draw body wash, crest line, and peak-hold line');
+    assert.ok(fillRects.some(r => r.y < 22 && r.h < 4), 'Icon RMS fill should draw upper crest/peak line');
+
+    fillRects.length = 0;
+    const hdrStyle = drawHeaderRmsMeter(meterCtx, 220, 22, 0.7, 0.98, baseIndigo, false);
+    assert.equal(hdrStyle.fg, '#0f172a');
+    assert.ok(fillRects.some(r => r.h === 22 && r.w > 100), 'Header RMS meter draws horizontal wash');
+    assert.ok(fillRects.some(r => r.h === 2.5 && r.y === 19.5), 'Header RMS meter draws bottom RMS ribbon');
+    assert.ok(fillRects.some(r => r.fillStyle === CLIP_MARKER_COLOR && r.w === 2), 'Header RMS meter draws near-clip peak pip');
+
+    // sampleBufferMeterLevels reports un-clamped RMS and peak above 1.0 for clipping detection
+    const sr = 48000;
+    const hotSamples = new Float32Array(sr);
+    hotSamples.fill(1.25);
+    const hotBuf = {
+        sampleRate: sr,
+        length: hotSamples.length,
+        duration: 1.0,
+        numberOfChannels: 1,
+        getChannelData: () => hotSamples
+    } as unknown as AudioBuffer;
+    const levels = sampleBufferMeterLevels(hotBuf, 0.5, 1.0, 0.04);
+    assert.equal(levels.active, true);
+    assert.ok(Math.abs(levels.rms - 1.25) < 1e-4);
+    assert.ok(Math.abs(levels.peak - 1.25) < 1e-4);
 });
 
 

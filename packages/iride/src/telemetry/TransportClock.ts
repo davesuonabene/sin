@@ -1,4 +1,4 @@
-import { type SignalTelemetry } from '../types.ts';
+import { type NodeLevelTelemetry, type SignalTelemetry } from '../types.ts';
 
 export type TelemetryListener = (telemetry: SignalTelemetry) => void;
 
@@ -16,6 +16,7 @@ export class TransportClock {
     private realtimeSpectrumData: Uint8Array | null = null;
     private masterRms = 0;
     private masterPeak = 0;
+    private readonly busLevels = new Map<string, NodeLevelTelemetry>();
     private readonly listeners = new Set<TelemetryListener>();
 
     setBpm(bpm: number): void {
@@ -41,6 +42,32 @@ export class TransportClock {
         this.masterPeak = Number.isFinite(peak) && peak > 0 ? peak : 0;
     }
 
+    setBusLevels(
+        rmsByNodeId?: Record<string, number> | null,
+        peaksByNodeId?: Record<string, number> | null
+    ): void {
+        this.busLevels.clear();
+        if (!rmsByNodeId && !peaksByNodeId) return;
+        const keys = new Set<string>();
+        if (rmsByNodeId) {
+            for (const k of Object.keys(rmsByNodeId)) keys.add(k);
+        }
+        if (peaksByNodeId) {
+            for (const k of Object.keys(peaksByNodeId)) keys.add(k);
+        }
+        for (const key of keys) {
+            const rawPeak = peaksByNodeId ? Number(peaksByNodeId[key]) : NaN;
+            const peak = Number.isFinite(rawPeak) && rawPeak > 0 ? rawPeak : 0;
+            const rawRms = rmsByNodeId ? Number(rmsByNodeId[key]) : NaN;
+            const rms = Number.isFinite(rawRms) && rawRms > 0
+                ? rawRms
+                : (peak > 0 && (!rmsByNodeId || rmsByNodeId[key] === undefined) ? peak * 0.7071 : 0);
+            if (rms > 0 || peak > 0) {
+                this.busLevels.set(key, { rms, peak });
+            }
+        }
+    }
+
     update(time: number, duration: number, isPlaying: boolean, activeNodeIds?: Set<number | string>): void {
         this.time = Math.max(0, time);
         this.duration = Math.max(0, duration);
@@ -48,6 +75,7 @@ export class TransportClock {
         if (!isPlaying) {
             this.masterRms = 0;
             this.masterPeak = 0;
+            this.busLevels.clear();
         }
         if (activeNodeIds) {
             this.activeNodeIds = activeNodeIds;
@@ -82,7 +110,8 @@ export class TransportClock {
             realtimeScope: this.realtimeScopeData,
             realtimeSpectrum: this.realtimeSpectrumData,
             masterRms: this.isPlaying ? this.masterRms : 0,
-            masterPeak: this.isPlaying ? this.masterPeak : 0
+            masterPeak: this.isPlaying ? this.masterPeak : 0,
+            busLevels: (this.isPlaying && this.busLevels.size > 0) ? this.busLevels : undefined
         };
     }
 

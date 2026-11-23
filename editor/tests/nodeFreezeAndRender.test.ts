@@ -2,6 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TrackNode } from '../src/nodes/TrackNode.ts';
 import { SampleNode } from '../src/nodes/SampleNode.ts';
+import { SequenceNode } from '../src/nodes/SequenceNode.ts';
+import { ArrangementNode } from '../src/nodes/ArrangementNode.ts';
+import {
+    collectNodesInSelectionRect,
+    computeResizedNodeRect,
+    detectNodeResizeEdge,
+    getResizeCursor,
+    syncNodesDistanceStage
+} from '../src/canvas/canvasGeometry.ts';
+import { ModulatorNode } from '../src/nodes/ModulatorNode.ts';
 import { resolveAssignedAssetFilters } from '../../ermes/ts/assetResolver.ts';
 import { resolveAssignedRandomModifiers } from '../../ermes/ts/randomResolver.ts';
 import { serializeNodeSubtree } from '../../ermes/ts/serializer.ts';
@@ -477,10 +487,10 @@ test('Distance model, bidirectional node resizing, and top-right Pool / Random m
     assert.equal(sample.properties.visual_width, 150);
     assert.equal(sample.properties.visual_height, 60);
 
-    // Intermediate zoom (scale = 0.55) remains in Stage 1
+    // Intermediate zoom (scale = 0.55) remains in Stage 1 for shrunk 150x60 node (collapseScale ~= 0.545)
     sample.syncDistanceStage(0.55);
     assert.equal(sample.currentDistanceStage, 1);
-    assert.equal(sample.isVisualizationActive, true, 'Viewer remains active above 0.40');
+    assert.equal(sample.isVisualizationActive, true, 'Viewer remains active above collapse threshold');
     assert.equal(sample.isMinifiedStage, false);
 
     // Stage 3: Far / Maximum distance (scale = 0.30) -> Viewer force-shut and not toggleable back
@@ -496,11 +506,16 @@ test('Distance model, bidirectional node resizing, and top-right Pool / Random m
     assert.equal(sample.isVisualizationActive, false, 'Viewer cannot be toggled back on at Stage 3');
     assert.equal(sample.properties.visualization_enabled, true, 'Underlying Viewer Cook preference is preserved');
 
-    // Returning above 0.44 restores the viewer and custom size automatically
+    // Scale 0.55 stays in Stage 3 due to hysteresis for the 150x60 node (expandScale ~= 0.600)
     sample.syncDistanceStage(0.55);
+    assert.equal(sample.currentDistanceStage, 3, 'Hysteresis keeps shrunk 150x60 node collapsed inside deadband');
+
+    // Returning above expandScale (~0.600) restores the viewer and custom size automatically
+    sample.syncDistanceStage(0.62);
     assert.equal(sample.currentDistanceStage, 1);
     assert.equal(sample.isVisualizationActive, true);
     assert.equal(sample.size[0], 150);
+    assert.equal(sample.size[1], 60);
 
     // Eye button acts as per-node "Viewer Cook" shutoff in Stage 1
     sample.eyeBtn.onClick();
@@ -729,7 +744,7 @@ function createRecordingCanvasCtx() {
 test('Closed, distant, and opened IRIDE visualizations render radial Arrangement, Sample slot index, Sequence step lighting, Master RMS/clip, and distant name badges without moving perimeter bars', async () => {
     const { ArrangementNode } = await import('../src/nodes/ArrangementNode.ts');
     const { SequenceNode } = await import('../src/nodes/SequenceNode.ts');
-    const { defaultTransportClock, CLIP_FILL_COLOR, CLIP_MARKER_COLOR } = await import('../../packages/iride/src/index.ts');
+    const { defaultTransportClock, deriveMatteNodePalette, CLIP_FILL_COLOR, CLIP_MARKER_COLOR } = await import('../../packages/iride/src/index.ts');
 
     const prevWindow = (globalThis as any).window;
     const winObj: any = {
@@ -743,7 +758,7 @@ test('Closed, distant, and opened IRIDE visualizations render radial Arrangement
     try {
         defaultTransportClock.setBpm(120);
 
-        // 1. SequenceNode: no moving perimeter bar (no setLineDash), step lighting dims inactive steps & lights active steps
+        // 1. SequenceNode: no moving perimeter bar (no setLineDash), flat active step & dimmed inactive steps
         const seq = new SequenceNode();
         seq.id = 301;
         seq.properties.node_name = 'Kick Seq';
@@ -755,7 +770,8 @@ test('Closed, distant, and opened IRIDE visualizations render radial Arrangement
         const seqRecActive = createRecordingCanvasCtx();
         seq.drawCanvas(seqRecActive.ctx, { ds: { scale: 1.0 } });
         assert.equal(seqRecActive.lineDashes.length, 0, 'Closed SequenceNode must not draw moving dashed perimeter bar');
-        assert.ok(seqRecActive.fills.includes('rgba(255, 255, 255, 0.16)'), 'Active step should apply step-lighting sheen');
+        assert.ok(seqRecActive.fills.includes(deriveMatteNodePalette(seq.nodeColor).iconBg), 'Active step should render flat native matte tone without internal lighting');
+        assert.ok(!seqRecActive.fills.includes('rgba(255, 255, 255, 0.16)'), 'Flat matte icon must not apply internal white lighting sheen');
 
         defaultTransportClock.update(0.125, 4.0, true); // beat 0.25 -> step 1 (inactive)
         const seqRecInactive = createRecordingCanvasCtx();
@@ -851,7 +867,7 @@ test('Closed, distant, and opened IRIDE visualizations render radial Arrangement
         sample.drawCanvas(sampleOpenRec.ctx, { ds: { scale: 1.0 } });
         assert.ok(sampleOpenRec.texts.some(t => t.text === '2' && t.y <= 22), 'Opened SampleNode should display live slot index pill in header');
 
-        // 4. Master TrackNode: RMS modulates own color, turns red on clip, latches red marker until Parameters opened
+        // 4. Master TrackNode: flat matte transparent base color, monochrome RMS meter fill, turns red on clip, latches red marker until Parameters opened
         const master = new TrackNode();
         master.id = 304;
         master.properties.node_name = 'Master Output';
@@ -859,21 +875,23 @@ test('Closed, distant, and opened IRIDE visualizations render radial Arrangement
         master.properties.color = '#0f172a';
         master.color = '#0f172a';
         master.properties.visualization_enabled = false;
+        const masterExpectedMatte = deriveMatteNodePalette('#0f172a');
 
-        // Silence -> base color
+        // Silence -> flat matte base color (matching expanded panel background)
         defaultTransportClock.setMasterLevels(0, 0);
         defaultTransportClock.update(0.0, 4.0, false);
         const masterIdleRec = createRecordingCanvasCtx();
         master.drawCanvas(masterIdleRec.ctx, { ds: { scale: 1.0 } });
-        assert.ok(masterIdleRec.fills.includes('#0f172a'));
+        assert.ok(masterIdleRec.fills.includes(masterExpectedMatte.iconBg));
         assert.equal(master.hasClipWarning, false);
 
-        // Mid RMS -> own hue brightened, not red, no clip latch
+        // Mid RMS -> flat base color + monochrome RMS meter overlay, not red, no clip latch
         defaultTransportClock.setMasterLevels(0.35, 0.55);
         defaultTransportClock.update(0.5, 4.0, true);
         const masterRmsRec = createRecordingCanvasCtx();
         master.drawCanvas(masterRmsRec.ctx, { ds: { scale: 1.0 } });
-        assert.ok(masterRmsRec.fills.some(f => f.startsWith('rgb(')), 'Master should modulate its own color by RMS');
+        assert.ok(masterRmsRec.fills.includes(masterExpectedMatte.iconBg), 'Master icon keeps flat unlighted base color');
+        assert.ok(masterRmsRec.fillRects.some(r => r.fillStyle === '#111111' || r.fillStyle.startsWith('rgba(0, 0, 0,')), 'Master icon renders monochrome RMS meter overlay');
         assert.ok(!masterRmsRec.fills.includes(CLIP_FILL_COLOR));
         assert.equal(master.hasClipWarning, false);
 
@@ -903,11 +921,309 @@ test('Closed, distant, and opened IRIDE visualizations render radial Arrangement
         const masterClearedRec = createRecordingCanvasCtx();
         master.drawCanvas(masterClearedRec.ctx, { ds: { scale: 1.0 } });
         assert.ok(!masterClearedRec.strokes.some(s => s.strokeStyle === CLIP_MARKER_COLOR));
+
+        // 5. Clipping while Parameters panel IS open still turns node red during clipping, without latching after stop
+        winObj.activeParamNodeId = master.id;
+        defaultTransportClock.setMasterLevels(0.95, 1.25);
+        defaultTransportClock.update(0.7, 4.0, true);
+        const masterOpenParamClipRec = createRecordingCanvasCtx();
+        master.drawCanvas(masterOpenParamClipRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(
+            masterOpenParamClipRec.fillRects.some(r => r.fillStyle === CLIP_FILL_COLOR),
+            'Clipping while parameter panel is open must still light header vivid red'
+        );
+        assert.ok(
+            masterOpenParamClipRec.strokes.some(s => s.strokeStyle === CLIP_MARKER_COLOR && s.lineWidth >= 2),
+            'Clipping while parameter panel is open must still show red alert border'
+        );
+        assert.equal(master.hasClipWarning, false, 'Clip border should not latch permanently while parameter panel is already open');
+
+        // 6. Intermediate (non-master) Bus TrackNode follows per-bus RMS/peak telemetry in icon and view mode
+        winObj.activeParamNodeId = null;
+        const subBus = new TrackNode();
+        subBus.id = 305;
+        subBus.properties.node_name = 'Drum Bus';
+        subBus.properties.color = '#4f46e5';
+        subBus.color = '#4f46e5';
+        subBus.properties.visualization_enabled = false;
+
+        defaultTransportClock.setMasterLevels(0.8, 1.1);
+        defaultTransportClock.setBusLevels({ '305': 0.32, '304': 0.8 }, { '305': 0.48, '304': 1.1 });
+        defaultTransportClock.update(0.8, 4.0, true);
+        const busIconRec = createRecordingCanvasCtx();
+        subBus.drawCanvas(busIconRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(busIconRec.fills.some(f => f.startsWith('rgb(')), 'Non-master Bus should modulate its color from its own busLevels');
+        assert.ok(busIconRec.fillRects.length >= 2, 'Non-master Bus closed icon should render RMS level fill curve');
+        assert.ok(!busIconRec.fills.includes(CLIP_FILL_COLOR), 'Non-master Bus at 0.48 peak must not clip even when Master clips');
+
+        subBus.properties.visualization_enabled = true;
+        subBus.size = subBus.computeSize();
+        const busOpenRec = createRecordingCanvasCtx();
+        subBus.drawCanvas(busOpenRec.ctx, { ds: { scale: 1.0 } });
+        assert.ok(
+            busOpenRec.fillRects.some(r => r.h === 2.5 && r.y === 19.5),
+            'Non-master Bus in view mode should render header RMS curve ribbon'
+        );
     } finally {
+        defaultTransportClock.setBusLevels(null, null);
         defaultTransportClock.setMasterLevels(0, 0);
         defaultTransportClock.update(0, 0, false);
         (globalThis as any).window = prevWindow;
     }
+});
+
+test('Dimension-aware auto-icon collapsing orders small-to-big, locks equal dimensions across types, enforces hysteresis and aspect floors', () => {
+    const small = new SampleNode();
+    small.onResize([140, 56]);
+    const def = new SampleNode();
+    const wide = new SequenceNode();
+    wide.onResize([440, 76]);
+    const large = new TrackNode();
+    large.onResize([440, 152]);
+    const huge = new ArrangementNode();
+    huge.onResize([660, 228]);
+
+    const tSmall = small.getDistanceThresholds();
+    const tDef = def.getDistanceThresholds();
+    const tWide = wide.getDistanceThresholds();
+    const tLarge = large.getDistanceThresholds();
+    const tHuge = huge.getDistanceThresholds();
+
+    // Default 220x76 matches calibrated reference thresholds
+    assert.ok(Math.abs(tDef.collapseScale - 0.40) < 1e-6);
+    assert.ok(Math.abs(tDef.expandScale - 0.44) < 1e-6);
+
+    // Strict ordering: smaller collapse at higher zoom scale (earlier), bigger collapse at lower zoom scale (later)
+    assert.ok(tSmall.collapseScale > tDef.collapseScale);
+    assert.ok(tDef.collapseScale > tWide.collapseScale);
+    assert.ok(tWide.collapseScale > tLarge.collapseScale);
+    assert.ok(tLarge.collapseScale > tHuge.collapseScale);
+
+    // Sweep zoom outward: 1.0 -> 0.50 -> 0.35 -> 0.25 -> 0.16 -> 0.10
+    const allNodes = [small, def, wide, large, huge];
+    const syncAll = (s: number) => allNodes.forEach(n => n.syncDistanceStage(s));
+
+    syncAll(0.50);
+    assert.deepEqual(allNodes.map(n => n.currentDistanceStage), [3, 1, 1, 1, 1], 'Only 140x56 collapses at 0.50');
+
+    syncAll(0.35);
+    assert.deepEqual(allNodes.map(n => n.currentDistanceStage), [3, 3, 1, 1, 1], 'Default 220x76 collapses at 0.35; wide/large/huge remain open');
+
+    syncAll(0.25);
+    assert.deepEqual(allNodes.map(n => n.currentDistanceStage), [3, 3, 3, 1, 1], '440x76 collapses by 0.25; 440x152 and 660x228 remain open');
+
+    syncAll(0.16);
+    assert.deepEqual(allNodes.map(n => n.currentDistanceStage), [3, 3, 3, 3, 1], '440x152 collapses by 0.16; huge 660x228 stands out');
+
+    syncAll(0.10);
+    assert.deepEqual(allNodes.map(n => n.currentDistanceStage), [3, 3, 3, 3, 3], 'Huge 660x228 collapses below ~0.133');
+
+    // Hysteresis deadband check for every node size
+    for (const node of allNodes) {
+        const { collapseScale, expandScale } = node.getDistanceThresholds();
+        const midDeadband = (collapseScale + expandScale) * 0.5;
+        node.syncDistanceStage(midDeadband);
+        assert.equal(node.currentDistanceStage, 3, 'Node stays collapsed inside its deadband');
+        node.syncDistanceStage(expandScale + 0.005);
+        assert.equal(node.currentDistanceStage, 1, 'Node expands once zoom reaches expandScale');
+    }
+
+    // Equal-dimension lockstep across distinct node subclasses
+    const eqSample = new SampleNode();
+    const eqSeq = new SequenceNode();
+    const eqTrack = new TrackNode();
+    const eqArr = new ArrangementNode();
+    const eqNodes = [eqSample, eqSeq, eqTrack, eqArr];
+    for (const n of eqNodes) n.onResize([320, 120]);
+    const refThresh = eqSample.getDistanceThresholds();
+    for (const n of eqNodes) {
+        assert.deepEqual(n.getDistanceThresholds(), refThresh);
+        n.syncDistanceStage(refThresh.collapseScale - 0.001);
+        assert.equal(n.currentDistanceStage, 3);
+    }
+
+    // Extreme aspect ratios respect minimum screen width (48px) and height (18px) floors
+    const ultraWide = new SampleNode();
+    ultraWide.onResize([1200, 56]);
+    const uwThresh = ultraWide.getDistanceThresholds();
+    assert.ok(uwThresh.collapseScale >= 18 / 56 - 1e-6);
+
+    const ultraTall = new SampleNode();
+    ultraTall.onResize([140, 600]);
+    const utThresh = ultraTall.getDistanceThresholds();
+    assert.ok(utThresh.collapseScale >= 48 / 140 - 1e-6);
+});
+
+test('Center-anchored collapse/expand, drag while collapsed, lossless serialize(), active resize guard, and onConfigure reset', () => {
+    const big = new SampleNode();
+    big.id = 901;
+    big.pos = [100, 200];
+    big.onResize([600, 240]);
+    // Center is (100 + 300, 200 + 120) = (400, 320)
+
+    const { collapseScale, expandScale } = big.getDistanceThresholds();
+    big.syncDistanceStage(collapseScale - 0.02);
+    assert.equal(big.currentDistanceStage, 3);
+    assert.deepEqual([big.size[0], big.size[1]], [44, 44]);
+    assert.deepEqual([big.pos[0], big.pos[1]], [378, 298], 'Collapsed icon must be centered on (400, 320)');
+
+    // serialize() must emit canonical expanded pos & size without mutating live collapsed state
+    const serialized = big.serialize();
+    assert.deepEqual([serialized.pos[0], serialized.pos[1]], [100, 200]);
+    assert.deepEqual([serialized.size[0], serialized.size[1]], [600, 240]);
+    assert.deepEqual([big.pos[0], big.pos[1]], [378, 298], 'Live collapsed pos must not be mutated by serialize()');
+    assert.deepEqual([big.size[0], big.size[1]], [44, 44], 'Live collapsed size must not be mutated by serialize()');
+
+    // Dragging while collapsed preserves center delta upon re-expansion
+    big.pos[0] += 50;
+    big.pos[1] -= 30;
+    big.syncDistanceStage(expandScale + 0.02);
+    assert.equal(big.currentDistanceStage, 1);
+    assert.deepEqual([big.size[0], big.size[1]], [600, 240]);
+    assert.deepEqual([big.pos[0], big.pos[1]], [150, 170], 'Expanded pos reflects [+50, -30] move while collapsed');
+
+    // Active resize guard via syncNodesDistanceStage
+    const resizingNode = new SequenceNode();
+    resizingNode.id = 902;
+    resizingNode.onResize([140, 56]);
+    const peerNode = new SequenceNode();
+    peerNode.id = 903;
+    peerNode.onResize([140, 56]);
+    const mockGraph = { _nodes: [resizingNode, peerNode] };
+
+    syncNodesDistanceStage(mockGraph, 0.45, resizingNode);
+    assert.equal(resizingNode.currentDistanceStage, 1, 'Actively resized node must not collapse mid-drag');
+    assert.equal(peerNode.currentDistanceStage, 3, 'Identical peer node not being resized collapses normally');
+
+    syncNodesDistanceStage(mockGraph, 0.45);
+    assert.equal(resizingNode.currentDistanceStage, 3, 'Releasing resize allows node to collapse cleanly');
+
+    // configure() / onConfigure() resets distance stage and collapse offset cleanly
+    resizingNode.configure({
+        properties: { ...resizingNode.properties, visual_width: 300, visual_height: 120 }
+    });
+    assert.equal(resizingNode.currentDistanceStage, 1);
+    assert.deepEqual([resizingNode.size[0], resizingNode.size[1]], [300, 120]);
+});
+
+test('Flat transparent matte node palette, icon/panel color parity, native-tone borders, and live drag-selection highlighting', async () => {
+    const { deriveMatteNodePalette } = await import('../../packages/iride/src/index.ts');
+
+    const node = new SampleNode();
+    node.id = 950;
+    node.properties.color = '#10b981';
+    node.color = '#10b981';
+    const palette = deriveMatteNodePalette('#10b981');
+
+    // Icon and expanded panel share identical flat transparent tint; selected border matches native RGB
+    assert.equal(palette.panelBg, palette.iconBg);
+    assert.equal(palette.borderSelected, 'rgb(16, 185, 129)');
+
+    // Expanded deselected panel: fill and border are identical matte color; no blue ring
+    const expandedDeselected = createRecordingCanvasCtx();
+    node.drawCanvas(expandedDeselected.ctx, { ds: { scale: 1.0 }, selected_nodes: {} });
+    assert.ok(expandedDeselected.fills.includes(palette.panelBg));
+    assert.ok(expandedDeselected.strokes.some(s => s.strokeStyle === palette.panelBg), 'Deselected border must match panel background');
+    assert.ok(!expandedDeselected.strokes.some(s => s.strokeStyle === '#38bdf8'), 'Blue selection ring must not be drawn');
+
+    // Expanded selected panel: border highlights in native tone
+    const expandedSelected = createRecordingCanvasCtx();
+    node.drawCanvas(expandedSelected.ctx, { ds: { scale: 1.0 }, selected_nodes: { 950: node } });
+    assert.ok(expandedSelected.strokes.some(s => s.strokeStyle === palette.borderSelected), 'Selected panel border must highlight in native tone');
+    assert.ok(!expandedSelected.strokes.some(s => s.strokeStyle === '#38bdf8'));
+
+    // Live drag-selection preview highlights included node and unhighlights excluded node (replace mode)
+    const previewIncluded = createRecordingCanvasCtx();
+    node.drawCanvas(previewIncluded.ctx, {
+        ds: { scale: 1.0 },
+        selected_nodes: {},
+        __sinDragSelectPreview: { ids: new Set([950]), additive: false }
+    });
+    assert.ok(previewIncluded.strokes.some(s => s.strokeStyle === palette.borderSelected), 'Node inside drag-selection box must highlight live');
+
+    const previewExcluded = createRecordingCanvasCtx();
+    node.drawCanvas(previewExcluded.ctx, {
+        ds: { scale: 1.0 },
+        selected_nodes: { 950: node },
+        __sinDragSelectPreview: { ids: new Set([999]), additive: false }
+    });
+    assert.ok(previewExcluded.strokes.some(s => s.strokeStyle === palette.panelBg), 'Node outside non-additive drag-selection box must drop highlight');
+
+    // Collapsed icon shares exact same flat tone and native-tone border behavior
+    node.properties.visualization_enabled = false;
+    node.size = node.computeSize();
+    const iconDeselected = createRecordingCanvasCtx();
+    node.drawCanvas(iconDeselected.ctx, { ds: { scale: 1.0 }, selected_nodes: {} });
+    assert.ok(iconDeselected.fills.includes(palette.iconBg));
+    assert.ok(iconDeselected.strokes.some(s => s.strokeStyle === palette.iconBg));
+
+    const iconSelected = createRecordingCanvasCtx();
+    node.drawCanvas(iconSelected.ctx, { ds: { scale: 1.0 }, selected_nodes: { 950: node } });
+    assert.ok(iconSelected.strokes.some(s => s.strokeStyle === palette.borderSelected));
+});
+
+test('8-way node border/corner resizing geometry and selection rectangle node collection', () => {
+    const seq = new SequenceNode();
+    seq.id = 960;
+    seq.pos = [100, 100];
+    seq.onResize([240, 100]);
+
+    // Sides detect single-axis resize
+    assert.equal(detectNodeResizeEdge(seq, 120, 1, 1.0), 'n');
+    assert.equal(detectNodeResizeEdge(seq, 120, 99, 1.0), 's');
+    assert.equal(detectNodeResizeEdge(seq, 1, 20, 1.0), 'w');
+    assert.equal(detectNodeResizeEdge(seq, 239, 20, 1.0), 'e');
+
+    // Corners detect free 2-axis resize
+    assert.equal(detectNodeResizeEdge(seq, 2, 2, 1.0), 'nw');
+    assert.equal(detectNodeResizeEdge(seq, 238, 2, 1.0), 'ne');
+    assert.equal(detectNodeResizeEdge(seq, 2, 98, 1.0), 'sw');
+    assert.equal(detectNodeResizeEdge(seq, 238, 98, 1.0), 'se');
+
+    // Left/right connection port midpoints remain free for cable wiring
+    assert.equal(detectNodeResizeEdge(seq, 0, 50, 1.0), null);
+    assert.equal(detectNodeResizeEdge(seq, 240, 50, 1.0), null);
+
+    // Cursors map cleanly
+    assert.equal(getResizeCursor('n'), 'ns-resize');
+    assert.equal(getResizeCursor('w'), 'ew-resize');
+    assert.equal(getResizeCursor('nw'), 'nwse-resize');
+    assert.equal(getResizeCursor('ne'), 'nesw-resize');
+
+    // Dragging west/north anchors opposite edge and respects min dimensions
+    const westResize = computeResizedNodeRect({ x: 100, y: 100, width: 240, height: 100 }, 'w', -40, 30);
+    assert.deepEqual(westResize, { x: 60, y: 100, width: 280, height: 100 });
+
+    const clampedNw = computeResizedNodeRect({ x: 100, y: 100, width: 240, height: 100 }, 'nw', 500, 500);
+    assert.deepEqual(clampedNw, { x: 200, y: 144, width: 140, height: 56 });
+
+    // Collapsed icons cannot be border-resized
+    seq.properties.visualization_enabled = false;
+    seq.size = seq.computeSize();
+    assert.equal(detectNodeResizeEdge(seq, 2, 2, 1.0), null);
+
+    // collectNodesInSelectionRect encloses overlapping visible nodes and skips hidden/modifier nodes
+    const visibleA = new SampleNode();
+    visibleA.id = 1;
+    visibleA.pos = [50, 50];
+    visibleA.onResize([220, 76]);
+
+    const visibleOutside = new SampleNode();
+    visibleOutside.id = 2;
+    visibleOutside.pos = [500, 500];
+    visibleOutside.onResize([220, 76]);
+
+    const hiddenNode = new SampleNode();
+    hiddenNode.id = 3;
+    hiddenNode.pos = [60, 60];
+    (hiddenNode.flags as any).hidden = true;
+
+    const modifier = new ModulatorNode();
+    modifier.id = 4;
+    modifier.pos = [60, 60];
+
+    const selectedIds = collectNodesInSelectionRect([visibleA, visibleOutside, hiddenNode, modifier], 40, 40, 100, 60);
+    assert.deepEqual([...selectedIds], [1]);
 });
 
 

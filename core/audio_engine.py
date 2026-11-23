@@ -111,6 +111,13 @@ class _SinBusPeak(ctypes.Structure):
     ]
 
 
+class _SinBusRms(ctypes.Structure):
+    _fields_ = [
+        ("bus_id", ctypes.c_uint32),
+        ("rms", ctypes.c_float),
+    ]
+
+
 class _SinSourceInfo(ctypes.Structure):
     _fields_ = [
         ("sample_rate", ctypes.c_uint32),
@@ -243,6 +250,13 @@ def _bind_functions(lib: ctypes.CDLL) -> None:
         c_f_p, ctypes.c_uint32,
     ]
     lib.sin_engine_read_telemetry.restype = None
+
+    if hasattr(lib, "sin_engine_read_bus_rms"):
+        lib.sin_engine_read_bus_rms.argtypes = [
+            c_void_p,
+            ctypes.POINTER(_SinBusRms), ctypes.c_uint32,
+        ]
+        lib.sin_engine_read_bus_rms.restype = ctypes.c_uint32
 
 
 def load_native_library(reload_if_missing: bool = False) -> Optional[ctypes.CDLL]:
@@ -614,7 +628,9 @@ class SinAudioEngine:
     def read_telemetry(self, include_scope: bool = False) -> Dict[str, object]:
         hdr = _SinTelemetry()
         bus_peaks_arr = (_SinBusPeak * 256)()
+        bus_rms_arr = (_SinBusRms * 256)()
         scope_arr = (ctypes.c_float * 128)() if include_scope else None
+        rms_count = 0
         if self._handle:
             self._lib.sin_engine_read_telemetry(
                 self._handle,
@@ -624,12 +640,24 @@ class SinAudioEngine:
                 scope_arr,
                 128 if include_scope else 0,
             )
+            if hasattr(self._lib, "sin_engine_read_bus_rms"):
+                rms_count = min(int(self._lib.sin_engine_read_bus_rms(self._handle, bus_rms_arr, 256)), 256)
         peaks_by_key: Dict[str, float] = {}
         count = min(int(hdr.active_bus_count), 256)
         for i in range(count):
             bid = int(bus_peaks_arr[i].bus_id)
             key = self._bus_key_map.get(bid, str(bid))
-            peaks_by_key[key] = round(float(bus_peaks_arr[i].peak), 4)
+            val = round(float(bus_peaks_arr[i].peak), 4)
+            if val > peaks_by_key.get(key, -1.0):
+                peaks_by_key[key] = val
+
+        rms_by_key: Dict[str, float] = {}
+        for i in range(rms_count):
+            bid = int(bus_rms_arr[i].bus_id)
+            key = self._bus_key_map.get(bid, str(bid))
+            val = round(float(bus_rms_arr[i].rms), 4)
+            if val > rms_by_key.get(key, -1.0):
+                rms_by_key[key] = val
 
         payload: Dict[str, object] = {
             "playhead_sec": round(float(hdr.playhead_seconds), 4),
@@ -644,6 +672,7 @@ class SinAudioEngine:
             "master_rms_l": round(float(hdr.master_rms_l), 4),
             "master_rms_r": round(float(hdr.master_rms_r), 4),
             "bus_peaks": peaks_by_key,
+            "bus_rms": rms_by_key,
         }
         if include_scope and scope_arr is not None:
             payload["scope"] = [round(float(scope_arr[i]), 4) for i in range(128)]

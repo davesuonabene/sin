@@ -7,7 +7,7 @@ export abstract class BaseSignalRenderer {
     constructor(options: RendererOptions = {}) {
         this.options = {
             theme: 'light',
-            accentColor: '#059669',
+            accentColor: '#111111',
             backgroundColor: '#ffffff',
             borderColor: '#e2e8f0',
             ...options

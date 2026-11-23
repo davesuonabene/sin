@@ -363,10 +363,14 @@ export class NodeContextToolbar {
 
             if (node.isVisualizationSupported !== false && typeof node.toggleVisualization === 'function') {
                 const isVizOn = node.properties?.visualization_enabled !== false;
+                const isFarStage = Number(node.currentDistanceStage) === 3;
                 commonGroup.appendChild(this.createToggleButton({
-                    iconHtml: renderIcon(isVizOn ? 'eye' : 'eyeOff'),
-                    title: `Viewer Cook: ${isVizOn ? 'ON' : 'OFF'}`,
-                    active: isVizOn,
+                    iconHtml: renderIcon(isVizOn && !isFarStage ? 'eye' : 'eyeOff'),
+                    title: isFarStage
+                        ? 'Viewer Cook: Auto-collapsed to icon at current zoom'
+                        : `Viewer Cook: ${isVizOn ? 'ON' : 'OFF'}`,
+                    active: isVizOn && !isFarStage,
+                    disabled: isFarStage,
                     tone: 'sky',
                     onClick: () => {
                         node.toggleVisualization();
@@ -504,12 +508,16 @@ export class NodeContextToolbar {
 
         const vizNodes = nodes.filter(n => !n.isModifier && n.isVisualizationSupported !== false && typeof n.toggleVisualization === 'function');
         if (vizNodes.length > 0) {
+            const allFarStage = vizNodes.every(n => Number(n.currentDistanceStage) === 3);
             const anyVizOff = vizNodes.some(n => n.properties?.visualization_enabled === false);
             batchGroup.appendChild(this.createToggleButton({
                 iconHtml: renderIcon('eye'),
                 label: anyVizOff ? 'Show' : 'Hide',
-                title: 'Toggle Viewer Cook on selected nodes',
-                active: !anyVizOff,
+                title: allFarStage
+                    ? 'Viewer Cook: Auto-collapsed to icon at current zoom'
+                    : 'Toggle Viewer Cook on selected nodes',
+                active: !anyVizOff && !allFarStage,
+                disabled: allFarStage,
                 tone: 'sky',
                 onClick: () => {
                     for (const n of vizNodes) {

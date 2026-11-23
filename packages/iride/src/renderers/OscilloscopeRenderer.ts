@@ -1,7 +1,6 @@
 import { BaseSignalRenderer } from './BaseSignalRenderer.ts';
 import { type RenderBox, type SignalTelemetry, type WaveformSignal, type RendererOptions } from '../types.ts';
 import {
-    colorWithAlpha,
     drawRoundRect,
     drawSlotBadge,
     sampleSignalAmplitude
@@ -26,7 +25,7 @@ export class OscilloscopeRenderer extends BaseSignalRenderer {
 
     constructor(options: RendererOptions = {}) {
         super({
-            accentColor: '#059669',
+            accentColor: '#111111',
             ...options
         });
     }
@@ -55,18 +54,19 @@ export class OscilloscopeRenderer extends BaseSignalRenderer {
         drawRoundRect(ctx, x, y, width, height, 4);
         ctx.clip();
 
-        ctx.fillStyle = this.options.backgroundColor || '#ffffff';
-        ctx.fillRect(x, y, width, height);
+        if (this.options.backgroundColor && this.options.backgroundColor !== 'transparent') {
+            ctx.fillStyle = this.options.backgroundColor;
+            ctx.fillRect(x, y, width, height);
+        }
 
         const midY = y + height * 0.5;
         const halfH = (height - 4) * 0.5;
         const signal = this.signal;
-        const accent = signal?.accentColor || this.options.accentColor || '#059669';
         const gain = Number(this.options.scopeGain) || 1.0;
         const isPlaying = Boolean(telemetry?.isPlaying);
 
         // Reference lines: 0 center line and ±0.5 (-6 dB) amplitude guides
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x, midY);
@@ -107,11 +107,11 @@ export class OscilloscopeRenderer extends BaseSignalRenderer {
         const barW = Math.max(1, colW - 0.35);
 
         const peakFill = signal?.isInvalidated
-            ? 'rgba(245, 158, 11, 0.38)'
-            : colorWithAlpha(accent, 0.38);
+            ? 'rgba(17, 17, 17, 0.20)'
+            : 'rgba(17, 17, 17, 0.28)';
         const rmsFill = signal?.isInvalidated
-            ? 'rgba(245, 158, 11, 0.88)'
-            : accent;
+            ? 'rgba(17, 17, 17, 0.48)'
+            : '#111111';
 
         // Render scrolling columns from oldest (left) to newest (right)
         for (let i = 0; i < HISTORY_COLS; i++) {
@@ -143,7 +143,7 @@ export class OscilloscopeRenderer extends BaseSignalRenderer {
         // Right-edge live entry head ("NOW" playhead line)
         if (isPlaying) {
             const headX = x + plotW;
-            ctx.strokeStyle = '#0284c7';
+            ctx.strokeStyle = '#000000';
             ctx.lineWidth = 1.25;
             ctx.beginPath();
             ctx.moveTo(headX, y + 1);

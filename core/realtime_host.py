@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import asyncio
+import copy
 import json
 import logging
 import threading
@@ -33,11 +34,21 @@ from core.audio_engine import SinAudioEngine, is_native_engine_available, render
 from core.plan_packer import pack_audio_node_model, pack_canonical_graph
 from core.render_plan import (
     BusSpec,
+    ChainStageSpec,
     ClipSpec,
     PARAM_NAME_TO_ID,
     SIN_CLIP_CROP_IN_PLACE,
     SIN_CLIP_LIVE_CROP_BOUND,
     SIN_DEFAULT_SAMPLE_RATE,
+    SIN_PARAM_CROP_END,
+    SIN_PARAM_CROP_START,
+    SIN_PARAM_MUTE,
+    SIN_PARAM_PAN,
+    SIN_PARAM_PLAYBACK_RATE,
+    SIN_PARAM_POST_GAIN_DB,
+    SIN_PARAM_PRE_GAIN_DB,
+    SIN_PARAM_SOLO,
+    SIN_PARAM_VOLUME,
     SinRenderPlan,
     SourceSpec,
 )
@@ -93,6 +104,7 @@ class RealtimeAudioHost:
         self._owner_ws: Optional[WebSocket] = None
         self._active_plan: Optional[SinRenderPlan] = None
         self._load_generation: int = 0
+        self._last_peak_columns: int = 512
         # 16-slot LRU of preview source IDs (90001..90016) so re-auditioning recent samples is 0ms RAM hit
         self._preview_lru: OrderedDict[str, int] = OrderedDict()
         self._preview_slot_pool: list[int] = list(range(90001, 90017))
@@ -354,6 +366,34 @@ class RealtimeAudioHost:
             "_plan": plan,
         }
 
+    def _snapshot_active_plan_locked(self) -> Optional[SinRenderPlan]:
+        plan = self._active_plan
+        if plan is None:
+            return None
+        return SinRenderPlan(
+            sample_rate=plan.sample_rate,
+            bpm=plan.bpm,
+            explicit_duration_sec=plan.explicit_duration_sec,
+            sources=list(plan.sources),
+            buses=[copy.copy(b) for b in plan.buses],
+            clips=list(plan.clips),
+            stages=[
+                ChainStageSpec(
+                    bus_id=st.bus_id,
+                    stage_index=st.stage_index,
+                    processor_type=st.processor_type,
+                    enabled=st.enabled,
+                    params=list(st.params),
+                )
+                for st in plan.stages
+            ],
+            bus_id_map=dict(plan.bus_id_map),
+            bus_key_map=dict(plan.bus_key_map),
+            manifest_nodes=plan.manifest_nodes,
+            normalize=plan.normalize,
+            target_peak_db=plan.target_peak_db,
+        )
+
     def _compute_plan_peaks(
         self, plan: SinRenderPlan, sr: int, peak_columns: int = 512
     ) -> Tuple[list[float], Dict[str, list[float]]]:
@@ -376,15 +416,45 @@ class RealtimeAudioHost:
                 else []
             )
             bus_cols = min(256, max(64, int(peak_columns // 2)))
-            bus_peaks: Dict[str, list[float]] = {}
+            grouped_buffers: Dict[str, list[np.ndarray]] = {}
             for bid, buf in tapped.items():
                 if buf.size > 0:
                     key = plan.bus_key_map.get(bid, str(bid))
-                    bus_peaks[key] = _fast_waveform_peaks(buf, columns=bus_cols)
+                    grouped_buffers.setdefault(key, []).append(buf)
+            bus_peaks: Dict[str, list[float]] = {}
+            for key, bufs in grouped_buffers.items():
+                if len(bufs) == 1:
+                    combined = bufs[0]
+                else:
+                    max_frames = max(int(b.shape[-1]) for b in bufs)
+                    ch = max(int(b.shape[0]) if b.ndim > 1 else 1 for b in bufs)
+                    combined = np.zeros((ch, max_frames), dtype=np.float32)
+                    for b in bufs:
+                        n = int(b.shape[-1])
+                        if b.ndim == 1:
+                            combined[:, :n] += b[None, :]
+                        else:
+                            combined[:b.shape[0], :n] += b
+                bus_peaks[key] = _fast_waveform_peaks(combined, columns=bus_cols)
             return master_peaks, bus_peaks
         except Exception as exc:
             logger.debug("[%s] Master peak extraction skipped: %s", self.name, exc)
         return [], {}
+
+    def _resolve_target_bus_ids_locked(self, node_id: str) -> list[int]:
+        key = str(node_id)
+        if self._active_plan is not None:
+            matched = [int(b.bus_id) for b in self._active_plan.buses if b.node_key == key]
+            if matched:
+                return matched
+        if self._engine is not None:
+            bid = self._engine.bus_id_map.get(key)
+            if bid is not None:
+                return [int(bid)]
+        try:
+            return [int(node_id)]
+        except (TypeError, ValueError):
+            return []
 
     def set_param(self, node_id: str, param: str, value: float, ramp_ms: float = 5.0) -> bool:
         with self._lock:
@@ -393,13 +463,36 @@ class RealtimeAudioHost:
             pid = PARAM_NAME_TO_ID.get(str(param or "").strip().lower())
             if pid is None:
                 return False
-            bid = self._engine.bus_id_map.get(str(node_id))
-            if bid is None:
-                try:
-                    bid = int(node_id)
-                except (TypeError, ValueError):
-                    return False
-            self._engine.set_param(bid, pid, float(value), float(ramp_ms))
+            target_bids = self._resolve_target_bus_ids_locked(node_id)
+            if not target_bids:
+                return False
+            fval = float(value)
+            framp = float(ramp_ms)
+            for bid in target_bids:
+                self._engine.set_param(bid, pid, fval, framp)
+            if self._active_plan is not None:
+                bid_set = set(target_bids)
+                for b in self._active_plan.buses:
+                    if b.bus_id not in bid_set:
+                        continue
+                    if pid == SIN_PARAM_PRE_GAIN_DB:
+                        b.pre_gain_db = fval
+                    elif pid == SIN_PARAM_VOLUME:
+                        b.volume = max(0.0, fval)
+                    elif pid == SIN_PARAM_POST_GAIN_DB:
+                        b.post_gain_db = fval
+                    elif pid == SIN_PARAM_PAN:
+                        b.pan = max(-1.0, min(1.0, fval))
+                    elif pid == SIN_PARAM_MUTE:
+                        b.muted = (fval >= 0.5)
+                    elif pid == SIN_PARAM_SOLO:
+                        b.solo = (fval >= 0.5)
+                    elif pid == SIN_PARAM_CROP_START:
+                        b.crop_start = max(0.0, min(b.crop_end, fval))
+                    elif pid == SIN_PARAM_CROP_END:
+                        b.crop_end = max(b.crop_start, min(1.0, fval))
+                    elif pid == SIN_PARAM_PLAYBACK_RATE:
+                        b.playback_rate = max(0.05, fval)
             return True
 
     def set_stage_param(
@@ -413,26 +506,38 @@ class RealtimeAudioHost:
         with self._lock:
             if self._engine is None:
                 return False
-            bid = self._engine.bus_id_map.get(str(node_id))
-            if bid is None:
-                try:
-                    bid = int(node_id)
-                except (TypeError, ValueError):
-                    return False
-            self._engine.set_stage_param(bid, int(stage_index), int(param_index), float(value), float(ramp_ms))
+            target_bids = self._resolve_target_bus_ids_locked(node_id)
+            if not target_bids:
+                return False
+            sidx = int(stage_index)
+            pidx = int(param_index)
+            fval = float(value)
+            framp = float(ramp_ms)
+            for bid in target_bids:
+                self._engine.set_stage_param(bid, sidx, pidx, fval, framp)
+            if self._active_plan is not None:
+                bid_set = set(target_bids)
+                for st in self._active_plan.stages:
+                    if st.bus_id in bid_set and st.stage_index == sidx and 0 <= pidx < len(st.params):
+                        st.params[pidx] = fval
             return True
 
     def set_stage_enabled(self, node_id: str, stage_index: int, enabled: bool) -> bool:
         with self._lock:
             if self._engine is None:
                 return False
-            bid = self._engine.bus_id_map.get(str(node_id))
-            if bid is None:
-                try:
-                    bid = int(node_id)
-                except (TypeError, ValueError):
-                    return False
-            self._engine.set_stage_enabled(bid, int(stage_index), bool(enabled))
+            target_bids = self._resolve_target_bus_ids_locked(node_id)
+            if not target_bids:
+                return False
+            sidx = int(stage_index)
+            flag = bool(enabled)
+            for bid in target_bids:
+                self._engine.set_stage_enabled(bid, sidx, flag)
+            if self._active_plan is not None:
+                bid_set = set(target_bids)
+                for st in self._active_plan.stages:
+                    if st.bus_id in bid_set and st.stage_index == sidx:
+                        st.enabled = flag
             return True
 
     def set_transport(
@@ -503,6 +608,7 @@ class RealtimeAudioHost:
                 "master_rms_l": 0.0,
                 "master_rms_r": 0.0,
                 "bus_peaks": {},
+                "bus_rms": {},
             }
         return eng.read_telemetry(include_scope=self._include_scope)
 
@@ -526,6 +632,7 @@ class RealtimeAudioHost:
         stop_telemetry = asyncio.Event()
         active_load_task: Optional[asyncio.Task] = None
         active_peaks_task: Optional[asyncio.Task] = None
+        peaks_debounce_task: Optional[asyncio.Task] = None
 
         async def _claim_ownership() -> None:
             prev_send = None
@@ -565,6 +672,44 @@ class RealtimeAudioHost:
                 self._load_generation += 1
                 return self._load_generation
 
+        def _schedule_param_peaks_recompute() -> None:
+            nonlocal peaks_debounce_task, active_peaks_task
+            if peaks_debounce_task and not peaks_debounce_task.done():
+                peaks_debounce_task.cancel()
+            if active_peaks_task and not active_peaks_task.done():
+                active_peaks_task.cancel()
+            with self._lock:
+                gen = self._load_generation
+                cols = self._last_peak_columns
+
+            async def _debounced_peaks(expected_g: int = gen, peak_cols: int = cols) -> None:
+                try:
+                    await asyncio.sleep(0.06)
+                    with self._lock:
+                        if self._load_generation != expected_g:
+                            return
+                        plan_snap = self._snapshot_active_plan_locked()
+                        sr = self._engine.sample_rate if self._engine is not None else self._requested_sr
+                    if plan_snap is None:
+                        return
+                    dur_sec = float(self.read_telemetry().get("duration_sec") or 0.0)
+                    if not (0.0 < dur_sec <= 60.0):
+                        return
+                    peaks, bus_peaks = await asyncio.to_thread(self._compute_plan_peaks, plan_snap, sr, peak_cols)
+                    if (peaks or bus_peaks) and self._load_generation == expected_g:
+                        await _send_json({
+                            "type": "master_peaks",
+                            "duration_sec": dur_sec,
+                            "master_peaks": peaks,
+                            "bus_peaks": bus_peaks,
+                        })
+                except asyncio.CancelledError:
+                    return
+                except Exception:
+                    return
+
+            peaks_debounce_task = asyncio.create_task(_debounced_peaks())
+
         try:
             while True:
                 raw = await websocket.receive_text()
@@ -579,32 +724,41 @@ class RealtimeAudioHost:
                 req_id = msg.get("req_id")
 
                 if mtype == "set_param":
+                    node_key = str(msg.get("node_id") or "")
                     ok = self.set_param(
-                        node_id=str(msg.get("node_id") or ""),
+                        node_id=node_key,
                         param=str(msg.get("param") or ""),
                         value=float(msg.get("value", 0.0)),
                         ramp_ms=float(msg.get("ramp_ms", 5.0)),
                     )
+                    if ok and node_key != "__monitor__" and self._active_plan is not None:
+                        _schedule_param_peaks_recompute()
                     if req_id is not None:
                         await _send_json({"type": "ack", "req_id": req_id, "ok": ok})
 
                 elif mtype == "set_stage_param":
+                    node_key = str(msg.get("node_id") or "")
                     ok = self.set_stage_param(
-                        node_id=str(msg.get("node_id") or ""),
+                        node_id=node_key,
                         stage_index=int(msg.get("stage_index", 0)),
                         param_index=int(msg.get("param_index", 0)),
                         value=float(msg.get("value", 0.0)),
                         ramp_ms=float(msg.get("ramp_ms", 5.0)),
                     )
+                    if ok and node_key != "__monitor__" and self._active_plan is not None:
+                        _schedule_param_peaks_recompute()
                     if req_id is not None:
                         await _send_json({"type": "ack", "req_id": req_id, "ok": ok})
 
                 elif mtype == "set_stage_enabled":
+                    node_key = str(msg.get("node_id") or "")
                     ok = self.set_stage_enabled(
-                        node_id=str(msg.get("node_id") or ""),
+                        node_id=node_key,
                         stage_index=int(msg.get("stage_index", 0)),
                         enabled=bool(msg.get("enabled", True)),
                     )
+                    if ok and node_key != "__monitor__" and self._active_plan is not None:
+                        _schedule_param_peaks_recompute()
                     if req_id is not None:
                         await _send_json({"type": "ack", "req_id": req_id, "ok": ok})
 
@@ -643,6 +797,8 @@ class RealtimeAudioHost:
                     gen = _next_generation()
                     if active_load_task and not active_load_task.done():
                         active_load_task.cancel()
+                    if peaks_debounce_task and not peaks_debounce_task.done():
+                        peaks_debounce_task.cancel()
 
                     async def _run_canonical(m=msg, rid=req_id, g=gen) -> None:
                         result = await asyncio.to_thread(
@@ -667,6 +823,9 @@ class RealtimeAudioHost:
                         active_load_task.cancel()
                     if active_peaks_task and not active_peaks_task.done():
                         active_peaks_task.cancel()
+                    if peaks_debounce_task and not peaks_debounce_task.done():
+                        peaks_debounce_task.cancel()
+                    self._last_peak_columns = int(msg.get("peak_columns", 512))
 
                     async def _run_node_model(m=msg, rid=req_id, g=gen) -> None:
                         nonlocal active_peaks_task
@@ -749,6 +908,8 @@ class RealtimeAudioHost:
                         active_load_task.cancel()
                     if active_peaks_task and not active_peaks_task.done():
                         active_peaks_task.cancel()
+                    if peaks_debounce_task and not peaks_debounce_task.done():
+                        peaks_debounce_task.cancel()
                     await asyncio.to_thread(self.stop_and_release)
                     tel = self.read_telemetry()
                     await _send_json({"type": "telemetry", **tel})
@@ -769,6 +930,8 @@ class RealtimeAudioHost:
                 active_load_task.cancel()
             if active_peaks_task and not active_peaks_task.done():
                 active_peaks_task.cancel()
+            if peaks_debounce_task and not peaks_debounce_task.done():
+                peaks_debounce_task.cancel()
             try:
                 await telemetry_task
             except Exception:

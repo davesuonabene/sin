@@ -151,11 +151,16 @@ function buildRmsPalette(baseColor: string): string[] {
         if (l < 0.35) {
             nextL = l + t * (0.56 - l);
             nextS = Math.min(0.88, s + t * 0.32);
-        } else {
-            const floorL = Math.max(0.18, l * 0.68);
-            const maxL = Math.min(0.76, l + 0.24);
+        } else if (l <= 0.72) {
+            const floorL = l;
+            const maxL = Math.min(0.78, l + 0.22);
             nextL = floorL + t * (maxL - floorL);
-            nextS = Math.min(0.95, s + t * 0.12);
+            nextS = Math.min(0.95, s + t * 0.22);
+        } else {
+            const floorL = l;
+            const maxL = Math.max(0.45, l - 0.24);
+            nextL = floorL + t * (maxL - floorL);
+            nextS = Math.min(0.98, s + t * 0.25);
         }
         palette[step] = hslToRgbString(h, nextS, nextL);
     }
@@ -210,6 +215,89 @@ export function getQuantizedRmsHeaderStyle(
 }
 
 /**
+ * Draws a bottom-up RMS level curve and peak-hold crest line inside a clipped square node icon.
+ */
+export function drawIconRmsFill(
+    ctx: CanvasRenderingContext2D,
+    size: number,
+    level: number,
+    peakLevel: number,
+    _baseColor: string,
+    isClipping: boolean
+): void {
+    if (size <= 0) return;
+    if (isClipping) {
+        ctx.fillStyle = CLIP_FILL_COLOR;
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#fecaca';
+        ctx.fillRect(0, 0, size, 2);
+        return;
+    }
+
+    const clampedLevel = Math.max(0, Math.min(1, Number.isFinite(level) ? level : 0));
+    const clampedPeak = Math.max(clampedLevel, Math.min(1, Number.isFinite(peakLevel) ? peakLevel : 0));
+
+    if (clampedLevel > 0.005) {
+        const fillH = Math.max(2, Math.min(size, clampedLevel * size));
+        const fillTop = size - fillH;
+        ctx.fillStyle = colorWithAlpha('#000000', Number((0.12 + clampedLevel * 0.22).toFixed(3)));
+        ctx.fillRect(0, fillTop, size, fillH);
+
+        ctx.fillStyle = '#111111';
+        ctx.fillRect(0, Math.max(0, fillTop), size, 1.5);
+    }
+
+    if (clampedPeak > clampedLevel + 0.03 && clampedPeak > 0.02) {
+        const peakY = Math.max(1, size - clampedPeak * size);
+        ctx.fillStyle = clampedPeak >= 0.96 ? CLIP_MARKER_COLOR : 'rgba(0, 0, 0, 0.65)';
+        ctx.fillRect(2, peakY, Math.max(1, size - 4), 1.25);
+    }
+}
+
+/**
+ * Draws a horizontal RMS curve wash, bottom level ribbon, and peak-hold pip inside an opened node header.
+ */
+export function drawHeaderRmsMeter(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    headerHeight: number,
+    level: number,
+    peakLevel: number,
+    baseColor: string,
+    isClipping: boolean
+): RmsHeaderStyle {
+    const style = getQuantizedRmsHeaderStyle(baseColor, level, isClipping);
+    if (width <= 0 || headerHeight <= 0) return style;
+
+    if (isClipping) {
+        ctx.fillStyle = CLIP_FILL_COLOR;
+        ctx.fillRect(0, 0, width, headerHeight);
+        return style;
+    }
+
+    const clampedLevel = Math.max(0, Math.min(1, Number.isFinite(level) ? level : 0));
+    const clampedPeak = Math.max(clampedLevel, Math.min(1, Number.isFinite(peakLevel) ? peakLevel : 0));
+    const accentCol = style.border || baseColor || '#0f172a';
+
+    if (clampedLevel > 0.005) {
+        const fillW = Math.max(2, Math.min(width, clampedLevel * width));
+        ctx.fillStyle = style.bg || colorWithAlpha(accentCol, 0.16);
+        ctx.fillRect(0, 0, fillW, headerHeight);
+
+        ctx.fillStyle = accentCol;
+        ctx.fillRect(0, Math.max(0, headerHeight - 2.5), fillW, 2.5);
+    }
+
+    if (clampedPeak > 0.02) {
+        const peakX = Math.max(0, Math.min(width - 2, clampedPeak * width - 1));
+        ctx.fillStyle = clampedPeak >= 0.96 ? CLIP_MARKER_COLOR : accentCol;
+        ctx.fillRect(peakX, Math.max(0, headerHeight - 4), 2, 4);
+    }
+
+    return style;
+}
+
+/**
  * Draws a centered circular radial loop indicator starting at 12 o'clock and sweeping clockwise.
  */
 export function drawRadialLoopProgress(
@@ -228,9 +316,9 @@ export function drawRadialLoopProgress(
 
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fillStyle = options?.trackFill ?? 'rgba(15, 23, 42, 0.28)';
+    ctx.fillStyle = options?.trackFill ?? 'rgba(0, 0, 0, 0.08)';
     ctx.fill();
-    ctx.strokeStyle = options?.trackStroke ?? 'rgba(255, 255, 255, 0.52)';
+    ctx.strokeStyle = options?.trackStroke ?? 'rgba(0, 0, 0, 0.35)';
     ctx.lineWidth = radius >= 10 ? 1.5 : 1;
     ctx.stroke();
 
@@ -246,13 +334,13 @@ export function drawRadialLoopProgress(
             ctx.arc(cx, cy, pieRadius, startAngle, startAngle + p * Math.PI * 2, false);
             ctx.closePath();
         }
-        ctx.fillStyle = options?.fillColor ?? 'rgba(255, 255, 255, 0.94)';
+        ctx.fillStyle = options?.fillColor ?? '#111111';
         ctx.fill();
     }
 
     const dividers = options?.dividerFractions;
     if (radius >= 10 && dividers && dividers.length > 0) {
-        ctx.strokeStyle = options?.dividerColor ?? 'rgba(15, 23, 42, 0.45)';
+        ctx.strokeStyle = options?.dividerColor ?? 'rgba(255, 255, 255, 0.85)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         for (let i = 0; i < dividers.length; i++) {
@@ -282,13 +370,13 @@ export function drawClosedSlotIndex(
     ctx.save();
     ctx.beginPath();
     ctx.arc(cx, cy, 12.5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.32)';
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)';
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#111111';
     ctx.font = label.length > 1 ? '700 13px Inter, monospace' : '700 16px Inter, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -305,19 +393,19 @@ export function drawHeaderSlotPill(
     y: number,
     height: number,
     slotIndex: number,
-    accentColor: string
+    _accentColor: string
 ): number {
     const label = String(Math.max(0, Math.trunc(slotIndex)));
     const pillW = label.length > 2 ? 25 : (label.length > 1 ? 20 : 15);
     ctx.save();
     drawRoundRect(ctx, x, y, pillW, height, 3);
-    ctx.fillStyle = colorWithAlpha(accentColor, 0.16);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
     ctx.fill();
-    ctx.strokeStyle = colorWithAlpha(accentColor, 0.48);
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.32)';
     ctx.lineWidth = 0.75;
     ctx.stroke();
 
-    ctx.fillStyle = '#0f172a';
+    ctx.fillStyle = '#111111';
     ctx.font = '700 9.5px Inter, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';

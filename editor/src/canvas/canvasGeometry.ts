@@ -127,13 +127,13 @@ export function syncAllModifierPositions(graph?: any): void {
     }
 }
 
-export function syncNodesDistanceStage(graph: any, scale: number): boolean {
+export function syncNodesDistanceStage(graph: any, scale: number, resizingNode?: any): boolean {
     const nodes = graph?._nodes;
     if (!Array.isArray(nodes)) return false;
     let anyStageChanged = false;
     for (const node of nodes) {
         if (node && typeof node.syncDistanceStage === 'function') {
-            if (node.syncDistanceStage(scale)) {
+            if (node.syncDistanceStage(scale, { deferCollapse: node === resizingNode })) {
                 anyStageChanged = true;
             }
         }
@@ -181,13 +181,145 @@ export function frameCanvasSelectionOrGraph(canvasInstance: any): void {
         const pad = 120;
         const scaleX = (viewW - pad) / boundsW;
         const scaleY = (viewH - pad) / boundsH;
-        targetScale = Math.max(0.25, Math.min(1.0, Math.min(scaleX, scaleY)));
+        targetScale = Math.max(0.10, Math.min(1.0, Math.min(scaleX, scaleY)));
     }
 
     ds.scale = targetScale;
     ds.offset[0] = (viewW * 0.5) / targetScale - centerX;
     ds.offset[1] = (viewH * 0.5) / targetScale - centerY;
-    syncNodesDistanceStage(graph, targetScale);
+    syncNodesDistanceStage(graph, targetScale, canvasInstance.resizing_node);
     canvasInstance.setDirty(true, true);
+}
+
+export type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
+
+export function getResizeCursor(edge: ResizeEdge): string {
+    switch (edge) {
+        case 'n':
+        case 's':
+            return 'ns-resize';
+        case 'e':
+        case 'w':
+            return 'ew-resize';
+        case 'nw':
+        case 'se':
+            return 'nwse-resize';
+        case 'ne':
+        case 'sw':
+            return 'nesw-resize';
+    }
+}
+
+export function detectNodeResizeEdge(
+    node: any,
+    localX: number,
+    localY: number,
+    zoomScale: number
+): ResizeEdge | null {
+    if (!node || node.resizable === false || !node.isVisualizationActive || node.flags?.collapsed || (node.flags as any)?.hidden || isModifierNode(node)) {
+        return null;
+    }
+    const w = Number(node.size?.[0]) || 0;
+    const h = Number(node.size?.[1]) || 0;
+    if (w <= 0 || h <= 0) return null;
+
+    const safeScale = Math.max(0.25, zoomScale || 1);
+    const edgeOutside = Math.min(10, Math.max(5, Math.round(5 / safeScale)));
+    const edgeInside = Math.min(
+        Math.floor(w * 0.2),
+        Math.floor(h * 0.2),
+        Math.min(14, Math.max(5, Math.round(5 / safeScale)))
+    );
+    const cornerReach = Math.min(
+        Math.floor(w * 0.28),
+        Math.floor(h * 0.28),
+        Math.min(26, Math.max(12, Math.round(12 / safeScale)))
+    );
+
+    if (localX < -edgeOutside || localX > w + edgeOutside || localY < -edgeOutside || localY > h + edgeOutside) {
+        return null;
+    }
+
+    // Keep connection ports on the left/right midpoints free for cable wiring
+    const portRadius = Math.max(10, Math.min(20, 10 / safeScale));
+    if (node.inputs?.length && Math.hypot(localX, localY - h * 0.5) <= portRadius) return null;
+    if (node.outputs?.length && Math.hypot(localX - w, localY - h * 0.5) <= portRadius) return null;
+
+    const onLeft = localX <= edgeInside;
+    const onRight = localX >= w - edgeInside;
+    const onTop = localY <= edgeInside;
+    const onBottom = localY >= h - edgeInside;
+    if (!onLeft && !onRight && !onTop && !onBottom) return null;
+
+    const nearLeft = localX <= cornerReach;
+    const nearRight = localX >= w - cornerReach;
+    const nearTop = localY <= cornerReach;
+    const nearBottom = localY >= h - cornerReach;
+
+    // Corners (angles) resize freely on both axes
+    if ((onTop || onLeft) && nearTop && nearLeft) return 'nw';
+    if ((onTop || onRight) && nearTop && nearRight) return 'ne';
+    if ((onBottom || onLeft) && nearBottom && nearLeft) return 'sw';
+    if ((onBottom || onRight) && nearBottom && nearRight) return 'se';
+
+    // Sides resize along a single axis
+    if (onTop) return 'n';
+    if (onBottom) return 's';
+    if (onLeft) return 'w';
+    if (onRight) return 'e';
+    return null;
+}
+
+export function computeResizedNodeRect(
+    start: { x: number; y: number; width: number; height: number },
+    edge: ResizeEdge,
+    dx: number,
+    dy: number,
+    minWidth: number = BaseNode.minVisualWidth,
+    minHeight: number = BaseNode.minVisualHeight
+): { x: number; y: number; width: number; height: number } {
+    let x = start.x;
+    let y = start.y;
+    let width = start.width;
+    let height = start.height;
+
+    if (edge.includes('e')) {
+        width = Math.max(minWidth, Math.round(start.width + dx));
+    }
+    if (edge.includes('w')) {
+        width = Math.max(minWidth, Math.round(start.width - dx));
+        x = (start.x + start.width) - width;
+    }
+    if (edge.includes('s')) {
+        height = Math.max(minHeight, Math.round(start.height + dy));
+    }
+    if (edge.includes('n')) {
+        height = Math.max(minHeight, Math.round(start.height - dy));
+        y = (start.y + start.height) - height;
+    }
+
+    return { x, y, width, height };
+}
+
+export function collectNodesInSelectionRect(
+    nodes: any[],
+    rx: number,
+    ry: number,
+    rw: number,
+    rh: number
+): Set<any> {
+    const ids = new Set<any>();
+    if (!Array.isArray(nodes) || (rw <= 2 && rh <= 2)) return ids;
+    for (const n of nodes) {
+        if (!n || (n.flags as any)?.hidden || isModifierNode(n)) continue;
+        const nw = Number(n.size?.[0]) || 44;
+        const nh = Number(n.size?.[1]) || 44;
+        const nx = Number(n.pos?.[0]) || 0;
+        const ny = Number(n.pos?.[1]) || 0;
+        if (nx < rx + rw && nx + nw > rx && ny < ry + rh && ny + nh > ry) {
+            ids.add(n.id);
+        }
+    }
+    return ids;
 }
 

@@ -40,6 +40,7 @@ export class RealtimeAudioClient {
             master_rms_l: 0,
             master_rms_r: 0,
             bus_peaks: {},
+            bus_rms: {},
             scope: null,
         };
 

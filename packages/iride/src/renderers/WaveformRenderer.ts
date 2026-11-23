@@ -2,7 +2,6 @@ import { BaseSignalRenderer } from './BaseSignalRenderer.ts';
 import { type RenderBox, type SignalTelemetry, type WaveformSignal, type RendererOptions } from '../types.ts';
 import { extractPeaksFromBuffer } from '../utils/peakExtractor.ts';
 import {
-    colorWithAlpha,
     drawPlayhead,
     drawRoundRect,
     drawSlotBadge,
@@ -23,7 +22,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
 
     constructor(options: RendererOptions = {}) {
         super({
-            accentColor: '#059669',
+            accentColor: '#111111',
             ...options
         });
     }
@@ -67,16 +66,18 @@ export class WaveformRenderer extends BaseSignalRenderer {
         drawRoundRect(ctx, x, y, width, height, 4);
         ctx.clip();
 
-        ctx.fillStyle = this.options.backgroundColor || '#ffffff';
-        ctx.fillRect(x, y, width, height);
+        if (this.options.backgroundColor && this.options.backgroundColor !== 'transparent') {
+            ctx.fillStyle = this.options.backgroundColor;
+            ctx.fillRect(x, y, width, height);
+        }
 
         const midY = y + height * 0.5;
         const signal = this.signal;
-        const accent = signal?.accentColor || this.options.accentColor || '#059669';
+        const dataColor = '#111111';
         const isPlaying = Boolean(telemetry?.isPlaying);
 
         // Center reference line
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.14)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x, midY);
@@ -163,15 +164,15 @@ export class WaveformRenderer extends BaseSignalRenderer {
                             const h = Math.max(1, bottom - top);
 
                             mCtx.fillStyle = (colX < cropStartNorm * width || colX > cropEndNorm * width)
-                                ? 'rgba(255, 255, 255, 0.25)'
+                                ? 'rgba(255, 255, 255, 0.18)'
                                 : '#ffffff';
                             mCtx.fillRect(colX, top, Math.max(1, colWidth - 0.5), h);
                         }
                     }
 
                     const tintFill = isInvalidated
-                        ? 'rgba(245, 158, 11, 0.6)'
-                        : (isDimmed ? colorWithAlpha(accent, 0.25) : accent);
+                        ? 'rgba(17, 17, 17, 0.45)'
+                        : (isDimmed ? 'rgba(17, 17, 17, 0.24)' : dataColor);
                     const nextTintFp = `${currentFp}_${tintFill}`;
                     if (this.tintFingerprint !== nextTintFp) {
                         this.tintFingerprint = nextTintFp;
@@ -195,20 +196,20 @@ export class WaveformRenderer extends BaseSignalRenderer {
                     const h = Math.max(1, bottom - top);
 
                     if (colX < cropStartX || colX > cropEndX) {
-                        ctx.fillStyle = 'rgba(148, 163, 184, 0.25)';
+                        ctx.fillStyle = 'rgba(17, 17, 17, 0.18)';
                     } else if (isInvalidated) {
-                        ctx.fillStyle = 'rgba(245, 158, 11, 0.6)';
+                        ctx.fillStyle = 'rgba(17, 17, 17, 0.45)';
                     } else if (isDimmed) {
-                        ctx.fillStyle = colorWithAlpha(accent, 0.25);
+                        ctx.fillStyle = 'rgba(17, 17, 17, 0.24)';
                     } else {
-                        ctx.fillStyle = accent;
+                        ctx.fillStyle = dataColor;
                     }
                     ctx.fillRect(colX, top, Math.max(1, colWidth - 0.5), h);
                 }
             }
 
             if (bufferFrontX != null) {
-                ctx.strokeStyle = '#38bdf8';
+                ctx.strokeStyle = '#525252';
                 ctx.lineWidth = 1.25;
                 ctx.beginPath();
                 ctx.moveTo(bufferFrontX, y + 2);
@@ -219,7 +220,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
             // Sample crop boundaries (only when crop is active on SampleNode)
             if (!isPlaying) {
                 if (cropStartNorm > 0.001) {
-                    ctx.strokeStyle = '#f59e0b';
+                    ctx.strokeStyle = 'rgba(17, 17, 17, 0.75)';
                     ctx.lineWidth = 1.25;
                     ctx.beginPath();
                     ctx.moveTo(cropStartX, y);
@@ -227,7 +228,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
                     ctx.stroke();
                 }
                 if (cropEndNorm < 0.999) {
-                    ctx.strokeStyle = '#f59e0b';
+                    ctx.strokeStyle = 'rgba(17, 17, 17, 0.75)';
                     ctx.lineWidth = 1.25;
                     ctx.beginPath();
                     ctx.moveTo(cropEndX, y);
@@ -236,7 +237,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
                 }
             }
         } else {
-            ctx.strokeStyle = isDimmed ? colorWithAlpha(accent, 0.15) : colorWithAlpha(accent, 0.35);
+            ctx.strokeStyle = isDimmed ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.22)';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
             ctx.moveTo(x + 4, midY);
@@ -244,7 +245,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
             ctx.stroke();
 
             if (!isPlaying && !this.options.minified) {
-                ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.50)';
                 ctx.font = '9px Inter, sans-serif';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
@@ -257,17 +258,17 @@ export class WaveformRenderer extends BaseSignalRenderer {
             if (signal?.playbackProgress != null) {
                 if (!hasTriggerState || isTriggerActive) {
                     const playheadX = x + Math.max(0, Math.min(1, signal.playbackProgress)) * width;
-                    drawPlayhead(ctx, playheadX, y, y + height, '#0284c7');
+                    drawPlayhead(ctx, playheadX, y, y + height, '#000000');
                 }
             } else if (hasTriggerState) {
                 if (isTriggerActive && signal?.triggerProgress != null) {
                     const playheadX = x + Math.max(0, Math.min(1, signal.triggerProgress)) * width;
-                    drawPlayhead(ctx, playheadX, y, y + height, '#0284c7');
+                    drawPlayhead(ctx, playheadX, y, y + height, '#000000');
                 }
             } else if (telemetry && telemetry.duration > 0) {
                 const progress = Math.max(0, Math.min(1, ((telemetry.time % telemetry.duration) + telemetry.duration) % telemetry.duration / telemetry.duration));
                 const playheadX = x + progress * width;
-                drawPlayhead(ctx, playheadX, y, y + height, '#0284c7');
+                drawPlayhead(ctx, playheadX, y, y + height, '#000000');
             }
         }
 

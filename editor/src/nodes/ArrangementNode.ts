@@ -4,7 +4,6 @@ import { type FieldSchema } from '../fields/FieldSchema.ts';
 import { type NodePanelSchema } from '../fields/NodePanelSchema.ts';
 import {
     ArrangementRenderer,
-    colorWithAlpha,
     drawRadialLoopProgress,
     type RenderBox,
     type SignalTelemetry,
@@ -483,12 +482,14 @@ export class ArrangementNode extends BaseNode {
         }
 
         this.arrangementRenderer.setOptions({
-            minified: this.isMinifiedStage
+            minified: this.isMinifiedStage,
+            backgroundColor: 'transparent',
+            accentColor: '#111111'
         });
         this.arrangementRenderer.setSignal({
             totalBars,
             sections: sections || [],
-            accentColor: this.nodeColor
+            accentColor: '#111111'
         });
 
         this.arrangementRenderer.render(ctx, bounds, telemetry);
@@ -584,20 +585,20 @@ export class ArrangementNode extends BaseNode {
     ): void {
         const cx = titleX + 6;
         const cy = headerHeight * 0.5;
-        const color = this.nodeColor;
+        const mono = '#111111';
         if (telemetry?.isPlaying) {
             const activity = this.getLiveActivityState(telemetry);
             drawRadialLoopProgress(ctx, cx, cy, 5.5, activity.progress ?? 0, {
-                fillColor: color,
-                trackFill: colorWithAlpha(color, 0.14),
-                trackStroke: colorWithAlpha(color, 0.45),
+                fillColor: mono,
+                trackFill: 'rgba(0, 0, 0, 0.10)',
+                trackStroke: 'rgba(0, 0, 0, 0.38)',
                 dimmed: !activity.isTriggered
             });
         } else {
             drawRadialLoopProgress(ctx, cx, cy, 5.5, 0, {
-                fillColor: color,
-                trackFill: colorWithAlpha(color, 0.08),
-                trackStroke: colorWithAlpha(color, 0.35)
+                fillColor: mono,
+                trackFill: 'rgba(0, 0, 0, 0.08)',
+                trackStroke: 'rgba(0, 0, 0, 0.32)'
             });
         }
         this._headerDeco.titleOffsetX = 16;

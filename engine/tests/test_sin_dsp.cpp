@@ -500,6 +500,116 @@ static int test_multi_producer_cmd_and_live_crop_seek() {
     return 0;
 }
 
+static int test_per_bus_rms_and_rt_peak_hold() {
+    // 1. Offline multi-bus RMS & peak telemetry (ch 10 -> sub 5 -> master 1) with zero allocs
+    {
+        SinEngineConfig cfg{48000, 256, 1};
+        SinEngine* eng = sin_engine_create(&cfg);
+        CHECK(eng != nullptr, "rms engine create failed");
+
+        constexpr uint32_t N = 2048;
+        std::vector<float> src(N, 0.5f);
+        CHECK(sin_engine_register_pcm_source(eng, 1, src.data(), src.data(), N, 48000, 777) == 0, "reg dc");
+
+        SinBusDesc buses[3] = {
+            {10, 5, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0, {0, 0}},
+            {5,  1, 0.0f, 0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0, {0, 0}},
+            {1,  0, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0, {0, 0}},
+        };
+        SinClipDesc clip{};
+        clip.clip_id = 1;
+        clip.source_id = 1;
+        clip.target_bus_id = 10;
+        clip.source_end_ratio = 1.0;
+        clip.gain = 1.0f;
+        clip.playback_rate = 1.0f;
+        CHECK(sin_engine_load_plan(eng, buses, 3, &clip, 1, 0.0, 120.0) == 0, "load multi-bus rms plan");
+
+        std::vector<float> out_l(512), out_r(512);
+        g_trapped_count.store(0, std::memory_order_relaxed);
+        g_trap_allocs.store(true, std::memory_order_release);
+        sin_engine_process(eng, out_l.data(), out_r.data(), 512);
+        g_trap_allocs.store(false, std::memory_order_release);
+        CHECK(g_trapped_count.load() == 0, "ZERO heap allocations allowed in multi-bus RMS process()");
+
+        SinTelemetry tel{};
+        SinBusPeak peaks[8]{};
+        SinBusRms rms_arr[8]{};
+        sin_engine_read_telemetry(eng, &tel, peaks, 8, nullptr, 0);
+        const uint32_t rc = sin_engine_read_bus_rms(eng, rms_arr, 8);
+        CHECK(rc == 3, "expected 3 buses in sin_engine_read_bus_rms");
+
+        float rms10 = -1.0f, rms5 = -1.0f, rms1 = -1.0f;
+        for (uint32_t i = 0; i < rc; ++i) {
+            if (rms_arr[i].bus_id == 10) rms10 = rms_arr[i].rms;
+            if (rms_arr[i].bus_id == 5)  rms5  = rms_arr[i].rms;
+            if (rms_arr[i].bus_id == 1)  rms1  = rms_arr[i].rms;
+        }
+        CHECK(std::abs(rms10 - 0.5f) < 1e-4f, "ch10 rms must equal 0.5");
+        CHECK(std::abs(rms5 - 0.25f) < 1e-4f, "sub-bus 5 rms must equal 0.25 after 0.5 volume");
+        CHECK(std::abs(rms1 - 0.25f) < 1e-4f, "master 1 rms must equal 0.25");
+
+        sin_engine_destroy(eng);
+    }
+
+    // 2. RT mode: brief clipping impulse holds peak >= 0.999 for >50ms and decays ballistic RMS smoothly
+    {
+        SinEngineConfig cfg{48000, 256, 0};
+        SinEngine* eng = sin_engine_create(&cfg);
+        CHECK(eng != nullptr, "rt rms engine create failed");
+
+        constexpr uint32_t N = 4800; // 100ms
+        std::vector<float> src(N, 0.0f);
+        for (uint32_t i = 200; i < 256; ++i) src[i] = 1.2f; // 1.1ms transient clip after 4ms start declick
+        CHECK(sin_engine_register_pcm_source(eng, 1, src.data(), src.data(), N, 48000, 888) == 0, "reg impulse");
+
+        SinBusDesc buses[2] = {
+            {10, 1, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0, {0, 0}},
+            {1,  0, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0, {0, 0}},
+        };
+        SinClipDesc clip{};
+        clip.clip_id = 1;
+        clip.source_id = 1;
+        clip.target_bus_id = 10;
+        clip.source_end_ratio = 1.0;
+        clip.gain = 1.0f;
+        clip.playback_rate = 1.0f;
+        CHECK(sin_engine_load_plan(eng, buses, 2, &clip, 1, 0.0, 120.0) == 0, "load rt impulse plan");
+        sin_engine_set_transport(eng, 1, 0.0, 120.0, 0.0, 0.0, 0);
+
+        std::vector<float> out_l(256), out_r(256);
+        // Process 10 blocks = 2560 frames (~53ms)
+        float first_rms = 0.0f;
+        float tenth_rms = 0.0f;
+        for (int blk = 0; blk < 10; ++blk) {
+            sin_engine_process(eng, out_l.data(), out_r.data(), 256);
+            SinBusRms rms_arr[4]{};
+            const uint32_t rc = sin_engine_read_bus_rms(eng, rms_arr, 4);
+            for (uint32_t i = 0; i < rc; ++i) {
+                if (rms_arr[i].bus_id == 10) {
+                    if (blk == 0) first_rms = rms_arr[i].rms;
+                    if (blk == 9) tenth_rms = rms_arr[i].rms;
+                }
+            }
+        }
+        SinTelemetry tel{};
+        SinBusPeak peaks[4]{};
+        sin_engine_read_telemetry(eng, &tel, peaks, 4, nullptr, 0);
+        float bus10_peak = 0.0f;
+        for (int i = 0; i < 4; ++i) {
+            if (peaks[i].bus_id == 10) bus10_peak = peaks[i].peak;
+        }
+        CHECK(bus10_peak >= 0.999f, "70ms RT peak-hold must preserve transient clip on bus 10 after 53ms");
+        CHECK(tel.master_peak_l >= 0.999f, "70ms RT peak-hold must preserve transient clip on master after 53ms");
+        CHECK(first_rms > 0.1f && tenth_rms > 0.05f && tenth_rms < first_rms,
+              "RT ballistic RMS must follow impulse and decay smoothly");
+
+        sin_engine_destroy(eng);
+    }
+
+    return 0;
+}
+
 int main() {
     if (test_default_sr_and_unity_passthrough() != 0) return 1;
     if (test_resampling_and_bus_solo_mute() != 0) return 1;
@@ -508,6 +618,7 @@ int main() {
     if (test_monotonic_seek_telemetry_and_declick_crossfade() != 0) return 1;
     if (test_dsp_processor_gain_chain() != 0) return 1;
     if (test_multi_producer_cmd_and_live_crop_seek() != 0) return 1;
+    if (test_per_bus_rms_and_rt_peak_hold() != 0) return 1;
     std::printf("ALL sin_dsp C++ TESTS PASSED!\n");
     return 0;
 }

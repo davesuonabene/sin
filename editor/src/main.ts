@@ -9,7 +9,7 @@ import './nodes/ModulatorNode';
 import './nodes/AssetFilterNode';
 import './nodes/RandomNode';
 import './nodes/DisabledNode';
-import { isModifierNode } from './nodes/BaseNode';
+import { BaseNode, isModifierNode } from './nodes/BaseNode';
 import { PropertiesWindow } from './ui/PropertiesWindow';
 import { TrackPropertiesWindow } from './ui/TrackPropertiesWindow';
 import { NodePopupMenu } from './ui/NodePopupMenu';
@@ -33,12 +33,17 @@ import {
     volumeIcon
 } from './ui/AppShell';
 import {
+    collectNodesInSelectionRect,
+    computeResizedNodeRect,
+    detectNodeResizeEdge,
     frameCanvasSelectionOrGraph,
     getDistanceToCubicBezier,
     getLinkControlPoints,
     getLinkEndpoints,
+    getResizeCursor,
     LEFT_PORT_BRANCH_INPUT,
     markLeftPortBranch,
+    type ResizeEdge,
     syncAllModifierPositions,
     syncNodesDistanceStage,
     updateModifiersForParent
@@ -67,6 +72,7 @@ import { applySignalFlowColors } from './graphColorEngine';
 
 const sinRealtime = new RealtimeAudioClient('/api/realtime/ws', { ownerId: 'sin-node-editor' });
 let sinRealtimeLoaded = false;
+let sinRealtimeBusIds = new Set<string>();
 let sinRealtimePlaying = false;
 let sinRealtimeDurationSec = 0;
 let sinRealtimeBpm = 120;
@@ -343,15 +349,20 @@ function flushRealtimeTelemetryFrame() {
         defaultTransportClock.setRealtimeScopeData(null);
     }
     if (sinRealtimePlaying) {
+        defaultTransportClock.setBusLevels(tel.bus_rms, tel.bus_peaks);
+        const masterKey = activeRamPreviewNodeId != null ? String(activeRamPreviewNodeId) : '';
+        const masterBusRms = masterKey && tel.bus_rms ? Number(tel.bus_rms[masterKey]) : NaN;
+        const masterBusPeak = masterKey && tel.bus_peaks ? Number(tel.bus_peaks[masterKey]) : NaN;
         const rmsL = Number(tel.master_rms_l) || 0;
         const rmsR = Number(tel.master_rms_r) || 0;
         const peakL = Number(tel.master_peak_l) || 0;
         const peakR = Number(tel.master_peak_r) || 0;
         defaultTransportClock.setMasterLevels(
-            Math.sqrt(0.5 * (rmsL * rmsL + rmsR * rmsR)),
-            Math.max(peakL, peakR)
+            Number.isFinite(masterBusRms) && masterBusRms > 0 ? masterBusRms : Math.sqrt(0.5 * (rmsL * rmsL + rmsR * rmsR)),
+            Number.isFinite(masterBusPeak) && masterBusPeak > 0 ? masterBusPeak : Math.max(peakL, peakR)
         );
     } else {
+        defaultTransportClock.setBusLevels(null, null);
         defaultTransportClock.setMasterLevels(0, 0);
     }
     defaultTransportClock.setBpm(sinRealtimeBpm || globalParameters.bpm);
@@ -370,12 +381,24 @@ sinRealtime.onTelemetry((tel) => {
 });
 
 function applyRealtimePeaksToGraph(masterPeaks: number[] | null, busPeaks: Record<string, number[]> | null, dur: number) {
+    const graph = (window as any).editorGraph as LGraph | undefined;
     if (Array.isArray(masterPeaks) && masterPeaks.length > 0) {
         (window as any).activeRealtimeMasterPeaks = new Float32Array(masterPeaks);
         (window as any).activeRealtimeMasterDuration = dur;
+        if (sinRealtimeLoaded) {
+            (window as any).activeRamPreviewBuffer = undefined;
+        }
         masterWaveform.setPeaks(masterPeaks, dur);
+        if (graph && activeRamPreviewNodeId != null) {
+            const target = graph.getNodeById(activeRamPreviewNodeId) as any;
+            if (target) {
+                target._lastRenderedBuffer = null;
+                delete target.manifestStemBuffer;
+                target._cachedMixedInput = null;
+                target.setDirtyCanvas?.(true, true);
+            }
+        }
     }
-    const graph = (window as any).editorGraph as LGraph | undefined;
     if (graph && busPeaks && typeof busPeaks === 'object') {
         const nodes = (((graph as any)._nodes || []) as any[]);
         for (const node of nodes) {
@@ -384,10 +407,14 @@ function applyRealtimePeaksToGraph(masterPeaks: number[] | null, busPeaks: Recor
             if (Array.isArray(raw) && raw.length >= 2) {
                 node.realtimePeaks = new Float32Array(raw);
                 node.realtimePeaksDuration = dur;
+                node._lastRenderedBuffer = null;
+                delete node.manifestStemBuffer;
+                node._cachedMixedInput = null;
+                node.setDirtyCanvas?.(true, true);
             }
         }
     }
-    (window as any).editorCanvas?.setDirty?.(true, false);
+    (window as any).editorCanvas?.setDirty?.(true, true);
 }
 
 sinRealtime.onMasterPeaks((res) => {
@@ -2288,6 +2315,8 @@ function clearActiveWorkspaceManifest() {
     sinRealtimePendingSeekSec = null;
     sinRealtimeSeekHoldUntil = 0;
     sinRealtimeLoaded = false;
+    (window as any).__sinRealtimeLoaded = false;
+    sinRealtimeBusIds.clear();
     sinRealtimePlaying = false;
     sinRealtimeDurationSec = 0;
     sinRealtimeTargetMode = 'graph';
@@ -2557,8 +2586,9 @@ const originalConnect = (LiteGraph as any).LGraphNode.prototype.connect;
 (window as any).updateModifiersForParent = updateModifiersForParent;
 (window as any).syncAllModifierPositions = syncAllModifierPositions;
 
-// Keep canvas navigation and selection on familiar desktop controls:
-// middle-drag pans, Shift+left-drag box-selects, and Ctrl+click adds nodes.
+// Keep canvas navigation and selection on desktop controls:
+// left-drag on empty canvas pans, middle-drag pans anywhere (universal pan fallback),
+// Shift+left-drag box-selects, Ctrl+click toggles/adds nodes, and all node borders/corners resize expanded panels.
 // Spacebar is reserved exclusively for transport toggle, not canvas dragging.
 const originalProcessKey = (LiteGraph as any).LGraphCanvas.prototype.processKey;
 (LiteGraph as any).LGraphCanvas.prototype.processKey = function (e: KeyboardEvent) {
@@ -2614,15 +2644,178 @@ const originalProcessKey = (LiteGraph as any).LGraphCanvas.prototype.processKey;
 let lastMouseDownPos: [number, number] | null = null;
 let lastMouseDownHitNode: any = null;
 let lastMouseDownWasEmptyBackground = false;
+let dragSelectAdditive = false;
+
+interface ActiveNodeResize {
+    canvas: any;
+    node: any;
+    edge: ResizeEdge;
+    startCanvasX: number;
+    startCanvasY: number;
+    startPosX: number;
+    startPosY: number;
+    startWidth: number;
+    startHeight: number;
+}
+
+let activeNodeResize: ActiveNodeResize | null = null;
+
+function handleWindowResizeMove(e: MouseEvent) {
+    if (!activeNodeResize) return;
+    applyActiveNodeResize(e);
+}
+
+function handleWindowResizeUp() {
+    if (!activeNodeResize) return;
+    finishActiveNodeResize();
+}
+
+function attachWindowResizeListeners() {
+    window.addEventListener('pointermove', handleWindowResizeMove, true);
+    window.addEventListener('mousemove', handleWindowResizeMove, true);
+    window.addEventListener('pointerup', handleWindowResizeUp, true);
+    window.addEventListener('mouseup', handleWindowResizeUp, true);
+}
+
+function detachWindowResizeListeners() {
+    window.removeEventListener('pointermove', handleWindowResizeMove, true);
+    window.removeEventListener('mousemove', handleWindowResizeMove, true);
+    window.removeEventListener('pointerup', handleWindowResizeUp, true);
+    window.removeEventListener('mouseup', handleWindowResizeUp, true);
+}
+
+function applyActiveNodeResize(e: MouseEvent) {
+    if (!activeNodeResize) return;
+    const { canvas, node, edge, startCanvasX, startCanvasY, startPosX, startPosY, startWidth, startHeight } = activeNodeResize;
+    const pos = canvas.convertEventToCanvasOffset ? canvas.convertEventToCanvasOffset(e) : [e.clientX, e.clientY];
+    const next = computeResizedNodeRect(
+        { x: startPosX, y: startPosY, width: startWidth, height: startHeight },
+        edge,
+        pos[0] - startCanvasX,
+        pos[1] - startCanvasY
+    );
+
+    node.pos[0] = next.x;
+    node.pos[1] = next.y;
+    if (typeof node.onResize === 'function') {
+        node.onResize([next.width, next.height]);
+    } else if (typeof node.setSize === 'function') {
+        node.setSize([next.width, next.height]);
+    }
+    syncAllModifierPositions(canvas.graph);
+    if (canvas.canvas) {
+        canvas.canvas.style.cursor = getResizeCursor(edge);
+    }
+    canvas.dirty_canvas = true;
+    canvas.dirty_bgcanvas = true;
+    canvas.setDirty?.(true, true);
+}
+
+function finishActiveNodeResize() {
+    if (!activeNodeResize) return;
+    const { canvas, node } = activeNodeResize;
+    activeNodeResize = null;
+    detachWindowResizeListeners();
+
+    canvas.resizing_node = null;
+    canvas.graph?.afterChange?.(node);
+    if (canvas.graph && canvas.ds?.scale != null) {
+        if (syncNodesDistanceStage(canvas.graph, Number(canvas.ds.scale))) {
+            syncNodeContextToolbar();
+        }
+    }
+    if (canvas.canvas) {
+        canvas.canvas.style.cursor = '';
+    }
+    canvas.setDirty?.(true, true);
+}
+
+let activeMiddlePan: { canvas: any; lastClientX: number; lastClientY: number } | null = null;
+
+function handleWindowMiddlePanMove(e: MouseEvent) {
+    if (!activeMiddlePan) return;
+    applyActiveMiddlePan(e);
+}
+
+function handleWindowMiddlePanUp() {
+    if (!activeMiddlePan) return;
+    finishActiveMiddlePan();
+}
+
+function attachWindowMiddlePanListeners() {
+    window.addEventListener('pointermove', handleWindowMiddlePanMove, true);
+    window.addEventListener('mousemove', handleWindowMiddlePanMove, true);
+    window.addEventListener('pointerup', handleWindowMiddlePanUp, true);
+    window.addEventListener('mouseup', handleWindowMiddlePanUp, true);
+    window.addEventListener('blur', handleWindowMiddlePanUp, true);
+}
+
+function detachWindowMiddlePanListeners() {
+    window.removeEventListener('pointermove', handleWindowMiddlePanMove, true);
+    window.removeEventListener('mousemove', handleWindowMiddlePanMove, true);
+    window.removeEventListener('pointerup', handleWindowMiddlePanUp, true);
+    window.removeEventListener('mouseup', handleWindowMiddlePanUp, true);
+    window.removeEventListener('blur', handleWindowMiddlePanUp, true);
+}
+
+function startActiveMiddlePan(canvas: any, e: MouseEvent) {
+    finishActiveMiddlePan();
+    activeMiddlePan = {
+        canvas,
+        lastClientX: e.clientX,
+        lastClientY: e.clientY
+    };
+    attachWindowMiddlePanListeners();
+    if (canvas.canvas) {
+        canvas.canvas.style.cursor = 'grabbing';
+    }
+}
+
+function applyActiveMiddlePan(e: MouseEvent) {
+    if (!activeMiddlePan) return;
+    const { canvas, lastClientX, lastClientY } = activeMiddlePan;
+    const dx = e.clientX - lastClientX;
+    const dy = e.clientY - lastClientY;
+    activeMiddlePan.lastClientX = e.clientX;
+    activeMiddlePan.lastClientY = e.clientY;
+    if (dx === 0 && dy === 0) return;
+    if (canvas.ds?.offset) {
+        const scale = canvas.ds.scale || 1;
+        canvas.ds.offset[0] += dx / scale;
+        canvas.ds.offset[1] += dy / scale;
+    }
+    if (canvas.canvas) {
+        canvas.canvas.style.cursor = 'grabbing';
+    }
+    canvas.setDirty?.(true, true);
+}
+
+function finishActiveMiddlePan() {
+    if (!activeMiddlePan) return;
+    const { canvas } = activeMiddlePan;
+    activeMiddlePan = null;
+    detachWindowMiddlePanListeners();
+    if (canvas.canvas) {
+        canvas.canvas.style.cursor = '';
+    }
+    canvas.setDirty?.(true, true);
+}
 
 const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.processMouseDown;
 (LiteGraph as any).LGraphCanvas.prototype.processMouseDown = function (e: MouseEvent) {
+    if (e.button === 1) {
+        startActiveMiddlePan(this, e);
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+    }
+
     const previousAllowDragCanvas = this.allow_dragcanvas;
     const offset = this.convertEventToCanvasOffset ? this.convertEventToCanvasOffset(e) : [0, 0];
     const hitNode = this.getNodeOnPos ? this.getNodeOnPos(offset[0], offset[1], (this.graph as any)?._nodes, 0) : null;
-    const emptyCanvasDrag = e.button === 0 && !hitNode && !this.connecting_node && !hoveredLink;
-    const boxSelect = (e.button === 0 && e.shiftKey && !e.ctrlKey) || emptyCanvasDrag;
+    const boxSelect = e.button === 0 && e.shiftKey && !e.ctrlKey;
     const additiveSelect = e.button === 0 && e.ctrlKey && !e.shiftKey;
+    const emptyCanvasDrag = e.button === 0 && !e.shiftKey && !e.ctrlKey && !hitNode && !this.connecting_node && !hoveredLink;
 
     lastMouseDownPos = [e.clientX, e.clientY];
     lastMouseDownHitNode = hitNode;
@@ -2637,11 +2830,11 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
         }
     }
 
-    // Priority 1: Check if an action button on any node was clicked.
+    // Priority 1: Check action buttons and 8-way resize borders/corners on nodes.
     // Must be handled BEFORE LiteGraph's output slot hitbox detection
     // which otherwise intercepts clicks near (x=48, y=18) as cable connection gestures.
     if (e.button === 0 && !e.shiftKey && !e.ctrlKey && this.graph) {
-        const offset = this.convertEventToCanvasOffset(e);
+        const zoomScale = this.ds?.scale || 1;
         const candidateNodes = (this.graph as any)._nodes || [];
         for (let i = candidateNodes.length - 1; i >= 0; i--) {
             const n = candidateNodes[i];
@@ -2654,40 +2847,47 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
             const localX = offset[0] - n.pos[0];
             const localY = offset[1] - n.pos[1];
 
-            // Priority 1a: Bottom-right resize grip on resizable panel nodes
-            if (
-                n.resizable !== false &&
-                n.isVisualizationActive &&
-                localX >= n.size[0] - 11 &&
-                localX <= n.size[0] + 3 &&
-                localY >= n.size[1] - 11 &&
-                localY <= n.size[1] + 3
-            ) {
+            if (Array.isArray(n.buttons) && n.buttons.length > 0) {
+                const activeButtons = typeof n.getVisibleCanvasButtons === 'function'
+                    ? n.getVisibleCanvasButtons(isSelected, isHovered)
+                    : (isSelected || !n.isVisualizationActive ? n.buttons : []);
+                for (const btn of activeButtons) {
+                    if (btn.checkHit(localX, localY, n)) {
+                        console.log(`[CanvasButton] Clicked '${btn.label}' (${btn.tooltip || 'button'}) on node #${n.id}`);
+                        btn.onClick(e);
+                        this.dirty_canvas = true;
+                        this.setDirty(true, true);
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return true;
+                    }
+                }
+            }
+
+            // Priority 1a: 8-way border & corner resize on resizable panel nodes
+            const resizeEdge = detectNodeResizeEdge(n, localX, localY, zoomScale);
+            if (resizeEdge) {
                 this.graph.beforeChange?.();
                 this.resizing_node = n;
-                if (this.canvas) this.canvas.style.cursor = "se-resize";
+                activeNodeResize = {
+                    canvas: this,
+                    node: n,
+                    edge: resizeEdge,
+                    startCanvasX: offset[0],
+                    startCanvasY: offset[1],
+                    startPosX: Number(n.pos[0]) || 0,
+                    startPosY: Number(n.pos[1]) || 0,
+                    startWidth: Number(n.size?.[0]) || n.getExpandedPanelSize?.()[0] || BaseNode.visualPanelWidth,
+                    startHeight: Number(n.size?.[1]) || n.getExpandedPanelSize?.()[1] || BaseNode.visualPanelHeight
+                };
+                attachWindowResizeListeners();
+                if (this.canvas) this.canvas.style.cursor = getResizeCursor(resizeEdge);
                 if (!isSelected) this.selectNode?.(n);
                 this.dirty_canvas = true;
                 this.setDirty(true, true);
                 e.preventDefault();
                 e.stopPropagation();
                 return true;
-            }
-
-            if (!Array.isArray(n.buttons) || n.buttons.length === 0) continue;
-            const activeButtons = typeof n.getVisibleCanvasButtons === 'function'
-                ? n.getVisibleCanvasButtons(isSelected, isHovered)
-                : (isSelected || !n.isVisualizationActive ? n.buttons : []);
-            for (const btn of activeButtons) {
-                if (btn.checkHit(localX, localY, n)) {
-                    console.log(`[CanvasButton] Clicked '${btn.label}' (${btn.tooltip || 'button'}) on node #${n.id}`);
-                    btn.onClick(e);
-                    this.dirty_canvas = true;
-                    this.setDirty(true, true);
-                    e.preventDefault();
-                    e.stopPropagation();
-                    return true;
-                }
             }
         }
 
@@ -2729,8 +2929,9 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
         }
     }
 
-    this.allow_dragcanvas = e.button === 1;
+    this.allow_dragcanvas = e.button === 0 && !boxSelect;
     if (boxSelect) {
+        dragSelectAdditive = Boolean(e.ctrlKey);
         Object.defineProperty(e, "ctrlKey", { configurable: true, value: true });
     } else if (additiveSelect) {
         Object.defineProperty(e, "ctrlKey", { configurable: true, value: false });
@@ -2742,6 +2943,9 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
         if (this.node_dragged && isModifierNode(this.node_dragged)) {
             this.node_dragged = null;
         }
+        if (this.dragging_canvas && this.canvas) {
+            this.canvas.style.cursor = 'grabbing';
+        }
         return res;
     } finally {
         this.allow_dragcanvas = previousAllowDragCanvas;
@@ -2752,6 +2956,16 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
 
 const originalProcessMouseMove = (LiteGraph as any).LGraphCanvas.prototype.processMouseMove;
 (LiteGraph as any).LGraphCanvas.prototype.processMouseMove = function (e: MouseEvent) {
+    if (activeNodeResize && activeNodeResize.canvas === this) {
+        applyActiveNodeResize(e);
+        e.preventDefault();
+        return false;
+    }
+    if (activeMiddlePan && activeMiddlePan.canvas === this) {
+        applyActiveMiddlePan(e);
+        e.preventDefault();
+        return false;
+    }
     if (this.node_dragged && isModifierNode(this.node_dragged)) {
         this.node_dragged = null;
     }
@@ -2759,25 +2973,89 @@ const originalProcessMouseMove = (LiteGraph as any).LGraphCanvas.prototype.proce
     if (this.node_dragged) {
         syncAllModifierPositions(this.graph);
     }
+    if (this.dragging_canvas && this.canvas) {
+        this.canvas.style.cursor = 'grabbing';
+    } else if (!this.node_dragged && !this.connecting_node && !this.dragging_rectangle && this.graph && this.canvas) {
+        const offset = this.convertEventToCanvasOffset ? this.convertEventToCanvasOffset(e) : null;
+        if (offset) {
+            const zoomScale = this.ds?.scale || 1;
+            const candidateNodes = (this.graph as any)._nodes || [];
+            for (let i = candidateNodes.length - 1; i >= 0; i--) {
+                const n = candidateNodes[i];
+                if (!n || n.flags?.collapsed || (n.flags as any)?.hidden || isModifierNode(n)) continue;
+                const localX = offset[0] - n.pos[0];
+                const localY = offset[1] - n.pos[1];
+                const isSelected = this.selected_nodes
+                    ? Boolean(this.selected_nodes[n.id] || this.selected_nodes[String(n.id)])
+                    : Boolean(n.is_selected);
+                const isHovered = this.node_over === n;
+                const activeButtons = typeof n.getVisibleCanvasButtons === 'function'
+                    ? n.getVisibleCanvasButtons(isSelected, isHovered)
+                    : (isSelected || !n.isVisualizationActive ? n.buttons : []);
+                if (Array.isArray(activeButtons) && activeButtons.some((btn: any) => btn.checkHit(localX, localY, n))) {
+                    break;
+                }
+                const resizeEdge = detectNodeResizeEdge(n, localX, localY, zoomScale);
+                if (resizeEdge) {
+                    this.canvas.style.cursor = getResizeCursor(resizeEdge);
+                    break;
+                }
+            }
+        }
+    }
     return res;
 };
 
-// Render theme-cohesive styled box selection instead of invisible #FFF stroke on white canvas
+// Sync distance stages BEFORE drawBackCanvas/drawFrontCanvas so cables and nodes update in lockstep
+const originalDraw = (LiteGraph as any).LGraphCanvas.prototype.draw;
+(LiteGraph as any).LGraphCanvas.prototype.draw = function () {
+    if (this.graph && this.ds?.scale != null) {
+        if (syncNodesDistanceStage(this.graph, Number(this.ds.scale), this.resizing_node)) {
+            this.dirty_bgcanvas = true;
+            this.dirty_canvas = true;
+            syncNodeContextToolbar();
+        }
+    }
+    return originalDraw ? originalDraw.apply(this, arguments) : undefined;
+};
+
+// Render monochrome slim selection rectangle and highlight nodes inside it while dragging
 const originalDrawFrontCanvas = (LiteGraph as any).LGraphCanvas.prototype.drawFrontCanvas;
 (LiteGraph as any).LGraphCanvas.prototype.drawFrontCanvas = function () {
     if (this.graph && this.ds?.scale != null) {
-        if (syncNodesDistanceStage(this.graph, Number(this.ds.scale))) {
+        if (syncNodesDistanceStage(this.graph, Number(this.ds.scale), this.resizing_node)) {
             this.dirty_bgcanvas = true;
+            if (this.bgcanvas && this.bgcanvas !== this.canvas && typeof this.drawBackCanvas === 'function') {
+                this.drawBackCanvas();
+            }
+            syncNodeContextToolbar();
         }
     }
     if (this.node_dragged) {
         this.dirty_bgcanvas = true;
     }
     const rect = this.dragging_rectangle;
+    let normRx = 0;
+    let normRy = 0;
+    let normRw = 0;
+    let normRh = 0;
     if (rect) {
+        normRx = rect[2] < 0 ? rect[0] + rect[2] : rect[0];
+        normRy = rect[3] < 0 ? rect[1] + rect[3] : rect[1];
+        normRw = Math.abs(rect[2]);
+        normRh = Math.abs(rect[3]);
+        const previewIds = collectNodesInSelectionRect(((this.graph as any)?._nodes || []) as any[], normRx, normRy, normRw, normRh);
+        (this as any).__sinDragSelectPreview = { ids: previewIds, additive: dragSelectAdditive };
         this.dragging_rectangle = null;
+    } else {
+        (this as any).__sinDragSelectPreview = null;
     }
-    const res = originalDrawFrontCanvas ? originalDrawFrontCanvas.apply(this, arguments) : undefined;
+    let res: any;
+    try {
+        res = originalDrawFrontCanvas ? originalDrawFrontCanvas.apply(this, arguments) : undefined;
+    } finally {
+        (this as any).__sinDragSelectPreview = null;
+    }
     if (rect) {
         this.dragging_rectangle = rect;
         const ctx = this.ctx || this.canvas?.getContext?.('2d');
@@ -2785,17 +3063,12 @@ const originalDrawFrontCanvas = (LiteGraph as any).LGraphCanvas.prototype.drawFr
             ctx.save();
             this.ds.toCanvasContext(ctx);
 
-            const rx = rect[2] < 0 ? rect[0] + rect[2] : rect[0];
-            const ry = rect[3] < 0 ? rect[1] + rect[3] : rect[1];
-            const rw = Math.abs(rect[2]);
-            const rh = Math.abs(rect[3]);
-
-            ctx.fillStyle = 'rgba(2, 132, 199, 0.08)';
-            ctx.fillRect(rx, ry, rw, rh);
-            ctx.strokeStyle = '#0284c7';
-            ctx.lineWidth = 1.25 / this.ds.scale;
-            ctx.setLineDash([4 / this.ds.scale, 2 / this.ds.scale]);
-            ctx.strokeRect(rx, ry, rw, rh);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
+            ctx.fillRect(normRx, normRy, normRw, normRh);
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.42)';
+            ctx.lineWidth = 1 / this.ds.scale;
+            ctx.setLineDash([]);
+            ctx.strokeRect(normRx, normRy, normRw, normRh);
             ctx.restore();
         }
     }
@@ -2815,6 +3088,19 @@ const originalProcessNodeSelected = (LiteGraph as any).LGraphCanvas.prototype.pr
 // Monkey-patch LGraphCanvas.prototype.processMouseUp for Cable to Nothing node selector
 const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.processMouseUp;
 (LiteGraph as any).LGraphCanvas.prototype.processMouseUp = function (e: MouseEvent) {
+    if (e.button === 1 || (activeMiddlePan && activeMiddlePan.canvas === this)) {
+        finishActiveMiddlePan();
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+    }
+    if (activeNodeResize && activeNodeResize.canvas === this) {
+        finishActiveNodeResize();
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+    }
+
     const connectingNode = this.connecting_node;
     const connectingOutput = (this as any).connecting_output;
     const connectingInput = (this as any).connecting_input;
@@ -2828,42 +3114,80 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
     const isLeftButton = e.button === 0;
     const isSimpleClick = Boolean(mouseDownPos && Math.hypot(e.clientX - mouseDownPos[0], e.clientY - mouseDownPos[1]) < 6);
 
-    const hadDraggingRect = Boolean(this.dragging_rectangle);
     const draggingRectW = this.dragging_rectangle ? Math.abs(this.dragging_rectangle[2]) : 0;
     const draggingRectH = this.dragging_rectangle ? Math.abs(this.dragging_rectangle[3]) : 0;
+    const wasResizingNode = this.resizing_node;
+    const wasDraggingCanvas = Boolean(this.dragging_canvas);
+    const isBoxSelectRelease = Boolean(this.dragging_rectangle);
 
-    const res = originalProcessMouseUp.call(this, e);
+    const suppressPanDeselect = isLeftButton && wasDraggingCanvas && !isSimpleClick;
+    const originalDeselectAll = this.deselectAllNodes;
+    if (suppressPanDeselect && typeof originalDeselectAll === 'function') {
+        this.deselectAllNodes = () => { };
+    }
+    const replaceBoxSelect = isBoxSelectRelease && !e.ctrlKey;
+    if (replaceBoxSelect) {
+        Object.defineProperty(e, "shiftKey", { configurable: true, value: false });
+    }
 
-    if (isLeftButton && !e.shiftKey && !e.ctrlKey && !connectingNode) {
-        if (wasEmptyBg) {
-            const isSmallClick = isSimpleClick || (hadDraggingRect && draggingRectW <= 10 && draggingRectH <= 10);
-            if (isSmallClick) {
-                // Clicked on empty canvas background -> deselect everything
-                this.deselectAllNodes?.();
-                if (selectedLinkIds.size > 0) {
-                    selectedLinkIds.clear();
-                }
-                const allNodes = ((this.graph as any)?._nodes || []) as any[];
-                for (const n of allNodes) {
-                    if (n && n.selectedModifierBadge) {
-                        n.selectedModifierBadge = null;
-                        n.setDirtyCanvas?.(true, true);
-                    }
-                }
-                this.setDirty(true, true);
-            } else if (hadDraggingRect && (draggingRectW > 10 || draggingRectH > 10)) {
-                // Box drag released on canvas -> if box enclosed 0 nodes, clear selection
-                if (!this.selected_nodes || Object.keys(this.selected_nodes).length === 0) {
-                    this.deselectAllNodes?.();
-                    if (selectedLinkIds.size > 0) {
-                        selectedLinkIds.clear();
-                    }
-                    this.setDirty(true, true);
-                } else if (selectedLinkIds.size > 0) {
-                    selectedLinkIds.clear();
-                    this.setDirty(true, true);
+    let res: any;
+    try {
+        res = originalProcessMouseUp.call(this, e);
+    } finally {
+        dragSelectAdditive = false;
+        if (suppressPanDeselect) {
+            this.deselectAllNodes = originalDeselectAll;
+        }
+        if (replaceBoxSelect) {
+            delete (e as any).shiftKey;
+        }
+    }
+
+    if (wasDraggingCanvas && this.canvas) {
+        this.canvas.style.cursor = '';
+    }
+
+    if (wasResizingNode && this.graph && this.ds?.scale != null) {
+        if (syncNodesDistanceStage(this.graph, Number(this.ds.scale))) {
+            syncNodeContextToolbar();
+        }
+        this.setDirty(true, true);
+    }
+
+    if (isLeftButton && isBoxSelectRelease) {
+        if (draggingRectW > 6 || draggingRectH > 6) {
+            const visibleSelected: any[] = [];
+            for (const n of Object.values(this.selected_nodes || {}) as any[]) {
+                if (n && !(n.flags as any)?.hidden && !isModifierNode(n)) {
+                    visibleSelected.push(n);
                 }
             }
+            if (visibleSelected.length === 0) {
+                this.deselectAllNodes?.();
+            } else if (visibleSelected.length !== Object.keys(this.selected_nodes || {}).length) {
+                this.selectNodes?.(visibleSelected, false);
+            }
+            if (selectedLinkIds.size > 0) {
+                selectedLinkIds.clear();
+            }
+            syncNodeContextToolbar();
+            this.setDirty(true, true);
+        }
+    } else if (isLeftButton && !e.shiftKey && !e.ctrlKey && !connectingNode) {
+        if (wasEmptyBg && isSimpleClick) {
+            // Clicked on empty canvas background without panning -> deselect everything
+            this.deselectAllNodes?.();
+            if (selectedLinkIds.size > 0) {
+                selectedLinkIds.clear();
+            }
+            const allNodes = ((this.graph as any)?._nodes || []) as any[];
+            for (const n of allNodes) {
+                if (n && n.selectedModifierBadge) {
+                    n.selectedModifierBadge = null;
+                    n.setDirtyCanvas?.(true, true);
+                }
+            }
+            this.setDirty(true, true);
         } else if (isSimpleClick && mouseDownHitNode) {
             // Clicked on a node without drag -> ensure ONLY this node is selected
             if (Object.keys(this.selected_nodes || {}).length > 1 || !this.selected_nodes?.[mouseDownHitNode.id]) {
@@ -5295,6 +5619,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     (window as any).editorCanvas = graphCanvas;
 
                     graphCanvas.ds.scale = 1.0;
+                    graphCanvas.ds.min_scale = 0.05;
 
                     // Direct 1-to-1 linear straight connections (Point A to Point B)
                     graphCanvas.links_render_mode = LiteGraph.LINEAR_LINK;
@@ -5508,6 +5833,10 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     });
 
                     canvas.addEventListener('mousedown', (e: MouseEvent) => {
+                        if (e.button === 1) {
+                            e.preventDefault();
+                            return;
+                        }
                         if (e.button === 0 && hoveredLink) {
                             canvas.focus?.();
                             const isMulti = e.shiftKey || e.ctrlKey;
@@ -6097,6 +6426,12 @@ async function calculatePreview(
             }
             if (rtRes?.ok) {
                 sinRealtimeLoaded = true;
+                (window as any).__sinRealtimeLoaded = true;
+                sinRealtimeBusIds = new Set<string>((rtRes.bus_ids || []).map(String));
+                if (globalAudioScheduler.getFullAudioBuffer()) {
+                    globalAudioScheduler.reset();
+                }
+                (window as any).activeRamPreviewBuffer = undefined;
                 sinRealtimeTargetMode = 'graph';
                 sinRealtimeDurationSec = Number(rtRes.duration_sec || 0);
                 sinRealtimeBpm = Number(rtRes.bpm || payload.bpm || globalParameters.bpm || 120);
@@ -6243,6 +6578,9 @@ async function calculatePreview(
                 runtimeLog(`Discarded superseded preview for node ${nodeId}`, 'warning');
                 return;
             }
+            sinRealtimeLoaded = false;
+            (window as any).__sinRealtimeLoaded = false;
+            sinRealtimeBusIds.clear();
             activeRamPreviewNodeId = nodeId;
             (window as any).activeRamPreviewNodeId = nodeId;
             activeRamPreviewPayload = payload;
@@ -6615,6 +6953,7 @@ function tryPushRealtimeParam(graph: LGraph | null, nodeId: number, propertyKey?
     if (!props) return false;
 
     const nid = String(nodeId);
+    if (!sinRealtimeBusIds.has(nid)) return false;
     if (propertyKey === 'gain' || propertyKey === 'chain') {
         const mult = getNodeGainMultiplier(node);
         sinRealtime.setParam(nid, 'pre_gain_db', 0, 0);
@@ -6695,6 +7034,8 @@ window.addEventListener('node-property-changed', (e: any) => {
     // Push Tier-0 live DSP parameters straight to native libsin_dsp (< 5ms on device audio!)
     const handledPureRealtime = tryPushRealtimeParam(graph, changedNodeId, propertyKey);
     if (handledPureRealtime) {
+        (graph?.getNodeById(changedNodeId) as any)?.invalidateDownstreamVisualCaches?.();
+        (window as any).editorCanvas?.setDirty?.(true, true);
         EngineSyncManager.getInstance().setState('idle_synced');
         return;
     }

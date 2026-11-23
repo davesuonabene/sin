@@ -62,8 +62,12 @@ struct BusState {
     std::vector<float> buf_l;
     std::vector<float> buf_r;
 
-    // Telemetry peak (written by audio thread, read by UI thread)
+    // Telemetry peak & ballistic RMS (written by audio thread, read by UI thread)
+    double rms_ms_state = 0.0;
+    float  peak_hold = 0.0f;
+    int32_t peak_hold_frames = 0;
     std::atomic<float> peak{0.0f};
+    std::atomic<float> rms{0.0f};
 };
 
 struct ClipState {
@@ -237,8 +241,15 @@ struct SinEngine {
     std::atomic<float>    tel_peak_r{0.0f};
     std::atomic<float>    tel_rms_l{0.0f};
     std::atomic<float>    tel_rms_r{0.0f};
+    double master_rms_ms_l = 0.0;
+    double master_rms_ms_r = 0.0;
+    float  master_peak_hold_l = 0.0f;
+    float  master_peak_hold_r = 0.0f;
+    int32_t master_peak_hold_frames_l = 0;
+    int32_t master_peak_hold_frames_r = 0;
     std::array<std::atomic<uint32_t>, SIN_MAX_BUSES> tel_bus_ids{};
     std::array<std::atomic<float>, SIN_MAX_BUSES>    tel_bus_peaks{};
+    std::array<std::atomic<float>, SIN_MAX_BUSES>    tel_bus_rms{};
     std::array<std::atomic<float>, SIN_MAX_SCOPE_SAMPLES> tel_scope{};
 
     // Background disk streaming thread (RT mode only; never locks audio thread)
@@ -682,11 +693,23 @@ struct SinEngine {
             tel_peak_r.store(0.0f, std::memory_order_relaxed);
             tel_rms_l.store(0.0f, std::memory_order_relaxed);
             tel_rms_r.store(0.0f, std::memory_order_relaxed);
+            master_rms_ms_l = 0.0;
+            master_rms_ms_r = 0.0;
+            master_peak_hold_l = 0.0f;
+            master_peak_hold_r = 0.0f;
+            master_peak_hold_frames_l = 0;
+            master_peak_hold_frames_r = 0;
             const size_t bc = std::min<size_t>(plan->buses.size(), SIN_MAX_BUSES);
             tel_bus_count.store(static_cast<uint32_t>(bc), std::memory_order_relaxed);
             for (size_t i = 0; i < bc; ++i) {
+                plan->buses[i]->rms_ms_state = 0.0;
+                plan->buses[i]->peak_hold = 0.0f;
+                plan->buses[i]->peak_hold_frames = 0;
+                plan->buses[i]->peak.store(0.0f, std::memory_order_relaxed);
+                plan->buses[i]->rms.store(0.0f, std::memory_order_relaxed);
                 tel_bus_ids[i].store(plan->buses[i]->bus_id, std::memory_order_relaxed);
                 tel_bus_peaks[i].store(0.0f, std::memory_order_relaxed);
+                tel_bus_rms[i].store(0.0f, std::memory_order_relaxed);
             }
             return;
         }
@@ -898,6 +921,7 @@ struct SinEngine {
                                         b.pan_r_sm.is_smoothing() || b.mute_sm.is_smoothing();
 
                 float b_peak = 0.0f;
+                double b_sum_sq = 0.0;
                 if (!any_smooth) {
                     const float g_base = b.pre_gain_sm.current * b.vol_sm.current * b.post_gain_sm.current * b.mute_sm.current;
                     const float gl = g_base * b.pan_l_sm.current;
@@ -907,31 +931,70 @@ struct SinEngine {
                         std::memset(br, 0, sizeof(float) * n);
                     } else if (gl == 1.0f && gr == 1.0f) {
                         for (uint32_t i = 0; i < n; ++i) {
-                            const float ap = std::max(std::abs(bl[i]), std::abs(br[i]));
+                            const float lv = bl[i];
+                            const float rv = br[i];
+                            const float ap = std::max(std::abs(lv), std::abs(rv));
                             if (ap > b_peak) b_peak = ap;
+                            b_sum_sq += 0.5 * (static_cast<double>(lv) * lv + static_cast<double>(rv) * rv);
                         }
                     } else {
                         for (uint32_t i = 0; i < n; ++i) {
-                            bl[i] *= gl;
-                            br[i] *= gr;
-                            const float ap = std::max(std::abs(bl[i]), std::abs(br[i]));
+                            const float lv = bl[i] * gl;
+                            const float rv = br[i] * gr;
+                            bl[i] = lv;
+                            br[i] = rv;
+                            const float ap = std::max(std::abs(lv), std::abs(rv));
                             if (ap > b_peak) b_peak = ap;
+                            b_sum_sq += 0.5 * (static_cast<double>(lv) * lv + static_cast<double>(rv) * rv);
                         }
                     }
                 } else {
                     for (uint32_t i = 0; i < n; ++i) {
                         const float g = b.pre_gain_sm.next() * b.vol_sm.next() * b.post_gain_sm.next() * b.mute_sm.next();
-                        bl[i] *= g * b.pan_l_sm.next();
-                        br[i] *= g * b.pan_r_sm.next();
-                        const float ap = std::max(std::abs(bl[i]), std::abs(br[i]));
+                        const float lv = bl[i] * g * b.pan_l_sm.next();
+                        const float rv = br[i] * g * b.pan_r_sm.next();
+                        bl[i] = lv;
+                        br[i] = rv;
+                        const float ap = std::max(std::abs(lv), std::abs(rv));
                         if (ap > b_peak) b_peak = ap;
+                        b_sum_sq += 0.5 * (static_cast<double>(lv) * lv + static_cast<double>(rv) * rv);
                     }
                 }
 
-                b.peak.store(b_peak, std::memory_order_relaxed);
+                const double block_ms = (n > 0) ? (b_sum_sq / static_cast<double>(n)) : 0.0;
+                float b_rms = 0.0f;
+                float b_peak_pub = b_peak;
+                if (offline_mode) {
+                    b_rms = static_cast<float>(std::sqrt(block_ms));
+                } else {
+                    const double dt = static_cast<double>(n) * inv_sr;
+                    const double tau = (block_ms > b.rms_ms_state) ? 0.020 : 0.140;
+                    const double alpha = 1.0 - std::exp(-dt / tau);
+                    b.rms_ms_state += alpha * (block_ms - b.rms_ms_state);
+                    if (b.rms_ms_state < 1e-10) b.rms_ms_state = 0.0;
+                    b_rms = static_cast<float>(std::sqrt(b.rms_ms_state));
+
+                    const int32_t hold_len = static_cast<int32_t>(std::max(1.0, 0.070 * static_cast<double>(sample_rate)));
+                    if (b_peak >= b.peak_hold) {
+                        b.peak_hold = b_peak;
+                        b.peak_hold_frames = hold_len;
+                    } else if (b.peak_hold_frames > static_cast<int32_t>(n)) {
+                        b.peak_hold_frames -= static_cast<int32_t>(n);
+                    } else {
+                        b.peak_hold_frames = 0;
+                        const float peak_decay = static_cast<float>(std::exp(-dt / 0.120));
+                        b.peak_hold = std::max(b_peak, b.peak_hold * peak_decay);
+                        if (b.peak_hold < 1e-5f) b.peak_hold = 0.0f;
+                    }
+                    b_peak_pub = b.peak_hold;
+                }
+
+                b.peak.store(b_peak_pub, std::memory_order_relaxed);
+                b.rms.store(b_rms, std::memory_order_relaxed);
                 if (bi < SIN_MAX_BUSES) {
                     tel_bus_ids[bi].store(b.bus_id, std::memory_order_relaxed);
-                    tel_bus_peaks[bi].store(b_peak, std::memory_order_relaxed);
+                    tel_bus_peaks[bi].store(b_peak_pub, std::memory_order_relaxed);
+                    tel_bus_rms[bi].store(b_rms, std::memory_order_relaxed);
                 }
 
                 // Write optional bus stem tap (offline previews / IRIDE waveforms)
@@ -1029,10 +1092,51 @@ struct SinEngine {
         tel_bpm.store(bpm, std::memory_order_relaxed);
         tel_loop_enabled.store(loop_enabled ? 1u : 0u, std::memory_order_relaxed);
         tel_audition_active.store(audition_active ? 1u : 0u, std::memory_order_relaxed);
-        tel_peak_l.store(block_peak_l, std::memory_order_relaxed);
-        tel_peak_r.store(block_peak_r, std::memory_order_relaxed);
-        tel_rms_l.store(static_cast<float>(std::sqrt(block_sum_sq_l / static_cast<double>(num_frames))), std::memory_order_relaxed);
-        tel_rms_r.store(static_cast<float>(std::sqrt(block_sum_sq_r / static_cast<double>(num_frames))), std::memory_order_relaxed);
+        const double inv_nf = (num_frames > 0) ? (1.0 / static_cast<double>(num_frames)) : 0.0;
+        const double ms_l = block_sum_sq_l * inv_nf;
+        const double ms_r = block_sum_sq_r * inv_nf;
+        if (offline_mode) {
+            tel_peak_l.store(block_peak_l, std::memory_order_relaxed);
+            tel_peak_r.store(block_peak_r, std::memory_order_relaxed);
+            tel_rms_l.store(static_cast<float>(std::sqrt(ms_l)), std::memory_order_relaxed);
+            tel_rms_r.store(static_cast<float>(std::sqrt(ms_r)), std::memory_order_relaxed);
+        } else {
+            const double dt = static_cast<double>(num_frames) * inv_sr;
+            const double tau_l = (ms_l > master_rms_ms_l) ? 0.020 : 0.140;
+            const double tau_r = (ms_r > master_rms_ms_r) ? 0.020 : 0.140;
+            master_rms_ms_l += (1.0 - std::exp(-dt / tau_l)) * (ms_l - master_rms_ms_l);
+            master_rms_ms_r += (1.0 - std::exp(-dt / tau_r)) * (ms_r - master_rms_ms_r);
+            if (master_rms_ms_l < 1e-10) master_rms_ms_l = 0.0;
+            if (master_rms_ms_r < 1e-10) master_rms_ms_r = 0.0;
+
+            const int32_t hold_len = static_cast<int32_t>(std::max(1.0, 0.070 * static_cast<double>(sample_rate)));
+            const float peak_decay = static_cast<float>(std::exp(-dt / 0.120));
+            if (block_peak_l >= master_peak_hold_l) {
+                master_peak_hold_l = block_peak_l;
+                master_peak_hold_frames_l = hold_len;
+            } else if (master_peak_hold_frames_l > static_cast<int32_t>(num_frames)) {
+                master_peak_hold_frames_l -= static_cast<int32_t>(num_frames);
+            } else {
+                master_peak_hold_frames_l = 0;
+                master_peak_hold_l = std::max(block_peak_l, master_peak_hold_l * peak_decay);
+                if (master_peak_hold_l < 1e-5f) master_peak_hold_l = 0.0f;
+            }
+            if (block_peak_r >= master_peak_hold_r) {
+                master_peak_hold_r = block_peak_r;
+                master_peak_hold_frames_r = hold_len;
+            } else if (master_peak_hold_frames_r > static_cast<int32_t>(num_frames)) {
+                master_peak_hold_frames_r -= static_cast<int32_t>(num_frames);
+            } else {
+                master_peak_hold_frames_r = 0;
+                master_peak_hold_r = std::max(block_peak_r, master_peak_hold_r * peak_decay);
+                if (master_peak_hold_r < 1e-5f) master_peak_hold_r = 0.0f;
+            }
+
+            tel_peak_l.store(master_peak_hold_l, std::memory_order_relaxed);
+            tel_peak_r.store(master_peak_hold_r, std::memory_order_relaxed);
+            tel_rms_l.store(static_cast<float>(std::sqrt(master_rms_ms_l)), std::memory_order_relaxed);
+            tel_rms_r.store(static_cast<float>(std::sqrt(master_rms_ms_r)), std::memory_order_relaxed);
+        }
 
         const uint32_t scope_n = std::min<uint32_t>(num_frames, SIN_MAX_SCOPE_SAMPLES);
         for (uint32_t i = 0; i < scope_n; ++i) {
@@ -1650,6 +1754,23 @@ SIN_API void sin_engine_read_telemetry(
             out_scope_mono[i] = engine->tel_scope[i].load(std::memory_order_relaxed);
         }
     }
+}
+
+SIN_API uint32_t sin_engine_read_bus_rms(
+    const SinEngine* engine,
+    SinBusRms* out_bus_rms, uint32_t max_buses
+) {
+    if (!engine) return 0;
+    const uint32_t bc = engine->tel_bus_count.load(std::memory_order_relaxed);
+    if (out_bus_rms && max_buses > 0) {
+        const uint32_t n = std::min<uint32_t>(bc, std::min<uint32_t>(max_buses, SIN_MAX_BUSES));
+        for (uint32_t i = 0; i < n; ++i) {
+            out_bus_rms[i].bus_id = engine->tel_bus_ids[i].load(std::memory_order_relaxed);
+            out_bus_rms[i].rms    = engine->tel_bus_rms[i].load(std::memory_order_relaxed);
+        }
+        return n;
+    }
+    return bc;
 }
 
 } // extern "C"

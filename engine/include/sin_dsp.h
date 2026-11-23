@@ -104,6 +104,11 @@ typedef struct {
 } SinBusPeak;
 
 typedef struct {
+    SinBusId bus_id;
+    float    rms;
+} SinBusRms;
+
+typedef struct {
     uint32_t sample_rate;
     uint32_t channels;
     uint64_t num_frames;
@@ -171,12 +176,15 @@ SIN_API void       sin_engine_process(SinEngine* engine, float* out_l, float* ou
 SIN_API int32_t    sin_engine_set_bus_tap(SinEngine* engine, SinBusId bus_id, float* tap_l, float* tap_r, uint32_t capacity_frames);
 SIN_API void       sin_engine_clear_bus_taps(SinEngine* engine);
 
-/* Telemetry Pull (60Hz playhead, per-bus peaks, oscilloscope frame) */
+/* Telemetry Pull (60Hz playhead, per-bus peaks/RMS, oscilloscope frame) */
 SIN_API void       sin_engine_read_telemetry(
                        const SinEngine* engine,
                        SinTelemetry* out_hdr,
                        SinBusPeak* out_bus_peaks, uint32_t max_buses,
                        float* out_scope_mono, uint32_t scope_len);
+SIN_API uint32_t   sin_engine_read_bus_rms(
+                       const SinEngine* engine,
+                       SinBusRms* out_bus_rms, uint32_t max_buses);
 
 #ifdef __cplusplus
 }

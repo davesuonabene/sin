@@ -1,7 +1,6 @@
 import { BaseSignalRenderer } from './BaseSignalRenderer.ts';
 import { type RenderBox, type SignalTelemetry, type WaveformSignal, type RendererOptions } from '../types.ts';
 import {
-    colorWithAlpha,
     drawRoundRect,
     drawSlotBadge,
     extractRealtimeSliceFromSignal
@@ -32,7 +31,7 @@ export class SpectrumRenderer extends BaseSignalRenderer {
 
     constructor(options: RendererOptions = {}) {
         super({
-            accentColor: '#059669',
+            accentColor: '#111111',
             ...options
         });
     }
@@ -54,18 +53,19 @@ export class SpectrumRenderer extends BaseSignalRenderer {
         drawRoundRect(ctx, x, y, width, height, 4);
         ctx.clip();
 
-        ctx.fillStyle = this.options.backgroundColor || '#ffffff';
-        ctx.fillRect(x, y, width, height);
+        if (this.options.backgroundColor && this.options.backgroundColor !== 'transparent') {
+            ctx.fillStyle = this.options.backgroundColor;
+            ctx.fillRect(x, y, width, height);
+        }
 
         const signal = this.signal;
-        const accent = signal?.accentColor || this.options.accentColor || '#059669';
         const gain = Number(this.options.scopeGain) || 1.0;
         const bottomY = y + height - 1;
         const topPad = 3;
         const usableH = Math.max(8, height - topPad - 1);
 
         // Analytical dB reference grid (-16dB, -32dB, -48dB) and log-frequency lines (100Hz, 1kHz, 10kHz)
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.2)';
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         for (let d = 1; d <= 3; d++) {
@@ -118,11 +118,11 @@ export class SpectrumRenderer extends BaseSignalRenderer {
         }
 
         const stepX = width / (NUM_POINTS - 1);
-        const strokeColor = signal?.isInvalidated ? 'rgba(245, 158, 11, 0.85)' : accent;
+        const strokeColor = signal?.isInvalidated ? 'rgba(17, 17, 17, 0.48)' : '#111111';
 
         if (hasVisibleEnergy) {
             // 1. Secondary Peak-Hold Envelope Trace
-            ctx.strokeStyle = colorWithAlpha(strokeColor, 0.35);
+            ctx.strokeStyle = 'rgba(17, 17, 17, 0.34)';
             ctx.lineWidth = 1;
             ctx.beginPath();
             for (let i = 0; i < NUM_POINTS; i++) {
@@ -134,7 +134,7 @@ export class SpectrumRenderer extends BaseSignalRenderer {
             ctx.stroke();
 
             // 2. Filled Area Under Live FFT Curve
-            ctx.fillStyle = colorWithAlpha(strokeColor, 0.18);
+            ctx.fillStyle = 'rgba(17, 17, 17, 0.15)';
             ctx.beginPath();
             ctx.moveTo(x, bottomY);
             for (let i = 0; i < NUM_POINTS; i++) {
@@ -162,7 +162,7 @@ export class SpectrumRenderer extends BaseSignalRenderer {
 
         // Frequency axis micro-labels in normal view
         if (!this.options.minified && height >= 36) {
-            ctx.fillStyle = 'rgba(100, 116, 139, 0.75)';
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
             ctx.font = '7.5px Inter, monospace';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'bottom';

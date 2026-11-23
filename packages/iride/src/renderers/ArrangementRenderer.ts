@@ -56,7 +56,7 @@ export class ArrangementRenderer extends BaseSignalRenderer {
 
     constructor(options: RendererOptions = {}) {
         super({
-            accentColor: '#f59e0b',
+            accentColor: '#111111',
             ...options
         });
     }
@@ -80,14 +80,16 @@ export class ArrangementRenderer extends BaseSignalRenderer {
         drawRoundRect(ctx, x, y, width, height, 4);
         ctx.clip();
 
-        // Background: clean light background matching theme
-        ctx.fillStyle = this.options.backgroundColor || '#ffffff';
-        ctx.fillRect(x, y, width, height);
+        // Background: only paint if explicitly opaque
+        if (this.options.backgroundColor && this.options.backgroundColor !== 'transparent') {
+            ctx.fillStyle = this.options.backgroundColor;
+            ctx.fillRect(x, y, width, height);
+        }
 
         const signal = this.signal;
         const totalBars = Math.max(1, signal?.totalBars || 4);
         const sections = signal?.sections || [];
-        const accent = signal?.accentColor || this.options.accentColor || '#f59e0b';
+        const dataColor = '#111111';
 
         const padding = 2;
         const availWidth = width - padding * 2;
@@ -96,7 +98,7 @@ export class ArrangementRenderer extends BaseSignalRenderer {
 
         // If no explicit sections, draw a single unified block
         if (sections.length === 0) {
-            ctx.fillStyle = colorWithAlpha(accent, 0.2);
+            ctx.fillStyle = colorWithAlpha(dataColor, 0.14);
             drawRoundRect(ctx, x + padding, y + padding, availWidth, height - padding * 2, 2);
             ctx.fill();
         } else {
@@ -132,24 +134,24 @@ export class ArrangementRenderer extends BaseSignalRenderer {
                             const secH = height - padding * 2;
                             const prob = typeof sec.probability === 'number' ? Math.max(0.1, sec.probability) : 1.0;
 
-                            mCtx.fillStyle = `rgba(255, 255, 255, ${0.15 + prob * 0.35})`;
+                            mCtx.fillStyle = `rgba(255, 255, 255, ${0.08 + prob * 0.24})`;
                             drawRoundRect(mCtx, secX, 0, secW, secH, 2);
                             mCtx.fill();
 
-                            mCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                            mCtx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
                             mCtx.lineWidth = 0.75;
                             mCtx.stroke();
                         }
                     }
 
-                    // Tint the cached mask with accent color only when mask or accent changes
-                    const nextTintFp = `${currentFp}_${accent}`;
+                    // Tint the cached mask with monochrome data ink only when mask changes
+                    const nextTintFp = `${currentFp}_${dataColor}`;
                     if (this.tintFingerprint !== nextTintFp) {
                         this.tintFingerprint = nextTintFp;
                         tCtx.clearRect(0, 0, availWidth, height - padding * 2);
                         tCtx.drawImage(mask, 0, 0);
                         tCtx.globalCompositeOperation = 'source-in';
-                        tCtx.fillStyle = accent;
+                        tCtx.fillStyle = dataColor;
                         tCtx.fillRect(0, 0, availWidth, height - padding * 2);
                         tCtx.globalCompositeOperation = 'source-over';
                     }
@@ -164,11 +166,11 @@ export class ArrangementRenderer extends BaseSignalRenderer {
                     const secH = height - padding * 2;
                     const prob = typeof sec.probability === 'number' ? Math.max(0.1, sec.probability) : 1.0;
 
-                    ctx.fillStyle = colorWithAlpha(accent, 0.15 + prob * 0.35);
+                    ctx.fillStyle = colorWithAlpha(dataColor, 0.08 + prob * 0.24);
                     drawRoundRect(ctx, secX, y + padding, secW, secH, 2);
                     ctx.fill();
 
-                    ctx.strokeStyle = colorWithAlpha(accent, 0.5);
+                    ctx.strokeStyle = colorWithAlpha(dataColor, 0.35);
                     ctx.lineWidth = 0.75;
                     ctx.stroke();
                 }
@@ -183,7 +185,7 @@ export class ArrangementRenderer extends BaseSignalRenderer {
                 const isActiveSection = currentBar >= sec.startBar && currentBar < (sec.startBar + sec.lengthBars);
 
                 if (isActiveSection) {
-                    ctx.fillStyle = accent;
+                    ctx.fillStyle = dataColor;
                     drawRoundRect(ctx, secX, y + padding, secW, secH, 2);
                     ctx.fill();
 
@@ -194,7 +196,7 @@ export class ArrangementRenderer extends BaseSignalRenderer {
 
                 // Section index label (omitted in chromeless minified middle stage)
                 if (!this.options.minified) {
-                    ctx.fillStyle = isActiveSection ? '#ffffff' : '#1e293b';
+                    ctx.fillStyle = isActiveSection ? '#ffffff' : '#111111';
                     ctx.font = 'bold 9px Inter, sans-serif';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';

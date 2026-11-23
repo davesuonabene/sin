@@ -11,6 +11,7 @@ export interface RealtimeTelemetry {
     master_rms_l: number;
     master_rms_r: number;
     bus_peaks: Record<string, number>;
+    bus_rms?: Record<string, number>;
     scope?: number[] | null;
 }
 
