@@ -5,6 +5,9 @@ import './nodes/TrackNode';
 import './nodes/SampleNode';
 import './nodes/SequenceNode';
 import './nodes/ArrangementNode';
+import './nodes/NullNode';
+import './nodes/PreampDenoiseNode';
+import './nodes/VoiceIsolatorNode';
 import './nodes/ModulatorNode';
 import './nodes/AssetFilterNode';
 import './nodes/RandomNode';
@@ -12,7 +15,7 @@ import './nodes/DisabledNode';
 import { BaseNode, isModifierNode } from './nodes/BaseNode';
 import { PropertiesWindow } from './ui/PropertiesWindow';
 import { TrackPropertiesWindow } from './ui/TrackPropertiesWindow';
-import { NodePopupMenu } from './ui/NodePopupMenu';
+import { NodePopupMenu, type SupportedNodeType } from './ui/NodePopupMenu';
 import { NodeContextMenu } from './ui/NodeContextMenu';
 import { NodeContextToolbar } from './ui/NodeContextToolbar';
 import { isLibraryPreviewEnabled, LibraryPanel, setLibraryPreviewEnabled } from './ui/LibraryPanel';
@@ -53,6 +56,8 @@ import { appendServerRuntimeLog, installFetchLogging, loggedTask, runtimeLog, up
 import { attachGhostProperties, createGhostNode, detachGhostDependents, getGhostSource, isGhostNode, syncGhostTrackData } from './ghosts';
 import { installSeparatedNodeClipboard } from './nodeClipboard';
 import { clearLibraryCache, fetchLibrary, findLibraryFile, findLibraryFileById, findLibraryFileForPoolLocator, refreshLibraryAssetSnapshot, resolveLibraryAssets, type LibraryFile } from './api';
+import { resolveDroppedAnyItems } from './ui/dragPayload';
+import { deduplicatePoolItemName, getPoolItemCallName, getPoolItemIdentityKey, isExternalPoolItem, isInlinePoolItem } from '../../ermes/ts/slotLanguage';
 import { serializeNodeSubtree } from '../../ermes/ts/serializer';
 import { advanceAssetPoolSeed, normalizeAssetRefreshMode, populateOwnerSlotsFromPool, resolveAssetFilterNode, resolveAssignedAssetFilters } from '../../ermes/ts/assetResolver';
 import {
@@ -68,11 +73,18 @@ import { RealtimeAudioClient } from '../../packages/media-client/src/realtime-cl
 import { clearAudioBufferCache, fetchAudioBuffer, getSharedAudioContext } from './audioBufferCache';
 import { globalAudioScheduler } from './audioScheduler';
 import { getNodeGainMultiplier } from './audioCompositor';
+import {
+    getChainStructureSignature,
+    getPrePostGainDb,
+    getUserFxStages,
+    readChainParamValue,
+} from './dsp/processorRegistry';
 import { applySignalFlowColors } from './graphColorEngine';
 
 const sinRealtime = new RealtimeAudioClient('/api/realtime/ws', { ownerId: 'sin-node-editor' });
 let sinRealtimeLoaded = false;
 let sinRealtimeBusIds = new Set<string>();
+let sinRealtimeChainSignatures = new Map<string, string>();
 let sinRealtimePlaying = false;
 let sinRealtimeDurationSec = 0;
 let sinRealtimeBpm = 120;
@@ -153,9 +165,11 @@ function clampGlobalParameter(key: 'bpm' | 'total_bars', rawValue: unknown): num
     const value = Number(rawValue);
     const fallback = DEFAULT_GLOBAL_PARAMETERS[key];
     if (!Number.isFinite(value)) return fallback;
-    return key === 'bpm'
-        ? Math.max(20, Math.min(300, value))
-        : Math.max(0.25, Math.min(128, value));
+    if (key === 'bpm') {
+        return Math.max(20, Math.min(300, value));
+    }
+    if (value <= 0) return -1;
+    return Math.max(0.25, Math.min(128, value));
 }
 
 function writeGlobalParametersToGraph(graph?: LGraph) {
@@ -350,6 +364,7 @@ function flushRealtimeTelemetryFrame() {
     }
     if (sinRealtimePlaying) {
         defaultTransportClock.setBusLevels(tel.bus_rms, tel.bus_peaks);
+        window.dispatchEvent(new CustomEvent('sin-stage-meters', { detail: tel.stage_meters || {} }));
         const masterKey = activeRamPreviewNodeId != null ? String(activeRamPreviewNodeId) : '';
         const masterBusRms = masterKey && tel.bus_rms ? Number(tel.bus_rms[masterKey]) : NaN;
         const masterBusPeak = masterKey && tel.bus_peaks ? Number(tel.bus_peaks[masterKey]) : NaN;
@@ -364,6 +379,7 @@ function flushRealtimeTelemetryFrame() {
     } else {
         defaultTransportClock.setBusLevels(null, null);
         defaultTransportClock.setMasterLevels(0, 0);
+        window.dispatchEvent(new CustomEvent('sin-stage-meters', { detail: {} }));
     }
     defaultTransportClock.setBpm(sinRealtimeBpm || globalParameters.bpm);
     defaultTransportClock.update(curTime, dur, sinRealtimePlaying);
@@ -380,7 +396,52 @@ sinRealtime.onTelemetry((tel) => {
     }
 });
 
-function applyRealtimePeaksToGraph(masterPeaks: number[] | null, busPeaks: Record<string, number[]> | null, dur: number) {
+let sinRealtimeHasPyramid = false;
+let sinRealtimeViewportReqId = 0;
+let loadingSpinnerTimer: number | null = null;
+
+function hasAnyActiveLoadingNode(): boolean {
+    if ((window as any).__sinRealtimePeaksPending) return true;
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    if (!graph) return false;
+    for (const node of (((graph as any)._nodes || []) as any[])) {
+        if (!node) continue;
+        if (node._isLoadingPreview) return true;
+        if (node.isAudioProcessor && !node.properties?.bypass) {
+            const st = node.processorStatus?.state;
+            const pct = Number(node.processorStatus?.progress ?? 0);
+            if (st === 'cooking_bypassed' || st === 'downloading' || (st === 'partial_ready' && pct < 0.999)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function ensureLoadingSpinnerTick(): void {
+    if (loadingSpinnerTimer !== null) return;
+    if (!hasAnyActiveLoadingNode()) return;
+    loadingSpinnerTimer = window.setInterval(() => {
+        if (!hasAnyActiveLoadingNode()) {
+            if (loadingSpinnerTimer !== null) {
+                window.clearInterval(loadingSpinnerTimer);
+                loadingSpinnerTimer = null;
+            }
+            return;
+        }
+        // Only repaint foreground at ~15 fps when transport isn't already driving frames
+        if (!sinRealtimePlaying) {
+            (window as any).editorCanvas?.setDirty?.(true, false);
+        }
+    }, 66);
+}
+
+function applyRealtimePeaksToGraph(
+    masterPeaks: number[] | null,
+    busPeaks: Record<string, number[]> | null,
+    dur: number,
+    options?: { tiers?: number[] | null; viewStartSec?: number; viewEndSec?: number }
+) {
     const graph = (window as any).editorGraph as LGraph | undefined;
     if (Array.isArray(masterPeaks) && masterPeaks.length > 0) {
         (window as any).activeRealtimeMasterPeaks = new Float32Array(masterPeaks);
@@ -388,7 +449,7 @@ function applyRealtimePeaksToGraph(masterPeaks: number[] | null, busPeaks: Recor
         if (sinRealtimeLoaded) {
             (window as any).activeRamPreviewBuffer = undefined;
         }
-        masterWaveform.setPeaks(masterPeaks, dur);
+        masterWaveform.setPeaks(masterPeaks, dur, options);
         if (graph && activeRamPreviewNodeId != null) {
             const target = graph.getNodeById(activeRamPreviewNodeId) as any;
             if (target) {
@@ -415,15 +476,250 @@ function applyRealtimePeaksToGraph(masterPeaks: number[] | null, busPeaks: Recor
         }
     }
     (window as any).editorCanvas?.setDirty?.(true, true);
+    window.dispatchEvent(new CustomEvent('sin-peaks-updated'));
 }
 
 sinRealtime.onMasterPeaks((res) => {
+    (window as any).__sinRealtimePeaksPending = false;
     const dur = Number(res?.duration_sec) || sinRealtimeDurationSec;
     if (dur > 0) sinRealtimeDurationSec = dur;
+    if (res?.has_peak_pyramid) {
+        sinRealtimeHasPyramid = true;
+    }
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    if (graph) {
+        for (const n of (((graph as any)._nodes || []) as any[])) {
+            if (n && n._isLoadingPreview) n._isLoadingPreview = false;
+        }
+    }
     const mPeaks = Array.isArray(res?.master_peaks) && res.master_peaks.length > 0 ? res.master_peaks : null;
     const bPeaks = (res?.bus_peaks && typeof res.bus_peaks === 'object') ? res.bus_peaks : null;
+    const tiers = Array.isArray(res?.peak_tiers) ? res.peak_tiers : null;
+    if (mPeaks || bPeaks) {
+        applyRealtimePeaksToGraph(mPeaks, bPeaks, dur, tiers ? { tiers } : undefined);
+    }
+});
+
+function patchInterleavedPeaksRange(
+    target: Float32Array,
+    dur: number,
+    startSec: number,
+    endSec: number,
+    tilePeaks: number[]
+): boolean {
+    const pairCount = Math.floor(target.length / 2);
+    const tilePairs = Math.floor(tilePeaks.length / 2);
+    if (pairCount <= 0 || tilePairs <= 0 || dur <= 0 || endSec <= startSec) return false;
+    const c0 = Math.max(0, Math.floor((startSec / dur) * pairCount));
+    const c1 = Math.min(pairCount, Math.ceil((endSec / dur) * pairCount));
+    if (c1 <= c0) return false;
+    const tileSpan = Math.max(1e-4, endSec - startSec);
+    for (let c = c0; c < c1; c++) {
+        const colT0 = (c / pairCount) * dur;
+        const colT1 = ((c + 1) / pairCount) * dur;
+        if (colT1 <= startSec || colT0 >= endSec) continue;
+        const u0 = Math.max(0, Math.min(1, (colT0 - startSec) / tileSpan));
+        const u1 = Math.max(u0, Math.min(1, (colT1 - startSec) / tileSpan));
+        const tp0 = Math.max(0, Math.min(tilePairs - 1, Math.floor(u0 * tilePairs)));
+        const tp1 = Math.max(tp0 + 1, Math.min(tilePairs, Math.ceil(u1 * tilePairs)));
+        let mn = 1;
+        let mx = -1;
+        for (let k = tp0; k < tp1; k++) {
+            const lo = Number(tilePeaks[k * 2]) || 0;
+            const hi = Number(tilePeaks[k * 2 + 1]) || 0;
+            if (lo < mn) mn = lo;
+            if (hi > mx) mx = hi;
+        }
+        if (mn <= mx) {
+            target[c * 2] = mn;
+            target[c * 2 + 1] = mx;
+        }
+    }
+    return true;
+}
+
+sinRealtime.onTileUpdate((msg) => {
+    if (msg?.clear_all) {
+        masterWaveform.clearTileTiers();
+        if (sinRealtime.available && sinRealtimeLoaded && sinRealtimeHasPyramid && sinRealtimeDurationSec > 0) {
+            const vp = masterWaveform.getViewport();
+            void sinRealtime.queryPeaks({ startSec: vp.startSec, endSec: vp.endSec, columns: vp.columns }).then((res) => {
+                if (!res?.ok || !Array.isArray(res.peaks) || res.peaks.length === 0) return;
+                const d = Number(res.duration_sec) || sinRealtimeDurationSec;
+                masterWaveform.setPeaks(res.peaks, d, {
+                    tiers: Array.isArray(res.tiers) ? res.tiers : null,
+                    viewStartSec: res.start_sec ?? vp.startSec,
+                    viewEndSec: res.end_sec ?? vp.endSec,
+                    preserveTiers: false,
+                });
+            });
+        }
+        return;
+    }
+    if (msg?.stale_all) {
+        masterWaveform.markAllTiersStale();
+        return;
+    }
+    const dur = (typeof msg?.duration_sec === 'number' && msg.duration_sec > 0)
+        ? msg.duration_sec
+        : sinRealtimeDurationSec;
+    if (dur > 0 && sinRealtimeDurationSec <= 0) {
+        sinRealtimeDurationSec = dur;
+    }
+    if (typeof msg?.start_sec === 'number' && typeof msg?.end_sec === 'number') {
+        const peaks = Array.isArray(msg.peaks) && msg.peaks.length >= 2 ? msg.peaks : null;
+        masterWaveform.applyTileDelta({
+            startSec: msg.start_sec,
+            endSec: msg.end_sec,
+            durationSec: dur,
+            tier: msg.tier,
+            stale: Boolean(msg.stale),
+            peaks,
+        });
+        // Live-update IRIDE node waveforms on processor & master nodes (preserving raw input peaks on Sample nodes!)
+        if (peaks && dur > 0) {
+            let dirty = false;
+            const masterArr = (window as any).activeRealtimeMasterPeaks as Float32Array | undefined;
+            if (masterArr instanceof Float32Array) {
+                if (patchInterleavedPeaksRange(masterArr, dur, msg.start_sec, msg.end_sec, peaks)) {
+                    dirty = true;
+                }
+            }
+            const graph = (window as any).editorGraph as LGraph | undefined;
+            if (graph) {
+                for (const node of (((graph as any)._nodes || []) as any[])) {
+                    if (!node || !(node.realtimePeaks instanceof Float32Array)) continue;
+                    const ntype = String(node.nodeType || node.properties?.node_type || '').toLowerCase();
+                    if (ntype === 'sample') continue;
+                    if (patchInterleavedPeaksRange(node.realtimePeaks, dur, msg.start_sec, msg.end_sec, peaks)) {
+                        node.setDirtyCanvas?.(true, false);
+                        dirty = true;
+                    }
+                }
+            }
+            if (dirty) {
+                (window as any).editorCanvas?.setDirty?.(true, false);
+            }
+        }
+    }
+});
+
+sinRealtime.onEngineSettings((settings) => {
+    window.dispatchEvent(new CustomEvent('sin-engine-settings-updated', { detail: settings }));
+});
+
+function applyProcessorStatusesToGraph(statuses: Record<string, any> | null | undefined) {
+    if (!statuses || typeof statuses !== 'object') return;
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    if (!graph) return;
+    for (const [nid, st] of Object.entries(statuses)) {
+        const gNode = graph.getNodeById(Number(nid)) as any;
+        if (gNode && typeof gNode.applyProcessorStatus === 'function' && st && typeof st === 'object') {
+            gNode.applyProcessorStatus(st);
+        }
+    }
+}
+
+sinRealtime.onProcessorStatus((msg) => {
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    const nid = Number(msg?.node_id);
+    if (graph && Number.isFinite(nid)) {
+        const gNode = graph.getNodeById(nid) as any;
+        if (gNode && typeof gNode.applyProcessorStatus === 'function') {
+            gNode.applyProcessorStatus(msg);
+        }
+    }
+    if (msg?.state === 'cooking_bypassed' || msg?.state === 'downloading') {
+        EngineSyncManager.getInstance().setState('dsp_rendering', {
+            nodeId: Number.isFinite(nid) ? nid : undefined,
+            nodeName: msg?.node_name || 'Processor',
+        });
+        ensureLoadingSpinnerTick();
+    } else if (msg?.state === 'partial_ready') {
+        EngineSyncManager.getInstance().setState('idle_synced', {
+            lastRenderDurationMs: typeof msg?.cook_ms === 'number' ? Math.round(msg.cook_ms) : undefined,
+        });
+        if (Number(msg?.progress ?? 0) < 0.999) {
+            ensureLoadingSpinnerTick();
+        }
+    } else if (msg?.state === 'ready') {
+        EngineSyncManager.getInstance().setState('idle_synced', {
+            lastRenderDurationMs: typeof msg?.cook_ms === 'number' ? Math.round(msg.cook_ms) : undefined,
+        });
+    }
+});
+
+sinRealtime.onPlanHotSwapped((msg) => {
+    const dur = Number(msg?.duration_sec) || sinRealtimeDurationSec;
+    if (dur > 0) sinRealtimeDurationSec = dur;
+    if (msg?.processor_statuses) {
+        applyProcessorStatusesToGraph(msg.processor_statuses);
+    }
+    const mPeaks = Array.isArray(msg?.master_peaks) && msg.master_peaks.length > 0 ? msg.master_peaks : null;
+    const bPeaks = (msg?.bus_peaks && typeof msg.bus_peaks === 'object') ? msg.bus_peaks : null;
     if (mPeaks || bPeaks) {
         applyRealtimePeaksToGraph(mPeaks, bPeaks, dur);
+    }
+    EngineSyncManager.getInstance().setState('idle_synced');
+});
+
+sinRealtime.onModelDownload((msg) => {
+    window.dispatchEvent(new CustomEvent('sin-model-download', { detail: msg }));
+});
+
+window.addEventListener('sin-cook-processor-node', (ev: Event) => {
+    const detail = (ev as CustomEvent).detail;
+    const targetId = detail?.nodeId;
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    if (!graph || targetId == null) return;
+    const rootId = activeRamPreviewNodeId ?? targetId;
+    const payload = serializeNodeSubtree(graph, rootId);
+    if (payload && sinRealtime.available) {
+        void sinRealtime.cookNode(String(targetId), payload);
+    }
+});
+
+window.addEventListener('sin-cook-full-track', (ev: Event) => {
+    const detail = (ev as CustomEvent).detail;
+    if (detail?.nodeId != null && sinRealtime.available) {
+        void sinRealtime.cookFullTrack(String(detail.nodeId), detail.enable !== false);
+    }
+});
+
+window.addEventListener('sin-processor-live-param', (ev: Event) => {
+    const detail = (ev as CustomEvent).detail;
+    if (detail?.nodeId != null && detail?.key && sinRealtime.available) {
+        sinRealtime.updateProcessorParam({
+            nodeId: String(detail.nodeId),
+            key: String(detail.key),
+            value: detail.value,
+            commit: detail.commit !== false,
+        });
+    }
+});
+
+window.addEventListener('sin-request-engine-settings', () => {
+    if (!sinRealtime.available) return;
+    void sinRealtime.getEngineSettings().then((res) => {
+        if (res?.ok) {
+            window.dispatchEvent(new CustomEvent('sin-engine-settings-updated', { detail: res }));
+        }
+    });
+});
+
+window.addEventListener('sin-set-engine-settings', (ev: Event) => {
+    const detail = (ev as CustomEvent).detail;
+    if (!detail || !sinRealtime.available) return;
+    void sinRealtime.setEngineSettings(detail).then((res) => {
+        if (res?.ok) {
+            window.dispatchEvent(new CustomEvent('sin-engine-settings-updated', { detail: res }));
+        }
+    });
+});
+
+window.addEventListener('sin-node-preview-refresh', () => {
+    if (activeRamPreviewNodeId != null) {
+        void previewNode(activeRamPreviewNodeId, false);
     }
 });
 
@@ -497,6 +793,18 @@ const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
         pendingMasterSeek = null;
         console.error('Seek failed', error);
     }
+}, (startSec, endSec, columns) => {
+    if (!sinRealtime.available || !sinRealtimeLoaded || !sinRealtimeHasPyramid) return;
+    const reqToken = ++sinRealtimeViewportReqId;
+    void sinRealtime.queryPeaks({ startSec, endSec, columns }).then((vp) => {
+        if (reqToken !== sinRealtimeViewportReqId || !vp?.ok || !Array.isArray(vp.peaks) || vp.peaks.length === 0) return;
+        const dur = Number(vp.duration_sec) || sinRealtimeDurationSec;
+        masterWaveform.setPeaks(vp.peaks, dur, {
+            tiers: Array.isArray(vp.tiers) ? vp.tiers : null,
+            viewStartSec: vp.start_sec ?? startSec,
+            viewEndSec: vp.end_sec ?? endSec,
+        });
+    });
 });
 
 function stopMasterFallbackAudio() {
@@ -2167,11 +2475,25 @@ async function applyGlobalSeedChange(graph: LGraph) {
             });
             for (const node of (((graph as any)._nodes || []) as any[])) {
                 if (!node?.properties) continue;
+                const isPoolNode = node.type === 'Audio/AssetFilter' || node.properties.node_type === 'asset_filter';
+                if (isPoolNode && node.properties.parentId != null) {
+                    const ownerNode = graph.getNodeById(node.properties.parentId);
+                    if (ownerNode) {
+                        populateOwnerSlotsFromPool(node, ownerNode);
+                    }
+                }
+            }
+            for (const node of (((graph as any)._nodes || []) as any[])) {
+                if (!node?.properties) continue;
                 if (typeof node.evaluateAllFieldOperators === 'function') {
                     node.evaluateAllFieldOperators(0);
                 }
                 if (node.id != null) {
                     window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
+                    const nodeKind = node.getNodeType?.() || node.properties?.node_type;
+                    if (nodeKind === 'sample' || nodeKind === 'sequence') {
+                        window.dispatchEvent(new CustomEvent('arrangement-source-changed', { detail: { nodeId: node.id } }));
+                    }
                 }
             }
         });
@@ -2317,6 +2639,7 @@ function clearActiveWorkspaceManifest() {
     sinRealtimeLoaded = false;
     (window as any).__sinRealtimeLoaded = false;
     sinRealtimeBusIds.clear();
+    sinRealtimeChainSignatures.clear();
     sinRealtimePlaying = false;
     sinRealtimeDurationSec = 0;
     sinRealtimeTargetMode = 'graph';
@@ -3378,7 +3701,7 @@ LiteGraph.NODE_TITLE_HEIGHT = 0;
 
 export interface TrackNodeData {
     id: number;
-    type: "track" | "sample" | "sequence" | "item_pool" | "sample_pool" | "arrangement" | "modulator" | "asset_filter" | "random" | "disabled";
+    type: "track" | "sample" | "sequence" | "item_pool" | "sample_pool" | "arrangement" | "null" | "preamp_denoise" | "voice_isolator" | "modulator" | "asset_filter" | "random" | "disabled";
     name: string;
     filepath: string;
     sample_type?: string;
@@ -3436,6 +3759,11 @@ interface LibraryDragItem {
     stems?: any[];
     is_valid_length?: boolean;
     length_variance?: number;
+    is_external?: boolean;
+    is_inline?: boolean;
+    source?: 'gaia' | 'external' | 'inline';
+    sequence?: number[];
+    step_parameters?: Array<Record<string, any>>;
 }
 
 function isMidiLibraryItem(item: LibraryDragItem): boolean {
@@ -3449,7 +3777,7 @@ function isSavedSequenceLibraryItem(item: LibraryDragItem): boolean {
 }
 
 function isSequenceSourceLibraryItem(item: LibraryDragItem): boolean {
-    return isMidiLibraryItem(item) || isSavedSequenceLibraryItem(item);
+    return isInlinePoolItem(item) || isMidiLibraryItem(item) || isSavedSequenceLibraryItem(item);
 }
 
 function getLibraryDragItems(payload: any): LibraryDragItem[] {
@@ -3457,7 +3785,9 @@ function getLibraryDragItems(payload: any): LibraryDragItem[] {
         ? payload.items
         : payload?.type === "library-item" ? [payload] : [];
 
-    return rawItems.filter((item: any) => item && typeof item.filepath === "string" && item.filepath.length > 0);
+    return rawItems.filter((item: any) =>
+        item && ((typeof item.filepath === "string" && item.filepath.length > 0) || isInlinePoolItem(item))
+    );
 }
 
 export function extractMetadataFromPath(filepath: string): { bpm: number | null; key: string | null } {
@@ -3966,9 +4296,9 @@ function toggleLibraryPanel(action: 'toggle' | 'open' | 'close' = 'toggle') {
     updatePanelToggleButtons();
 }
 
-function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: boolean; location?: 'right' | 'floating' }) {
+function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: boolean; location?: 'right' | 'floating'; initialTab?: string }) {
     if (!node || node.id == null) return;
-    if (node.type !== "Audio/Track" && node.type !== "Audio/Sample" && node.type !== "Audio/Sequence" && node.type !== "Audio/Arrangement" && node.type !== "Audio/Modulator" && node.type !== "Audio/AssetFilter" && node.type !== "Audio/Random" && !(node as any).isModifier) return;
+    if (!(node instanceof BaseNode) && !(node as any).isModifier) return;
 
     const dv = (window as any).dockview;
     if (!dv) return;
@@ -3999,6 +4329,11 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
             setActiveParamNodeId(node.id);
         }
         panel.api.setActive();
+        if (options?.initialTab) {
+            window.dispatchEvent(new CustomEvent('select-properties-tab', {
+                detail: { nodeId: node.id, tab: options.initialTab }
+            }));
+        }
         node.onParametersOpened?.();
         updateGraphNodeCollapsing();
         updatePanelToggleButtons();
@@ -4021,7 +4356,8 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
             component: 'properties-panel',
             title: `Node Properties`,
             params: {
-                nodeId: node.id
+                nodeId: node.id,
+                initialTab: options?.initialTab
             }
         });
         const rightX = Math.max(20, window.innerWidth - width - 40);
@@ -4038,7 +4374,8 @@ function openParamWindow(node: any, options?: { forceOpen?: boolean; toggle?: bo
             component: 'properties-panel',
             title: `Node Properties`,
             params: {
-                nodeId: node.id
+                nodeId: node.id,
+                initialTab: options?.initialTab
             },
             position: {
                 referencePanel: previousDockedPanel?.id || 'graph_panel',
@@ -4224,21 +4561,23 @@ window.addEventListener('add-asset-filter-to-param', (e: any) => {
     }
 
     const forceOpen = Boolean(e.detail?.forceOpen);
+    const requestedTab = typeof e.detail?.targetTab === 'string' && e.detail.targetTab
+        ? e.detail.targetTab
+        : 'POOL';
     const isOwnerAlreadyOpen = activeParamNodeId === ownerNode.id && dockedPropertyPanels().length > 0;
-    if (typeof ownerNode.togglePoolView === 'function') {
-        if (isOwnerAlreadyOpen && !forceOpen) {
-            ownerNode.togglePoolView();
-        } else {
-            ownerNode.togglePoolView(true);
-        }
-    } else if (ownerNode.properties) {
-        ownerNode.properties.pool_view_open = (isOwnerAlreadyOpen && !forceOpen) ? !ownerNode.properties.pool_view_open : true;
-    }
+    const activeTabMap: Map<number, string> | undefined = (window as any).__sinActiveParamTabByNode;
+    const currentTab = activeTabMap?.get(ownerNode.id);
+    const defaultTab = ownerNode.getDefaultPropertiesTab?.() || ownerNode.defaultPropertiesTab || 'SAMPLE';
+    const nextTab = (isOwnerAlreadyOpen && !forceOpen && currentTab === requestedTab)
+        ? defaultTab
+        : requestedTab;
 
     if (isOwnerAlreadyOpen) {
-        window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: ownerNode.id } }));
+        window.dispatchEvent(new CustomEvent('select-properties-tab', {
+            detail: { nodeId: ownerNode.id, tab: nextTab }
+        }));
     } else {
-        openParamWindow(ownerNode, { forceOpen: true });
+        openParamWindow(ownerNode, { forceOpen: true, initialTab: nextTab });
     }
 });
 
@@ -4252,12 +4591,13 @@ window.addEventListener('item-pool-preview-refresh', async (e: any) => {
     const selectedItems = Array.isArray(poolNode.properties?.selected_items)
         ? poolNode.properties.selected_items
         : [];
-    if (selectedItems.length === 0) return;
 
-    // Find any nodes associated with this pool (either via asset_modifier_id or parentId)
-    const files = await resolveLibraryAssets(selectedItems);
-    for (const item of selectedItems) {
-        refreshLibraryAssetSnapshot(item, files);
+    const gaiaItems = selectedItems.filter((it: any) => !isExternalPoolItem(it) && !isInlinePoolItem(it));
+    if (gaiaItems.length > 0) {
+        const files = await resolveLibraryAssets(gaiaItems);
+        for (const item of gaiaItems) {
+            refreshLibraryAssetSnapshot(item, files);
+        }
     }
 
     const nodes = (((graph as any)._nodes || []) as any[]);
@@ -4267,15 +4607,21 @@ window.addEventListener('item-pool-preview-refresh', async (e: any) => {
             poolNode.properties?.parentId === node.id;
         if (!isAssociated) continue;
 
+        if (node.properties) {
+            node.properties.selected_items = selectedItems.map((it: any) => ({ ...it }));
+        }
         const nodeKind = node.getNodeType?.() || node.properties?.node_type;
         if (nodeKind === 'sample') {
-            populateOwnerSlotsFromPool(poolNode, node, selectedItems);
+            if (selectedItems.length > 0) {
+                populateOwnerSlotsFromPool(poolNode, node, selectedItems);
+            }
             const data = trackNodes.get(node.id);
             if (data) {
                 data.filepath = node.properties?.filepath || data.filepath;
                 data.original_bpm = node.properties?.original_bpm ?? data.original_bpm;
                 data.key = node.properties?.key ?? data.key;
                 data.duration_seconds = node.properties?.duration_seconds ?? data.duration_seconds;
+                data.selected_items = selectedItems.map((it: any) => ({ ...it }));
             }
             node.setDirtyCanvas?.(true, true);
             window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
@@ -4285,23 +4631,51 @@ window.addEventListener('item-pool-preview-refresh', async (e: any) => {
                 detail: { nodeId: node.id }
             }));
         } else if (nodeKind === 'sequence') {
-            populateOwnerSlotsFromPool(poolNode, node, selectedItems);
-            const targetPath = poolNode.properties?.output_value;
-            const activeItem = (targetPath
-                ? selectedItems.find((it: any) => (it.filepath || it.absolute_path) === targetPath)
-                : null) || selectedItems[0];
-            if (!activeItem) continue;
-            const dragItem: LibraryDragItem = {
-                id: activeItem.id,
-                name: activeItem.name,
-                filepath: activeItem.filepath || activeItem.absolute_path,
-                itemType: activeItem.type || 'sequence',
-                key: activeItem.key || undefined,
-                bpm: activeItem.bpm || undefined,
-                duration_seconds: activeItem.duration_seconds || undefined
-            };
-            await applyLibraryItemToSequence(node, dragItem);
+            if (selectedItems.length > 0) {
+                populateOwnerSlotsFromPool(poolNode, node, selectedItems);
+                const activeIdx = Math.max(0, Number(node.activeSlotIndex ?? node.properties?.active_slot ?? 0));
+                const activeSlot = Array.isArray(node.properties?.slots) ? node.properties.slots[activeIdx] : null;
+                const activeFp = String(activeSlot?.filepath || node.properties?.filepath || '');
+                const activeId = activeSlot?.library_item_id ?? node.properties?.library_item_id;
+                const activeItem = selectedItems.find((it: any) =>
+                    (activeId != null && String(it.id) === String(activeId))
+                    || (activeFp && String(it.filepath || it.absolute_path || '') === activeFp)
+                ) || selectedItems[0];
+
+                if (activeItem && !isInlinePoolItem(activeItem)) {
+                    const hasCachedSteps = Array.isArray(activeItem.sequence) && activeItem.sequence.length > 0;
+                    const itemFp = String(activeItem.filepath || activeItem.absolute_path || '');
+                    if (!hasCachedSteps && itemFp) {
+                        const prevQuery = node.properties?.pool_query;
+                        const dragItem: LibraryDragItem = {
+                            id: activeItem.id,
+                            name: activeItem.name,
+                            filepath: itemFp,
+                            itemType: activeItem.type || 'sequence',
+                            key: activeItem.key || undefined,
+                            bpm: activeItem.bpm || undefined,
+                            duration_seconds: activeItem.duration_seconds || undefined,
+                            is_external: isExternalPoolItem(activeItem),
+                            source: isExternalPoolItem(activeItem) ? 'external' : 'gaia',
+                        };
+                        await applyLibraryItemToSequence(node, dragItem);
+                        if (prevQuery !== undefined && String(prevQuery).trim() !== '') {
+                            node.updateProperty?.('pool_query', prevQuery);
+                        }
+                    }
+                }
+            }
+            const data = trackNodes.get(node.id);
+            if (data) {
+                data.selected_items = selectedItems.map((it: any) => ({ ...it }));
+            }
             node.setDirtyCanvas?.(true, true);
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
+                detail: { nodeId: node.id }
+            }));
+            window.dispatchEvent(new CustomEvent('arrangement-source-changed', {
+                detail: { nodeId: node.id }
+            }));
         }
     }
 });
@@ -4490,9 +4864,21 @@ window.addEventListener('add-library-node', async (e: any) => {
     }
 });
 
+type SpawnableNodeType = SupportedNodeType | "item_pool";
+
+const NODE_SPAWN_SPECS: Record<string, { liteType: string; childName: string; rootName: string }> = {
+    sample: { liteType: "Audio/Sample", childName: "New Sample", rootName: "Sample" },
+    track: { liteType: "Audio/Track", childName: "Sub Track", rootName: "Master Track" },
+    sequence: { liteType: "Audio/Sequence", childName: "Sequence", rootName: "Sequence" },
+    arrangement: { liteType: "Audio/Arrangement", childName: "Arrangement", rootName: "Arrangement" },
+    null: { liteType: "Audio/Null", childName: "Null", rootName: "Null" },
+    preamp_denoise: { liteType: "Audio/PreampDenoise", childName: "Preamp De-Noise", rootName: "Preamp De-Noise" },
+    voice_isolator: { liteType: "Audio/VoiceIsolator", childName: "Voice Isolator", rootName: "Voice Isolator" },
+};
+
 function addChildNode(
     parentId: number,
-    nodeType: "sample" | "track" | "sequence" | "item_pool" | "arrangement" = "sample",
+    nodeType: SpawnableNodeType = "sample",
     openProperties: boolean = true
 ) {
     const graph = (window as any).editorGraph as LGraph;
@@ -4508,18 +4894,9 @@ function addChildNode(
         return addRandomNode(parentId, openProperties);
     }
 
-    let typeStr = "Audio/Sample";
-    let defaultName = "New Sample";
-    if (nodeType === "track") {
-        typeStr = "Audio/Track";
-        defaultName = "Sub Track";
-    } else if (nodeType === "sequence") {
-        typeStr = "Audio/Sequence";
-        defaultName = "Sequence";
-    } else if (nodeType === "arrangement") {
-        typeStr = "Audio/Arrangement";
-        defaultName = "Arrangement";
-    }
+    const spec = NODE_SPAWN_SPECS[nodeType] || NODE_SPAWN_SPECS.sample;
+    const typeStr = spec.liteType;
+    const defaultName = spec.childName;
 
     const childNode = LiteGraph.createNode(typeStr);
     childNode.properties.node_name = defaultName;
@@ -4527,7 +4904,7 @@ function addChildNode(
     childNode.properties.filepath = "";
     childNode.properties.original_bpm = 120;
     childNode.properties.start_beat = 0;
-    childNode.properties.mix_mode = "sum";
+    childNode.properties.mix_mode = nodeType === "null" ? "first" : "sum";
     if (nodeType === "sequence") {
         childNode.properties.sequence = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
         childNode.properties.step_length = 0.25;
@@ -4736,7 +5113,7 @@ installSeparatedNodeClipboard(() => {
 });
 
 function addRootNode(
-    nodeType: "sample" | "track" | "sequence" | "item_pool" | "arrangement" = "track",
+    nodeType: SpawnableNodeType = "track",
     pos?: [number, number],
     filepath?: string,
     customName?: string,
@@ -4746,24 +5123,15 @@ function addRootNode(
     const graph = (window as any).editorGraph as LGraph;
     if (!graph) return;
 
-    let typeStr = "Audio/Track";
-    let defaultName = "Master Track";
-    if (nodeType === "sample") {
-        typeStr = "Audio/Sample";
-        defaultName = "Sample";
-    } else if (nodeType === "sequence") {
-        typeStr = "Audio/Sequence";
-        defaultName = "Sequence";
-    } else if (nodeType === "arrangement") {
-        typeStr = "Audio/Arrangement";
-        defaultName = "Arrangement";
-    }
+    const spec = NODE_SPAWN_SPECS[nodeType] || NODE_SPAWN_SPECS.track;
+    const typeStr = spec.liteType;
+    const defaultName = spec.rootName;
 
     const rootNode = LiteGraph.createNode(typeStr);
     rootNode.pos = pos ? [pos[0], pos[1]] : [350 + Math.random() * 40, 100 + Math.random() * 40];
     rootNode.properties.node_name = customName || defaultName;
     rootNode.properties.filepath = filepath || "";
-    rootNode.properties.mix_mode = "sum";
+    rootNode.properties.mix_mode = nodeType === "null" ? "first" : "sum";
 
     let extractedBpm = metaBpm;
     let extractedKey = metaKey;
@@ -4860,7 +5228,7 @@ function addRootNode(
 
 function insertNodeIntoLink(
     targetLink: any,
-    nodeType: "sample" | "item_pool" | "sequence" | "track" | "arrangement",
+    nodeType: SpawnableNodeType,
     canvasPos: [number, number]
 ): any | null {
     const graph = (window as any).editorGraph as LGraph;
@@ -4918,10 +5286,14 @@ function insertNodeIntoLink(
 (window as any).insertNodeIntoLink = insertNodeIntoLink;
 
 async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
-    if (!node?.properties || isMidiLibraryItem(item)) return false;
+    if (!node?.properties || isSequenceSourceLibraryItem(item)) return false;
 
-    const files = await resolveLibraryAssets([item]);
-    const latest = refreshLibraryAssetSnapshot(item, files);
+    const isExternal = isExternalPoolItem(item);
+    let latest: LibraryFile | undefined;
+    if (!isExternal) {
+        const files = await resolveLibraryAssets([item]);
+        latest = refreshLibraryAssetSnapshot(item, files);
+    }
 
     const metadata = extractMetadataFromPath(item.filepath);
     const originalBpm = item.bpm || metadata.bpm || node.properties.original_bpm || 120;
@@ -4930,7 +5302,23 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
     const sampleType = item.itemType === "one_shot" ? "one_shot" : "loop";
 
     const resolvedKey = latest ? String(latest.key ?? '') : (item.key || metadata.key || "");
-    const resolvedItemId = latest?.id ?? item.id;
+    const resolvedItemId = isExternal
+        ? (item.id || `ext:${item.filepath}`)
+        : (latest?.id ?? item.id);
+
+    const registered = typeof node.ensureItemsInPool === 'function'
+        ? node.ensureItemsInPool([{
+            ...item,
+            id: resolvedItemId,
+            name: nodeName,
+            key: resolvedKey || null,
+            bpm: originalBpm,
+            is_external: isExternal,
+            source: isExternal ? 'external' : 'gaia',
+        }])[0]
+        : null;
+    const callName = getPoolItemCallName(registered || { ...item, name: nodeName }, false);
+
     if (typeof node.updateProperty === 'function') {
         node.updateProperty('node_name', nodeName);
         node.updateProperty('sample_type', sampleType);
@@ -4938,6 +5326,7 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
         node.updateProperty('target_bpm', targetBpm);
         node.updateProperty('bpm', targetBpm);
         node.updateProperty('key', resolvedKey);
+        node.updateProperty('is_external', isExternal);
         if (resolvedItemId !== undefined) {
             node.updateProperty('library_item_id', resolvedItemId);
         }
@@ -4945,12 +5334,17 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
             node.updateProperty('duration_seconds', item.duration_seconds);
         }
         node.updateProperty('filepath', item.filepath);
+        if (callName) {
+            node.updateProperty('pool_query', callName);
+        }
     } else {
         Object.assign(node.properties, {
             node_name: nodeName,
             node_type: "sample",
             filepath: item.filepath,
             library_item_id: resolvedItemId,
+            is_external: isExternal,
+            pool_query: callName,
             sample_type: sampleType,
             original_bpm: originalBpm,
             target_bpm: targetBpm,
@@ -4972,7 +5366,8 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
             target_bpm: targetBpm,
             bpm: targetBpm,
             key: resolvedKey,
-            duration_seconds: item.duration_seconds ?? undefined
+            duration_seconds: item.duration_seconds ?? undefined,
+            selected_items: typeof node.getPoolItems === 'function' ? node.getPoolItems() : data.selected_items,
         });
     }
 
@@ -4984,6 +5379,9 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
     window.dispatchEvent(new CustomEvent('arrangement-source-changed', {
         detail: { nodeId: node.id },
     }));
+    window.dispatchEvent(new CustomEvent('node-properties-refreshed', {
+        detail: { nodeId: node.id },
+    }));
     return true;
 }
 
@@ -4992,11 +5390,54 @@ const parsedMidiCache = new Map<string, any>();
 async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
     if (!node?.properties || !isSequenceSourceLibraryItem(item)) return false;
 
+    const syncCachedPoolSteps = (seq: number[], params: any[], targetFp: string, targetId: any) => {
+        const poolItems = typeof node.getPoolItems === 'function' ? node.getPoolItems() : [];
+        for (const pItem of poolItems) {
+            const pFp = String(pItem?.filepath || pItem?.absolute_path || '');
+            if ((targetId != null && String(pItem?.id) === String(targetId)) || (targetFp && pFp === targetFp)) {
+                pItem.sequence = [...seq];
+                if (Array.isArray(params)) {
+                    pItem.step_parameters = params.map((s: any) => ({ ...(s || {}) }));
+                }
+            }
+        }
+    };
+
+    if (isInlinePoolItem(item)) {
+        const seqName = item.name || 'Sequence';
+        const seqSteps = Array.isArray(item.sequence) ? [...item.sequence] : [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+        const stepParams = Array.isArray(item.step_parameters) ? item.step_parameters.map((s: any) => ({ ...(s || {}) })) : undefined;
+        if (typeof node.updateProperty === 'function') {
+            node.updateProperty('is_inline', true);
+            node.updateProperty('is_external', false);
+            node.updateProperty('filepath', '');
+            if (item.id != null) node.updateProperty('library_item_id', item.id);
+            node.updateProperty('sequence_name', seqName);
+            node.updateProperty('node_name', seqName);
+            node.updateProperty('sequence', seqSteps);
+            if (stepParams) node.updateProperty('step_parameters', stepParams);
+        }
+        const data = trackNodes.get(node.id);
+        if (data) {
+            data.name = seqName;
+            data.filepath = '';
+            data.sequence = [...seqSteps];
+            if (stepParams) data.step_parameters = stepParams.map((s: any) => ({ ...(s || {}) }));
+        }
+        const graph = (window as any).editorGraph as LGraph;
+        if (graph && !isGraphEvaluating()) markNodeAndAncestorsInvalidated(graph, node.id);
+        node.setDirtyCanvas?.(true, true);
+        window.dispatchEvent(new CustomEvent('arrangement-source-changed', { detail: { nodeId: node.id } }));
+        window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
+        return true;
+    }
+
+    const isExternal = isExternalPoolItem(item);
     if (isSavedSequenceLibraryItem(item)) {
         const response = await fetch('/api/sequence/parse', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filepath: item.filepath, file_id: item.id })
+            body: JSON.stringify({ filepath: item.filepath, file_id: isExternal ? undefined : item.id })
         });
         const document = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(document.detail || `Sequence loading failed (${response.status})`);
@@ -5004,8 +5445,11 @@ async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
             throw new Error('Node cannot load saved sequence files');
         }
         node.applySequenceDocument(document);
+        node.updateProperty('is_inline', false);
+        node.updateProperty('is_external', isExternal);
         node.updateProperty('filepath', item.filepath);
         if (item.id != null) node.updateProperty('library_item_id', item.id);
+        syncCachedPoolSteps(node.properties?.sequence || [], node.properties?.step_parameters || [], item.filepath, item.id);
         const graph = (window as any).editorGraph as LGraph;
         if (graph && !isGraphEvaluating()) markNodeAndAncestorsInvalidated(graph, node.id);
         node.setDirtyCanvas?.(true, true);
@@ -5041,6 +5485,8 @@ async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
     const nodeName = sourceName.replace(/\.(?:mid|midi)$/i, '') || "Sequence";
 
     if (typeof node.updateProperty === 'function') {
+        node.updateProperty('is_inline', false);
+        node.updateProperty('is_external', isExternal);
         node.updateProperty('node_name', nodeName);
         node.updateProperty('sequence_name', nodeName);
         node.updateProperty('filepath', item.filepath);
@@ -5059,6 +5505,8 @@ async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
             node_type: "sequence",
             filepath: item.filepath,
             library_item_id: item.id ?? node.properties.library_item_id,
+            is_external: isExternal,
+            is_inline: false,
             sequence: [...parsed.sequence],
             step_parameters: Array.isArray(parsed.step_parameters)
                 ? parsed.step_parameters.map((step: any) => ({ ...step }))
@@ -5067,6 +5515,7 @@ async function applyLibraryItemToSequence(node: any, item: LibraryDragItem) {
         });
         node.title = nodeName;
     }
+    syncCachedPoolSteps(parsed.sequence, parsed.step_parameters || node.properties.step_parameters, item.filepath, item.id);
 
     const data = trackNodes.get(node.id);
     if (data) {
@@ -5100,28 +5549,40 @@ function addLibraryItemsToPool(node: any, items: LibraryDragItem[]) {
     const existing = Array.isArray(node.properties.selected_items) ? node.properties.selected_items : [];
     const byKey = new Map<string, any>();
     for (const item of existing) {
-        // Several files inside one GAIA collection can carry the same parent
-        // item ID, so identity must prefer the contained asset's exact path.
-        const key = String(item.absolute_path ?? item.filepath ?? item.id ?? "")
-            .replace(/\\/g, '/').toLocaleLowerCase();
+        const key = getPoolItemIdentityKey(item);
         if (key) byKey.set(key, item);
     }
     for (const item of items) {
-        if (item.id == null || !String(item.id).trim()) {
+        const isExt = isExternalPoolItem(item);
+        const isInline = isInlinePoolItem(item);
+        if (!isExt && !isInline && (item.id == null || !String(item.id).trim())) {
             throw new Error('Cannot add a library item without its GAIA id to an Asset Pool');
         }
-        const poolItem = {
-            id: item.id,
-            absolute_path: item.filepath,
-            filepath: item.filepath,
-            name: item.name || item.filepath.split(/[\\/]/).pop(),
-            type: item.itemType || (isSavedSequenceLibraryItem(item) ? "sequence" : isMidiLibraryItem(item) ? "midi" : "audio"),
+        const key = getPoolItemIdentityKey(item);
+        const already = key ? byKey.get(key) : null;
+        const baseName = item.name || (item.filepath ? item.filepath.split(/[\\/]/).pop() : 'Sequence') || 'Item';
+        const dedupedName = already?.name || deduplicatePoolItemName(baseName, [...byKey.values()], key);
+        const poolItem: Record<string, any> = {
+            id: item.id ?? (isExt ? `ext:${item.filepath}` : `inline:${Date.now()}`),
+            absolute_path: isInline ? '' : item.filepath,
+            filepath: isInline ? '' : item.filepath,
+            name: dedupedName,
+            type: item.itemType || (isInline || isSavedSequenceLibraryItem(item) ? "sequence" : isMidiLibraryItem(item) ? "midi" : "audio"),
             key: item.key || null,
             bpm: item.bpm || null,
-            duration_seconds: item.duration_seconds || null
+            duration_seconds: item.duration_seconds || null,
+            is_external: isExt,
+            is_inline: isInline,
+            source: isInline ? 'inline' : isExt ? 'external' : 'gaia',
         };
-        const key = String(item.filepath || item.id || '')
-            .replace(/\\/g, '/').toLocaleLowerCase();
+        if (isInline || Array.isArray(item.sequence)) {
+            poolItem.sequence = Array.isArray(item.sequence) ? [...item.sequence] : undefined;
+        }
+        if (isInline || Array.isArray(item.step_parameters)) {
+            poolItem.step_parameters = Array.isArray(item.step_parameters)
+                ? item.step_parameters.map((s: any) => ({ ...(s || {}) }))
+                : undefined;
+        }
         if (key) byKey.set(key, poolItem);
     }
 
@@ -5176,16 +5637,35 @@ async function applyLibraryDropToNode(node: any, items: LibraryDragItem[]) {
     const nodeKind = node.getNodeType?.() || node.properties?.node_type;
 
     if (nodeKind === "sample") {
-        const sample = items.find(item => !isMidiLibraryItem(item));
-        return sample ? await applyLibraryItemToSample(node, sample) : false;
+        const audioItems = items.filter(item => !isSequenceSourceLibraryItem(item));
+        if (audioItems.length === 0) return false;
+        if (typeof node.loadDroppedItemsIntoSlots === 'function') {
+            await node.loadDroppedItemsIntoSlots(audioItems);
+            const graph = (window as any).editorGraph as LGraph;
+            if (graph && !isGraphEvaluating()) markNodeAndAncestorsInvalidated(graph, node.id);
+            node.setDirtyCanvas?.(true, true);
+            window.dispatchEvent(new CustomEvent('arrangement-source-changed', { detail: { nodeId: node.id } }));
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: node.id } }));
+            return true;
+        }
+        return await applyLibraryItemToSample(node, audioItems[0]);
     }
 
     if (nodeKind === "sequence") {
         let applied = false;
-        const sequenceSource = items.find(isSequenceSourceLibraryItem);
-        const sample = items.find(item => !isSequenceSourceLibraryItem(item));
-        if (sequenceSource) applied = await applyLibraryItemToSequence(node, sequenceSource) || applied;
-        if (sample) applied = await attachLibrarySampleToSequence(node, sample) || applied;
+        const seqItems = items.filter(isSequenceSourceLibraryItem);
+        const audioItems = items.filter(item => !isSequenceSourceLibraryItem(item));
+        if (seqItems.length > 0) {
+            if (typeof node.loadDroppedItemsIntoSlots === 'function') {
+                await node.loadDroppedItemsIntoSlots(seqItems);
+                applied = true;
+            } else {
+                applied = await applyLibraryItemToSequence(node, seqItems[0]) || applied;
+            }
+        }
+        if (audioItems.length > 0) {
+            applied = await attachLibrarySampleToSequence(node, audioItems[0]) || applied;
+        }
         return applied;
     }
 
@@ -5199,7 +5679,11 @@ async function applyLibraryDropToNode(node: any, items: LibraryDragItem[]) {
         if (isSequenceSourceLibraryItem(item)) {
             const sequence = addChildNode(node.id, "sequence", false);
             if (sequence) {
-                await applyLibraryItemToSequence(sequence, item);
+                if (typeof (sequence as any).loadDroppedItemsIntoSlots === 'function') {
+                    await (sequence as any).loadDroppedItemsIntoSlots([item]);
+                } else {
+                    await applyLibraryItemToSequence(sequence, item);
+                }
                 applied = true;
             }
         } else {
@@ -5222,7 +5706,13 @@ async function addLibraryItemsToCanvas(items: LibraryDragItem[], canvasPos?: [nu
             : undefined;
         if (isSequenceSourceLibraryItem(item)) {
             const sequence = addRootNode("sequence", pos, item.filepath, item.name, item.key || undefined, item.bpm || undefined);
-            if (sequence) await applyLibraryItemToSequence(sequence, item);
+            if (sequence) {
+                if (typeof (sequence as any).loadDroppedItemsIntoSlots === 'function') {
+                    await (sequence as any).loadDroppedItemsIntoSlots([item]);
+                } else {
+                    await applyLibraryItemToSequence(sequence, item);
+                }
+            }
         } else {
             const sample = addRootNode("sample", pos, item.filepath, item.name, item.key || undefined, item.bpm || undefined);
             if (sample) await applyLibraryItemToSample(sample, item);
@@ -5897,6 +6387,20 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         }
                     });
 
+                    if (!(window as any).__sinOsDropGuardInstalled) {
+                        (window as any).__sinOsDropGuardInstalled = true;
+                        window.addEventListener('dragover', (ev: DragEvent) => {
+                            if (ev.dataTransfer?.types?.includes('Files')) {
+                                ev.preventDefault();
+                            }
+                        });
+                        window.addEventListener('drop', (ev: DragEvent) => {
+                            if (ev.dataTransfer?.types?.includes('Files')) {
+                                ev.preventDefault();
+                            }
+                        });
+                    }
+
                     canvas.addEventListener('drop', async (e: DragEvent) => {
                         e.preventDefault();
                         (graphCanvas as any).library_drop_node = null;
@@ -5904,9 +6408,13 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         if (!e.dataTransfer) return;
 
                         try {
-                            const dataStr = e.dataTransfer.getData('text/plain');
-                            if (!dataStr) return;
-                            const items = getLibraryDragItems(JSON.parse(dataStr));
+                            let items: LibraryDragItem[] = await resolveDroppedAnyItems(e.dataTransfer);
+                            if (items.length === 0) {
+                                const dataStr = e.dataTransfer.getData('text/plain');
+                                if (dataStr) {
+                                    items = getLibraryDragItems(JSON.parse(dataStr));
+                                }
+                            }
                             if (items.length === 0) return;
 
                             const offset = graphCanvas.convertEventToCanvasOffset(e);
@@ -5917,7 +6425,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                                 await addLibraryItemsToCanvas(items, [offset[0], offset[1]]);
                             }
                         } catch (err) {
-                            console.error("Failed applying dropped GAIA item", err);
+                            console.error("Failed applying dropped asset item", err);
                         }
                     });
 
@@ -6006,7 +6514,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     element.appendChild(notice);
                 } else if (node) {
                     try {
-                        const win = new PropertiesWindow(element, node, onClose);
+                        const win = new PropertiesWindow(element, node, onClose, options.params?.initialTab);
                         disposeComponent = () => win.dispose();
                         win.render().catch(err => {
                             element.innerHTML = `
@@ -6272,6 +6780,78 @@ async function renderNode(nodeId: number, autoPlay: boolean = true) {
             payload.export_overwrite_mode = targetNode.properties.export_overwrite_mode || 'incremental';
         }
 
+        // Hybrid export preflight guard for bypassed, stale-manual, or model-missing processor nodes
+        try {
+            const preRes = await fetch('/api/export/preflight', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (preRes.ok) {
+                const preData = await preRes.json();
+                if (preData?.has_warnings && Array.isArray(preData.issues) && preData.issues.length > 0) {
+                    const proceed = await new Promise<boolean>((resolve) => {
+                        const overlay = document.createElement('div');
+                        overlay.className = 'sin-export-preflight-overlay';
+                        const modal = document.createElement('div');
+                        modal.className = 'sin-export-preflight-modal';
+                        modal.setAttribute('role', 'dialog');
+                        modal.setAttribute('aria-modal', 'true');
+
+                        const heading = document.createElement('h3');
+                        heading.className = 'sin-export-preflight-title';
+                        heading.textContent = 'Processor Export Warning';
+
+                        const intro = document.createElement('div');
+                        intro.style.fontSize = '12px';
+                        intro.textContent = 'One or more DSP processor nodes are bypassed, stale, or missing a downloaded model:';
+
+                        const list = document.createElement('ul');
+                        list.className = 'sin-export-preflight-list';
+                        for (const issue of preData.issues) {
+                            const li = document.createElement('li');
+                            li.textContent = String(issue?.detail || issue?.state || 'Processor warning');
+                            list.appendChild(li);
+                        }
+
+                        const actionsRow = document.createElement('div');
+                        actionsRow.className = 'sin-export-preflight-actions';
+
+                        const cancelBtn = document.createElement('button');
+                        cancelBtn.type = 'button';
+                        cancelBtn.className = 'sin-proc-btn';
+                        cancelBtn.textContent = 'Cancel';
+                        cancelBtn.onclick = () => {
+                            overlay.remove();
+                            resolve(false);
+                        };
+
+                        const bypassBtn = document.createElement('button');
+                        bypassBtn.type = 'button';
+                        bypassBtn.className = 'sin-proc-btn sin-proc-btn-primary';
+                        bypassBtn.textContent = 'Bypass & Proceed';
+                        bypassBtn.onclick = () => {
+                            overlay.remove();
+                            resolve(true);
+                        };
+
+                        actionsRow.append(cancelBtn, bypassBtn);
+                        modal.append(heading, intro, list, actionsRow);
+                        overlay.appendChild(modal);
+                        document.body.appendChild(overlay);
+                    });
+
+                    if (!proceed) {
+                        runtimeLog('Disk render cancelled at processor preflight warning.', 'warning');
+                        return;
+                    }
+                    payload.allow_bypassed_export = true;
+                }
+            }
+        } catch {
+            // If preflight endpoint is unavailable, continue directly to /api/render
+        }
+
         const res = await loggedTask('Render audio on server', () =>
             fetch('/api/render', {
                 method: 'POST',
@@ -6427,7 +7007,15 @@ async function calculatePreview(
             if (rtRes?.ok) {
                 sinRealtimeLoaded = true;
                 (window as any).__sinRealtimeLoaded = true;
+                (window as any).__sinRealtimeTiled = Boolean(rtRes.tiled);
+                sinRealtimeHasPyramid = Boolean(rtRes.has_peak_pyramid || rtRes.tiled);
                 sinRealtimeBusIds = new Set<string>((rtRes.bus_ids || []).map(String));
+                sinRealtimeChainSignatures.clear();
+                for (const gNode of (((graph as any)._nodes || []) as any[])) {
+                    if (gNode?.id != null && sinRealtimeBusIds.has(String(gNode.id))) {
+                        sinRealtimeChainSignatures.set(String(gNode.id), getChainStructureSignature(gNode.properties?.chain));
+                    }
+                }
                 if (globalAudioScheduler.getFullAudioBuffer()) {
                     globalAudioScheduler.reset();
                 }
@@ -6449,10 +7037,24 @@ async function calculatePreview(
                 const inlineMasterPeaks = Array.isArray(rtRes.master_peaks) && rtRes.master_peaks.length > 0 ? rtRes.master_peaks : null;
                 const inlineBusPeaks = (rtRes.bus_peaks && typeof rtRes.bus_peaks === 'object') ? rtRes.bus_peaks : null;
                 if (inlineMasterPeaks || inlineBusPeaks) {
+                    (window as any).__sinRealtimePeaksPending = false;
                     applyRealtimePeaksToGraph(inlineMasterPeaks, inlineBusPeaks, sinRealtimeDurationSec);
+                } else if (sinRealtimeDurationSec > 0) {
+                    (window as any).__sinRealtimePeaksPending = true;
+                    ensureLoadingSpinnerTick();
+                    if (masterWaveform.duration <= 0 || Math.abs(masterWaveform.duration - sinRealtimeDurationSec) > 0.25) {
+                        masterWaveform.setProgressOnly(sinRealtimeDurationSec, '');
+                    }
+                    if (!sinRealtimePlaying) {
+                        masterWaveform.setPlayback(0, sinRealtimeDurationSec);
+                    }
                 }
                 if (rtRes.manifest && typeof rtRes.manifest === 'object') {
                     await distributeWorkspaceManifest(graph, rtRes.manifest);
+                }
+                if (rtRes.processor_statuses && typeof rtRes.processor_statuses === 'object') {
+                    applyProcessorStatusesToGraph(rtRes.processor_statuses);
+                    ensureLoadingSpinnerTick();
                 }
                 clearSubtreeInvalidated(graph, nodeId);
                 if (targetNode) {
@@ -6581,6 +7183,7 @@ async function calculatePreview(
             sinRealtimeLoaded = false;
             (window as any).__sinRealtimeLoaded = false;
             sinRealtimeBusIds.clear();
+            sinRealtimeChainSignatures.clear();
             activeRamPreviewNodeId = nodeId;
             (window as any).activeRamPreviewNodeId = nodeId;
             activeRamPreviewPayload = payload;
@@ -6732,22 +7335,25 @@ async function distributeWorkspaceManifest(graph: LGraph, manifest: any): Promis
             }
             if (manifestEntry.filepath && gNode.properties && !isDynamicPoolWithPath && !hasMultiSlots) {
                 const currentPath = String(gNode.properties.filepath || '');
-                if (currentPath !== manifestEntry.filepath || !gNode.audioBuffer) {
+                if (currentPath !== manifestEntry.filepath || (!nativeRealtimeActive && !gNode.audioBuffer)) {
                     gNode.properties.filepath = manifestEntry.filepath;
                     gNode.loadedFilepath = manifestEntry.filepath;
                     gNode.syncActiveSlotFromProperties?.();
                     delete gNode.manifestStemBuffer;
-                    pendingLoads.push(
-                        fetchAudioBuffer(manifestEntry.filepath).then(buf => {
-                            if (buf) {
-                                gNode.audioBuffer = buf;
-                                if (buf.duration) {
-                                    gNode.properties.duration_seconds = buf.duration;
+                    // Skip downloading & decoding huge raw files in Chrome when native C++ streams them from disk!
+                    if (!nativeRealtimeActive) {
+                        pendingLoads.push(
+                            fetchAudioBuffer(manifestEntry.filepath).then(buf => {
+                                if (buf) {
+                                    gNode.audioBuffer = buf;
+                                    if (buf.duration) {
+                                        gNode.properties.duration_seconds = buf.duration;
+                                    }
+                                    gNode.setDirtyCanvas?.(true, false);
                                 }
-                                gNode.setDirtyCanvas?.(true, true);
-                            }
-                        }).catch(() => { })
-                    );
+                            }).catch(() => { })
+                        );
+                    }
                 }
             }
 
@@ -6955,10 +7561,21 @@ function tryPushRealtimeParam(graph: LGraph | null, nodeId: number, propertyKey?
     const nid = String(nodeId);
     if (!sinRealtimeBusIds.has(nid)) return false;
     if (propertyKey === 'gain' || propertyKey === 'chain') {
-        const mult = getNodeGainMultiplier(node);
-        sinRealtime.setParam(nid, 'pre_gain_db', 0, 0);
-        sinRealtime.setParam(nid, 'post_gain_db', 0, 0);
-        sinRealtime.setParam(nid, 'volume', mult, 5);
+        const prevSig = sinRealtimeChainSignatures.get(nid) ?? '';
+        const curSig = getChainStructureSignature(props.chain);
+        if (prevSig !== curSig) {
+            return false; // Structural add/remove/reorder -> reload plan & rebuild C++ BusStages
+        }
+        const { preDb, postDb } = getPrePostGainDb(props.chain);
+        sinRealtime.setParam(nid, 'pre_gain_db', preDb, 5);
+        sinRealtime.setParam(nid, 'post_gain_db', postDb, 5);
+        sinRealtime.setParam(nid, 'volume', 1.0, 5);
+        for (const entry of getUserFxStages(props.chain)) {
+            sinRealtime.setStageEnabled(nid, entry.stageIndex, entry.module.enabled !== false);
+            for (const pDef of entry.def.params) {
+                sinRealtime.setStageParam(nid, entry.stageIndex, pDef.paramIndex, readChainParamValue(entry.module, pDef), 5);
+            }
+        }
         return true;
     }
     if (propertyKey === 'pan') {

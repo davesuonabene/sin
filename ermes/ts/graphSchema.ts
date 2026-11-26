@@ -17,6 +17,9 @@ export type GraphNodeType =
     | 'sequence'
     | 'arrangement'
     | 'track'
+    | 'null'
+    | 'preamp_denoise'
+    | 'voice_isolator'
     | 'asset_filter'
     | 'modulator'
     | 'random'
@@ -146,6 +149,9 @@ const LITE_GRAPH_NODE_TYPES: Record<GraphNodeType, string> = {
     sequence: 'Audio/Sequence',
     arrangement: 'Audio/Arrangement',
     track: 'Audio/Track',
+    null: 'Audio/Null',
+    preamp_denoise: 'Audio/PreampDenoise',
+    voice_isolator: 'Audio/VoiceIsolator',
     asset_filter: 'Audio/AssetFilter',
     modulator: 'Audio/Modulator',
     random: 'Audio/Random',
@@ -157,6 +163,9 @@ const DEFAULT_NODE_NAMES: Record<GraphNodeType, string> = {
     sequence: 'Sequence',
     arrangement: 'Arrangement',
     track: 'Track',
+    null: 'Null',
+    preamp_denoise: 'Preamp De-Noise',
+    voice_isolator: 'Voice Isolator',
     asset_filter: 'Asset Pool',
     modulator: 'Modulator',
     random: 'Random',
@@ -172,6 +181,9 @@ function isGraphNodeType(value: unknown): value is GraphNodeType {
         || value === 'sequence'
         || value === 'arrangement'
         || value === 'track'
+        || value === 'null'
+        || value === 'preamp_denoise'
+        || value === 'voice_isolator'
         || value === 'asset_filter'
         || value === 'modulator'
         || value === 'random'
@@ -369,6 +381,7 @@ export function validateGraphDocument(
     if (!Array.isArray(rawConnections)) errors.push('Graph connections must be an array.');
 
     const adjacency = new Map<string, string[]>();
+    const incomingCounts = new Map<string, number>();
     const seenConnections = new Set<string>();
     connections.forEach((rawConnection, index) => {
         if (!isRecord(rawConnection)) {
@@ -396,8 +409,14 @@ export function validateGraphDocument(
             const targets = adjacency.get(from) || [];
             targets.push(to);
             adjacency.set(from, targets);
+            incomingCounts.set(to, (incomingCounts.get(to) || 0) + 1);
         }
     });
+    for (const [id, count] of incomingCounts.entries()) {
+        if (count > 1 && nodesById.get(id)?.type === 'null') {
+            errors.push(`Null node "${id}" accepts at most 1 incoming audio connection.`);
+        }
+    }
 
     const visiting = new Set<string>();
     const visited = new Set<string>();
@@ -546,7 +565,15 @@ function propertiesForLiteGraphNode(
         }
     }
 
-    if (node.type === 'sample' || node.type === 'sequence' || node.type === 'arrangement' || node.type === 'track') {
+    if (
+        node.type === 'sample'
+        || node.type === 'sequence'
+        || node.type === 'arrangement'
+        || node.type === 'track'
+        || node.type === 'null'
+        || node.type === 'preamp_denoise'
+        || node.type === 'voice_isolator'
+    ) {
         const rawGain = properties.gain;
         const rawChain = Array.isArray(properties.chain) ? properties.chain : [];
         if (typeof rawGain === 'number' && Number.isFinite(rawGain) && rawChain.length === 0) {

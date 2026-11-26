@@ -2,9 +2,13 @@ import { type FieldSchema } from '../../fields/FieldSchema.ts';
 import { type BaseNode } from '../../nodes/BaseNode.ts';
 import { StepValueControl } from './StepValueControl.ts';
 import { type SequenceDocument } from '../../nodes/SequenceNode.ts';
-import { getDroppedSequenceItems, hasSequenceDragPayload } from '../dragPayload.ts';
-import { isFieldOperatorExpression } from '../../../../ermes/ts/slotLanguage.ts';
-import { resolvePoolItemByQuery } from '../../../../ermes/ts/assetResolver.ts';
+import { hasSequenceDragPayload, resolveDroppedSequenceItems } from '../dragPayload.ts';
+import {
+    getPoolItemCallName,
+    isCalculatedPoolQuery,
+    isFieldOperatorExpression,
+} from '../../../../ermes/ts/slotLanguage.ts';
+import { resolveEffectivePoolSeed, resolvePoolItemByQuery } from '../../../../ermes/ts/assetResolver.ts';
 import { SlotStrip } from './SlotStrip.ts';
 import { renderIcon } from '../../../../packages/ui/src/icons.js';
 
@@ -73,73 +77,161 @@ export class SequenceGridSection {
         const header = document.createElement('div');
         header.className = 'td-seq-asset-row';
 
-        const assignedModifier = typeof node.getAttachedPoolNode === 'function'
-            ? node.getAttachedPoolNode()
-            : null;
-        const poolItems = Array.isArray(assignedModifier?.properties?.selected_items)
-            ? assignedModifier.properties.selected_items
-            : [];
-        const isPoolOpen = Boolean(node.isPoolViewOpen);
+        const getPoolContext = () => {
+            const assignedModifier = typeof node.getAttachedPoolNode === 'function'
+                ? node.getAttachedPoolNode()
+                : null;
+            const poolItems = typeof (node as any).getPoolItems === 'function'
+                ? (node as any).getPoolItems()
+                : (Array.isArray(assignedModifier?.properties?.selected_items) ? assignedModifier.properties.selected_items : []);
+            const effPoolSeed = resolveEffectivePoolSeed(assignedModifier, node);
+            const poolSalt = typeof (node as any).getPoolSalt === 'function'
+                ? (node as any).getPoolSalt()
+                : Number(assignedModifier?.id || node.id || 0);
+            return { assignedModifier, poolItems, effPoolSeed, poolSalt };
+        };
+
+        const initialCtx = getPoolContext();
+        const isPoolOpen = Boolean(node.isPoolPanelOpen);
+
+        const indexPill = document.createElement('button');
+        indexPill.type = 'button';
+        indexPill.className = 'td-pool-index-pill';
+        indexPill.style.display = 'none';
+        indexPill.title = 'Current-run pool index · Click to open POOL tab';
+        indexPill.addEventListener('click', () => {
+            window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
+                detail: { nodeId: node.id, forceOpen: true, targetTab: 'POOL' }
+            }));
+        });
+
+        const sourceBadge = document.createElement('span');
+        sourceBadge.className = 'pool-source-badge';
+        sourceBadge.style.display = 'none';
 
         const getLoadedSeqName = (): string => {
             const activeIdx = Math.max(0, Number((node as any).activeSlotIndex ?? node.properties?.active_slot ?? 0));
+            const { poolItems, effPoolSeed, poolSalt } = getPoolContext();
             const q = String(node.properties?.pool_query ?? '').trim();
-            if (isFieldOperatorExpression(q)) {
-                const liveName = String((node as any)._liveTriggeredSequenceName || '');
-                if (liveName) return liveName.replace(/\.(?:seq|mid|midi)$/i, '');
+            if (isCalculatedPoolQuery(q, poolItems)) {
+                if (isFieldOperatorExpression(q, poolItems)) {
+                    const liveName = String((node as any)._liveTriggeredSequenceName || '');
+                    if (liveName) return liveName.replace(/\.(?:seq|mid|midi)$/i, '');
+                }
                 if (poolItems.length > 0) {
                     const chosen = resolvePoolItemByQuery(
                         poolItems,
                         q,
                         activeIdx,
-                        node.properties?.seed ?? assignedModifier?.properties?.seed ?? 42,
+                        node.properties?.seed ?? 42,
                         false,
-                        node.getTriggerCount()
+                        node.getTriggerCount(),
+                        { poolSeed: effPoolSeed, nodeId: poolSalt }
                     );
-                    const chosenName = String(chosen?.name || chosen?.absolute_path || chosen?.filepath || '');
-                    if (chosenName) {
-                        return (chosenName.split(/[\\/]/).pop() || chosenName).replace(/\.(?:seq|mid|midi)$/i, '');
+                    if (chosen) {
+                        return getPoolItemCallName(chosen, true);
                     }
                 }
             }
+            const activeId = node.properties?.library_item_id;
             const slotFp = Array.isArray(node.properties?.slots) ? String(node.properties.slots[activeIdx]?.filepath || '') : '';
             const fp = String(node.properties?.filepath || slotFp || '');
+            if (poolItems.length > 0) {
+                const matched = poolItems.find((it: any) =>
+                    (activeId != null && String(it?.id) === String(activeId))
+                    || (fp && String(it?.filepath || it?.absolute_path || '') === fp)
+                );
+                if (matched) return getPoolItemCallName(matched, true);
+            }
             const fpName = fp ? (fp.split(/[\\/]/).pop() || '').replace(/\.(?:seq|mid|midi)$/i, '') : '';
             return String(
                 fpName
-                || node.properties?.node_name
                 || node.properties?.sequence_name
+                || node.properties?.node_name
                 || node.title
                 || 'Sequence'
             );
         };
 
         const isPoolCalculated = (): boolean => {
-            return isFieldOperatorExpression(node.properties?.pool_query);
+            const { poolItems } = getPoolContext();
+            return isCalculatedPoolQuery(node.properties?.pool_query, poolItems);
         };
 
         const getEditableExpression = (): string => {
             const mixedName = node.hasMixedSlotValues?.('sequence_name') ?? false;
             const mixedQuery = node.hasMixedSlotValues?.('pool_query') ?? false;
             if (mixedName && mixedQuery) return '';
+            const { poolItems } = getPoolContext();
             const q = String(node.properties?.pool_query ?? '').trim();
-            if (isFieldOperatorExpression(q)) return q;
+            if (isCalculatedPoolQuery(q, poolItems)) return q;
             return getLoadedSeqName();
         };
 
         const nameInput = document.createElement('input');
         nameInput.type = 'text';
         nameInput.className = 'td-seq-name-input td-pool-selector-input';
-        nameInput.placeholder = (assignedModifier || isPoolOpen)
+        nameInput.placeholder = (initialCtx.poolItems.length > 0 || initialCtx.assignedModifier)
             ? 'Pool: name, index (0..), or rand'
             : 'Sequence name';
-        nameInput.title = (assignedModifier || isPoolOpen)
-            ? 'Click to view/edit pool expression (name, index 0.., or "rand") · Drop sequence/MIDI to load'
+        nameInput.title = (initialCtx.poolItems.length > 0 || initialCtx.assignedModifier)
+            ? 'Click to view/edit pool call (name, run index 0.., or "rand") · Drop sequence/MIDI to load'
             : 'Sequence name · Drop sequence/MIDI to load';
         nameInput.setAttribute('aria-label', 'Sequence name or pool query');
         nameInput.maxLength = 64;
 
+        const poolButton = document.createElement('button');
+        poolButton.type = 'button';
+        poolButton.className = `waveform-asset-button td-seq-header-button waveform-pool-button ${initialCtx.poolItems.length > 0 || initialCtx.assignedModifier ? 'is-assigned' : ''} ${isPoolOpen ? 'is-active' : ''}`;
+        poolButton.textContent = initialCtx.poolItems.length > 0 ? `POOL · ${initialCtx.poolItems.length}` : 'POOL';
+        poolButton.title = isPoolOpen ? 'Show Sequence Parameters' : 'Open MIDI / Sequence Pool tab';
+        poolButton.setAttribute('aria-label', poolButton.title);
+        poolButton.setAttribute('aria-pressed', String(isPoolOpen));
+        poolButton.addEventListener('click', () => {
+            window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
+                detail: { nodeId: node.id, targetTab: 'POOL' }
+            }));
+        });
+
+        const syncBadges = () => {
+            const { assignedModifier, poolItems, effPoolSeed } = getPoolContext();
+            const calc = isPoolCalculated();
+            poolButton.textContent = poolItems.length > 0 ? `POOL · ${poolItems.length}` : 'POOL';
+            poolButton.classList.toggle('is-assigned', poolItems.length > 0 || Boolean(assignedModifier));
+
+            const fp = String(node.properties?.filepath || '');
+            const id = node.properties?.library_item_id;
+            const runIdx = typeof (node as any).findPoolItemRunIndex === 'function'
+                ? (node as any).findPoolItemRunIndex({ filepath: fp, id })
+                : -1;
+            if (runIdx >= 0) {
+                indexPill.style.display = '';
+                indexPill.textContent = `#${runIdx}`;
+                indexPill.classList.toggle('is-pool-computed', calc);
+                indexPill.title = `Pool run index #${runIdx} (seed ${effPoolSeed}) · Click to open POOL tab`;
+            } else {
+                indexPill.style.display = 'none';
+            }
+
+            const isExt = Boolean(node.properties?.is_external || String(id ?? '').startsWith('ext:'));
+            const isInline = Boolean(node.properties?.is_inline || String(id ?? '').startsWith('inline:'));
+            if (isExt) {
+                sourceBadge.style.display = '';
+                sourceBadge.className = 'pool-source-badge pool-source-badge--ext';
+                sourceBadge.textContent = 'EXT';
+                sourceBadge.title = `External local file: ${fp}`;
+            } else if (isInline) {
+                sourceBadge.style.display = '';
+                sourceBadge.className = 'pool-source-badge pool-source-badge--inline';
+                sourceBadge.textContent = 'INLINE';
+                sourceBadge.title = 'Inline sequence stored in this node pool';
+            } else {
+                sourceBadge.style.display = 'none';
+            }
+        };
+
         const syncNameDisplay = () => {
+            syncBadges();
             if (document.activeElement === nameInput) return;
             const mixedName = (node.hasMixedSlotValues?.('sequence_name') ?? false) || (node.hasMixedSlotValues?.('filepath') ?? false);
             if (mixedName) {
@@ -161,10 +253,14 @@ export class SequenceGridSection {
                 syncNameDisplay();
                 return;
             }
-            const seqWithPool = node as BaseNode & { applyPoolQuery?: (q: string) => Promise<boolean> };
-            const hasPoolItems = (assignedModifier && poolItems.length > 0) || (Array.isArray(node.properties?.selected_items) && node.properties.selected_items.length > 0);
-            if (hasPoolItems && typeof seqWithPool.applyPoolQuery === 'function') {
-                if (isFieldOperatorExpression(raw)) {
+            const { poolItems } = getPoolContext();
+            const seqWithPool = node as BaseNode & {
+                applyPoolQuery?: (q: string) => Promise<boolean>;
+                renamePoolItem?: (keyOrId: string, nextName: string) => boolean;
+                ensureCurrentSequenceInPool?: (opts?: any) => any;
+            };
+            if (poolItems.length > 0 && typeof seqWithPool.applyPoolQuery === 'function') {
+                if (isFieldOperatorExpression(raw, poolItems)) {
                     node.resetTriggerCount?.();
                 }
                 const matched = await seqWithPool.applyPoolQuery(raw);
@@ -175,8 +271,19 @@ export class SequenceGridSection {
                 }
             }
             if (raw) {
-                node.updateProperty('sequence_name', raw);
-                node.updateProperty('node_name', raw);
+                const curId = node.properties?.library_item_id;
+                if (node.properties?.is_inline && curId && typeof seqWithPool.renamePoolItem === 'function') {
+                    seqWithPool.renamePoolItem(String(curId), raw);
+                } else if (typeof seqWithPool.ensureCurrentSequenceInPool === 'function') {
+                    seqWithPool.ensureCurrentSequenceInPool({
+                        forkIfFileBacked: true,
+                        forkIfSharedByOtherSlot: true,
+                        preferredName: raw,
+                    });
+                } else {
+                    node.updateProperty('sequence_name', raw);
+                    node.updateProperty('node_name', raw);
+                }
             }
             syncNameDisplay();
         };
@@ -211,7 +318,9 @@ export class SequenceGridSection {
         });
         const buttons: HTMLButtonElement[] = [];
         const syncLiveSequenceSteps = () => {
-            const liveSeq = isPoolCalculated() && Array.isArray((node as any)._liveTriggeredSequence)
+            const { poolItems } = getPoolContext();
+            const isDyn = isFieldOperatorExpression(node.properties?.pool_query, poolItems);
+            const liveSeq = isDyn && Array.isArray((node as any)._liveTriggeredSequence)
                 ? ((node as any)._liveTriggeredSequence as number[])
                 : null;
             buttons.forEach((btn, idx) => {
@@ -230,7 +339,8 @@ export class SequenceGridSection {
                 }
                 const detail = (evt as CustomEvent)?.detail;
                 if (!detail || detail.nodeId === node.id) {
-                    if (detail?.liveTelemetry && !isPoolCalculated()) {
+                    const { poolItems } = getPoolContext();
+                    if (detail?.liveTelemetry && !isFieldOperatorExpression(node.properties?.pool_query, poolItems)) {
                         return;
                     }
                     syncNameDisplay();
@@ -239,19 +349,6 @@ export class SequenceGridSection {
             };
             window.addEventListener('node-properties-refreshed', onSeqRefreshed);
         }
-
-        const poolButton = document.createElement('button');
-        poolButton.type = 'button';
-        poolButton.className = `waveform-asset-button td-seq-header-button waveform-pool-button ${assignedModifier ? 'is-assigned' : ''} ${isPoolOpen ? 'is-active' : ''}`;
-        poolButton.textContent = poolItems.length > 0 ? `POOL · ${poolItems.length}` : 'POOL';
-        poolButton.title = isPoolOpen ? 'Show Sequence Parameters' : 'Toggle MIDI / Sequence Pool';
-        poolButton.setAttribute('aria-label', poolButton.title);
-        poolButton.setAttribute('aria-pressed', String(isPoolOpen));
-        poolButton.addEventListener('click', () => {
-            window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
-                detail: { nodeId: node.id, toggleInline: true }
-            }));
-        });
 
         const saveButton = document.createElement('button');
         saveButton.type = 'button';
@@ -266,7 +363,10 @@ export class SequenceGridSection {
 
         saveButton.addEventListener('click', async () => {
             await commitName();
-            const sequenceNode = node as BaseNode & { toSequenceDocument?: () => SequenceDocument };
+            const sequenceNode = node as BaseNode & {
+                toSequenceDocument?: () => SequenceDocument;
+                ensureItemsInPool?: (items: any[]) => any[];
+            };
             if (typeof sequenceNode.toSequenceDocument !== 'function') return;
             saveButton.disabled = true;
             saveStatus.textContent = 'Saving…';
@@ -279,8 +379,31 @@ export class SequenceGridSection {
                 });
                 const result = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(result.detail || `Save failed (${response.status})`);
-                if (result.absolute_path) node.updateProperty('filepath', result.absolute_path);
-                if (result.id != null) node.updateProperty('library_item_id', result.id);
+                if (result.absolute_path) {
+                    node.updateProperty('is_inline', false);
+                    node.updateProperty('is_external', false);
+                    node.updateProperty('filepath', result.absolute_path);
+                    if (result.id != null) node.updateProperty('library_item_id', result.id);
+                    const registered = sequenceNode.ensureItemsInPool?.([{
+                        id: result.id,
+                        filepath: result.absolute_path,
+                        name: result.name || node.properties?.sequence_name || 'Sequence',
+                        type: 'sequence',
+                        is_inline: false,
+                        is_external: false,
+                        source: 'gaia',
+                        sequence: Array.isArray(node.properties?.sequence) ? [...node.properties.sequence] : [],
+                        step_parameters: Array.isArray(node.properties?.step_parameters)
+                            ? node.properties.step_parameters.map((s: any) => ({ ...(s || {}) }))
+                            : [],
+                    }])?.[0];
+                    if (registered) {
+                        node.updateProperty('pool_query', getPoolItemCallName(registered, true));
+                    }
+                    syncNameDisplay();
+                } else if (result.id != null) {
+                    node.updateProperty('library_item_id', result.id);
+                }
                 saveStatus.textContent = 'Saved';
                 window.dispatchEvent(new CustomEvent('library-content-changed'));
                 window.setTimeout(() => { if (saveStatus.isConnected) saveStatus.textContent = ''; }, 1600);
@@ -292,7 +415,7 @@ export class SequenceGridSection {
             }
         });
 
-        header.append(nameInput, saveStatus, poolButton, saveButton);
+        header.append(indexPill, nameInput, sourceBadge, saveStatus, poolButton, saveButton);
         wrapper.appendChild(header);
 
         const seqNodeWithSlots = node as BaseNode & {
@@ -307,12 +430,13 @@ export class SequenceGridSection {
         };
 
         const handleDroppedSequenceItems = async (dataTransfer: DataTransfer, target?: number | 'plus') => {
-            const items = getDroppedSequenceItems(dataTransfer);
+            const items = await resolveDroppedSequenceItems(dataTransfer);
             if (items.length === 0) return;
             try {
                 if (typeof seqNodeWithSlots.loadDroppedItemsIntoSlots === 'function') {
                     await seqNodeWithSlots.loadDroppedItemsIntoSlots(items, target);
                 }
+                const { assignedModifier } = getPoolContext();
                 if (assignedModifier?.properties && items[0]) {
                     assignedModifier.properties.output_value = items[0].filepath;
                     if (items[0].id != null) assignedModifier.properties.output_item_id = items[0].id;
@@ -419,6 +543,11 @@ export class SequenceGridSection {
                     grid.querySelectorAll<HTMLElement>(`.td-step-value-control[data-step-index="${index}"]`)
                         .forEach(control => control.classList.toggle('is-step-off', !nextValue));
                     node.updateProperty('sequence', [...rawSequence]);
+                    (node as any).ensureCurrentSequenceInPool?.({
+                        forkIfFileBacked: true,
+                        forkIfSharedByOtherSlot: true,
+                    });
+                    syncNameDisplay();
                     windowContext.refreshAudioPreview();
                 }
             });
@@ -701,6 +830,11 @@ export class SequenceGridSection {
                         fullStepParameters[targetIndex] = { ...targetParameters };
                     });
                     node.updateProperty('step_parameters', fullStepParameters.map(s => ({ ...s })));
+                    (node as any).ensureCurrentSequenceInPool?.({
+                        forkIfFileBacked: true,
+                        forkIfSharedByOtherSlot: true,
+                    });
+                    syncNameDisplay();
                     windowContext.refreshAudioPreview();
                     windowContext?.applyOverlays?.();
                 };

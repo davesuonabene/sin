@@ -10,7 +10,9 @@ export type SectionType =
     | 'fx_chain'
     | 'pool_editor'
     | 'random_panel'
-    | 'export_panel';
+    | 'export_panel'
+    | 'preamp_denoise_panel'
+    | 'voice_isolator_panel';
 
 export interface PanelSectionConfig {
     type: SectionType;

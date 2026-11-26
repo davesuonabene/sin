@@ -24,6 +24,11 @@ export class RealtimeAudioClient {
         this._planListeners = new Set();
         this._peaksListeners = new Set();
         this._statusListeners = new Set();
+        this._processorStatusListeners = new Set();
+        this._hotSwapListeners = new Set();
+        this._modelDownloadListeners = new Set();
+        this._tileUpdateListeners = new Set();
+        this._engineSettingsListeners = new Set();
         this._reconnectTimer = null;
         this._closedExplicitly = false;
         this._selfPlaying = false;
@@ -154,6 +159,40 @@ export class RealtimeAudioClient {
                         try { cb(msg); } catch { /* ignore */ }
                     }
                     return;
+                }
+
+                if (msg.type === 'processor_status') {
+                    for (const cb of this._processorStatusListeners) {
+                        try { cb(msg); } catch { /* ignore */ }
+                    }
+                    return;
+                }
+
+                if (msg.type === 'plan_hot_swapped') {
+                    for (const cb of this._hotSwapListeners) {
+                        try { cb(msg); } catch { /* ignore */ }
+                    }
+                    return;
+                }
+
+                if (msg.type === 'model_download') {
+                    for (const cb of this._modelDownloadListeners) {
+                        try { cb(msg); } catch { /* ignore */ }
+                    }
+                    return;
+                }
+
+                if (msg.type === 'tile_update') {
+                    for (const cb of this._tileUpdateListeners) {
+                        try { cb(msg); } catch { /* ignore */ }
+                    }
+                    return;
+                }
+
+                if (msg.type === 'engine_settings') {
+                    for (const cb of this._engineSettingsListeners) {
+                        try { cb(msg); } catch { /* ignore */ }
+                    }
                 }
 
                 if (msg.type === 'plan_loaded') {
@@ -432,6 +471,87 @@ export class RealtimeAudioClient {
     onMasterPeaks(cb) {
         this._peaksListeners.add(cb);
         return () => this._peaksListeners.delete(cb);
+    }
+
+    cookNode(nodeId, model = null) {
+        return this._sendRequest({
+            type: 'cook_node',
+            node_id: String(nodeId),
+            ...(model ? { model } : {}),
+        }, 30000);
+    }
+
+    cancelCook(nodeId) {
+        return this._sendFireAndForget({
+            type: 'cancel_cook',
+            node_id: String(nodeId),
+        });
+    }
+
+    cookFullTrack(nodeId, enable = true) {
+        return this._sendRequest({
+            type: 'cook_full_track',
+            node_id: String(nodeId),
+            enable: Boolean(enable),
+        }, 5000);
+    }
+
+    updateProcessorParam({ nodeId, key, value, commit = true }) {
+        if (!this.available) return false;
+        return this._sendFireAndForget({
+            type: 'update_processor_param',
+            node_id: String(nodeId),
+            key: String(key),
+            value,
+            commit: Boolean(commit),
+        });
+    }
+
+    queryPeaks({ startSec, endSec, columns = 512, signal = null }) {
+        return this._sendRequest({
+            type: 'query_peaks',
+            start_sec: Number(startSec),
+            end_sec: Number(endSec),
+            columns: Number(columns),
+        }, 5000, signal);
+    }
+
+    setEngineSettings(settings) {
+        return this._sendRequest({
+            type: 'set_engine_settings',
+            settings: settings || {},
+        }, 5000);
+    }
+
+    getEngineSettings() {
+        return this._sendRequest({
+            type: 'get_engine_settings',
+        }, 5000);
+    }
+
+    onTileUpdate(cb) {
+        this._tileUpdateListeners.add(cb);
+        return () => this._tileUpdateListeners.delete(cb);
+    }
+
+    onEngineSettings(cb) {
+        this._engineSettingsListeners.add(cb);
+        return () => this._engineSettingsListeners.delete(cb);
+    }
+
+    onProcessorStatus(cb) {
+        this._processorStatusListeners.add(cb);
+        return () => this._processorStatusListeners.delete(cb);
+    }
+
+    onPlanHotSwapped(cb) {
+        this._hotSwapListeners.add(cb);
+        return () => this._hotSwapListeners.delete(cb);
+    }
+
+    onModelDownload(cb) {
+        this._modelDownloadListeners.add(cb);
+        return () => this._modelDownloadListeners.delete(cb);
     }
 
     onStatusChange(cb) {

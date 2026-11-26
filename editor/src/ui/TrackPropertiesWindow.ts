@@ -6,6 +6,7 @@ export class TrackPropertiesWindow {
     onClose: () => void;
     private disposed: boolean = false;
     private onGlobalParamsChanged: (e: Event) => void;
+    private onEngineSettingsUpdated: (e: Event) => void;
 
     constructor(container: HTMLElement, onClose: () => void) {
         this.container = container;
@@ -16,15 +17,23 @@ export class TrackPropertiesWindow {
                 this.updateFieldsFromGlobal();
             }
         };
+        this.onEngineSettingsUpdated = (ev: Event) => {
+            if (!this.disposed) {
+                this.applyEngineSettingsToUI((ev as CustomEvent).detail);
+            }
+        };
 
         window.addEventListener('global-parameters-changed', this.onGlobalParamsChanged);
+        window.addEventListener('sin-engine-settings-updated', this.onEngineSettingsUpdated);
         this.render();
+        window.dispatchEvent(new CustomEvent('sin-request-engine-settings'));
     }
 
     dispose() {
         if (this.disposed) return;
         this.disposed = true;
         window.removeEventListener('global-parameters-changed', this.onGlobalParamsChanged);
+        window.removeEventListener('sin-engine-settings-updated', this.onEngineSettingsUpdated);
     }
 
     private getBpm(): number {
@@ -52,15 +61,25 @@ export class TrackPropertiesWindow {
         }
     }
 
-    private computeDuration(): { seconds: number; formatted: string; beats: number } {
+    private computeDuration(): { seconds: number; formatted: string; beats: number; isFree: boolean } {
         const bpm = this.getBpm();
         const bars = this.getTotalBars();
+        if (bars <= 0) {
+            return { seconds: 0, formatted: 'Free', beats: 0, isFree: true };
+        }
         const beats = bars * 4;
         const seconds = (beats * 60) / Math.max(20, bpm);
         const mins = Math.floor(seconds / 60);
         const remSecs = (seconds % 60).toFixed(1);
         const formatted = `${String(mins).padStart(2, '0')}:${remSecs.padStart(4, '0')}`;
-        return { seconds, formatted, beats };
+        return { seconds, formatted, beats, isFree: false };
+    }
+
+    private formatDurationLabel(duration: { seconds: number; formatted: string; beats: number; isFree: boolean }): string {
+        if (duration.isFree) {
+            return 'Free (-1) · Plays longest finite source to end';
+        }
+        return `${duration.seconds.toFixed(2)}s (${duration.formatted}) · ${duration.beats} beats @ 4/4`;
     }
 
     private getGraphStats(): { nodesCount: number; sampleCount: number; seqCount: number; trackCount: number } {
@@ -127,7 +146,7 @@ export class TrackPropertiesWindow {
                                 <label class="td-field-label">Length (Bars)</label>
                                 <div class="td-number-stepper">
                                     <button type="button" class="td-stepper-btn" id="bars-dec-btn" title="Decrease Bars">-</button>
-                                    <input type="number" id="track-bars-input" class="td-track-input" min="0.25" max="128" step="0.25" value="${totalBars}">
+                                    <input type="number" id="track-bars-input" class="td-track-input" min="-1" max="128" step="0.25" value="${totalBars}">
                                     <button type="button" class="td-stepper-btn" id="bars-inc-btn" title="Increase Bars">+</button>
                                 </div>
                             </div>
@@ -137,6 +156,7 @@ export class TrackPropertiesWindow {
                         <div class="td-quick-presets-row">
                             <span class="td-presets-label">Bar Presets:</span>
                             <div class="td-preset-chips">
+                                <button type="button" class="td-preset-chip ${totalBars <= 0 ? 'active' : ''}" data-bars="-1" title="Unconstrained length: plays longest source to end">Free (-1)</button>
                                 ${[1, 2, 4, 8, 16, 32].map(b => `
                                     <button type="button" class="td-preset-chip ${totalBars === b ? 'active' : ''}" data-bars="${b}">${b}</button>
                                 `).join('')}
@@ -146,7 +166,7 @@ export class TrackPropertiesWindow {
                         <!-- Computed Duration Badge -->
                         <div class="td-duration-badge" id="track-duration-display">
                             <span class="td-duration-icon">⏱</span>
-                            <span class="td-duration-text">${duration.seconds.toFixed(2)}s (${duration.formatted}) · ${duration.beats} beats @ 4/4</span>
+                            <span class="td-duration-text">${this.formatDurationLabel(duration)}</span>
                         </div>
                     </div>
 
@@ -190,6 +210,29 @@ export class TrackPropertiesWindow {
                                 <span class="td-stat-val" id="stat-tracks">${stats.trackCount}</span>
                                 <span class="td-stat-label">Tracks</span>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Long-Track Engine & Tile Cache Section -->
+                    <div class="td-section">
+                        <div class="td-section-title">LONG-TRACK ENGINE & CACHE</div>
+                        <div class="td-field-row" style="align-items: center; justify-content: space-between;">
+                            <label class="td-field-label" for="engine-wait-fx-toggle" title="Pause briefly on Play/Seek until the playhead RX tile is cooked instead of starting raw">Wait for FX (Preroll)</label>
+                            <input type="checkbox" id="engine-wait-fx-toggle" />
+                        </div>
+                        <div class="td-track-fields-grid" style="margin-top: 6px;">
+                            <div class="td-field-row">
+                                <label class="td-field-label" for="engine-ram-budget-input">Tile RAM (MB)</label>
+                                <input type="number" id="engine-ram-budget-input" class="td-track-input" min="32" max="4096" step="32" value="256">
+                            </div>
+                            <div class="td-field-row">
+                                <label class="td-field-label" for="engine-disk-budget-input">Disk Cache (GB)</label>
+                                <input type="number" id="engine-disk-budget-input" class="td-track-input" min="0.5" max="64" step="0.5" value="4">
+                            </div>
+                        </div>
+                        <div class="td-duration-badge" id="engine-cache-stats-row" style="margin-top: 6px; justify-content: space-between;">
+                            <span id="engine-cache-stats-text" class="td-duration-text">RAM: 0 / 256 MB · Disk: 0 MB / 4.0 GB</span>
+                            <button type="button" class="td-preset-chip" id="engine-clear-cache-btn" title="Clear cached RAM & disk processor tiles">Clear</button>
                         </div>
                     </div>
 
@@ -251,30 +294,34 @@ export class TrackPropertiesWindow {
                 isInteger: false,
                 getValue: () => this.getTotalBars(),
                 setValue: (val) => {
-                    const next = Math.max(0.25, Math.min(128, roundStepValue(val)));
+                    const next = val <= 0 ? -1 : Math.max(0.25, Math.min(128, roundStepValue(val)));
                     this.setGlobal({ total_bars: next });
                 },
             });
             barsInput.addEventListener('change', () => {
                 const val = parseFloat(barsInput.value);
-                if (!isNaN(val)) this.setGlobal({ total_bars: val });
+                if (!isNaN(val)) this.setGlobal({ total_bars: val <= 0 ? -1 : val });
             });
             barsInput.addEventListener('wheel', (e) => {
                 e.preventDefault();
                 if (e.altKey || barsInput.disabled) return;
                 const dir = e.deltaY < 0 ? 1 : -1;
                 const step = getParameterWheelStep(false);
-                const next = Math.max(0.25, Math.min(128, roundStepValue(this.getTotalBars() + dir * step, step)));
+                const cur = this.getTotalBars();
+                const rawNext = cur <= 0 ? (dir > 0 ? 1 : -1) : roundStepValue(cur + dir * step, step);
+                const next = rawNext <= 0 ? -1 : Math.max(0.25, Math.min(128, rawNext));
                 this.setGlobal({ total_bars: next });
             });
         }
 
         this.container.querySelector('#bars-dec-btn')?.addEventListener('click', () => {
-            const next = Math.max(0.25, this.getTotalBars() - 1);
+            const cur = this.getTotalBars();
+            const next = cur <= 0.25 ? -1 : Math.max(0.25, cur - 1);
             this.setGlobal({ total_bars: next });
         });
         this.container.querySelector('#bars-inc-btn')?.addEventListener('click', () => {
-            const next = Math.min(128, this.getTotalBars() + 1);
+            const cur = this.getTotalBars();
+            const next = cur <= 0 ? 1 : Math.min(128, cur + 1);
             this.setGlobal({ total_bars: next });
         });
 
@@ -317,6 +364,41 @@ export class TrackPropertiesWindow {
             });
         });
 
+        // Engine & tile cache controls
+        const waitFxToggle = this.container.querySelector('#engine-wait-fx-toggle') as HTMLInputElement | null;
+        if (waitFxToggle) {
+            waitFxToggle.addEventListener('change', () => {
+                window.dispatchEvent(new CustomEvent('sin-set-engine-settings', {
+                    detail: { wait_for_fx: waitFxToggle.checked },
+                }));
+            });
+        }
+        const ramInput = this.container.querySelector('#engine-ram-budget-input') as HTMLInputElement | null;
+        if (ramInput) {
+            ramInput.addEventListener('change', () => {
+                const mb = Math.max(32, Math.min(4096, Math.round(parseFloat(ramInput.value) || 256)));
+                ramInput.value = String(mb);
+                window.dispatchEvent(new CustomEvent('sin-set-engine-settings', {
+                    detail: { tile_ram_mb: mb },
+                }));
+            });
+        }
+        const diskInput = this.container.querySelector('#engine-disk-budget-input') as HTMLInputElement | null;
+        if (diskInput) {
+            diskInput.addEventListener('change', () => {
+                const gb = Math.max(0.5, Math.min(64, parseFloat(diskInput.value) || 4.0));
+                diskInput.value = String(gb);
+                window.dispatchEvent(new CustomEvent('sin-set-engine-settings', {
+                    detail: { dsp_cache_max_gb: gb },
+                }));
+            });
+        }
+        this.container.querySelector('#engine-clear-cache-btn')?.addEventListener('click', () => {
+            window.dispatchEvent(new CustomEvent('sin-set-engine-settings', {
+                detail: { clear_tile_cache: true },
+            }));
+        });
+
         // Quick actions
         this.container.querySelector('#track-refresh-pools-btn')?.addEventListener('click', () => {
             const btn = document.querySelector('#preview-recalculate-btn') as HTMLButtonElement | null;
@@ -350,12 +432,13 @@ export class TrackPropertiesWindow {
 
         const durationDisplay = this.container.querySelector('#track-duration-display .td-duration-text');
         if (durationDisplay) {
-            durationDisplay.textContent = `${duration.seconds.toFixed(2)}s (${duration.formatted}) · ${duration.beats} beats @ 4/4`;
+            durationDisplay.textContent = this.formatDurationLabel(duration);
         }
 
         this.container.querySelectorAll<HTMLButtonElement>('.td-preset-chip').forEach(chip => {
-            const b = parseFloat(chip.dataset.bars || '4');
-            chip.classList.toggle('active', totalBars === b);
+            if (!chip.dataset.bars) return;
+            const b = parseFloat(chip.dataset.bars);
+            chip.classList.toggle('active', b <= 0 ? totalBars <= 0 : totalBars === b);
         });
 
         this.container.querySelectorAll<HTMLButtonElement>('.td-key-chip').forEach(chip => {
@@ -377,5 +460,28 @@ export class TrackPropertiesWindow {
         if (statSeqs) statSeqs.textContent = String(stats.seqCount);
         const statTracks = this.container.querySelector('#stat-tracks');
         if (statTracks) statTracks.textContent = String(stats.trackCount);
+    }
+
+    private applyEngineSettingsToUI(settings: any) {
+        if (!settings || typeof settings !== 'object') return;
+        const waitFxToggle = this.container.querySelector('#engine-wait-fx-toggle') as HTMLInputElement | null;
+        if (waitFxToggle && typeof settings.wait_for_fx === 'boolean') {
+            waitFxToggle.checked = settings.wait_for_fx;
+        }
+        const cs = settings.cache_stats;
+        if (cs && typeof cs === 'object') {
+            const ramInput = this.container.querySelector('#engine-ram-budget-input') as HTMLInputElement | null;
+            if (ramInput && document.activeElement !== ramInput && cs.ram_budget_mb != null) {
+                ramInput.value = String(Math.round(Number(cs.ram_budget_mb)));
+            }
+            const diskInput = this.container.querySelector('#engine-disk-budget-input') as HTMLInputElement | null;
+            if (diskInput && document.activeElement !== diskInput && cs.disk_budget_gb != null) {
+                diskInput.value = String(Number(cs.disk_budget_gb));
+            }
+            const statsText = this.container.querySelector('#engine-cache-stats-text');
+            if (statsText) {
+                statsText.textContent = `RAM: ${Number(cs.ram_used_mb || 0).toFixed(1)} / ${Math.round(Number(cs.ram_budget_mb || 256))} MB · Disk: ${Number(cs.disk_used_mb || 0).toFixed(1)} MB / ${Number(cs.disk_budget_gb || 4).toFixed(1)} GB`;
+            }
+        }
     }
 }

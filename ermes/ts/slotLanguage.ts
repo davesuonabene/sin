@@ -27,6 +27,9 @@ export interface NodeSlot {
     sequence_name?: string;
     filepath?: string;
     library_item_id?: number | string | null;
+    is_external?: boolean;
+    is_inline?: boolean;
+    source?: 'gaia' | 'external' | 'inline';
     original_bpm?: number | null;
     key?: string | null;
     duration_seconds?: number | null;
@@ -252,6 +255,83 @@ export function isDefaultSlotToken(token: unknown): boolean {
     return t === '*' || t === 'default' || t === 'active';
 }
 
+export function isPoolIndexToken(expr: unknown): boolean {
+    const raw = String(expr ?? '').trim();
+    return /^-?\d+$/.test(raw);
+}
+
+export function isExternalPoolItem(item: any): boolean {
+    if (!item || typeof item !== 'object') return false;
+    return Boolean(
+        item.is_external
+        || item.source === 'external'
+        || String(item.id ?? '').startsWith('ext:')
+    );
+}
+
+export function isInlinePoolItem(item: any): boolean {
+    if (!item || typeof item !== 'object') return false;
+    const fp = String(item.absolute_path || item.filepath || '').trim();
+    return Boolean(
+        item.is_inline
+        || item.source === 'inline'
+        || String(item.id ?? '').startsWith('inline:')
+        || (Array.isArray(item.sequence) && !fp)
+    );
+}
+
+export function getPoolItemIdentityKey(item: any): string {
+    if (!item || typeof item !== 'object') return '';
+    if (isInlinePoolItem(item)) {
+        const inlineId = String(item.id ?? '').trim();
+        if (inlineId) return `inline:${inlineId.toLowerCase()}`;
+        const inlineName = String(item.name || item.sequence_name || '').trim().toLowerCase();
+        return inlineName ? `inline-name:${inlineName}` : '';
+    }
+    const fp = String(item.absolute_path || item.filepath || '').trim();
+    if (fp) {
+        return fp.replace(/\\/g, '/').toLowerCase();
+    }
+    const idStr = item.id != null ? String(item.id).trim() : '';
+    return idStr ? `id:${idStr.toLowerCase()}` : '';
+}
+
+export function getPoolItemCallName(item: any, isSequence: boolean = false): string {
+    const rawName = String(item?.name || item?.sequence_name || '').trim();
+    const fp = String(item?.filepath || item?.absolute_path || '').trim();
+    const fpBase = fp ? (fp.split(/[\\/]/).pop() || '') : '';
+    let candidate = rawName || fpBase || (isSequence ? 'Sequence' : 'Sample');
+    if (isSequence) {
+        candidate = candidate.replace(/\.(?:seq|mid|midi)$/i, '').trim() || candidate;
+    }
+    return candidate;
+}
+
+export function deduplicatePoolItemName(
+    baseName: string,
+    existingItems: any[],
+    excludeKey?: string
+): string {
+    const clean = String(baseName || '').trim() || 'Asset';
+    const used = new Set<string>();
+    for (const item of existingItems || []) {
+        if (!item || typeof item !== 'object') continue;
+        if (excludeKey && getPoolItemIdentityKey(item) === excludeKey) continue;
+        const existingName = String(item.name || '').trim().toLowerCase();
+        if (existingName) used.add(existingName);
+    }
+    if (!used.has(clean.toLowerCase())) return clean;
+
+    const extMatch = clean.match(/^(.*?)(\.[a-z0-9]{2,5})$/i);
+    const stem = extMatch ? extMatch[1] : clean;
+    const ext = extMatch ? extMatch[2] : '';
+    for (let n = 2; n < 1000; n++) {
+        const next = `${stem} (${n})${ext}`;
+        if (!used.has(next.toLowerCase())) return next;
+    }
+    return `${stem} (${Date.now()})${ext}`;
+}
+
 /**
  * Parses a range operator token such as "-12..12", "0.1..0.9", or "rand(-5, 5)".
  * Returns `{ min, max }` when matched, or `null` otherwise.
@@ -419,6 +499,14 @@ export function isFieldOperatorExpression(expr: unknown, poolItems?: any[]): boo
     const raw = String(expr ?? '').trim();
     if (!raw) return false;
 
+    const unwrapped = (
+        (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2 && !raw.slice(1, -1).includes('"'))
+        || (raw.startsWith("'") && raw.endsWith("'") && raw.length >= 2 && !raw.slice(1, -1).includes("'"))
+    ) ? raw.slice(1, -1).trim() : null;
+    if (unwrapped !== null) {
+        return isRandomToken(unwrapped) || isRangeOperatorToken(unwrapped) !== null;
+    }
+
     if (Array.isArray(poolItems) && poolItems.length > 0 && !/[,[\]<>]/.test(raw) && !isRandomToken(raw) && !isRangeOperatorToken(raw)) {
         const lower = raw.toLowerCase();
         for (const item of poolItems) {
@@ -442,6 +530,18 @@ export function isFieldOperatorExpression(expr: unknown, poolItems?: any[]): boo
     if (tokens.length > 1) return true;
     const single = tokens[0];
     return isRandomToken(single) || isRangeOperatorToken(single) !== null;
+}
+
+/**
+ * Returns `true` when `expr` is a calculated pool lookup (either a Field Operator like `rand`, `[0 1]`,
+ * `<a b>`, or an integer pool index like `0`, `1` that depends on the current run's `global_seed` order).
+ * Direct single-item string name calls (e.g. `Kick_01.wav`, `Breakbeat (edit)`) return `false`.
+ */
+export function isCalculatedPoolQuery(expr: unknown, poolItems?: any[]): boolean {
+    const raw = String(expr ?? '').trim();
+    if (!raw) return false;
+    if (isPoolIndexToken(raw)) return true;
+    return isFieldOperatorExpression(raw, poolItems);
 }
 
 /**
@@ -575,18 +675,20 @@ export function computeLeafPrngSeed(leaf: ResolvedFieldLeaf, ctx: FieldEvalConte
  * - `'event'` (default, for SampleNode): `<item1, item2>` (round-robins per step trigger)
  * - `'cycle'` (for SequenceNode): `[item1][item2]` (subdivides Wrapper Cycle across child cycles)
  */
-export function formatPoolListExpression(items: any[], mode: 'plain' | 'event' | 'cycle' | 'wrapper' | 'global' = 'plain'): string {
+export function formatPoolListExpression(
+    items: any[],
+    mode: 'plain' | 'event' | 'cycle' | 'wrapper' | 'global' = 'plain',
+    isSequence: boolean = false
+): string {
     if (!Array.isArray(items) || items.length === 0) return '';
-    const formatted = items
-        .map(item => {
-            const fp = String(item?.filepath || item?.absolute_path || '').trim();
-            const base = (fp ? fp.split(/[\\/]/).pop() : '') || String(item?.name || '').trim();
-            if (!base) return '';
-            return /[\s,[\]<>]/.test(base) ? `"${base.replace(/"/g, '')}"` : base;
-        })
+    const rawNames = items
+        .map(item => getPoolItemCallName(item, isSequence))
         .filter(Boolean);
-    if (formatted.length === 0) return '';
-    if (formatted.length === 1) return formatted[0];
+    if (rawNames.length === 0) return '';
+    if (rawNames.length === 1) return rawNames[0];
+    const formatted = rawNames.map(base =>
+        /[\s,[\]<>]/.test(base) ? `"${base.replace(/"/g, '')}"` : base
+    );
     if (mode === 'cycle') {
         return formatted.map(tok => `[${tok}]`).join('');
     }

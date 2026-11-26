@@ -6,13 +6,20 @@ export class MasterWaveform {
     private readonly scrub: WaveformScrubCanvas;
     private readonly timeDisplay: HTMLElement | null;
     private loadToken = 0;
+    private lastTimeText = '';
 
-    constructor(container: HTMLElement, onSeek: (progress: number) => void) {
+    constructor(
+        container: HTMLElement,
+        onSeek: (progress: number) => void,
+        onViewportChange?: (startSec: number, endSec: number, columns: number) => void
+    ) {
         this.timeDisplay = typeof document !== 'undefined' ? document.getElementById('master-time-display') : null;
         this.scrub = new WaveformScrubCanvas(container, {
             emptyMessage: 'Ready to render',
             ariaLabel: 'Audio timeline',
-            onSeek
+            enableZoom: true,
+            onSeek,
+            onViewportChange,
         });
         this.syncTimeDisplay();
     }
@@ -61,10 +68,49 @@ export class MasterWaveform {
         this.syncTimeDisplay();
     }
 
-    setPeaks(interleavedMinMax: number[], durationSeconds: number): void {
+    setPeaks(
+        interleavedMinMax: number[],
+        durationSeconds: number,
+        options?: { tiers?: number[] | Uint8Array | null; viewStartSec?: number; viewEndSec?: number; preserveTiers?: boolean }
+    ): void {
         this.loadToken++;
-        this.scrub.setInterleavedPeaks(interleavedMinMax, durationSeconds);
+        this.scrub.setInterleavedPeaks(interleavedMinMax, durationSeconds, options);
         this.syncTimeDisplay();
+    }
+
+    setProgressOnly(durationSeconds: number, message = ''): void {
+        this.loadToken++;
+        this.scrub.setProgressOnly(durationSeconds, message);
+        this.syncTimeDisplay();
+    }
+
+    applyTileDelta(delta: {
+        startSec: number;
+        endSec: number;
+        durationSec?: number;
+        tier?: number;
+        stale?: boolean;
+        peaks?: number[] | null;
+        clearAll?: boolean;
+    }): void {
+        this.scrub.applyTileDelta(delta);
+        this.syncTimeDisplay();
+    }
+
+    clearTileTiers(): void {
+        this.scrub.clearTileTiers();
+    }
+
+    markAllTiersStale(): void {
+        this.scrub.markAllTiersStale();
+    }
+
+    getViewport(): { startSec: number; endSec: number; zoom: number; columns: number } {
+        return this.scrub.getViewport();
+    }
+
+    resetZoom(): void {
+        this.scrub.resetZoom();
     }
 
     clear(message = 'Ready to render') {
@@ -78,6 +124,10 @@ export class MasterWaveform {
         if (!target) return;
         const dur = this.scrub.duration;
         const cur = this.scrub.currentTime;
-        target.textContent = `${formatTransportTime(cur)} / ${formatTransportTime(dur)}`;
+        const nextText = `${formatTransportTime(cur)} / ${formatTransportTime(dur)}`;
+        if (nextText !== this.lastTimeText) {
+            this.lastTimeText = nextText;
+            target.textContent = nextText;
+        }
     }
 }

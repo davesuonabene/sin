@@ -66,6 +66,9 @@ DEFAULT_NODE_NAMES = {
     "sequence": "Sequence",
     "arrangement": "Arrangement",
     "track": "Track",
+    "null": "Null",
+    "preamp_denoise": "Preamp De-Noise",
+    "voice_isolator": "Voice Isolator",
     "asset_filter": "Asset Pool",
     "modulator": "Modulator",
     "random": "Random",
@@ -77,6 +80,9 @@ LITE_GRAPH_TYPE_MAP = {
     "sequence": "Audio/Sequence",
     "arrangement": "Audio/Arrangement",
     "track": "Audio/Track",
+    "null": "Audio/Null",
+    "preamp_denoise": "Audio/PreampDenoise",
+    "voice_isolator": "Audio/VoiceIsolator",
     "asset_filter": "Audio/AssetFilter",
     "modulator": "Audio/Modulator",
     "random": "Audio/Random",
@@ -222,6 +228,7 @@ def validate_graph(doc: Dict[str, Any]) -> Tuple[bool, List[str]]:
         errors.append(f"Output node '{output_id}' not found in 'nodes'.")
 
     connections = doc.get("connections", [])
+    incoming_counts: Dict[str, int] = {}
     for conn in connections:
         c_from = conn.get("from")
         c_to = conn.get("to")
@@ -229,6 +236,12 @@ def validate_graph(doc: Dict[str, Any]) -> Tuple[bool, List[str]]:
             errors.append(f"Connection from non-existent node: '{c_from}'.")
         if not c_to or c_to not in node_ids:
             errors.append(f"Connection to non-existent node: '{c_to}'.")
+        if c_to and c_to in node_ids:
+            incoming_counts[c_to] = incoming_counts.get(c_to, 0) + 1
+
+    for nid, cnt in incoming_counts.items():
+        if cnt > 1 and node_by_id.get(nid, {}).get("type") == "null":
+            errors.append(f"Null node '{nid}' accepts at most 1 incoming audio connection.")
 
     # Cycle detection on audio connections
     adj: Dict[str, List[str]] = {nid: [] for nid in node_ids}
@@ -261,7 +274,36 @@ def validate_graph(doc: Dict[str, Any]) -> Tuple[bool, List[str]]:
 
 
 # Node types whose properties are compiled into AudioNodeModel fields.
-AUDIO_NODE_TYPES = frozenset({"sample", "sequence", "arrangement", "track"})
+AUDIO_NODE_TYPES = frozenset({"sample", "sequence", "arrangement", "track", "null", "preamp_denoise", "voice_isolator"})
+PROCESSOR_NODE_TYPES = frozenset({"preamp_denoise", "voice_isolator"})
+
+_PROCESSOR_PARAM_KEYS_BY_TYPE: Dict[str, frozenset[str]] = {
+    "preamp_denoise": frozenset({
+        "profile_id", "input_topology", "stft_mode", "reduction_db", "sensitivity",
+        "profile_weight", "stereo_coherence", "hp_hz", "spur_notch",
+        "psychoacoustic_preserve", "natural_floor", "output_mode",
+        "noise_start", "noise_end", "cook_mode", "mix", "bypass",
+    }),
+    "voice_isolator": frozenset({
+        "voice_db", "reverb_db", "ambience_db", "reverb_sensitivity",
+        "mask_sharpness", "backend", "solo_stem", "mute_voice", "mute_reverb",
+        "mute_ambience", "cook_mode", "mix", "bypass",
+    }),
+}
+
+
+def _extract_processor_params(ntype: str, props: Dict[str, Any]) -> Dict[str, Any]:
+    if ntype not in PROCESSOR_NODE_TYPES:
+        return {}
+    out: Dict[str, Any] = {}
+    nested = props.get("processor_params")
+    if isinstance(nested, dict):
+        out.update(nested)
+    allowed = _PROCESSOR_PARAM_KEYS_BY_TYPE.get(ntype, frozenset())
+    for k in allowed:
+        if k in props and props[k] is not None:
+            out[k] = props[k]
+    return out
 
 # Properties the compiler reads that are not AudioNodeModel fields themselves.
 COMPILER_CONSUMED_PROPERTIES = frozenset({
@@ -272,7 +314,7 @@ COMPILER_CONSUMED_PROPERTIES = frozenset({
     "active_slot",
     "library_item_id",
     "asset_modifier_id",
-})
+}) | _PROCESSOR_PARAM_KEYS_BY_TYPE["preamp_denoise"] | _PROCESSOR_PARAM_KEYS_BY_TYPE["voice_isolator"]
 
 
 def _normalize_gain_into_chain(props: Dict[str, Any], remove_top_gain: bool = False) -> List[Dict[str, Any]]:
@@ -616,8 +658,9 @@ def graph_to_workspace(doc: Dict[str, Any]) -> Dict[str, Any]:
 
         incoming_count = incoming_counts.get(nid, 0)
         inputs: List[Dict[str, Any]] = []
-        if ntype in ("track", "sequence", "arrangement"):
-            for slot in range(max(1, incoming_count + 1)):
+        if ntype in ("track", "sequence", "arrangement", "null", "preamp_denoise", "voice_isolator"):
+            slot_count = 1 if ntype in ("null", "preamp_denoise", "voice_isolator") else max(1, incoming_count + 1)
+            for slot in range(slot_count):
                 link_id = None
                 for c_idx, conn in enumerate(connections):
                     if conn.get("to") == nid and target_slots.get(c_idx) == slot:
@@ -627,7 +670,7 @@ def graph_to_workspace(doc: Dict[str, Any]) -> Dict[str, Any]:
 
         links = outgoing_links.get(num_id)
         outputs = [{"name": "Audio", "type": "audio", "links": links, "slot_index": 0}] if ntype in (
-            "track", "sample", "sequence", "arrangement"
+            "track", "sample", "sequence", "arrangement", "null", "preamp_denoise", "voice_isolator"
         ) else []
 
         props = copy.deepcopy(node.get("properties", {}))
@@ -829,9 +872,11 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
         elif raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
             if ntype == "sample":
                 is_loop = props.get("sample_type", "loop") == "loop"
-                total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track")) else None
+                total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track", "null")) else None
             elif ntype == "track":
                 total_bars = parent_total_bars if parent_total_bars is not None else global_bars
+            elif ntype == "null":
+                total_bars = parent_total_bars
             else:
                 fallback_bars = global_bars if global_bars is not None else 4.0
                 total_bars = (
@@ -844,6 +889,8 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
 
         # Children recursion
         child_ids = incoming_audio.get(nid, [])
+        if ntype == "null":
+            child_ids = child_ids[:1]
         children: List[AudioNodeModel] = []
         for cid in child_ids:
             if cid in nodes_by_id:
@@ -910,6 +957,7 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             key_match_mode=props.get("key_match_mode", "off"),
             key_match_algorithm=props.get("key_match_algorithm", "nearest"),
             chain=fx_chain,
+            processor_params=_extract_processor_params(ntype, props),
             children=children,
         )
 
@@ -1030,9 +1078,11 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
         elif raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
             if ntype == "sample":
                 is_loop = props.get("sample_type", "loop") == "loop"
-                total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track")) else None
+                total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track", "null")) else None
             elif ntype == "track":
                 total_bars = parent_total_bars if parent_total_bars is not None else global_bars
+            elif ntype == "null":
+                total_bars = parent_total_bars
             else:
                 fallback_bars = global_bars if global_bars is not None else 4.0
                 total_bars = (
@@ -1044,6 +1094,8 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             total_bars = float(raw_total_bars)
 
         child_ids = incoming_audio.get(num_id, [])
+        if ntype == "null":
+            child_ids = child_ids[:1]
         children: List[AudioNodeModel] = []
         for cid in child_ids:
             if cid in nodes_by_num_id:
@@ -1109,6 +1161,7 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             key_match_mode=props.get("key_match_mode", "off"),
             key_match_algorithm=props.get("key_match_algorithm", "nearest"),
             chain=fx_chain,
+            processor_params=_extract_processor_params(ntype, props),
             children=children,
         )
 

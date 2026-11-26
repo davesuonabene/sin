@@ -15,14 +15,19 @@ from typing import List, Optional, Literal, Dict, Any, Union
 import soundfile as sf
 import numpy as np
 
+from core.env_config import get_env_config, load_sin_env
 from core.system import System
 from core.audio_object import ItemPoolObject
 from core.realtime_host import RealtimeAudioHost
 from core.runtime_trace import collect_runtime_trace, trace_runtime
+from ermes.py.slot_language import is_external_pool_item as _is_external_pool_item, is_inline_pool_item as _is_inline_pool_item
+
+load_sin_env()
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = PROJECT_ROOT / "static"
 SAVES_DIR = PROJECT_ROOT / "saves"
+EXTERNAL_SAMPLES_DIR = PROJECT_ROOT / ".runtime" / "external_samples"
 # The editor has one continuously saved working stage.  It deliberately lives
 # alongside named workspace presets, but is hidden from the preset list.
 STAGE_SAVE_PATH = SAVES_DIR / ".current-stage.json"
@@ -300,7 +305,11 @@ def render_graph(payload: AudioNodeModel):
     try:
         with collect_runtime_trace() as runtime_entries:
             trace_runtime(f"Render request accepted: {payload.node_name} ({payload.node_type})", "common")
-            sys = System(bpm=payload.bpm)
+            sys = System(
+                bpm=payload.bpm,
+                render_mode="offline",
+                allow_bypassed_export=bool(getattr(payload, "allow_bypassed_export", False)),
+            )
             renderer = get_renderer_for_node(payload.node_type)
             trace_runtime(f"Renderer selected: {renderer.__class__.__name__}")
 
@@ -337,6 +346,18 @@ def render_graph(payload: AudioNodeModel):
                 "runtime_log": runtime_entries,
             }
     except Exception as e:
+        from core.processors.voice_isolator import ModelNotInstalledError
+
+        if isinstance(e, ModelNotInstalledError):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "model_missing",
+                    "model_id": e.model_id,
+                    "message": str(e),
+                    "model_status": e.model_status,
+                },
+            )
         logger.error(f"[API /render Error] {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1047,7 +1068,11 @@ def _resolve_library_references(references: Optional[List[Dict[str, Any]]]) -> D
         }
     numeric_ids: list[int] = []
     exact_paths: list[str] = []
+    gaia_requested: list[dict[str, Any]] = []
     for ref in requested:
+        if _is_external_pool_item(ref) or _is_inline_pool_item(ref):
+            continue
+        gaia_requested.append(ref)
         raw_id = ref.get("id")
         try:
             if raw_id is not None and str(raw_id).strip().isdigit():
@@ -1059,9 +1084,12 @@ def _resolve_library_references(references: Optional[List[Dict[str, Any]]]) -> D
         if raw_path:
             exact_paths.extend([str(raw_path), os.path.abspath(str(raw_path))])
 
+    if not gaia_requested:
+        return {"files": [], "missing": [], "diagnostics": diagnostics(0, 0)}
+
     db_path = _gaia_db_path()
     if not db_path:
-        return {"files": [], "missing": requested, "diagnostics": diagnostics(0, 0)}
+        return {"files": [], "missing": gaia_requested, "diagnostics": diagnostics(0, 0)}
 
     clauses: list[str] = []
     params: list[Any] = []
@@ -1119,7 +1147,7 @@ def _resolve_library_references(references: Optional[List[Dict[str, Any]]]) -> D
     ordered: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     emitted: set[str] = set()
-    for ref in requested:
+    for ref in gaia_requested:
         raw_id = ref.get("id")
         raw_path = ref.get("absolute_path") or ref.get("filepath") or ref.get("path")
         record = by_id.get(str(raw_id)) if raw_id is not None else None
@@ -1148,7 +1176,13 @@ def _resolve_pool_asset_keys(selected_items: Optional[List[Dict[str, Any]]]) -> 
     a stale path, name, collection, or filter.
     """
     raw_items = selected_items or []
-    keyed_items = [item for item in raw_items if isinstance(item, dict) and item.get("id") is not None]
+    keyed_items = [
+        item for item in raw_items
+        if isinstance(item, dict)
+        and item.get("id") is not None
+        and not _is_external_pool_item(item)
+        and not _is_inline_pool_item(item)
+    ]
     by_id: dict[str, dict[str, Any]] = {}
 
     if keyed_items:
@@ -1171,6 +1205,48 @@ def _resolve_pool_asset_keys(selected_items: Optional[List[Dict[str, Any]]]) -> 
     for raw_item in raw_items:
         if not isinstance(raw_item, dict):
             missing.append("invalid reference")
+            continue
+
+        if _is_inline_pool_item(raw_item):
+            seq = raw_item.get("sequence")
+            if not isinstance(seq, list):
+                missing.append(str(raw_item.get("name") or raw_item.get("id") or "inline sequence"))
+                continue
+            resolved.append({
+                **raw_item,
+                "id": raw_item.get("id") or f"inline:{raw_item.get('name') or 'sequence'}",
+                "is_inline": True,
+                "source": "inline",
+                "absolute_path": "",
+                "filepath": "",
+                "name": raw_item.get("name") or raw_item.get("sequence_name") or "Sequence",
+                "type": "sequence",
+            })
+            continue
+
+        if _is_external_pool_item(raw_item):
+            ext_fp = raw_item.get("absolute_path") or raw_item.get("filepath") or raw_item.get("path")
+            if not ext_fp:
+                missing.append(str(raw_item.get("name") or raw_item.get("id") or "external sample"))
+                continue
+            ext_fp_str = str(ext_fp)
+            if not os.path.exists(ext_fp_str):
+                alt_ext = os.path.join("assets", ext_fp_str)
+                if os.path.exists(alt_ext):
+                    ext_fp_str = alt_ext
+                else:
+                    missing.append(ext_fp_str)
+                    continue
+            resolved.append({
+                **raw_item,
+                "id": raw_item.get("id") or f"ext:{hashlib.sha256(ext_fp_str.encode('utf-8')).hexdigest()[:16]}",
+                "is_external": True,
+                "source": "external",
+                "absolute_path": ext_fp_str,
+                "filepath": ext_fp_str,
+                "name": raw_item.get("name") or os.path.basename(ext_fp_str),
+                "type": raw_item.get("type") or "audio",
+            })
             continue
 
         item_id = raw_item.get("id")
@@ -1212,13 +1288,43 @@ def _resolve_pool_asset_keys(selected_items: Optional[List[Dict[str, Any]]]) -> 
 
 
 def _validate_resolved_pool_items(selected_items: Optional[List[Dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Validate the current GAIA snapshot already resolved by this API."""
+    """Validate the current GAIA/external/inline snapshot already resolved by this API."""
     from fastapi import HTTPException
 
     resolved: list[dict[str, Any]] = []
     missing: list[str] = []
     for index, raw_item in enumerate(selected_items or []):
-        if not isinstance(raw_item, dict) or raw_item.get("id") is None:
+        if not isinstance(raw_item, dict):
+            missing.append(f"item {index}")
+            continue
+        if _is_inline_pool_item(raw_item):
+            if not isinstance(raw_item.get("sequence"), list):
+                missing.append(f"item {index}")
+                continue
+            resolved.append({
+                **raw_item,
+                "id": raw_item.get("id") or f"inline:{raw_item.get('name') or index}",
+                "is_inline": True,
+                "source": "inline",
+                "absolute_path": "",
+                "filepath": "",
+            })
+            continue
+        if _is_external_pool_item(raw_item):
+            filepath = raw_item.get("absolute_path") or raw_item.get("filepath") or raw_item.get("path")
+            if not filepath:
+                missing.append(f"item {index}")
+                continue
+            resolved.append({
+                **raw_item,
+                "id": raw_item.get("id") or f"ext:{hashlib.sha256(str(filepath).encode('utf-8')).hexdigest()[:16]}",
+                "is_external": True,
+                "source": "external",
+                "absolute_path": str(filepath),
+                "filepath": str(filepath),
+            })
+            continue
+        if raw_item.get("id") is None:
             missing.append(f"item {index}")
             continue
         filepath = raw_item.get("absolute_path") or raw_item.get("filepath") or raw_item.get("path")
@@ -2236,6 +2342,271 @@ def get_audio_metadata(filepath: str):
         "sample_rate": int(info.samplerate),
         "frames": int(info.frames),
     }
+
+
+@api_router.get("/audio/peaks", tags=["Audio"])
+def get_audio_peaks(
+    filepath: str,
+    columns: int = 1024,
+    start_sec: float = 0.0,
+    end_sec: float = 0.0,
+):
+    """Return lightweight interleaved [min, max] waveform peaks for any audio file (including 1h+ MP3s)
+    without forcing the browser to download or decode 90+ MB into WebAudio RAM."""
+    from fastapi import HTTPException
+    from core.processors.tile_cache import GLOBAL_PEAK_PYRAMID_CACHE
+
+    actual_path = _resolve_audio_filepath(filepath)
+    cols = max(32, min(2048, int(columns or 1024)))
+    try:
+        res = GLOBAL_PEAK_PYRAMID_CACHE.scan_quick_overview(
+            actual_path,
+            start_sec=max(0.0, float(start_sec or 0.0)),
+            end_sec=max(0.0, float(end_sec or 0.0)),
+            columns=cols,
+        )
+        if res is None:
+            raise HTTPException(status_code=422, detail="Could not scan audio peaks")
+        peaks, file_dur = res
+        return {
+            "peaks": peaks,
+            "duration_seconds": float(file_dur),
+            "columns": len(peaks) // 2,
+            "start_sec": max(0.0, float(start_sec or 0.0)),
+            "end_sec": float(end_sec) if float(end_sec or 0.0) > float(start_sec or 0.0) else float(file_dur),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not extract audio peaks: {exc}") from exc
+
+
+_EXTERNAL_AUDIO_EXTS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".aif", ".aiff", ".m4a"})
+_EXTERNAL_SEQUENCE_EXTS = frozenset({".mid", ".midi", ".seq"})
+_EXTERNAL_ALLOWED_EXTS = _EXTERNAL_AUDIO_EXTS | _EXTERNAL_SEQUENCE_EXTS
+
+
+def _sanitize_external_filename(filename: str) -> str:
+    base = os.path.basename(str(filename or "").replace("\\", "/")).strip()
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", base)
+    return base or "external_sample.wav"
+
+
+def _build_external_asset_response(dest_path: Path, display_name: str, ext_id: str) -> Dict[str, Any]:
+    ext = dest_path.suffix.lower()
+    abs_str = str(dest_path.resolve())
+    if ext in _EXTERNAL_SEQUENCE_EXTS:
+        item_type = "sequence" if ext == ".seq" else "midi"
+        bpm = None
+        if ext in (".mid", ".midi"):
+            try:
+                from gaia import midi_parser
+                parsed = midi_parser.parse_midi_file(abs_str)
+                bpm = parsed.get("bpm") if isinstance(parsed, dict) else None
+            except Exception:
+                bpm = None
+        return {
+            "id": ext_id,
+            "is_external": True,
+            "source": "external",
+            "filepath": abs_str,
+            "absolute_path": abs_str,
+            "name": display_name,
+            "type": item_type,
+            "itemType": item_type,
+            "bpm": bpm,
+            "key": None,
+            "duration_seconds": None,
+        }
+
+    duration_seconds: Optional[float] = None
+    sample_rate: Optional[int] = None
+    try:
+        info = sf.info(abs_str)
+        duration_seconds = float(info.duration)
+        sample_rate = int(info.samplerate)
+    except Exception:
+        pass
+
+    from core.analyzers import BPMAnalyzer
+    bpm = BPMAnalyzer.from_filename(display_name)
+    is_short_one_shot = duration_seconds is not None and duration_seconds < 2.0 and bpm is None
+    item_type = "one_shot" if is_short_one_shot else "audio"
+
+    return {
+        "id": ext_id,
+        "is_external": True,
+        "source": "external",
+        "filepath": abs_str,
+        "absolute_path": abs_str,
+        "name": display_name,
+        "type": "audio",
+        "itemType": item_type,
+        "bpm": bpm,
+        "key": None,
+        "duration_seconds": duration_seconds,
+        "sample_rate": sample_rate,
+    }
+
+
+@api_router.post("/external/stage", tags=["Audio"])
+async def stage_external_file(filename: str, request: Request):
+    """Stage a browser-dropped OS file into `.runtime/external_samples/<hash16>/<filename>` without touching GAIA."""
+    from fastapi import HTTPException
+
+    safe_name = _sanitize_external_filename(filename)
+    ext = Path(safe_name).suffix.lower()
+    if ext not in _EXTERNAL_ALLOWED_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported external file extension '{ext or '(none)'}'. Supported: {', '.join(sorted(_EXTERNAL_ALLOWED_EXTS))}",
+        )
+
+    raw_bytes = await request.body()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Dropped file is empty.")
+
+    digest = hashlib.sha256(raw_bytes).hexdigest()[:16]
+    dest_dir = EXTERNAL_SAMPLES_DIR / digest
+    dest_path = dest_dir / safe_name
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    if not dest_path.is_file() or dest_path.stat().st_size != len(raw_bytes):
+        dest_path.write_bytes(raw_bytes)
+
+    return _build_external_asset_response(dest_path, safe_name, f"ext:{digest}")
+
+
+class ExternalInspectRequest(BaseModel):
+    filepath: str
+
+
+@api_router.post("/external/inspect", tags=["Audio"])
+def inspect_external_file(payload: ExternalInspectRequest):
+    """Inspect a local OS file path directly (for desktop shells exposing `file.path`) without copying or writing to GAIA."""
+    from fastapi import HTTPException
+
+    raw_fp = str(payload.filepath or "").strip()
+    if not raw_fp:
+        raise HTTPException(status_code=400, detail="Missing filepath")
+    target = Path(raw_fp)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"Local file not found: {raw_fp}")
+    ext = target.suffix.lower()
+    if ext not in _EXTERNAL_ALLOWED_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported external file extension '{ext or '(none)'}'.",
+        )
+    abs_norm = str(target.resolve())
+    digest = hashlib.sha256(abs_norm.lower().encode("utf-8")).hexdigest()[:16]
+    return _build_external_asset_response(target, target.name, f"ext:path:{digest}")
+
+class PreampAnalyzeRequest(BaseModel):
+    filepath: Optional[str] = None
+    model: Optional[Dict[str, Any]] = None
+    params: Dict[str, Any] = {}
+    num_points: int = 128
+
+
+@api_router.get("/dsp/runtime", tags=["DSP Processors"])
+def get_dsp_runtime_status(refresh: bool = False):
+    """Cross-OS runtime capabilities, `.env` resolved paths, and global tool discovery."""
+    from core.processors.runtime_env import detect_runtime_capabilities
+
+    cfg = get_env_config()
+    caps = detect_runtime_capabilities(cfg=cfg, refresh=refresh)
+    return {
+        "env": cfg.to_public_dict(),
+        "runtime": caps.to_dict(),
+    }
+
+
+@api_router.get("/dsp/models", tags=["DSP Processors"])
+def list_dsp_models(node_type: Optional[str] = None):
+    """List manifest models with local `.gaia/models/` + global HF/Torch cache resolution."""
+    from core.processors.model_manager import GLOBAL_MODEL_MANAGER
+
+    cfg = get_env_config()
+    return {
+        "models_dir": str(cfg.models_dir),
+        "models": GLOBAL_MODEL_MANAGER.list_models_status(node_type=node_type),
+    }
+
+
+@api_router.post("/dsp/models/{model_id}/download", tags=["DSP Processors"])
+def start_dsp_model_download(model_id: str):
+    """Explicitly trigger lazy download of a model into `.gaia/models/<model_id>/`."""
+    from fastapi import HTTPException
+    from core.processors.model_manager import GLOBAL_MODEL_MANAGER
+
+    if GLOBAL_MODEL_MANAGER.get_spec(model_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown model '{model_id}'")
+
+    def _push_dl(dl_state: Dict[str, Any]) -> None:
+        sin_realtime_host._broadcast_async_event({"type": "model_download", **dl_state})
+
+    return GLOBAL_MODEL_MANAGER.start_download_async(model_id, on_progress=_push_dl)
+
+
+@api_router.delete("/dsp/models/{model_id}/download", tags=["DSP Processors"])
+def cancel_dsp_model_download(model_id: str):
+    """Cancel an active lazy model download and clean up `.part` files."""
+    from core.processors.model_manager import GLOBAL_MODEL_MANAGER
+
+    return GLOBAL_MODEL_MANAGER.cancel_download(model_id)
+
+
+@api_router.get("/dsp/preamp-profiles", tags=["DSP Processors"])
+def list_dsp_preamp_profiles():
+    """Read-only list of built-in + GAIA custom preamp profiles from `.gaia/profiles/preamp_profiles/`."""
+    from core.processors.preamp_profiles import list_preamp_profiles, preamp_profiles_directory
+
+    return {
+        "profiles_dir": str(preamp_profiles_directory()),
+        "profiles": [p.to_public_dict() for p in list_preamp_profiles()],
+    }
+
+
+@api_router.post("/dsp/preamp-denoise/analyze", tags=["DSP Processors"])
+def analyze_preamp_denoise_preview(payload: PreampAnalyzeRequest):
+    """Compute 128-point log-frequency input/noise/output PSD curves and suggested quietest window."""
+    from fastapi import HTTPException
+    from core.processors.preamp_denoise import compute_preview_curves
+
+    audio: Optional[np.ndarray] = None
+    sr = 48000
+    if payload.filepath:
+        resolved = _resolve_audio_filepath(payload.filepath)
+        data, sr_read = sf.read(resolved, dtype="float32", always_2d=True)
+        audio = data.T
+        sr = int(sr_read)
+    elif payload.model:
+        try:
+            node_model = AudioNodeModel(**payload.model)
+            sys_obj = System(bpm=float(node_model.bpm or 120.0), sample_rate=sr, render_mode="preview")
+            obj = build_node_object(node_model)
+            audio = obj.render(sys_obj)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Could not analyze upstream audio: {exc}") from exc
+    else:
+        raise HTTPException(status_code=400, detail="Provide either 'filepath' or upstream 'model'.")
+
+    if audio is None or audio.size == 0:
+        raise HTTPException(status_code=422, detail="Upstream audio buffer is empty.")
+    # Cap preview PSD analysis to first 30s for instant Inspector responsiveness
+    max_frames = sr * 30
+    if audio.shape[-1] > max_frames:
+        audio = audio[..., :max_frames]
+    return compute_preview_curves(audio, sr, payload.params, num_points=payload.num_points)
+
+
+@api_router.post("/export/preflight", tags=["System"])
+def export_preflight(payload: AudioNodeModel):
+    """Hybrid export preflight: flags bypassed, stale manual, or model-missing processor nodes."""
+    from core.processor_nodes import inspect_export_preflight
+
+    return inspect_export_preflight(payload)
+
 
 app.include_router(api_router)
 

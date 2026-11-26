@@ -21,12 +21,14 @@ export class PropertiesWindow {
     private pendingTabRender: boolean = false;
     private modifierAssignmentHandler: (event: Event) => void;
     private nodePropertiesRefreshHandler: (event: Event) => void;
+    private selectPropertiesTabHandler: (event: Event) => void;
     private arrangementGraphHandler: () => void;
     private disposed: boolean = false;
     private isRandomMappingMode: boolean = false;
     private startRandomMappingHandler: (event: Event) => void;
+    private sectionCleanups: Array<() => void> = [];
 
-    constructor(container: HTMLElement, node: LGraphNode, onClose: () => void) {
+    constructor(container: HTMLElement, node: LGraphNode, onClose: () => void, initialTab?: string) {
         this.container = container;
         this.node = node;
         this.modifierAssignmentHandler = (event: Event) => {
@@ -34,7 +36,16 @@ export class PropertiesWindow {
         };
         this.nodePropertiesRefreshHandler = (event: Event) => {
             const detail = (event as CustomEvent).detail;
-            if (detail?.nodeId === this.node.id && !detail?.liveTelemetry) void this.renderTabContent();
+            if (detail?.nodeId === this.node.id && !detail?.liveTelemetry) {
+                this.updateTabLabels();
+                void this.renderTabContent();
+            }
+        };
+        this.selectPropertiesTabHandler = (event: Event) => {
+            const detail = (event as CustomEvent).detail;
+            if (detail?.nodeId === this.node.id && typeof detail?.tab === 'string') {
+                void this.selectTab(detail.tab);
+            }
         };
         this.arrangementGraphHandler = () => {
             if ((this.node as any).shouldRefreshTabOnGraphChange?.(this.activeTab)) {
@@ -52,6 +63,7 @@ export class PropertiesWindow {
         };
         window.addEventListener('modifier-assignment-changed', this.modifierAssignmentHandler);
         window.addEventListener('node-properties-refreshed', this.nodePropertiesRefreshHandler);
+        window.addEventListener('select-properties-tab', this.selectPropertiesTabHandler);
         window.addEventListener('graph-connections-changed', this.arrangementGraphHandler);
         window.addEventListener('arrangement-length-changed', this.arrangementGraphHandler);
         window.addEventListener('arrangement-source-changed', this.arrangementGraphHandler);
@@ -60,14 +72,85 @@ export class PropertiesWindow {
             this.dispose();
             onClose();
         };
-        this.activeTab = this.getDefaultTab();
+        const tabs = this.getTabList();
+        this.activeTab = (initialTab && tabs.includes(initialTab)) ? initialTab : this.getDefaultTab();
+        this.syncActiveTabRegistry(this.activeTab);
         (this.node as any).onParametersOpened?.();
+    }
+
+    private syncActiveTabRegistry(tabId: string | null): void {
+        if (typeof window === 'undefined' || this.node?.id == null) return;
+        if (!((window as any).__sinActiveParamTabByNode instanceof Map)) {
+            (window as any).__sinActiveParamTabByNode = new Map<number, string>();
+        }
+        const map: Map<number, string> = (window as any).__sinActiveParamTabByNode;
+        if (tabId === null) {
+            map.delete(this.node.id);
+        } else {
+            map.set(this.node.id, tabId);
+        }
+    }
+
+    private formatTabLabel(tab: string): string {
+        if (tab === 'POOL') {
+            const nodeAny = this.node as any;
+            const poolItems = typeof nodeAny.getPoolItems === 'function' ? nodeAny.getPoolItems() : [];
+            return poolItems.length > 0 ? `POOL · ${poolItems.length}` : 'POOL';
+        }
+        return tab;
+    }
+
+    private updateTabLabels(): void {
+        const tabBtns = this.container.querySelectorAll<HTMLElement>('.td-param-tab');
+        tabBtns.forEach(btn => {
+            const tab = btn.getAttribute('data-tab');
+            if (!tab) return;
+            const nextLabel = this.formatTabLabel(tab);
+            if (btn.textContent?.trim() !== nextLabel) {
+                btn.textContent = nextLabel;
+            }
+        });
+    }
+
+    async selectTab(tabId: string): Promise<void> {
+        if (this.disposed) return;
+        const tabs = this.getTabList();
+        if (!tabs.includes(tabId)) return;
+        const changed = this.activeTab !== tabId;
+        this.activeTab = tabId;
+        this.syncActiveTabRegistry(tabId);
+        const tabBtns = this.container.querySelectorAll<HTMLElement>('.td-param-tab');
+        tabBtns.forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-tab') === tabId);
+        });
+        this.updateTabLabels();
+        (this.node as any).setDirtyCanvas?.(true, true);
+        if (changed) {
+            await this.renderTabContent();
+        }
+    }
+
+    registerCleanup(fn: () => void): void {
+        if (this.disposed) {
+            try { fn(); } catch {}
+            return;
+        }
+        this.sectionCleanups.push(fn);
+    }
+
+    private runSectionCleanups(): void {
+        if (this.sectionCleanups.length === 0) return;
+        const cleanups = this.sectionCleanups.splice(0, this.sectionCleanups.length);
+        for (const fn of cleanups) {
+            try { fn(); } catch {}
+        }
     }
 
     dispose() {
         if (this.disposed) return;
         this.disposed = true;
         this.renderToken++;
+        this.runSectionCleanups();
         if (this.currentWaveformVisualizer) {
             this.currentWaveformVisualizer.destroy();
             this.currentWaveformVisualizer = null;
@@ -78,8 +161,10 @@ export class PropertiesWindow {
         }
         this.stopPoolItemPreview();
         RandomParamOverlay.closePopover();
+        this.syncActiveTabRegistry(null);
         window.removeEventListener('modifier-assignment-changed', this.modifierAssignmentHandler);
         window.removeEventListener('node-properties-refreshed', this.nodePropertiesRefreshHandler);
+        window.removeEventListener('select-properties-tab', this.selectPropertiesTabHandler);
         window.removeEventListener('graph-connections-changed', this.arrangementGraphHandler);
         window.removeEventListener('arrangement-length-changed', this.arrangementGraphHandler);
         window.removeEventListener('arrangement-source-changed', this.arrangementGraphHandler);
@@ -315,6 +400,7 @@ export class PropertiesWindow {
         if (!tabs.includes(this.activeTab)) {
             this.activeTab = tabs[0];
         }
+        this.syncActiveTabRegistry(this.activeTab);
 
         const titleText = this.node.properties.node_name || this.node.title || 'Node';
 
@@ -345,7 +431,7 @@ export class PropertiesWindow {
                 <div class="td-param-tabs" id="td-tabs-bar">
                     ${tabs.map(tab => `
                         <div class="td-param-tab ${tab === this.activeTab ? 'active' : ''}" data-tab="${tab}">
-                            ${tab}
+                            ${this.formatTabLabel(tab)}
                         </div>
                     `).join('')}
                 </div>
@@ -375,14 +461,11 @@ export class PropertiesWindow {
 
         const tabBtns = this.container.querySelectorAll('.td-param-tab');
         tabBtns.forEach(btn => {
-            btn.addEventListener('click', async (e) => {
+            btn.addEventListener('click', (e) => {
                 const clickedTab = e.currentTarget as HTMLElement;
                 const tab = clickedTab.getAttribute('data-tab');
                 if (tab && tab !== this.activeTab) {
-                    this.activeTab = tab;
-                    await this.renderTabContent();
-                    tabBtns.forEach(t => t.classList.remove('active'));
-                    clickedTab.classList.add('active');
+                    void this.selectTab(tab);
                 }
             });
         });
@@ -422,6 +505,7 @@ export class PropertiesWindow {
     private async executeRenderTabContent() {
         const token = ++this.renderToken;
 
+        this.runSectionCleanups();
         this.stopPoolItemPreview();
 
         if (this.currentWaveformVisualizer) {
@@ -483,7 +567,7 @@ export class PropertiesWindow {
         finish();
     }
 
-    private stopPoolItemPreview() {
+    public stopPoolItemPreview() {
         if (this.currentPoolPreviewAudio) {
             this.currentPoolPreviewAudio.pause();
             this.currentPoolPreviewAudio.src = '';

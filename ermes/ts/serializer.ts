@@ -5,6 +5,10 @@
 
 import {
     type NodeSlot,
+    evaluateNumericFieldOperator,
+    evaluateSelectFieldOperator,
+    isFieldOperatorExpression,
+    normalizeNumericSeed,
     resolveCycleSeeds,
     resolveSectionSlot,
     resolveStepSlots,
@@ -15,6 +19,10 @@ import {
 import {
     resolveEffectivePoolSeed,
 } from './assetResolver.ts';
+import {
+    findChainModuleParam,
+    parseChainParamFieldKey,
+} from '../../editor/src/dsp/processorRegistry.ts';
 
 export interface SerializationOptions {
     includeDynamicPools?: boolean;
@@ -155,7 +163,15 @@ export function serializeNodeSubtree(
         const start_beat = data?.start_beat || nodeObj?.properties?.start_beat || 0;
         const mix_mode = data?.mix_mode || nodeObj?.properties?.mix_mode || "sum";
 
-        const nodeType = data?.type || nodeObj?.properties?.node_type || (nodeObj?.type === "Audio/Sample" ? "sample" : nodeObj?.type === "Audio/Sequence" ? "sequence" : "track");
+        const nodeType = data?.type || (typeof nodeObj?.getNodeType === 'function' ? nodeObj.getNodeType() : undefined) || nodeObj?.properties?.node_type || (
+            nodeObj?.type === "Audio/Sample" ? "sample"
+            : nodeObj?.type === "Audio/Sequence" ? "sequence"
+            : nodeObj?.type === "Audio/Arrangement" ? "arrangement"
+            : nodeObj?.type === "Audio/Null" ? "null"
+            : nodeObj?.type === "Audio/PreampDenoise" ? "preamp_denoise"
+            : nodeObj?.type === "Audio/VoiceIsolator" ? "voice_isolator"
+            : "track"
+        );
 
         const sequence = nodeObj?.properties?.sequence ?? data?.sequence ?? (nodeType === "sequence" ? [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] : undefined);
         const rawStepParameters = nodeObj?.properties?.step_parameters ?? data?.step_parameters;
@@ -175,9 +191,11 @@ export function serializeNodeSubtree(
             total_bars = undefined;
         } else if (isGlobalOrInherited) {
             if (nodeType === 'sample') {
-                total_bars = (isSampleLoop && (parentNodeType === undefined || parentNodeType === 'track')) ? fallbackBars : undefined;
+                total_bars = (isSampleLoop && (parentNodeType === undefined || parentNodeType === 'track' || parentNodeType === 'null')) ? fallbackBars : undefined;
             } else if (nodeType === 'track') {
                 total_bars = fallbackBars;
+            } else if (nodeType === 'null') {
+                total_bars = parentTotalBars ?? parentWrapperBars;
             } else {
                 total_bars = fallbackBars ?? 4.0;
             }
@@ -195,7 +213,12 @@ export function serializeNodeSubtree(
         const section_quant_anchor = nodeObj?.properties?.section_quant_anchor ?? data?.section_quant_anchor ?? (nodeType === "arrangement" ? ["start"] : undefined);
 
         const poolProperties = assignedModifier?.properties;
-        const selected_items = poolProperties?.selected_items || data?.selected_items || nodeObj?.properties?.selected_items || [];
+        const selected_items = (Array.isArray(poolProperties?.selected_items) && poolProperties.selected_items.length > 0)
+            ? poolProperties.selected_items
+            : (Array.isArray(nodeObj?.properties?.selected_items) && nodeObj.properties.selected_items.length > 0
+                ? nodeObj.properties.selected_items
+                : (data?.selected_items || []));
+        const pool_node_id = Number(assignedModifier?.id || nodeId || 0);
         const playbackMode = includeDynamicPools
             ? (poolProperties?.playbackMode || data?.playbackMode || nodeObj?.properties?.playbackMode)
             : undefined;
@@ -237,8 +260,9 @@ export function serializeNodeSubtree(
             }
         }
 
+        const effectiveChildrenIds = nodeType === 'null' ? childrenIds.slice(0, 1) : childrenIds;
         const childModels: any[] = [];
-        for (const cid of childrenIds) {
+        for (const cid of effectiveChildrenIds) {
             const childModel = buildNodeModel(cid, total_bars, resolvedBpm, nodeType);
             if (childModel) {
                 childModels.push(childModel);
@@ -248,8 +272,44 @@ export function serializeNodeSubtree(
         const rawChain = nodeObj?.properties?.chain || data?.chain || [];
         let chain = rawChain.map((fx: any) => (typeof fx === 'object' && fx !== null ? {
             name: fx.name || fx.id || fx.type || 'FX',
-            ...fx
+            ...fx,
+            params: fx.params && typeof fx.params === 'object' ? { ...fx.params } : {},
         } : fx));
+        const rawFieldOps = nodeObj?.properties?.field_operators ?? data?.field_operators;
+        if (rawFieldOps && typeof rawFieldOps === 'object' && chain.length > 0) {
+            for (const [opKey, opExpr] of Object.entries(rawFieldOps)) {
+                if (typeof opExpr !== 'string' || !isFieldOperatorExpression(opExpr)) continue;
+                const parsedChainKey = parseChainParamFieldKey(opKey);
+                if (!parsedChainKey) continue;
+                const found = findChainModuleParam({ properties: { chain } }, opKey);
+                if (!found) continue;
+                const mod = chain.find((m: any) => m && String(m.id) === parsedChainKey.moduleId);
+                if (!mod) continue;
+                const evalSeed = field_seed ?? 42;
+                const salt = normalizeNumericSeed(opKey, 0xF1E1);
+                if (found.schema.type === 'select' && Array.isArray(found.schema.options)) {
+                    const resolvedOpt = evaluateSelectFieldOperator(opExpr, found.schema.options as any, {
+                        triggerCount: 0,
+                        seed: evalSeed,
+                        salt,
+                        fallback: found.schema.default,
+                    });
+                    mod.params[parsedChainKey.paramKey] = Number(resolvedOpt);
+                } else {
+                    const resolvedNum = evaluateNumericFieldOperator(opExpr, {
+                        triggerCount: 0,
+                        seed: evalSeed,
+                        salt,
+                        min: found.param.min,
+                        max: found.param.max,
+                        step: found.param.step,
+                        isInteger: found.param.kind === 'bool' || found.param.kind === 'enum',
+                        fallback: Number(found.param.defaultValue),
+                    });
+                    mod.params[parsedChainKey.paramKey] = resolvedNum;
+                }
+            }
+        }
         const rawTopGain = nodeObj?.properties?.gain ?? data?.gain;
         if (typeof rawTopGain === 'number' && Number.isFinite(rawTopGain) && chain.length === 0) {
             const gainLin = rawTopGain <= -35.9 ? 0 : Number(Math.pow(10, rawTopGain / 20).toFixed(6));
@@ -484,6 +544,7 @@ export function serializeNodeSubtree(
             global_bars: global_bars,
             global_seed: global_seed,
             field_seed: field_seed,
+            pool_node_id: pool_node_id,
             section_points: section_points,
             section_enabled: section_enabled,
             section_probability: section_probability,

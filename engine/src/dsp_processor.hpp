@@ -1,6 +1,10 @@
 #pragma once
 #include "../include/sin_dsp.h"
 #include "smoother.hpp"
+#include "sin_fx/clipper.hpp"
+#include "sin_fx/compressor.hpp"
+#include "sin_fx/limiter.hpp"
+#include "sin_fx/param_eq.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -29,9 +33,10 @@ public:
         float* out_l, float* out_r,
         const ProcessContext& ctx
     ) noexcept = 0;
+    virtual float get_meter() const noexcept { return 0.0f; }
 };
 
-/* Sole built-in processor today: zipper-free Gain stage (param 0 = linear gain). */
+/* Zipper-free Gain stage (param 0 = linear gain). */
 class GainProcessor final : public DspProcessor {
 public:
     SinProcessorType type_id() const noexcept override { return SIN_PROC_GAIN; }
@@ -96,10 +101,48 @@ private:
     ParamSmoother gain_sm_{1.0f, 1.0f, 0.0f, 0};
 };
 
+/* Thin adapter bridging standalone sin_fx::DspModule implementations into SIN's audio graph. */
+template <typename ModuleT, SinProcessorType TypeId>
+class FxModuleAdapter final : public DspProcessor {
+public:
+    SinProcessorType type_id() const noexcept override { return TypeId; }
+
+    void prepare(uint32_t sample_rate, uint32_t max_block_size) noexcept override {
+        mod_.prepare(sample_rate, max_block_size);
+    }
+
+    void reset() noexcept override {
+        mod_.reset();
+    }
+
+    void set_param(uint32_t param_index, float value, float ramp_ms) noexcept override {
+        mod_.set_param(param_index, value, ramp_ms);
+    }
+
+    void process(
+        const float* in_l, const float* in_r,
+        float* out_l, float* out_r,
+        const ProcessContext& ctx
+    ) noexcept override {
+        mod_.process(in_l, in_r, out_l, out_r, ctx.num_frames);
+    }
+
+    float get_meter() const noexcept override {
+        return mod_.get_meter();
+    }
+
+private:
+    ModuleT mod_;
+};
+
 inline std::unique_ptr<DspProcessor> create_processor(SinProcessorType type) {
     switch (type) {
-        case SIN_PROC_GAIN: return std::make_unique<GainProcessor>();
-        default:            return nullptr;
+        case SIN_PROC_GAIN:     return std::make_unique<GainProcessor>();
+        case SIN_PROC_PARAM_EQ: return std::make_unique<FxModuleAdapter<sin_fx::ParamEqModule, SIN_PROC_PARAM_EQ>>();
+        case SIN_PROC_COMP:     return std::make_unique<FxModuleAdapter<sin_fx::CompressorModule, SIN_PROC_COMP>>();
+        case SIN_PROC_CLIPPER:  return std::make_unique<FxModuleAdapter<sin_fx::ClipperModule, SIN_PROC_CLIPPER>>();
+        case SIN_PROC_LIMITER:  return std::make_unique<FxModuleAdapter<sin_fx::LimiterModule, SIN_PROC_LIMITER>>();
+        default:                return nullptr;
     }
 }
 

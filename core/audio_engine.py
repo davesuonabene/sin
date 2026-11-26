@@ -18,6 +18,7 @@ import numpy as np
 from core.render_plan import (
     SIN_DEFAULT_SAMPLE_RATE,
     SIN_MAX_PROC_PARAMS,
+    SIN_MAX_STAGE_METERS,
     BusSpec,
     ChainStageSpec,
     ClipSpec,
@@ -118,6 +119,14 @@ class _SinBusRms(ctypes.Structure):
     ]
 
 
+class _SinStageMeter(ctypes.Structure):
+    _fields_ = [
+        ("bus_id", ctypes.c_uint32),
+        ("stage_index", ctypes.c_uint32),
+        ("meter_value", ctypes.c_float),
+    ]
+
+
 class _SinSourceInfo(ctypes.Structure):
     _fields_ = [
         ("sample_rate", ctypes.c_uint32),
@@ -185,6 +194,24 @@ def _bind_functions(lib: ctypes.CDLL) -> None:
         c_void_p, ctypes.c_uint32, c_f_p, c_f_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint64
     ]
     lib.sin_engine_register_pcm_source.restype = ctypes.c_int32
+
+    if hasattr(lib, "sin_engine_register_layered_source"):
+        lib.sin_engine_register_layered_source.argtypes = [
+            c_void_p, ctypes.c_uint32, ctypes.c_char_p,
+            ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint64
+        ]
+        lib.sin_engine_register_layered_source.restype = ctypes.c_int32
+
+    if hasattr(lib, "sin_engine_set_layered_tile"):
+        lib.sin_engine_set_layered_tile.argtypes = [
+            c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+            c_f_p, c_f_p, ctypes.c_uint32, ctypes.c_uint32
+        ]
+        lib.sin_engine_set_layered_tile.restype = ctypes.c_int32
+
+    if hasattr(lib, "sin_engine_clear_layered_tiles"):
+        lib.sin_engine_clear_layered_tiles.argtypes = [c_void_p, ctypes.c_uint32]
+        lib.sin_engine_clear_layered_tiles.restype = ctypes.c_int32
 
     lib.sin_engine_get_source_info.argtypes = [c_void_p, ctypes.c_uint32, ctypes.POINTER(_SinSourceInfo)]
     lib.sin_engine_get_source_info.restype = ctypes.c_int32
@@ -257,6 +284,13 @@ def _bind_functions(lib: ctypes.CDLL) -> None:
             ctypes.POINTER(_SinBusRms), ctypes.c_uint32,
         ]
         lib.sin_engine_read_bus_rms.restype = ctypes.c_uint32
+
+    if hasattr(lib, "sin_engine_read_stage_meters"):
+        lib.sin_engine_read_stage_meters.argtypes = [
+            c_void_p,
+            ctypes.POINTER(_SinStageMeter), ctypes.c_uint32,
+        ]
+        lib.sin_engine_read_stage_meters.restype = ctypes.c_uint32
 
 
 def load_native_library(reload_if_missing: bool = False) -> Optional[ctypes.CDLL]:
@@ -439,6 +473,86 @@ class SinAudioEngine:
             return True
         return False
 
+    def supports_layered_tiles(self) -> bool:
+        return bool(
+            self._handle
+            and hasattr(self._lib, "sin_engine_register_layered_source")
+            and hasattr(self._lib, "sin_engine_set_layered_tile")
+        )
+
+    def register_layered_source(
+        self,
+        source_id: int,
+        base_filepath: Optional[str],
+        tile_frames: int,
+        num_tiles: int,
+        tile_sr: int = SIN_DEFAULT_SAMPLE_RATE,
+        total_tile_frames: int = 0,
+    ) -> bool:
+        if not self.supports_layered_tiles():
+            return False
+        path_bytes = str(base_filepath).encode("utf-8") if base_filepath else b""
+        rc = self._lib.sin_engine_register_layered_source(
+            self._handle,
+            int(source_id),
+            path_bytes,
+            int(tile_frames),
+            int(num_tiles),
+            int(tile_sr or SIN_DEFAULT_SAMPLE_RATE),
+            int(max(0, total_tile_frames)),
+        )
+        if rc == 0:
+            self._registered_sources[int(source_id)] = (str(base_filepath or ""), int(num_tiles))
+            self._file_sigs.pop(int(source_id), None)
+            return True
+        return False
+
+    def set_layered_tile(
+        self,
+        source_id: int,
+        tile_index: int,
+        audio: Optional[np.ndarray],
+        generation: int = 1,
+    ) -> bool:
+        if not self.supports_layered_tiles():
+            return False
+        if audio is None or getattr(audio, "size", 0) == 0:
+            rc = self._lib.sin_engine_set_layered_tile(
+                self._handle, int(source_id), int(tile_index), None, None, 0, int(generation) & 0xFFFFFFFF
+            )
+            return rc == 0
+        arr = np.asarray(audio, dtype=np.float32)
+        if arr.ndim == 1:
+            ch0 = np.ascontiguousarray(arr, dtype=np.float32)
+            p0 = ch0.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            p1 = None
+            n_frames = int(ch0.shape[0])
+        else:
+            ch0 = np.ascontiguousarray(arr[0], dtype=np.float32)
+            p0 = ch0.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            if arr.shape[0] > 1:
+                ch1 = np.ascontiguousarray(arr[1], dtype=np.float32)
+                p1 = ch1.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            else:
+                ch1 = None
+                p1 = None
+            n_frames = int(ch0.shape[0])
+        rc = self._lib.sin_engine_set_layered_tile(
+            self._handle,
+            int(source_id),
+            int(tile_index),
+            p0,
+            p1,
+            n_frames,
+            int(generation) & 0xFFFFFFFF,
+        )
+        return rc == 0
+
+    def clear_layered_tiles(self, source_id: int) -> bool:
+        if not self._handle or not hasattr(self._lib, "sin_engine_clear_layered_tiles"):
+            return False
+        return self._lib.sin_engine_clear_layered_tiles(self._handle, int(source_id)) == 0
+
     def get_source_info(self, source_id: int) -> Optional[Dict[str, object]]:
         if not self._handle:
             return None
@@ -468,7 +582,21 @@ class SinAudioEngine:
         for src in plan.sources:
             sid = int(src.source_id)
             active_source_ids.add(sid)
-            if src.pcm is not None:
+            if getattr(src, "layered_tile_frames", 0) > 0 and getattr(src, "layered_num_tiles", 0) > 0:
+                if self.supports_layered_tiles():
+                    self.register_layered_source(
+                        sid,
+                        src.filepath,
+                        int(src.layered_tile_frames),
+                        int(src.layered_num_tiles),
+                        int(src.sample_rate or SIN_DEFAULT_SAMPLE_RATE),
+                        int(src.layered_total_frames or src.num_frames or 0),
+                    )
+                elif src.filepath:
+                    sig = self._file_signature(str(src.filepath))
+                    if self._file_sigs.get(sid) != sig:
+                        self.register_file_source(sid, src.filepath, force_ram=False)
+            elif src.pcm is not None:
                 self.register_pcm_source(sid, src.pcm, src.sample_rate, src.content_hash)
             elif src.filepath:
                 sig = self._file_signature(str(src.filepath))
@@ -625,12 +753,31 @@ class SinAudioEngine:
                 float(end_sec),
             )
 
+    def read_stage_meters(self) -> Dict[str, Dict[int, float]]:
+        if not self._handle or not hasattr(self._lib, "sin_engine_read_stage_meters"):
+            return {}
+        arr = (_SinStageMeter * SIN_MAX_STAGE_METERS)()
+        sc = min(
+            int(self._lib.sin_engine_read_stage_meters(self._handle, arr, SIN_MAX_STAGE_METERS)),
+            SIN_MAX_STAGE_METERS,
+        )
+        out: Dict[str, Dict[int, float]] = {}
+        for i in range(sc):
+            bid = int(arr[i].bus_id)
+            key = self._bus_key_map.get(bid, str(bid))
+            sidx = int(arr[i].stage_index)
+            val = round(float(arr[i].meter_value), 3)
+            out.setdefault(key, {})[sidx] = val
+        return out
+
     def read_telemetry(self, include_scope: bool = False) -> Dict[str, object]:
         hdr = _SinTelemetry()
         bus_peaks_arr = (_SinBusPeak * 256)()
         bus_rms_arr = (_SinBusRms * 256)()
+        stage_arr = (_SinStageMeter * SIN_MAX_STAGE_METERS)()
         scope_arr = (ctypes.c_float * 128)() if include_scope else None
         rms_count = 0
+        stage_count = 0
         if self._handle:
             self._lib.sin_engine_read_telemetry(
                 self._handle,
@@ -642,6 +789,11 @@ class SinAudioEngine:
             )
             if hasattr(self._lib, "sin_engine_read_bus_rms"):
                 rms_count = min(int(self._lib.sin_engine_read_bus_rms(self._handle, bus_rms_arr, 256)), 256)
+            if hasattr(self._lib, "sin_engine_read_stage_meters"):
+                stage_count = min(
+                    int(self._lib.sin_engine_read_stage_meters(self._handle, stage_arr, SIN_MAX_STAGE_METERS)),
+                    SIN_MAX_STAGE_METERS,
+                )
         peaks_by_key: Dict[str, float] = {}
         count = min(int(hdr.active_bus_count), 256)
         for i in range(count):
@@ -659,6 +811,14 @@ class SinAudioEngine:
             if val > rms_by_key.get(key, -1.0):
                 rms_by_key[key] = val
 
+        stage_meters_by_key: Dict[str, Dict[int, float]] = {}
+        for i in range(stage_count):
+            bid = int(stage_arr[i].bus_id)
+            key = self._bus_key_map.get(bid, str(bid))
+            sidx = int(stage_arr[i].stage_index)
+            val = round(float(stage_arr[i].meter_value), 3)
+            stage_meters_by_key.setdefault(key, {})[sidx] = val
+
         payload: Dict[str, object] = {
             "playhead_sec": round(float(hdr.playhead_seconds), 4),
             "duration_sec": round(float(hdr.duration_seconds), 4),
@@ -673,6 +833,7 @@ class SinAudioEngine:
             "master_rms_r": round(float(hdr.master_rms_r), 4),
             "bus_peaks": peaks_by_key,
             "bus_rms": rms_by_key,
+            "stage_meters": stage_meters_by_key,
         }
         if include_scope and scope_arr is not None:
             payload["scope"] = [round(float(scope_arr[i]), 4) for i in range(128)]

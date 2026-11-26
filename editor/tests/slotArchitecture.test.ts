@@ -551,31 +551,28 @@ test('resolvePoolItemByQuery and applyPoolQuery support index, name match, and r
     assert.equal(seq.properties.sequence_name, 'Euclidean Groove');
 });
 
-test('inline Pool view toggle replaces parameter fields below visualizer and restores them when toggled off', () => {
+test('dedicated POOL tab exposes pool_editor while primary tab keeps visualizer and parameter fields intact', () => {
     const sample = new SampleNode();
-    const defaultSchema = sample.getPanelSchema();
-    const defaultSections = defaultSchema.tabs[0].sections.map(s => s.type);
+    const sampleSchema = sample.getPanelSchema();
+    const defaultSections = sampleSchema.tabs[0].sections.map(s => s.type);
     assert.equal(defaultSections[0], 'waveform_crop');
     assert.ok(defaultSections.includes('fields'));
     assert.ok(!defaultSections.includes('pool_editor'));
 
-    // Toggle pool view ON -> keeps waveform_crop at top and replaces fields with pool_editor
-    assert.equal(sample.togglePoolView(), true);
-    const poolSchema = sample.getPanelSchema();
-    assert.deepEqual(poolSchema.tabs[0].sections.map(s => s.type), ['waveform_crop', 'pool_editor']);
-
-    // Toggle pool view OFF -> restores normal parameter fields
-    assert.equal(sample.togglePoolView(), false);
-    assert.deepEqual(sample.getPanelSchema().tabs[0].sections.map(s => s.type), defaultSections);
+    const samplePoolTab = sampleSchema.tabs.find(t => t.id === 'POOL');
+    assert.ok(samplePoolTab);
+    assert.deepEqual(samplePoolTab.sections.map(s => s.type), ['pool_editor']);
 
     const seq = new SequenceNode();
-    const defaultSeqSections = seq.getPanelSchema().tabs[0].sections.map(s => s.type);
+    const seqSchema = seq.getPanelSchema();
+    const defaultSeqSections = seqSchema.tabs[0].sections.map(s => s.type);
     assert.equal(defaultSeqSections[0], 'sequence_grid');
     assert.ok(defaultSeqSections.includes('fields'));
-    assert.equal(seq.togglePoolView(true), true);
-    assert.deepEqual(seq.getPanelSchema().tabs[0].sections.map(s => s.type), ['sequence_grid', 'pool_editor']);
-    assert.equal(seq.togglePoolView(false), false);
-    assert.deepEqual(seq.getPanelSchema().tabs[0].sections.map(s => s.type), defaultSeqSections);
+    assert.ok(!defaultSeqSections.includes('pool_editor'));
+
+    const seqPoolTab = seqSchema.tabs.find(t => t.id === 'POOL');
+    assert.ok(seqPoolTab);
+    assert.deepEqual(seqPoolTab.sections.map(s => s.type), ['pool_editor']);
 });
 
 test('copySlot and pasteSlot copy-paste slot contents across slots on SampleNode and SequenceNode', () => {
@@ -687,13 +684,17 @@ test('loadDroppedItemsIntoSlots: dropping on "+" creates multiple slots while dr
         { id: 103, name: 'Kick C', filepath: '/vault/kick_c.wav', bpm: 128, key: 'Emin' },
     ];
 
-    // 1. Dropping multiple items onto "+" ('plus') creates multiple individual fixed slots
+    // 1. Dropping multiple items onto "+" ('plus') creates multiple individual fixed slots,
+    //    auto-registers them in the pool, and calls each directly by string name.
     await sample.loadDroppedItemsIntoSlots(droppedSamples, 'plus');
     assert.equal(sample.getSlots().length, 3);
     assert.equal(sample.getSlots()[0].filepath, '/vault/kick_a.wav');
-    assert.equal(sample.getSlots()[0].pool_query, '');
+    assert.equal(sample.getSlots()[0].pool_query, 'Kick A');
     assert.equal(sample.getSlots()[1].filepath, '/vault/kick_b.wav');
+    assert.equal(sample.getSlots()[1].pool_query, 'Kick B');
     assert.equal(sample.getSlots()[2].filepath, '/vault/kick_c.wav');
+    assert.equal(sample.getSlots()[2].pool_query, 'Kick C');
+    assert.equal(sample.getPoolItems().length, 3);
     assert.equal(sample.activeSlotIndex, 0);
     assert.equal(sample.properties.filepath, '/vault/kick_a.wav');
 
@@ -705,8 +706,8 @@ test('loadDroppedItemsIntoSlots: dropping on "+" creates multiple slots while dr
     ], 1);
     assert.equal(sample.getSlots().length, 3, 'slot count should remain 3 when dropping onto slot 1');
     assert.equal(sample.activeSlotIndex, 1);
-    assert.equal(sample.getSlots()[1].pool_query, 'snare_x.wav snare_y.wav');
-    assert.equal(sample.properties.pool_query, 'snare_x.wav snare_y.wav');
+    assert.equal(sample.getSlots()[1].pool_query, '"Snare X" "Snare Y"');
+    assert.equal(sample.properties.pool_query, '"Snare X" "Snare Y"');
     assert.equal(sample.properties.filepath, '/vault/snare_x.wav');
 
     // Advancing trigger count cycles the text list operator independent of seed

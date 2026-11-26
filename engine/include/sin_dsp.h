@@ -21,7 +21,8 @@ extern "C" {
 #define SIN_DEFAULT_SAMPLE_RATE 48000u
 #define SIN_MAX_BUSES           256u
 #define SIN_MAX_SCOPE_SAMPLES   256u
-#define SIN_MAX_PROC_PARAMS     8u
+#define SIN_MAX_PROC_PARAMS     32u
+#define SIN_MAX_STAGE_METERS    512u
 
 typedef struct SinEngine SinEngine;
 typedef uint32_t SinBusId;
@@ -109,6 +110,12 @@ typedef struct {
 } SinBusRms;
 
 typedef struct {
+    SinBusId bus_id;
+    uint32_t stage_index;
+    float    meter_value;
+} SinStageMeter;
+
+typedef struct {
     uint32_t sample_rate;
     uint32_t channels;
     uint64_t num_frames;
@@ -127,17 +134,24 @@ SIN_API void       sin_engine_stop_device(SinEngine* engine);
 SIN_API int32_t    sin_engine_is_device_running(const SinEngine* engine);
 SIN_API uint32_t   sin_engine_get_sample_rate(const SinEngine* engine);
 
-/* Hybrid Sources: RAM (<30s) or Direct Lock-Free Disk Streaming (multi-GB) + In-Memory PCM (Python) */
+/* Hybrid Sources: RAM (<30s) or Direct Lock-Free Disk Streaming (multi-GB) + In-Memory PCM (Python) + Layered Tile Overlay */
 SIN_API int32_t    sin_engine_register_file_source(SinEngine* engine, SinSourceId id, const char* utf8_path, uint32_t force_ram);
 SIN_API int32_t    sin_engine_register_pcm_source(SinEngine* engine, SinSourceId id, const float* ch0, const float* ch1, uint32_t num_frames, uint32_t src_sr, uint64_t content_hash);
+SIN_API int32_t    sin_engine_register_layered_source(SinEngine* engine, SinSourceId id, const char* base_utf8_path, uint32_t tile_frames, uint32_t num_tiles, uint32_t tile_sr, uint64_t total_tile_frames);
+SIN_API int32_t    sin_engine_set_layered_tile(SinEngine* engine, SinSourceId id, uint32_t tile_index, const float* ch0, const float* ch1, uint32_t num_frames, uint32_t generation);
+SIN_API int32_t    sin_engine_clear_layered_tiles(SinEngine* engine, SinSourceId id);
 SIN_API int32_t    sin_engine_get_source_info(const SinEngine* engine, SinSourceId id, SinSourceInfo* out_info);
 SIN_API int32_t    sin_engine_release_source(SinEngine* engine, SinSourceId id);
 SIN_API void       sin_engine_release_all_sources(SinEngine* engine);
 
 /* Atomic Plan Swap (5ms click-free crossfade in RT mode; instant in offline mode) */
 typedef enum SinProcessorType {
-    SIN_PROC_NONE = 0,
-    SIN_PROC_GAIN = 1
+    SIN_PROC_NONE     = 0,
+    SIN_PROC_GAIN     = 1,
+    SIN_PROC_PARAM_EQ = 2,
+    SIN_PROC_COMP     = 3,
+    SIN_PROC_CLIPPER  = 4,
+    SIN_PROC_LIMITER  = 5
 } SinProcessorType;
 
 typedef struct SinChainStageDesc {
@@ -185,6 +199,9 @@ SIN_API void       sin_engine_read_telemetry(
 SIN_API uint32_t   sin_engine_read_bus_rms(
                        const SinEngine* engine,
                        SinBusRms* out_bus_rms, uint32_t max_buses);
+SIN_API uint32_t   sin_engine_read_stage_meters(
+                       const SinEngine* engine,
+                       SinStageMeter* out_meters, uint32_t max_meters);
 
 #ifdef __cplusplus
 }

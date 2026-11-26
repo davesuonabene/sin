@@ -9,6 +9,8 @@ import { FxChainSection } from './components/FxChainSection.ts';
 import { AssetPoolSection } from './components/AssetPoolSection.ts';
 import { RandomDestinationsSection } from './components/RandomDestinationsSection.ts';
 import { ExportSection } from './components/ExportSection.ts';
+import { PreampDenoiseSection } from './components/PreampDenoiseSection.ts';
+import { VoiceIsolatorSection } from './components/VoiceIsolatorSection.ts';
 import { APPEARANCE_COLOR_PRESETS } from '../config/appearance.ts';
 import { enhanceSelect } from '../../../packages/ui/src/dropdown.js';
 
@@ -59,6 +61,12 @@ export class SectionRendererFactory {
             case 'export_panel':
                 await ExportSection.render(wrapper, node, windowContext);
                 break;
+            case 'preamp_denoise_panel':
+                await PreampDenoiseSection.render(wrapper, node, windowContext);
+                break;
+            case 'voice_isolator_panel':
+                await VoiceIsolatorSection.render(wrapper, node, windowContext);
+                break;
             default:
                 this.renderFieldsSection(wrapper, section, node, windowContext);
                 break;
@@ -106,7 +114,17 @@ export class SectionRendererFactory {
                         titleDisplay.innerText = String(val);
                     }
                     SectionRendererFactory.updateNodeFieldStates(windowContext?.container || group, node);
-                    windowContext.refreshAudioPreview();
+                    const procNode = node as any;
+                    if (
+                        procNode?.isAudioProcessor
+                        && (window as any).__sinRealtimeTiled
+                        && typeof procNode.emitLiveParam === 'function'
+                        && procNode.getProcessorParamKeys?.().includes(key)
+                    ) {
+                        procNode.emitLiveParam(key, val, true);
+                    } else {
+                        windowContext.refreshAudioPreview();
+                    }
                     if ((key === 'crop_start' || key === 'crop_end') && typeof windowContext?.updateCropFromFields === 'function') {
                         const cs = Math.max(0, Math.min(1, Number(node.properties.crop_start) || 0));
                         const ce = Math.max(0, Math.min(1, Number(node.properties.crop_end) ?? 1));

@@ -51,6 +51,9 @@ export interface WaveformSignal {
     playbackProgress?: number;// Explicit normalized playhead position (0.0 - 1.0)
     bufferedProgress?: number;// Normalized RAM buffer fill front (0.0 - 1.0)
     isInvalidated?: boolean;  // True when buffer was dirtied and is refilling
+    isLoading?: boolean;      // True while node content/processing is still loading or cooking
+    loadingLabel?: string;    // Compact status text shown with the loading spinner
+    loadingProgress?: number; // Optional 0.0 - 1.0 progress for cooking/loading indicator
     slotCount?: number;       // Number of slots on this node
     activeSlot?: number;      // Currently active/inspected slot index
 }

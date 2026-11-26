@@ -5,6 +5,7 @@ import { groupFileVersions } from '../libraryVersioning.ts';
 import { RadioGroup } from './components/RadioGroup.ts';
 import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from './ParameterWheelMenu.ts';
 import { isFieldOperatorExpression } from '../../../ermes/ts/slotLanguage.ts';
+import { findChainModuleParam, parseChainParamFieldKey } from '../dsp/processorRegistry.ts';
 import { renderIcon } from '../../../packages/ui/src/icons.js';
 import { enhanceSelect } from '../../../packages/ui/src/dropdown.js';
 import { enhanceRangeSlider } from '../../../packages/ui/src/slider.js';
@@ -18,6 +19,16 @@ function formatDb(db: number): string {
 
 export class WidgetFactory {
     static getFieldValue<T = any>(node: BaseNode, field: FieldSchema<T>): T {
+        const chainKey = parseChainParamFieldKey(field.key);
+        if (chainKey) {
+            const found = findChainModuleParam(node, field.key);
+            if (found) {
+                const raw = found.module.params?.[chainKey.paramKey];
+                if (raw === undefined || raw === null) return field.default;
+                if (field.type === 'boolean') return (typeof raw === 'boolean' ? raw : Number(raw) >= 0.5) as unknown as T;
+                return raw as unknown as T;
+            }
+        }
         const p = node.properties || {};
         const val = p[field.key];
         return val !== undefined ? val : field.default;
@@ -27,7 +38,9 @@ export class WidgetFactory {
         if (!node.properties) node.properties = {};
         let validatedVal = val;
 
-        if (field.type === 'int') {
+        if (field.type === 'boolean') {
+            validatedVal = Boolean(val) as unknown as T;
+        } else if (field.type === 'int') {
             let num = typeof val === 'number' ? val : parseInt(String(val), 10);
             if (isNaN(num)) num = typeof field.default === 'number' ? field.default : 0;
             if (field.min !== undefined) num = Math.max(field.min, num);
@@ -43,6 +56,22 @@ export class WidgetFactory {
             if (field.min !== undefined) num = Math.max(field.min, num);
             if (field.max !== undefined) num = Math.min(field.max, num);
             validatedVal = num as unknown as T;
+        } else if (field.type === 'select' && typeof field.default === 'number') {
+            const num = Number(val);
+            if (Number.isFinite(num)) validatedVal = num as unknown as T;
+        }
+
+        const chainKey = parseChainParamFieldKey(field.key);
+        if (chainKey && Array.isArray(node.properties.chain)) {
+            const nextChain = node.properties.chain.map((m: any) =>
+                m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m
+            );
+            const mod = nextChain.find((m: any) => m && String(m.id) === chainKey.moduleId);
+            if (mod) {
+                mod.params[chainKey.paramKey] = field.type === 'boolean' ? (validatedVal ? 1 : 0) : Number(validatedVal);
+                node.updateProperty('chain', nextChain);
+                return validatedVal;
+            }
         }
 
         node.updateProperty(field.key, validatedVal);
@@ -1091,7 +1120,10 @@ export class WidgetFactory {
         const container = document.createElement('div');
         container.className = 'td-float-box';
 
-        const currentDb = Number(this.getFieldValue(node, field) ?? 0.0);
+        const minDb = field.min ?? -36.0;
+        const maxDb = field.max ?? 12.0;
+        const dbSpan = (maxDb - minDb) || 1.0;
+        const currentDb = Number(this.getFieldValue(node, field) ?? field.default ?? 0.0);
 
         const fillBar = document.createElement('span');
         fillBar.className = 'td-float-fill';
@@ -1099,16 +1131,19 @@ export class WidgetFactory {
 
         const labelText = document.createElement('span');
         labelText.className = 'float-val-text';
-        labelText.innerText = formatDb(currentDb);
+        labelText.innerText = minDb <= -35.9 ? formatDb(currentDb) : `${currentDb > 0 ? '+' : ''}${currentDb.toFixed(1)} dB`;
         container.append(fillBar, labelText);
 
         let activeDb = currentDb;
 
+        const formatThisDb = (val: number) =>
+            minDb <= -35.9 ? formatDb(val) : `${val > 0 ? '+' : ''}${val.toFixed(1)} dB`;
+
         const updateUI = (db: number) => {
-            activeDb = Math.max(-36.0, Math.min(12.0, db));
-            labelText.innerText = formatDb(activeDb);
-            const valPct = ((activeDb + 36.0) / 48.0) * 100;
-            const zeroPct = 75.0;
+            activeDb = Math.max(minDb, Math.min(maxDb, db));
+            labelText.innerText = formatThisDb(activeDb);
+            const valPct = ((activeDb - minDb) / dbSpan) * 100;
+            const zeroPct = Math.max(0, Math.min(100, ((0 - minDb) / dbSpan) * 100));
             const leftPct = Math.min(zeroPct, valPct);
             const widthPct = Math.abs(valPct - zeroPct);
             fillBar.style.left = `${leftPct}%`;
@@ -1238,7 +1273,7 @@ export class WidgetFactory {
             isInteger: false,
             getValue: () => activeDb,
             setValue: (nextDb) => applyDbValue(nextDb),
-            formatValue: (val) => formatDb(Math.max(-36.0, Math.min(12.0, val))),
+            formatValue: (val) => formatThisDb(Math.max(minDb, Math.min(maxDb, val))),
         });
         container.addEventListener('wheel', event => {
             event.preventDefault();

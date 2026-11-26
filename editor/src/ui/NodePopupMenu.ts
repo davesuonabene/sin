@@ -1,4 +1,11 @@
-export type SupportedNodeType = "sample" | "sequence" | "track" | "arrangement";
+export type SupportedNodeType =
+    | "sample"
+    | "sequence"
+    | "track"
+    | "arrangement"
+    | "null"
+    | "preamp_denoise"
+    | "voice_isolator";
 
 export interface PopupNodeItem {
     type: SupportedNodeType;
@@ -27,6 +34,9 @@ export class NodePopupMenu {
         { type: "sequence", label: "Sequence Node", badge: "SEQ", badgeColor: "#ec4899" },
         { type: "track", label: "Track Node", badge: "TRACK", badgeColor: "#3b82f6" },
         { type: "arrangement", label: "Arrangement Node", badge: "ARR", badgeColor: "#f59e0b" },
+        { type: "null", label: "Null Node", badge: "NULL", badgeColor: "#64748b" },
+        { type: "preamp_denoise", label: "Preamp De-Noise", badge: "PREAMP", badgeColor: "#14b8a6" },
+        { type: "voice_isolator", label: "Voice Isolator", badge: "VOICE", badgeColor: "#06b6d4" },
     ];
 
     constructor() {

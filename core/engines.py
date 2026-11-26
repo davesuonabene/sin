@@ -23,9 +23,9 @@ class NodeRenderer(ABC):
             if system is not None and system.render_mode == "preview":
                 tap_ids = [
                     b.bus_id for b in plan.buses
-                    if b.node_type in ("track", "master", "bus", "arrangement", "sequence")
+                    if b.node_type in ("track", "master", "bus", "arrangement", "sequence", "null", "sample", "preamp_denoise", "voice_isolator")
                     and b.node_key.isdigit()
-                ]
+                ][:64]
             audio_out, taps = render_plan_offline(plan, sample_rate=system.sample_rate, bus_tap_ids=tap_ids)
             if system is not None and system.render_mode == "preview":
                 for b in plan.buses:
@@ -53,11 +53,26 @@ class ArrangementRenderer(NodeRenderer):
     """Rendering engine specific to Arrangement nodes."""
 
 
+class NullRenderer(NodeRenderer):
+    """Rendering engine specific to single-input Null pass-through nodes."""
+
+
+class PreampDenoiseRenderer(NodeRenderer):
+    """Rendering engine specific to standalone Preamp De-Noise processor nodes."""
+
+
+class VoiceIsolatorRenderer(NodeRenderer):
+    """Rendering engine specific to standalone 3-way Voice Isolator processor nodes."""
+
+
 RENDERER_REGISTRY: Dict[str, Type[NodeRenderer]] = {
     "track": TrackRenderer,
     "sample": SampleRenderer,
     "sequence": SequenceRenderer,
-    "arrangement": ArrangementRenderer
+    "arrangement": ArrangementRenderer,
+    "null": NullRenderer,
+    "preamp_denoise": PreampDenoiseRenderer,
+    "voice_isolator": VoiceIsolatorRenderer,
 }
 
 
@@ -234,6 +249,34 @@ def build_node_object(node_data: Any) -> AudioObject:
                 field_operators=_get_val(node_data, "field_operators", None),
                 seed=_get_val(node_data, "seed", None),
             )
+    elif str(node_type or "").lower() == "null":
+        obj = AudioObject(
+            **common_dsp_kwargs,
+            **crop_kwargs,
+            mix_mode="first",
+            filepath=actual_path,
+            node_type="null",
+        )
+    elif str(node_type or "").lower() == "preamp_denoise":
+        from core.processor_nodes import PreampDenoiseObject
+
+        obj = PreampDenoiseObject(
+            **common_dsp_kwargs,
+            **crop_kwargs,
+            mix_mode=_get_val(node_data, "mix_mode", "sum"),
+            filepath=actual_path,
+            processor_params=dict(_get_val(node_data, "processor_params", None) or {}),
+        )
+    elif str(node_type or "").lower() == "voice_isolator":
+        from core.processor_nodes import VoiceIsolatorObject
+
+        obj = VoiceIsolatorObject(
+            **common_dsp_kwargs,
+            **crop_kwargs,
+            mix_mode=_get_val(node_data, "mix_mode", "sum"),
+            filepath=actual_path,
+            processor_params=dict(_get_val(node_data, "processor_params", None) or {}),
+        )
     else:
         obj = AudioObject(
             **common_dsp_kwargs,
@@ -253,12 +296,15 @@ def build_node_object(node_data: Any) -> AudioObject:
     obj.global_bars = resolved_wrapper_bars
     obj.global_seed = _get_val(node_data, "global_seed", None)
     obj.field_seed = _get_val(node_data, "field_seed", None)
+    obj.pool_node_id = _get_val(node_data, "pool_node_id", None)
     if not hasattr(obj, "field_operators") or obj.field_operators is None:
         obj.field_operators = dict(_get_val(node_data, "field_operators", None) or {})
 
     from core.dag_cache import GLOBAL_DAG_CACHE
 
     children = _get_val(node_data, "children", []) or []
+    if obj.node_type.lower() == "null":
+        children = children[:1]
     for child_data in children:
         start_beat = _get_val(child_data, "start_beat", 0.0)
         child_obj = build_node_object(child_data)

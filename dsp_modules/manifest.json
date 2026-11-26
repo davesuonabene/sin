@@ -1,0 +1,552 @@
+{
+  "version": 1,
+  "maxParams": 32,
+  "processors": [
+    {
+      "type": "gain",
+      "engineId": 1,
+      "label": "Gain",
+      "addable": false,
+      "meterKind": "none",
+      "params": [
+        {
+          "key": "gain_db",
+          "label": "Gain",
+          "unit": "dB",
+          "min": -36,
+          "max": 12,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 0,
+          "kind": "db",
+          "scale": "linear"
+        }
+      ]
+    },
+    {
+      "type": "param_eq",
+      "engineId": 2,
+      "label": "Param EQ",
+      "addable": true,
+      "meterKind": "peak",
+      "params": [
+        {
+          "key": "b1_enabled",
+          "label": "B1 On",
+          "unit": "",
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "defaultValue": 1,
+          "paramIndex": 0,
+          "kind": "bool",
+          "scale": "linear",
+          "group": "Band 1"
+        },
+        {
+          "key": "b1_type",
+          "label": "B1 Curve",
+          "unit": "",
+          "min": 0,
+          "max": 5,
+          "step": 1,
+          "defaultValue": 1,
+          "paramIndex": 1,
+          "kind": "enum",
+          "scale": "linear",
+          "group": "Band 1",
+          "options": [
+            { "value": 0, "label": "Low Cut" },
+            { "value": 1, "label": "Low Shelf" },
+            { "value": 2, "label": "Bell" },
+            { "value": 3, "label": "Notch" },
+            { "value": 4, "label": "High Shelf" },
+            { "value": 5, "label": "High Cut" }
+          ]
+        },
+        {
+          "key": "b1_freq",
+          "label": "B1 Freq",
+          "unit": "Hz",
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "defaultValue": 100,
+          "paramIndex": 2,
+          "kind": "hz",
+          "scale": "log",
+          "group": "Band 1"
+        },
+        {
+          "key": "b1_gain",
+          "label": "B1 Gain",
+          "unit": "dB",
+          "min": -18,
+          "max": 18,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 3,
+          "kind": "db",
+          "scale": "linear",
+          "group": "Band 1"
+        },
+        {
+          "key": "b1_q",
+          "label": "B1 Q",
+          "unit": "",
+          "min": 0.2,
+          "max": 12.0,
+          "step": 0.01,
+          "defaultValue": 0.71,
+          "paramIndex": 4,
+          "kind": "float",
+          "scale": "log",
+          "group": "Band 1"
+        },
+        {
+          "key": "b2_enabled",
+          "label": "B2 On",
+          "unit": "",
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "defaultValue": 1,
+          "paramIndex": 5,
+          "kind": "bool",
+          "scale": "linear",
+          "group": "Band 2"
+        },
+        {
+          "key": "b2_type",
+          "label": "B2 Curve",
+          "unit": "",
+          "min": 0,
+          "max": 5,
+          "step": 1,
+          "defaultValue": 2,
+          "paramIndex": 6,
+          "kind": "enum",
+          "scale": "linear",
+          "group": "Band 2",
+          "options": [
+            { "value": 0, "label": "Low Cut" },
+            { "value": 1, "label": "Low Shelf" },
+            { "value": 2, "label": "Bell" },
+            { "value": 3, "label": "Notch" },
+            { "value": 4, "label": "High Shelf" },
+            { "value": 5, "label": "High Cut" }
+          ]
+        },
+        {
+          "key": "b2_freq",
+          "label": "B2 Freq",
+          "unit": "Hz",
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "defaultValue": 400,
+          "paramIndex": 7,
+          "kind": "hz",
+          "scale": "log",
+          "group": "Band 2"
+        },
+        {
+          "key": "b2_gain",
+          "label": "B2 Gain",
+          "unit": "dB",
+          "min": -18,
+          "max": 18,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 8,
+          "kind": "db",
+          "scale": "linear",
+          "group": "Band 2"
+        },
+        {
+          "key": "b2_q",
+          "label": "B2 Q",
+          "unit": "",
+          "min": 0.2,
+          "max": 12.0,
+          "step": 0.01,
+          "defaultValue": 1.0,
+          "paramIndex": 9,
+          "kind": "float",
+          "scale": "log",
+          "group": "Band 2"
+        },
+        {
+          "key": "b3_enabled",
+          "label": "B3 On",
+          "unit": "",
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "defaultValue": 1,
+          "paramIndex": 10,
+          "kind": "bool",
+          "scale": "linear",
+          "group": "Band 3"
+        },
+        {
+          "key": "b3_type",
+          "label": "B3 Curve",
+          "unit": "",
+          "min": 0,
+          "max": 5,
+          "step": 1,
+          "defaultValue": 2,
+          "paramIndex": 11,
+          "kind": "enum",
+          "scale": "linear",
+          "group": "Band 3",
+          "options": [
+            { "value": 0, "label": "Low Cut" },
+            { "value": 1, "label": "Low Shelf" },
+            { "value": 2, "label": "Bell" },
+            { "value": 3, "label": "Notch" },
+            { "value": 4, "label": "High Shelf" },
+            { "value": 5, "label": "High Cut" }
+          ]
+        },
+        {
+          "key": "b3_freq",
+          "label": "B3 Freq",
+          "unit": "Hz",
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "defaultValue": 2500,
+          "paramIndex": 12,
+          "kind": "hz",
+          "scale": "log",
+          "group": "Band 3"
+        },
+        {
+          "key": "b3_gain",
+          "label": "B3 Gain",
+          "unit": "dB",
+          "min": -18,
+          "max": 18,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 13,
+          "kind": "db",
+          "scale": "linear",
+          "group": "Band 3"
+        },
+        {
+          "key": "b3_q",
+          "label": "B3 Q",
+          "unit": "",
+          "min": 0.2,
+          "max": 12.0,
+          "step": 0.01,
+          "defaultValue": 1.0,
+          "paramIndex": 14,
+          "kind": "float",
+          "scale": "log",
+          "group": "Band 3"
+        },
+        {
+          "key": "b4_enabled",
+          "label": "B4 On",
+          "unit": "",
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "defaultValue": 1,
+          "paramIndex": 15,
+          "kind": "bool",
+          "scale": "linear",
+          "group": "Band 4"
+        },
+        {
+          "key": "b4_type",
+          "label": "B4 Curve",
+          "unit": "",
+          "min": 0,
+          "max": 5,
+          "step": 1,
+          "defaultValue": 4,
+          "paramIndex": 16,
+          "kind": "enum",
+          "scale": "linear",
+          "group": "Band 4",
+          "options": [
+            { "value": 0, "label": "Low Cut" },
+            { "value": 1, "label": "Low Shelf" },
+            { "value": 2, "label": "Bell" },
+            { "value": 3, "label": "Notch" },
+            { "value": 4, "label": "High Shelf" },
+            { "value": 5, "label": "High Cut" }
+          ]
+        },
+        {
+          "key": "b4_freq",
+          "label": "B4 Freq",
+          "unit": "Hz",
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "defaultValue": 8000,
+          "paramIndex": 17,
+          "kind": "hz",
+          "scale": "log",
+          "group": "Band 4"
+        },
+        {
+          "key": "b4_gain",
+          "label": "B4 Gain",
+          "unit": "dB",
+          "min": -18,
+          "max": 18,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 18,
+          "kind": "db",
+          "scale": "linear",
+          "group": "Band 4"
+        },
+        {
+          "key": "b4_q",
+          "label": "B4 Q",
+          "unit": "",
+          "min": 0.2,
+          "max": 12.0,
+          "step": 0.01,
+          "defaultValue": 0.71,
+          "paramIndex": 19,
+          "kind": "float",
+          "scale": "log",
+          "group": "Band 4"
+        }
+      ]
+    },
+    {
+      "type": "comp",
+      "engineId": 3,
+      "label": "Compressor",
+      "addable": true,
+      "meterKind": "gr_db",
+      "params": [
+        {
+          "key": "threshold_db",
+          "label": "Threshold",
+          "unit": "dB",
+          "min": -60,
+          "max": 0,
+          "step": 0.5,
+          "defaultValue": -18,
+          "paramIndex": 0,
+          "kind": "db",
+          "scale": "linear"
+        },
+        {
+          "key": "ratio",
+          "label": "Ratio",
+          "unit": ":1",
+          "min": 1,
+          "max": 20,
+          "step": 0.1,
+          "defaultValue": 4,
+          "paramIndex": 1,
+          "kind": "ratio",
+          "scale": "linear"
+        },
+        {
+          "key": "attack_ms",
+          "label": "Attack",
+          "unit": "ms",
+          "min": 0.1,
+          "max": 200,
+          "step": 0.1,
+          "defaultValue": 10,
+          "paramIndex": 2,
+          "kind": "ms",
+          "scale": "log"
+        },
+        {
+          "key": "release_ms",
+          "label": "Release",
+          "unit": "ms",
+          "min": 5,
+          "max": 1000,
+          "step": 1,
+          "defaultValue": 100,
+          "paramIndex": 3,
+          "kind": "ms",
+          "scale": "log"
+        },
+        {
+          "key": "knee_db",
+          "label": "Knee",
+          "unit": "dB",
+          "min": 0,
+          "max": 12,
+          "step": 0.1,
+          "defaultValue": 3,
+          "paramIndex": 4,
+          "kind": "db",
+          "scale": "linear"
+        },
+        {
+          "key": "makeup_db",
+          "label": "Makeup",
+          "unit": "dB",
+          "min": -12,
+          "max": 24,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 5,
+          "kind": "db",
+          "scale": "linear"
+        },
+        {
+          "key": "mix",
+          "label": "Mix",
+          "unit": "%",
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "defaultValue": 100,
+          "paramIndex": 6,
+          "kind": "percent",
+          "scale": "linear"
+        }
+      ]
+    },
+    {
+      "type": "clipper",
+      "engineId": 4,
+      "label": "Clipper",
+      "addable": true,
+      "meterKind": "gr_db",
+      "params": [
+        {
+          "key": "mode",
+          "label": "Mode",
+          "unit": "",
+          "min": 0,
+          "max": 2,
+          "step": 1,
+          "defaultValue": 1,
+          "paramIndex": 0,
+          "kind": "enum",
+          "scale": "linear",
+          "options": [
+            { "value": 0, "label": "Hard" },
+            { "value": 1, "label": "Soft" },
+            { "value": 2, "label": "Tanh" }
+          ]
+        },
+        {
+          "key": "drive_db",
+          "label": "Drive",
+          "unit": "dB",
+          "min": 0,
+          "max": 24,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 1,
+          "kind": "db",
+          "scale": "linear"
+        },
+        {
+          "key": "ceiling_db",
+          "label": "Ceiling",
+          "unit": "dB",
+          "min": -24,
+          "max": 0,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 2,
+          "kind": "db",
+          "scale": "linear"
+        },
+        {
+          "key": "softness",
+          "label": "Softness",
+          "unit": "",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "defaultValue": 0.5,
+          "paramIndex": 3,
+          "kind": "float",
+          "scale": "linear"
+        },
+        {
+          "key": "output_db",
+          "label": "Output",
+          "unit": "dB",
+          "min": -24,
+          "max": 12,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 4,
+          "kind": "db",
+          "scale": "linear"
+        }
+      ]
+    },
+    {
+      "type": "limiter",
+      "engineId": 5,
+      "label": "Limiter",
+      "addable": true,
+      "meterKind": "gr_db",
+      "params": [
+        {
+          "key": "input_gain_db",
+          "label": "Input",
+          "unit": "dB",
+          "min": 0,
+          "max": 24,
+          "step": 0.1,
+          "defaultValue": 0,
+          "paramIndex": 0,
+          "kind": "db",
+          "scale": "linear"
+        },
+        {
+          "key": "ceiling_db",
+          "label": "Ceiling",
+          "unit": "dB",
+          "min": -24,
+          "max": 0,
+          "step": 0.1,
+          "defaultValue": -0.3,
+          "paramIndex": 1,
+          "kind": "db",
+          "scale": "linear"
+        },
+        {
+          "key": "release_ms",
+          "label": "Release",
+          "unit": "ms",
+          "min": 5,
+          "max": 500,
+          "step": 1,
+          "defaultValue": 60,
+          "paramIndex": 2,
+          "kind": "ms",
+          "scale": "log"
+        },
+        {
+          "key": "lookahead_ms",
+          "label": "Lookahead",
+          "unit": "ms",
+          "min": 0,
+          "max": 10,
+          "step": 0.1,
+          "defaultValue": 2.0,
+          "paramIndex": 3,
+          "kind": "ms",
+          "scale": "linear"
+        }
+      ]
+    }
+  ]
+}

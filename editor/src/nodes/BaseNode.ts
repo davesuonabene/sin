@@ -25,12 +25,17 @@ import { globalAudioScheduler } from '../audioScheduler.ts';
 import {
     evaluateNumericFieldOperator,
     evaluateSelectFieldOperator,
+    getPoolItemIdentityKey,
+    getPoolPermutationOrder,
     hashSeed,
+    isCalculatedPoolQuery,
     isFieldOperatorExpression,
     normalizeNumericSeed,
     wrapSlotIndex,
 } from '../../../ermes/ts/slotLanguage.ts';
+import { resolveEffectivePoolSeed } from '../../../ermes/ts/assetResolver.ts';
 import { getEffectiveFieldSeed, restoreBaseValues } from '../../../ermes/ts/randomResolver.ts';
+import { findChainModuleParam, parseChainParamFieldKey } from '../dsp/processorRegistry.ts';
 
 export const VISUALIZATION_TYPE_LABELS: Record<VisualizationTypeId, string> = {
     loop: 'Loop Waveform',
@@ -493,9 +498,60 @@ export abstract class BaseNode extends LGraphNode {
         return Boolean(this.getAttachedRandomModNode());
     }
 
+    getPoolItems(): any[] {
+        if (!this.isPoolSupported) return [];
+        const modNode = this.getAttachedPoolNode();
+        if (Array.isArray(modNode?.properties?.selected_items) && modNode.properties.selected_items.length > 0) {
+            return modNode.properties.selected_items;
+        }
+        if (Array.isArray(this.properties?.selected_items) && this.properties.selected_items.length > 0) {
+            return this.properties.selected_items;
+        }
+        return Array.isArray(modNode?.properties?.selected_items) ? modNode.properties.selected_items : [];
+    }
+
+    getPoolSalt(): number {
+        const modNode = this.getAttachedPoolNode();
+        return Number(modNode?.id || this.id || 0);
+    }
+
+    getOrderedPoolItems(): Array<{ item: any; runIndex: number; baseIndex: number }> {
+        const baseItems = this.getPoolItems();
+        if (baseItems.length === 0) return [];
+        const modNode = this.getAttachedPoolNode();
+        const effPoolSeed = resolveEffectivePoolSeed(modNode, this);
+        const permOrder = getPoolPermutationOrder(baseItems.length, effPoolSeed, this.getPoolSalt());
+        return permOrder.map((baseIndex, runIndex) => ({
+            item: baseItems[baseIndex],
+            runIndex,
+            baseIndex,
+        }));
+    }
+
+    findPoolItemRunIndex(target: { id?: any; filepath?: string; absolute_path?: string; name?: string; is_inline?: boolean } | null | undefined): number {
+        if (!target) return -1;
+        const ordered = this.getOrderedPoolItems();
+        if (ordered.length === 0) return -1;
+        const targetKey = getPoolItemIdentityKey(target);
+        if (targetKey) {
+            const byKey = ordered.find(entry => getPoolItemIdentityKey(entry.item) === targetKey);
+            if (byKey) return byKey.runIndex;
+        }
+        if (target.id != null && String(target.id).trim()) {
+            const idStr = String(target.id).trim();
+            const byId = ordered.find(entry => entry.item?.id != null && String(entry.item.id).trim() === idStr);
+            if (byId) return byId.runIndex;
+        }
+        const nameLower = String(target.name || '').trim().toLowerCase();
+        if (nameLower) {
+            const byName = ordered.find(entry => String(entry.item?.name || '').trim().toLowerCase() === nameLower);
+            if (byName) return byName.runIndex;
+        }
+        return -1;
+    }
+
     isPoolDefinitelyCreated(): boolean {
-        const items = this.getAttachedPoolNode()?.properties?.selected_items;
-        return Array.isArray(items) && items.length > 0;
+        return this.getPoolItems().length > 0;
     }
 
     isRandomModDefinitelyCreated(): boolean {
@@ -505,6 +561,12 @@ export abstract class BaseNode extends LGraphNode {
 
     get isPoolPanelOpen(): boolean {
         if (!this.isPoolSupported) return false;
+        if (typeof window !== 'undefined') {
+            const activeTabMap = (window as any).__sinActiveParamTabByNode as Map<number, string> | undefined;
+            if ((window as any).activeParamNodeId === this.id && activeTabMap?.get(this.id) === 'POOL') {
+                return true;
+            }
+        }
         if (this.isPoolViewOpen) return true;
         const poolId = this.getAttachedPoolNode()?.id;
         return poolId != null && (typeof window !== 'undefined') && (window as any).activeParamNodeId === poolId;
@@ -799,7 +861,11 @@ export abstract class BaseNode extends LGraphNode {
             const expr = String(ops[key] ?? '').trim();
             if (isFieldOperatorExpression(expr)) return expr;
         }
-        if (key === 'pool_query' || key === 'sample_slot' || key === 'seed') {
+        if (key === 'pool_query') {
+            const raw = String(this.properties?.pool_query ?? '').trim();
+            return isFieldOperatorExpression(raw, this.getPoolItems()) ? raw : '';
+        }
+        if (key === 'sample_slot' || key === 'seed') {
             const raw = String(this.properties?.[key] ?? '').trim();
             return isFieldOperatorExpression(raw) ? raw : '';
         }
@@ -828,7 +894,8 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     evaluateFieldOperatorForKey(key: string, expr: string, field?: FieldSchema, triggerOverride?: number): any {
-        const schema = field || this.getFields().find(f => f.key === key);
+        const chainField = !field ? findChainModuleParam(this, key)?.schema : undefined;
+        const schema = field || chainField || this.getFields().find(f => f.key === key);
         const triggerCount = triggerOverride !== undefined ? triggerOverride : this.getTriggerCount();
         const seed = this.getEffectiveSeed();
         const salt = normalizeNumericSeed(key, 0xF1E1);
@@ -882,6 +949,18 @@ export abstract class BaseNode extends LGraphNode {
         }
         this.setFieldOperator(key, trimmed);
         const resolved = this.evaluateFieldOperatorForKey(key, trimmed, field);
+        const chainKey = parseChainParamFieldKey(key);
+        if (chainKey && Array.isArray(this.properties?.chain)) {
+            const nextChain = this.properties.chain.map((m: any) =>
+                m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m
+            );
+            const mod = nextChain.find((m: any) => m && String(m.id) === chainKey.moduleId);
+            if (mod) {
+                mod.params[chainKey.paramKey] = typeof resolved === 'boolean' ? (resolved ? 1 : 0) : Number(resolved);
+                this.updateProperty('chain', nextChain);
+            }
+            return resolved;
+        }
         if (key === 'sample_slot' || key === 'pool_query' || key === 'seed') {
             this.updateProperty(key, trimmed);
         } else {
@@ -893,16 +972,34 @@ export abstract class BaseNode extends LGraphNode {
     evaluateAllFieldOperators(triggerOverride?: number): void {
         const ops = this.properties?.field_operators;
         if (ops && typeof ops === 'object') {
+            let chainDirty = false;
+            const nextChain = Array.isArray(this.properties?.chain)
+                ? this.properties.chain.map((m: any) =>
+                    m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m
+                )
+                : null;
             for (const [key, expr] of Object.entries(ops)) {
                 if (key === 'sample_slot' || key === 'pool_query' || key === 'seed') continue;
                 if (typeof expr === 'string' && isFieldOperatorExpression(expr)) {
                     const resolved = this.evaluateFieldOperatorForKey(key, expr, undefined, triggerOverride);
-                    this.updateProperty(key, resolved);
+                    const chainKey = parseChainParamFieldKey(key);
+                    if (chainKey && nextChain) {
+                        const mod = nextChain.find((m: any) => m && String(m.id) === chainKey.moduleId);
+                        if (mod) {
+                            mod.params[chainKey.paramKey] = typeof resolved === 'boolean' ? (resolved ? 1 : 0) : Number(resolved);
+                            chainDirty = true;
+                        }
+                    } else {
+                        this.updateProperty(key, resolved);
+                    }
                 }
+            }
+            if (chainDirty && nextChain) {
+                this.updateProperty('chain', nextChain);
             }
         }
         const poolQuery = String(this.properties?.pool_query ?? '').trim();
-        if (isFieldOperatorExpression(poolQuery) && typeof (this as any).applyPoolQuery === 'function') {
+        if (isCalculatedPoolQuery(poolQuery, this.getPoolItems()) && typeof (this as any).applyPoolQuery === 'function') {
             (this as any).applyPoolQuery(poolQuery, false);
         }
     }
@@ -930,25 +1027,10 @@ export abstract class BaseNode extends LGraphNode {
 
         if (ctor.panelSchema) {
             schema = {
-                tabs: ctor.panelSchema.tabs.map((t: any) => {
-                    const isPrimaryVisualizerTab = this.isPoolSupported && t.id === this.defaultPropertiesTab;
-                    if (isPrimaryVisualizerTab && this.isPoolViewOpen) {
-                        const visualizerSections = t.sections.filter((s: any) =>
-                            s.type === 'waveform_crop' || s.type === 'sequence_grid'
-                        );
-                        return {
-                            ...t,
-                            sections: [
-                                ...visualizerSections,
-                                { type: 'pool_editor' }
-                            ]
-                        };
-                    }
-                    return {
-                        ...t,
-                        sections: [...t.sections]
-                    };
-                })
+                tabs: ctor.panelSchema.tabs.map((t: any) => ({
+                    ...t,
+                    sections: [...t.sections]
+                }))
             };
         } else {
             const tabs = ctor.tabs || ["TRACK", "CHAIN", "EXPORT", "COMMON"];
@@ -1313,6 +1395,19 @@ export abstract class BaseNode extends LGraphNode {
         const slots = typeof (this as any).getSlots === 'function' ? (this as any).getSlots() : undefined;
         const activeSlot = typeof (this as any).activeSlotIndex === 'number' ? (this as any).activeSlotIndex : undefined;
 
+        const explicitLoading = Boolean((this as any)._isLoadingPreview);
+        const pendingPeaksOnLive = Boolean(
+            nativeRealtimeLoaded
+            && !displayBuffer
+            && !resolvedPeaks
+            && (isPreviewTarget || Boolean(win?.__sinRealtimePeaksPending))
+            && (Boolean(this.properties?.filepath) || this.getInputNodes().length > 0 || isPreviewTarget)
+        );
+        const isLoading = explicitLoading || pendingPeaksOnLive;
+        const loadingLabel = isLoading
+            ? (String((this as any)._loadingPreviewLabel || '') || (telemetry?.isPlaying ? 'Loading · Raw' : 'Loading…'))
+            : undefined;
+
         return {
             buffer: displayBuffer,
             peaks: (!displayBuffer && resolvedPeaks) ? resolvedPeaks : undefined,
@@ -1320,6 +1415,8 @@ export abstract class BaseNode extends LGraphNode {
             accentColor: accent,
             bufferedProgress,
             isInvalidated,
+            isLoading,
+            loadingLabel,
             playbackProgress,
             slotCount: Array.isArray(slots) ? slots.length : undefined,
             activeSlot
@@ -1739,7 +1836,7 @@ export abstract class BaseNode extends LGraphNode {
                 this.selectedModifierBadge = 'pool';
                 this.setDirtyCanvas(true, true);
                 if (typeof window !== 'undefined') {
-                    window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', { detail: { nodeId: this.id, forceOpen: true } }));
+                    window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', { detail: { nodeId: this.id, forceOpen: true, targetTab: 'POOL' } }));
                 }
             },
             "Asset Pool",

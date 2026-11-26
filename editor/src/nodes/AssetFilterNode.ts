@@ -95,6 +95,11 @@ export class AssetFilterNode extends ModulatorNode {
                 ownerNode = allNodes.find((n: any) => n?.properties?.asset_modifier_id === this.id) || null;
             }
             if (ownerNode) {
+                if (key === 'selected_items' && ownerNode.properties) {
+                    ownerNode.properties.selected_items = Array.isArray(value)
+                        ? value.map((it: any) => ({ ...it }))
+                        : [];
+                }
                 populateOwnerSlotsFromPool(this, ownerNode);
                 if (typeof window !== 'undefined') {
                     window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: ownerNode.id } }));

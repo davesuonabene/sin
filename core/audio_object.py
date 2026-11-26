@@ -14,7 +14,10 @@ from core.dag_cache import GLOBAL_DAG_CACHE
 from ermes.py.slot_language import (
     evaluate_numeric_field_operator,
     hash_seed,
+    is_calculated_pool_query,
+    is_external_pool_item,
     is_field_operator_expression,
+    is_inline_pool_item,
     is_random_token,
     mulberry32,
     normalize_numeric_seed,
@@ -743,10 +746,10 @@ class SampleObject(AudioObject):
         self._resolved_path_cache: Dict[str, str] = {}
         self.slots: List[Dict[str, Any]] = self._normalize_slots(slots)
         self.is_dynamic = bool(
-            is_field_operator_expression(self.pool_query)
+            is_field_operator_expression(self.pool_query, self.selected_items)
             or bool(self.field_operators)
             or any(
-                is_field_operator_expression(s.get("pool_query")) or bool(s.get("field_operators"))
+                is_field_operator_expression(s.get("pool_query"), self.selected_items) or bool(s.get("field_operators"))
                 for s in self.slots
             )
         )
@@ -778,7 +781,7 @@ class SampleObject(AudioObject):
             if isinstance(slot_cfg.get("field_operators"), dict) and slot_cfg.get("field_operators")
             else self.field_operators
         )
-        has_slot_op = is_field_operator_expression(slot_query) or bool(slot_ops)
+        has_slot_op = is_field_operator_expression(slot_query, self.selected_items) or bool(slot_ops)
         if iteration is not None:
             trigger_idx = max(0, int(iteration))
             self._trigger_count = trigger_idx + 1
@@ -855,7 +858,8 @@ class SampleObject(AudioObject):
             self._window_slice_state[state_key] = (slice_key, win_idx)
             return w_prog, c_prog, win_idx
 
-        if self.selected_items and (is_field_operator_expression(slot_query_str) or (slot_query_str and not slot_filepath)):
+        if self.selected_items and slot_query_str:
+            eff_pool_node_id = int(getattr(self, "pool_node_id", None) or self.node_id or 0)
             q_w_prog, q_c_prog, q_win_idx = _get_eval_coords("pool_query", slot_query_str)
             chosen = resolve_pool_item_by_query(
                 self.selected_items,
@@ -865,6 +869,7 @@ class SampleObject(AudioObject):
                 is_sequential=False,
                 trigger_count=trigger_idx,
                 pool_seed=eff_pool_seed,
+                node_id=eff_pool_node_id,
                 wrapper_idx=wrapper_idx,
                 wrapper_progress=q_w_prog,
                 cycle_idx=cycle_idx,
@@ -1165,11 +1170,11 @@ class SequenceObject(AudioObject):
             self.seed_mode == "moving"
             or len(set(self.cycle_seeds)) > 1
             or is_field_operator_expression(self.seed)
-            or is_field_operator_expression(self.pool_query)
+            or is_field_operator_expression(self.pool_query, self.selected_items)
             or bool(self.field_operators)
             or is_field_operator_expression(self.sample_slot)
             or any(
-                is_field_operator_expression(s.get("pool_query"))
+                is_field_operator_expression(s.get("pool_query"), self.selected_items)
                 or bool(s.get("field_operators"))
                 or is_field_operator_expression(s.get("sample_slot"))
                 for s in self.slots
@@ -1295,7 +1300,24 @@ class SequenceObject(AudioObject):
             if isinstance(slot_cfg.get("field_operators"), dict) and slot_cfg.get("field_operators")
             else self.field_operators
         )
-        has_seq_pool_op = is_field_operator_expression(slot_query) and bool(self.selected_items)
+        has_seq_pool_op = is_field_operator_expression(slot_query, self.selected_items) and bool(self.selected_items)
+        has_static_seq_pool_query = bool(slot_query) and not has_seq_pool_op and bool(self.selected_items)
+        eff_pool_node_id = int(getattr(self, "pool_node_id", None) or self.node_id or 0)
+        if has_static_seq_pool_query:
+            static_chosen = resolve_pool_item_by_query(
+                self.selected_items,
+                slot_query,
+                slot_index=eff_slot,
+                slot_seed=self.field_seed if getattr(self, "field_seed", None) is not None else active_seed,
+                is_sequential=False,
+                trigger_count=0,
+                pool_seed=getattr(self, "global_seed", None),
+                node_id=eff_pool_node_id,
+            )
+            if static_chosen:
+                static_pat = _load_sequence_pattern_from_item(static_chosen)
+                if static_pat is not None:
+                    active_sequence, active_step_params, _ = static_pat
         sample_slot_op = (
             slot_ops.get("sample_slot")
             if isinstance(slot_ops, dict) and is_field_operator_expression(slot_ops.get("sample_slot"))
@@ -1417,6 +1439,7 @@ class SequenceObject(AudioObject):
                     is_sequential=False,
                     trigger_count=cycle_iter,
                     pool_seed=eff_pool_seed,
+                    node_id=eff_pool_node_id,
                     wrapper_idx=wrapper_idx,
                     wrapper_progress=cycle_wrapper_progress,
                     global_idx=wrapper_idx,
@@ -1763,10 +1786,19 @@ class ItemPoolObject(AudioObject):
         for index, item in enumerate(self.selected_items):
             if not isinstance(item, dict):
                 raise ValueError(f"Asset Pool item {index} is not an asset reference")
+            if is_external_pool_item(item) or is_inline_pool_item(item):
+                continue
             if item.get("id") is None:
                 raise ValueError(f"Asset Pool item {index} is missing its GAIA id")
         enriched = _enrich_selected_items(self.selected_items)
         for index, item in enumerate(enriched):
+            if is_inline_pool_item(item):
+                self.current_pool.append({
+                    **item,
+                    "absolute_path": "",
+                    "type": "sequence",
+                })
+                continue
             filepath = item.get("absolute_path") or item.get("filepath") or item.get("path")
             if not filepath:
                 raise ValueError(f"Asset Pool item {index} has no resolved asset path")

@@ -18,12 +18,33 @@ class System:
         sample_rate: int = 44100,
         root_object: Optional[AudioObject] = None,
         render_mode: str = "offline",
+        allow_async_cook: bool = False,
+        playhead_sec: float = 0.0,
+        allow_bypassed_export: bool = False,
+        force_cook_node_ids: Optional[set[str]] = None,
     ) -> None:
         self.bpm = float(bpm)
         self.sample_rate = int(sample_rate)
         self.root_object = root_object
         self.render_mode = str(render_mode or "offline").lower()
+        self.allow_async_cook = bool(allow_async_cook)
+        self.playhead_sec = float(playhead_sec or 0.0)
+        self.allow_bypassed_export = bool(allow_bypassed_export)
+        self.force_cook_node_ids: set[str] = set(force_cook_node_ids or ())
+        self.pending_cooks: list = []
+        self.pending_tiled_cooks: list = []
+        self.processor_statuses: dict[str, dict] = {}
         self.manifest: dict = {"nodes": {}}
+
+    def record_processor_status(self, node_id: str, status: dict) -> None:
+        nid = str(node_id)
+        self.processor_statuses[nid] = dict(status)
+        if nid:
+            node_entry = self.manifest["nodes"].setdefault(nid, {
+                "node_id": int(nid) if nid.isdigit() else nid,
+                "events": [],
+            })
+            node_entry["processor_status"] = dict(status)
 
     def record_node_stem(
         self,
@@ -46,8 +67,8 @@ class System:
         node_entry["duration_seconds"] = float(duration_seconds)
         if extra:
             node_entry.update(extra)
-        # Store numpy buffer for composite and sequence nodes that require intermediate stem encoding.
-        if node_type in ("track", "master", "bus", "arrangement", "sequence"):
+        # Store numpy buffer for composite, sequence, and cooked processor nodes that require intermediate stem encoding.
+        if node_type in ("track", "master", "bus", "arrangement", "sequence", "preamp_denoise", "voice_isolator"):
             if not hasattr(self, "_node_stems"):
                 self._node_stems = {}
             self._node_stems[str(node_id)] = audio_array

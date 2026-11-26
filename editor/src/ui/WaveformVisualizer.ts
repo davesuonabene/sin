@@ -1,4 +1,4 @@
-import { fetchAudioBuffer, getCachedAudioBufferSync, getSharedAudioContext } from '../audioBufferCache.ts';
+import { fetchAudioBuffer, fetchAudioPeaks, getCachedAudioBufferSync, getSharedAudioContext } from '../audioBufferCache.ts';
 
 export interface WaveformVisualizerOptions {
     container?: HTMLElement;
@@ -60,6 +60,15 @@ export class WaveformVisualizer {
     private canvas: HTMLCanvasElement;
     private ctx: CanvasRenderingContext2D;
     private audioBuffer: AudioBuffer | null = null;
+    private peaks: Float32Array | null = null;
+    private peaksDuration: number = 0;
+    private peaksNormStart: number = 0.0;
+    private peaksNormEnd: number = 1.0;
+    private currentFilepath: string = '';
+    private isLoadingAudio: boolean = false;
+    private loadSeq: number = 0;
+    private loadingRafId: number | null = null;
+    private zoomFetchTimer: number | null = null;
     private previewSource: AudioBufferSourceNode | null = null;
     private previewStartTime: number = 0;
     private previewDuration: number = 0;
@@ -149,6 +158,11 @@ export class WaveformVisualizer {
 
     public destroy() {
         this.stopPreview();
+        this.stopLoadingSpinner();
+        if (this.zoomFetchTimer !== null) {
+            window.clearTimeout(this.zoomFetchTimer);
+            this.zoomFetchTimer = null;
+        }
         if (this.animFrameId) {
             cancelAnimationFrame(this.animFrameId);
             this.animFrameId = null;
@@ -177,6 +191,59 @@ export class WaveformVisualizer {
         this.viewStart = s;
         this.viewEnd = e;
         this.draw();
+        // On long peak-backed files, lazily fetch crisp zoomed peaks on demand
+        if (!this.audioBuffer && this.currentFilepath && this.peaksDuration > 0) {
+            this.scheduleZoomPeaksFetch();
+        }
+    }
+
+    private scheduleZoomPeaksFetch() {
+        if (this.zoomFetchTimer !== null) {
+            window.clearTimeout(this.zoomFetchTimer);
+        }
+        const fp = this.currentFilepath;
+        const seq = this.loadSeq;
+        this.zoomFetchTimer = window.setTimeout(async () => {
+            this.zoomFetchTimer = null;
+            if (!this.container || seq !== this.loadSeq || fp !== this.currentFilepath || this.peaksDuration <= 0) return;
+            const sSec = this.viewStart * this.peaksDuration;
+            const eSec = Math.max(sSec + 0.05, this.viewEnd * this.peaksDuration);
+            const res = await fetchAudioPeaks(fp, { columns: 1024, startSec: sSec, endSec: eSec });
+            if (!res || seq !== this.loadSeq || !this.container) return;
+            this.peaks = res.peaks;
+            this.peaksNormStart = Math.max(0, Math.min(1, res.startSec / Math.max(1e-4, this.peaksDuration)));
+            this.peaksNormEnd = Math.max(this.peaksNormStart + 1e-4, Math.min(1, res.endSec / Math.max(1e-4, this.peaksDuration)));
+            this.maskFingerprint = '';
+            this.tintFingerprint = '';
+            this.draw();
+        }, 120);
+    }
+
+    private startLoadingSpinner() {
+        this.isLoadingAudio = true;
+        if (this.loadingRafId !== null) return;
+        let lastDraw = 0;
+        const tick = (ts: number) => {
+            if (!this.isLoadingAudio || !this.container) {
+                this.loadingRafId = null;
+                return;
+            }
+            if (ts - lastDraw >= 64) {
+                lastDraw = ts;
+                this.showLoadingState();
+            }
+            this.loadingRafId = requestAnimationFrame(tick);
+        };
+        this.showLoadingState();
+        this.loadingRafId = requestAnimationFrame(tick);
+    }
+
+    private stopLoadingSpinner() {
+        this.isLoadingAudio = false;
+        if (this.loadingRafId !== null) {
+            cancelAnimationFrame(this.loadingRafId);
+            this.loadingRafId = null;
+        }
     }
 
     public getViewRange(): { start: number; end: number } {
@@ -228,7 +295,14 @@ export class WaveformVisualizer {
 
     public setAudioBufferSync(buffer: AudioBuffer | null): void {
         this.stopPreview();
+        this.stopLoadingSpinner();
+        this.loadSeq++;
         this.audioBuffer = buffer;
+        this.peaks = null;
+        this.peaksDuration = buffer ? buffer.duration : 0;
+        this.peaksNormStart = 0;
+        this.peaksNormEnd = 1;
+        this.currentFilepath = '';
         this.maskFingerprint = '';
         this.tintFingerprint = '';
         this.draw();
@@ -236,6 +310,7 @@ export class WaveformVisualizer {
 
     public async loadAudio(source: string | AudioBuffer | ArrayBuffer): Promise<void> {
         this.stopPreview();
+        const seq = ++this.loadSeq;
 
         if (typeof source === 'string') {
             const cached = getCachedAudioBufferSync(source);
@@ -243,31 +318,64 @@ export class WaveformVisualizer {
                 this.setAudioBufferSync(cached);
                 return;
             }
+            this.currentFilepath = source;
         } else if (source instanceof AudioBuffer) {
             this.setAudioBufferSync(source);
             return;
         }
 
-        this.showLoadingState();
+        this.audioBuffer = null;
+        this.peaks = null;
+        this.startLoadingSpinner();
 
         try {
             this.maskFingerprint = '';
             this.tintFingerprint = '';
             if (typeof source === 'string') {
+                // Fast zero-RAM peak fetch (~8 KB, <150ms even on 1h+ MP3s — never freezes Chrome decoding 900 MB PCM!)
+                const peakRes = await fetchAudioPeaks(source, { columns: 1024 });
+                if (seq !== this.loadSeq) return;
+                if (peakRes && peakRes.peaks.length >= 2) {
+                    this.peaks = peakRes.peaks;
+                    this.peaksDuration = peakRes.durationSeconds;
+                    this.peaksNormStart = 0;
+                    this.peaksNormEnd = 1;
+                    this.stopLoadingSpinner();
+                    this.draw();
+                    // Only decode WebAudio buffer lazily in background for short samples (<= 45s)
+                    if (peakRes.durationSeconds > 0 && peakRes.durationSeconds <= 45) {
+                        void fetchAudioBuffer(source).then((decoded) => {
+                            if (decoded && seq === this.loadSeq && this.container) {
+                                this.audioBuffer = decoded;
+                                this.maskFingerprint = '';
+                                this.tintFingerprint = '';
+                                this.draw();
+                            }
+                        }).catch(() => {});
+                    }
+                    return;
+                }
                 const decoded = await fetchAudioBuffer(source);
+                if (seq !== this.loadSeq) return;
                 if (!decoded) {
                     throw new Error(`Could not decode audio: ${source}`);
                 }
                 this.audioBuffer = decoded;
+                this.peaksDuration = decoded.duration;
             } else {
                 const audioContext = getSharedAudioContext();
                 if (!audioContext) throw new Error('AudioContext unavailable');
                 this.audioBuffer = await audioContext.decodeAudioData(source);
+                this.peaksDuration = this.audioBuffer.duration;
             }
+            if (seq !== this.loadSeq) return;
+            this.stopLoadingSpinner();
             this.maskFingerprint = '';
             this.tintFingerprint = '';
             this.draw();
         } catch (err) {
+            if (seq !== this.loadSeq) return;
+            this.stopLoadingSpinner();
             console.error("WaveformVisualizer: Failed to load audio", err);
             this.showErrorState("Failed to load audio waveform");
         }
@@ -298,7 +406,7 @@ export class WaveformVisualizer {
     }
 
     public getDuration(): number {
-        return this.audioBuffer ? this.audioBuffer.duration : 0;
+        return this.audioBuffer ? this.audioBuffer.duration : this.peaksDuration;
     }
 
     public playPreview() {
@@ -368,17 +476,37 @@ export class WaveformVisualizer {
         const dpr = window.devicePixelRatio || 1;
         const width = this.canvas.width / dpr;
         const height = this.canvas.height / dpr;
+        if (width <= 0 || height <= 0) return;
 
         this.ctx.save();
         this.ctx.scale(dpr, dpr);
         this.ctx.fillStyle = this.backgroundColor;
         this.ctx.fillRect(0, 0, width, height);
 
-        this.ctx.fillStyle = "#94a3b8";
-        this.ctx.font = "11px Inter, sans-serif";
-        this.ctx.textAlign = "center";
+        const cx = width * 0.5 - 56;
+        const cy = height * 0.5;
+        const r = 6.5;
+        const angle = ((typeof performance !== 'undefined' ? performance.now() : Date.now()) * 0.006) % (Math.PI * 2);
+
+        this.ctx.strokeStyle = "rgba(15, 23, 42, 0.14)";
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        this.ctx.stroke();
+
+        this.ctx.strokeStyle = "#0284c7";
+        this.ctx.lineWidth = 2;
+        this.ctx.lineCap = "round";
+        this.ctx.beginPath();
+        this.ctx.arc(cx, cy, r, angle, angle + Math.PI * 1.35);
+        this.ctx.stroke();
+        this.ctx.lineCap = "butt";
+
+        this.ctx.fillStyle = "#64748b";
+        this.ctx.font = "600 10.5px Inter, sans-serif";
+        this.ctx.textAlign = "left";
         this.ctx.textBaseline = "middle";
-        this.ctx.fillText("Loading Audio Waveform...", width / 2, height / 2);
+        this.ctx.fillText("Loading waveform…", cx + r + 8, cy + 0.5);
         this.ctx.restore();
     }
 
@@ -439,45 +567,70 @@ export class WaveformVisualizer {
         this.ctx.lineTo(width, centerY);
         this.ctx.stroke();
 
-        // 3. Waveform Peaks for visible slice (rendered via cached mask)
-        if (this.audioBuffer) {
-            const totalSamples = this.audioBuffer.length;
-            const startSample = Math.floor(this.viewStart * totalSamples);
-            const endSample = Math.min(totalSamples, Math.ceil(this.viewEnd * totalSamples));
-            const visibleSamples = Math.max(1, endSample - startSample);
-
+        // 3. Waveform Peaks for visible slice (rendered via cached mask — supports both AudioBuffer and lightweight peak arrays!)
+        if (this.audioBuffer || (this.peaks && this.peaks.length >= 2)) {
             const barWidth = 2;
             const barGap = 1;
             const step = barWidth + barGap;
-            const numBars = Math.floor(width / step);
-            const samplesPerBar = Math.max(1, Math.floor(visibleSamples / numBars));
+            const numBars = Math.max(1, Math.floor(width / step));
             const maxAmplitudeHeight = (mainH / 2) * 0.85;
 
-            const currentFp = `${totalSamples}_${Math.floor(width)}_${Math.floor(height)}_${this.viewStart}_${this.viewEnd}`;
+            const sourceKey = this.audioBuffer
+                ? `buf_${this.audioBuffer.length}`
+                : `pk_${this.peaks!.length}_${this.peaksNormStart.toFixed(4)}_${this.peaksNormEnd.toFixed(4)}`;
+            const currentFp = `${sourceKey}_${Math.floor(width)}_${Math.floor(height)}_${this.viewStart.toFixed(5)}_${this.viewEnd.toFixed(5)}`;
             const currentTintFp = `${currentFp}_${this.waveformColor}`;
             const mask = getOrCreateOffscreenCanvas(this.maskCanvas, width, height);
             const tint = getOrCreateOffscreenCanvas(this.tintCanvas, width, height);
 
             const drawPeakBars = (targetCtx: CanvasRenderingContext2D) => {
-                const channels = Array.from(
-                    { length: this.audioBuffer!.numberOfChannels },
-                    (_, channel) => this.audioBuffer!.getChannelData(channel)
-                );
-                const sampleStep = Math.max(1, Math.floor(samplesPerBar / 4));
-                for (let i = 0; i < numBars; i++) {
-                    const sIdx = startSample + Math.floor(i * (visibleSamples / numBars));
-                    let min = 1.0;
-                    let max = -1.0;
-                    for (let j = 0; j < samplesPerBar; j += sampleStep) {
-                        for (const rawData of channels) {
-                            const val = rawData[sIdx + j] || 0;
-                            if (val < min) min = val;
-                            if (val > max) max = val;
+                if (this.audioBuffer) {
+                    const totalSamples = this.audioBuffer.length;
+                    const startSample = Math.floor(this.viewStart * totalSamples);
+                    const endSample = Math.min(totalSamples, Math.ceil(this.viewEnd * totalSamples));
+                    const visibleSamples = Math.max(1, endSample - startSample);
+                    const samplesPerBar = Math.max(1, Math.floor(visibleSamples / numBars));
+                    const channels = Array.from(
+                        { length: this.audioBuffer.numberOfChannels },
+                        (_, channel) => this.audioBuffer!.getChannelData(channel)
+                    );
+                    const sampleStep = Math.max(1, Math.floor(samplesPerBar / 4));
+                    for (let i = 0; i < numBars; i++) {
+                        const sIdx = startSample + Math.floor(i * (visibleSamples / numBars));
+                        let min = 1.0;
+                        let max = -1.0;
+                        for (let j = 0; j < samplesPerBar; j += sampleStep) {
+                            for (const rawData of channels) {
+                                const val = rawData[sIdx + j] || 0;
+                                if (val < min) min = val;
+                                if (val > max) max = val;
+                            }
                         }
+                        const amp = Math.max(Math.abs(min), Math.abs(max));
+                        const barHeight = Math.max(2, amp * maxAmplitudeHeight * 2);
+                        targetCtx.fillRect(i * step, centerY - barHeight / 2, barWidth, barHeight);
                     }
-                    const amp = Math.max(Math.abs(min), Math.abs(max));
-                    const barHeight = Math.max(2, amp * maxAmplitudeHeight * 2);
-                    targetCtx.fillRect(i * step, centerY - barHeight / 2, barWidth, barHeight);
+                } else if (this.peaks && this.peaks.length >= 2) {
+                    const pk = this.peaks;
+                    const pairCount = Math.floor(pk.length / 2);
+                    const pkSpan = Math.max(1e-6, this.peaksNormEnd - this.peaksNormStart);
+                    const viewSpan = Math.max(1e-6, this.viewEnd - this.viewStart);
+                    for (let i = 0; i < numBars; i++) {
+                        const n0 = this.viewStart + (i / numBars) * viewSpan;
+                        const n1 = this.viewStart + ((i + 1) / numBars) * viewSpan;
+                        if (n1 <= this.peaksNormStart || n0 >= this.peaksNormEnd) continue;
+                        const p0 = Math.max(0, Math.min(pairCount - 1, Math.floor(((n0 - this.peaksNormStart) / pkSpan) * pairCount)));
+                        const p1 = Math.max(p0 + 1, Math.min(pairCount, Math.ceil(((n1 - this.peaksNormStart) / pkSpan) * pairCount)));
+                        let amp = 0;
+                        for (let k = p0; k < p1; k++) {
+                            const lo = Math.abs(pk[k * 2]);
+                            const hi = Math.abs(pk[k * 2 + 1]);
+                            if (lo > amp) amp = lo;
+                            if (hi > amp) amp = hi;
+                        }
+                        const barHeight = Math.max(2, Math.min(1, amp) * maxAmplitudeHeight * 2);
+                        targetCtx.fillRect(i * step, centerY - barHeight / 2, barWidth, barHeight);
+                    }
                 }
             };
 

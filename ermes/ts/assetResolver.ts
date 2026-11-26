@@ -7,9 +7,15 @@ import {
     type FieldEvalContext,
     type NodeSlot,
     computeLeafPrngSeed,
+    deduplicatePoolItemName,
+    getPoolItemCallName,
+    getPoolItemIdentityKey,
     getPoolPermutationOrder,
     hashSeed,
+    isCalculatedPoolQuery,
+    isExternalPoolItem,
     isFieldOperatorExpression,
+    isInlinePoolItem,
     isRandomToken,
     isRangeOperatorToken,
     mulberry32,
@@ -21,7 +27,16 @@ import {
     wrapSlotIndex
 } from './slotLanguage.ts';
 
-export { getPoolPermutationOrder, permutePoolItems };
+export {
+    deduplicatePoolItemName,
+    getPoolItemCallName,
+    getPoolItemIdentityKey,
+    getPoolPermutationOrder,
+    isCalculatedPoolQuery,
+    isExternalPoolItem,
+    isInlinePoolItem,
+    permutePoolItems,
+};
 
 /**
  * Resolves a single item from an asset pool using a selector query or bracketed Field Operator:
@@ -48,7 +63,6 @@ export function resolvePoolItemByQuery(
         : items;
 
     const raw = String(query ?? '').trim();
-    const lower = raw.toLowerCase();
     const triggerIdx = Math.max(0, Math.floor(Number(evalCtx?.triggerCount ?? triggerCount) || 0));
     const numericSeed = normalizeNumericSeed(evalCtx?.seed ?? slotSeed, 0);
 
@@ -61,11 +75,16 @@ export function resolvePoolItemByQuery(
         return { name, nameStem, base, baseStem, fpLower: fp.toLowerCase() };
     };
 
-    // 1. If raw is an exact match for a single item name (even if it contains spaces), return it directly
-    if (raw && !/[,[\]<>]/.test(raw) && !isRandomToken(raw) && !isRangeOperatorToken(raw)) {
+    // 1. If raw is an exact match for a single item name (even if it contains spaces or quotes), return it directly
+    const unquoted = (
+        (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2 && !raw.slice(1, -1).includes('"'))
+        || (raw.startsWith("'") && raw.endsWith("'") && raw.length >= 2 && !raw.slice(1, -1).includes("'"))
+    ) ? raw.slice(1, -1).trim() : raw;
+    const unquotedLower = unquoted.toLowerCase();
+    if (unquoted && !/[,[\]<>]/.test(unquoted) && !isRandomToken(unquoted) && !isRangeOperatorToken(unquoted)) {
         for (const item of activeItems) {
             const { name, nameStem, base, baseStem } = extractNames(item);
-            if (name === lower || nameStem === lower || base === lower || baseStem === lower) {
+            if (name === unquotedLower || nameStem === unquotedLower || base === unquotedLower || baseStem === unquotedLower) {
                 return item;
             }
         }
@@ -176,7 +195,7 @@ export function resolveEffectivePoolSeed(modifierNode?: any, ownerNode?: any, gr
     if (windowGraph?.extra?.global_seed !== undefined) {
         return normalizeNumericSeed(windowGraph.extra.global_seed, 0);
     }
-    return normalizeNumericSeed(modifierNode?.properties?.seed ?? ownerNode?.properties?.seed ?? 0, 0);
+    return 0;
 }
 
 /**
@@ -237,7 +256,9 @@ export function populateOwnerSlotsFromPool(
         || ownerNode.properties?.node_type === 'sequence';
 
     const rawItems = resolvedSelectedItems || modifierNode.properties.selected_items || [];
-    const baseItems = rawItems.filter((item: any) => Boolean(item?.absolute_path || item?.filepath));
+    const baseItems = rawItems.filter((item: any) =>
+        Boolean(item?.absolute_path || item?.filepath || (isSeq && Array.isArray(item?.sequence)))
+    );
     if (baseItems.length === 0) return;
 
     const poolSeed = resolveEffectivePoolSeed(modifierNode, ownerNode);
@@ -323,13 +344,22 @@ export function populateOwnerSlotsFromPool(
         const key = chosen.key != null ? String(chosen.key).trim() : undefined;
 
         if (isSeq) {
+            const chosenInline = isInlinePoolItem(chosen);
+            const nextSeqName = chosen.name || chosen.sequence_name || slots[s]?.sequence_name || 'Sequence';
             slots[s] = {
                 ...(slots[s] || {}),
                 slot: s,
                 index: s,
-                filepath,
+                filepath: chosenInline ? '' : filepath,
                 library_item_id: chosen.id ?? slots[s]?.library_item_id,
-                sequence_name: chosen.name || slots[s]?.sequence_name,
+                is_external: isExternalPoolItem(chosen),
+                is_inline: chosenInline,
+                source: chosenInline ? 'inline' : (isExternalPoolItem(chosen) ? 'external' : 'gaia'),
+                sequence_name: nextSeqName,
+                ...(Array.isArray(chosen.sequence) ? { sequence: [...chosen.sequence] } : {}),
+                ...(Array.isArray(chosen.step_parameters)
+                    ? { step_parameters: chosen.step_parameters.map((st: any) => ({ ...(st || {}) })) }
+                    : {}),
             };
         } else {
             slots[s] = {
@@ -338,6 +368,8 @@ export function populateOwnerSlotsFromPool(
                 index: s,
                 filepath,
                 library_item_id: chosen.id,
+                is_external: isExternalPoolItem(chosen),
+                source: isExternalPoolItem(chosen) ? 'external' : 'gaia',
                 original_bpm: bpm ?? slots[s]?.original_bpm,
                 key: key || slots[s]?.key || 'C',
                 ...(Number.isFinite(Number(chosen.duration_seconds)) && Number(chosen.duration_seconds) > 0
@@ -349,20 +381,75 @@ export function populateOwnerSlotsFromPool(
 
     const activeSlot = slots[activeIdx] || slots[0];
     if (isSeq) {
-        if (activeSlot?.filepath) {
-            modifierNode.properties.output_value = activeSlot.filepath;
+        if (activeSlot) {
+            if (activeSlot.filepath) {
+                modifierNode.properties.output_value = activeSlot.filepath;
+            } else if (activeSlot.is_inline) {
+                modifierNode.properties.output_value = '';
+            }
             if (activeSlot.library_item_id != null) modifierNode.properties.output_item_id = activeSlot.library_item_id;
+            if (Array.isArray(activeSlot.sequence) && activeSlot.sequence.length > 0) {
+                ownerNode.properties.sequence = [...activeSlot.sequence];
+            }
+            if (Array.isArray(activeSlot.step_parameters) && activeSlot.step_parameters.length > 0) {
+                ownerNode.properties.step_parameters = activeSlot.step_parameters.map((st: any) => ({ ...(st || {}) }));
+            }
+            if (activeSlot.filepath !== undefined) {
+                ownerNode.properties.filepath = String(activeSlot.filepath || '');
+            }
+            if (activeSlot.sequence_name) {
+                ownerNode.properties.sequence_name = activeSlot.sequence_name;
+            }
+            if (activeSlot.library_item_id !== undefined) {
+                ownerNode.properties.library_item_id = activeSlot.library_item_id;
+            }
+            ownerNode.properties.is_external = Boolean(activeSlot.is_external);
+            ownerNode.properties.is_inline = Boolean(activeSlot.is_inline);
+            ownerNode._cachedCompositedBuffer = null;
+            ownerNode.invalidateDownstreamVisualCaches?.();
+            const trackData = typeof window !== 'undefined' ? (window as any).trackNodes?.get?.(ownerNode.id) : null;
+            if (trackData) {
+                if (Array.isArray(ownerNode.properties.sequence)) trackData.sequence = [...ownerNode.properties.sequence];
+                if (Array.isArray(ownerNode.properties.step_parameters)) {
+                    trackData.step_parameters = ownerNode.properties.step_parameters.map((st: any) => ({ ...(st || {}) }));
+                }
+                trackData.filepath = ownerNode.properties.filepath;
+            }
+            // If active slot resolved to a file-backed sequence without cached steps yet, trigger async parse
+            if (activeSlot.filepath && !activeSlot.is_inline && (!Array.isArray(activeSlot.sequence) || activeSlot.sequence.length === 0)) {
+                const applySequence = typeof window !== 'undefined' ? (window as any).applyLibraryItemToSequence : undefined;
+                if (typeof applySequence === 'function') {
+                    const savedQuery = activeSlot.pool_query ?? ownerNode.properties.pool_query;
+                    void applySequence(ownerNode, {
+                        id: activeSlot.library_item_id,
+                        filepath: activeSlot.filepath,
+                        itemType: activeSlot.filepath.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi',
+                        name: activeSlot.sequence_name || activeSlot.filepath.split(/[\\/]/).pop() || 'Sequence',
+                        is_external: Boolean(activeSlot.is_external),
+                    }).then(() => {
+                        if (savedQuery !== undefined) {
+                            ownerNode.properties.pool_query = String(savedQuery);
+                            if (slots[activeIdx]) slots[activeIdx].pool_query = String(savedQuery);
+                        }
+                        ownerNode.syncActiveSlotFromProperties?.();
+                    }).catch(() => {});
+                }
+            }
         }
         return;
     }
 
     if (activeSlot?.filepath) {
+        const prevPath = ownerNode.properties.filepath;
         if (typeof ownerNode.updateProperty === 'function') {
             if (ownerNode.properties.filepath !== activeSlot.filepath) {
                 ownerNode.updateProperty('filepath', activeSlot.filepath);
             }
             if (activeSlot.library_item_id != null && ownerNode.properties.library_item_id !== activeSlot.library_item_id) {
                 ownerNode.updateProperty('library_item_id', activeSlot.library_item_id);
+            }
+            if (ownerNode.properties.is_external !== Boolean(activeSlot.is_external)) {
+                ownerNode.properties.is_external = Boolean(activeSlot.is_external);
             }
             if (activeSlot.original_bpm != null && !ownerNode.properties.original_bpm_is_local_override && ownerNode.properties.original_bpm !== activeSlot.original_bpm) {
                 ownerNode.updateProperty('original_bpm', activeSlot.original_bpm);
@@ -373,8 +460,18 @@ export function populateOwnerSlotsFromPool(
         } else {
             ownerNode.properties.filepath = activeSlot.filepath;
             if (activeSlot.library_item_id != null) ownerNode.properties.library_item_id = activeSlot.library_item_id;
+            ownerNode.properties.is_external = Boolean(activeSlot.is_external);
             if (activeSlot.original_bpm != null) ownerNode.properties.original_bpm = activeSlot.original_bpm;
             if (activeSlot.key != null) ownerNode.properties.key = activeSlot.key;
+        }
+        const trackData = typeof window !== 'undefined' ? (window as any).trackNodes?.get?.(ownerNode.id) : null;
+        if (trackData) {
+            trackData.filepath = activeSlot.filepath;
+            if (activeSlot.original_bpm != null) trackData.original_bpm = activeSlot.original_bpm;
+            if (activeSlot.key != null) trackData.key = activeSlot.key;
+        }
+        if (prevPath !== activeSlot.filepath) {
+            ownerNode.invalidateDownstreamVisualCaches?.();
         }
         modifierNode.properties.output_value = activeSlot.filepath;
         if (activeSlot.library_item_id != null) modifierNode.properties.output_item_id = activeSlot.library_item_id;
@@ -487,12 +584,34 @@ export async function resolveAssetFilterNode(
     const findLibraryFile = typeof window !== 'undefined' ? (window as any).findLibraryFile : undefined;
     const findLibraryFileForPoolLocator = typeof window !== 'undefined' ? (window as any).findLibraryFileForPoolLocator : undefined;
     const resolveLibraryAssets = typeof window !== 'undefined' ? (window as any).resolveLibraryAssets : undefined;
+    const rawPoolItems = modifierNode.properties.selected_items || [];
+    const gaiaPoolItems = rawPoolItems.filter((item: any) => !isExternalPoolItem(item) && !isInlinePoolItem(item));
     let libraryFiles = resolvedLibraryFiles || (
-        typeof resolveLibraryAssets === 'function'
-            ? await resolveLibraryAssets(modifierNode.properties.selected_items || [])
-            : typeof fetchLibrary === 'function' ? await fetchLibrary(false, true) : []
+        gaiaPoolItems.length === 0
+            ? []
+            : (typeof resolveLibraryAssets === 'function'
+                ? await resolveLibraryAssets(gaiaPoolItems)
+                : typeof fetchLibrary === 'function' ? await fetchLibrary(false, true) : [])
     );
-    for (const item of modifierNode.properties.selected_items || []) {
+    for (const item of rawPoolItems) {
+        if (isExternalPoolItem(item)) {
+            const extPath = String(item.absolute_path || item.filepath || '').trim();
+            if (!extPath) {
+                throw new Error(`External Asset Pool item is missing its local filepath: ${item?.name ?? item?.id ?? 'unknown'}`);
+            }
+            item.absolute_path = extPath;
+            item.filepath = extPath;
+            item.is_external = true;
+            item.source = 'external';
+            if (!item.id) item.id = `ext:${extPath}`;
+            continue;
+        }
+        if (isInlinePoolItem(item)) {
+            item.is_inline = true;
+            item.source = 'inline';
+            if (!item.id) item.id = `inline:${item.name || 'sequence'}`;
+            continue;
+        }
         if (item?.id == null || !String(item.id).trim()) {
             throw new Error('Asset Pool item is missing its GAIA id');
         }
@@ -504,7 +623,7 @@ export async function resolveAssetFilterNode(
                 ? findLibraryFile(libraryFiles, path)
                 : null);
         if (!latest && resolvedLibraryFiles && typeof resolveLibraryAssets === 'function') {
-            libraryFiles = await resolveLibraryAssets(modifierNode.properties.selected_items || []);
+            libraryFiles = await resolveLibraryAssets(gaiaPoolItems);
             resolvedLibraryFiles = undefined;
             latest = (typeof findLibraryFileForPoolLocator === 'function'
                 ? findLibraryFileForPoolLocator(libraryFiles, item)
@@ -527,7 +646,10 @@ export async function resolveAssetFilterNode(
         item.duration_seconds = latest.duration_seconds ?? null;
         item.collection_id = latest.collection_id ?? item.collection_id;
     }
-    const selectedItems = (modifierNode.properties.selected_items || []).filter((item: any) => {
+    const selectedItems = rawPoolItems.filter((item: any) => {
+        if (isInlinePoolItem(item)) {
+            return acceptedType === 'sequence_source' || !acceptedType;
+        }
         if (!(item.absolute_path || item.filepath)) return false;
         if (!acceptedType) return true;
         const path = String(item.absolute_path || item.filepath || item.name || '').toLowerCase();
@@ -551,11 +673,22 @@ export async function resolveAssetFilterNode(
         }
         requestItems = [lockedItem];
     }
+    const hasOnlyInlineItems = requestItems.length > 0 && requestItems.every(isInlinePoolItem);
+    if (hasOnlyInlineItems) {
+        if (ownerNode?.properties) {
+            populateOwnerSlotsFromPool(modifierNode, ownerNode, requestItems);
+        }
+        notifyResolvedProperties(modifierNode);
+        notifyResolvedProperties(ownerNode);
+        notifyArrangementSourceChanged(ownerNode);
+        return '';
+    }
+    const fileBackedRequestItems = requestItems.filter((item: any) => !isInlinePoolItem(item));
     const response = await fetch('/api/pool/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            selected_items: requestItems,
+            selected_items: fileBackedRequestItems,
             seed: modifierNode.properties.seed || 0,
             playbackMode: modifierNode.properties.playbackMode || 'Random',
             items_resolved: true,

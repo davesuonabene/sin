@@ -61,6 +61,8 @@ frontend/dist/
 Thumbs.db
 
 # Logs, Temp & Runtime State
+.env
+.gaia/models/
 *.log
 .runtime/
 tmp/

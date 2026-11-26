@@ -10,6 +10,8 @@ fading, mixing, and device output live inside libsin_dsp.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 import numpy as np
 
@@ -32,14 +34,90 @@ SIN_CLIP_LIVE_CROP_BOUND = 1 << 1
 SIN_CLIP_LIVE_RATE_BOUND = 1 << 2
 SIN_CLIP_CROP_IN_PLACE   = 1 << 3
 
-# Matches SinProcessorType & SIN_MAX_PROC_PARAMS in engine/include/sin_dsp.h
-SIN_MAX_PROC_PARAMS = 8
-SIN_PROC_NONE       = 0
-SIN_PROC_GAIN       = 1
+# Matches SinProcessorType & ABI limits in engine/include/sin_dsp.h
+SIN_MAX_PROC_PARAMS  = 32
+SIN_MAX_STAGE_METERS = 512
+SIN_PROC_NONE        = 0
+SIN_PROC_GAIN        = 1
+SIN_PROC_PARAM_EQ    = 2
+SIN_PROC_COMP        = 3
+SIN_PROC_CLIPPER     = 4
+SIN_PROC_LIMITER     = 5
+
+_MANIFEST_PATH = Path(__file__).resolve().parent.parent / "dsp_modules" / "manifest.json"
+
+
+def _load_processor_manifest() -> Dict[str, Dict[str, Any]]:
+    if not _MANIFEST_PATH.is_file():
+        return {}
+    raw = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+    out: Dict[str, Dict[str, Any]] = {}
+    for proc in raw.get("processors", []):
+        ptype = str(proc.get("type") or "").strip().lower()
+        if ptype:
+            out[ptype] = proc
+    return out
+
+
+PROCESSOR_MANIFEST: Dict[str, Dict[str, Any]] = _load_processor_manifest()
 
 PROCESSOR_TYPE_TO_ID: Dict[str, int] = {
+    ptype: int(spec.get("engineId", SIN_PROC_NONE))
+    for ptype, spec in PROCESSOR_MANIFEST.items()
+} or {
     "gain": SIN_PROC_GAIN,
+    "param_eq": SIN_PROC_PARAM_EQ,
+    "comp": SIN_PROC_COMP,
+    "clipper": SIN_PROC_CLIPPER,
+    "limiter": SIN_PROC_LIMITER,
 }
+
+
+def pack_processor_params(proc_type: str, params_dict: Optional[Dict[str, Any]]) -> List[float]:
+    """Pack a dict of module parameters into an ordered float list matching `manifest.json`."""
+    ptype = str(proc_type or "").strip().lower()
+    pdict = params_dict or {}
+    if ptype == "gain":
+        if pdict.get("gain") is not None:
+            return [max(0.0, float(pdict["gain"]))]
+        if pdict.get("gain_db") is not None:
+            db = float(pdict["gain_db"])
+            return [0.0 if db <= -35.9 else float(10.0 ** (db / 20.0))]
+        return [1.0]
+
+    spec = PROCESSOR_MANIFEST.get(ptype)
+    if not spec:
+        return []
+    param_defs = sorted(spec.get("params", []), key=lambda p: int(p.get("paramIndex", 0)))
+    if not param_defs:
+        return []
+    max_idx = max(int(p.get("paramIndex", 0)) for p in param_defs)
+    out = [0.0] * min(SIN_MAX_PROC_PARAMS, max_idx + 1)
+    for pdef in param_defs:
+        idx = int(pdef.get("paramIndex", 0))
+        if idx < 0 or idx >= len(out):
+            continue
+        key = str(pdef.get("key") or "")
+        default_val = float(pdef.get("defaultValue", 0.0))
+        raw_val = pdict.get(key, default_val)
+        if raw_val is None:
+            val = default_val
+        elif isinstance(raw_val, bool):
+            val = 1.0 if raw_val else 0.0
+        else:
+            try:
+                val = float(raw_val)
+            except (TypeError, ValueError):
+                val = default_val
+        pmin = pdef.get("min")
+        pmax = pdef.get("max")
+        if pmin is not None:
+            val = max(float(pmin), val)
+        if pmax is not None:
+            val = min(float(pmax), val)
+        out[idx] = val
+    return out
+
 
 PARAM_NAME_TO_ID: Dict[str, int] = {
     "pre_gain_db": SIN_PARAM_PRE_GAIN_DB,
@@ -58,8 +136,8 @@ PARAM_NAME_TO_ID: Dict[str, int] = {
 
 @dataclass
 class SourceSpec:
-    """An audio source registered into libsin_dsp: either a disk file (auto RAM <30s / stream >=30s)
-    or an in-memory cooked planar float32 NumPy buffer."""
+    """An audio source registered into libsin_dsp: either a disk file (auto RAM <30s / stream >=30s),
+    an in-memory cooked planar float32 NumPy buffer, or a layered sparse-tile streaming source."""
 
     source_id: int
     filepath: Optional[str] = None
@@ -68,6 +146,10 @@ class SourceSpec:
     sample_rate: int = SIN_DEFAULT_SAMPLE_RATE
     content_hash: int = 0
     num_frames: int = 0  # optional cached frame count at source sample_rate
+    layered_tile_frames: int = 0  # > 0 => register layered tile overlay over filepath
+    layered_num_tiles: int = 0
+    layered_total_frames: int = 0  # total frames at tile sample_rate
+    layered_node_key: str = ""     # processor node id owning this layered source
 
 
 @dataclass

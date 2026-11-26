@@ -7,6 +7,7 @@
 import { type FieldSchema } from '../../editor/src/fields/FieldSchema.ts';
 import {
     hashSeed,
+    isCalculatedPoolQuery,
     isFieldOperatorExpression,
     mulberry32,
     resolveModifierSlotSeeds,
@@ -18,6 +19,10 @@ import {
     populateOwnerSlotsFromPool,
     topAncestorId
 } from './assetResolver.ts';
+import {
+    findChainModuleParam,
+    parseChainParamFieldKey,
+} from '../../editor/src/dsp/processorRegistry.ts';
 
 export type RandomRefreshMode = 'local' | 'parent' | 'ancestor' | 'global' | 'off';
 
@@ -219,6 +224,9 @@ export function advanceRandomSeed(modifierNode: any, trackNodesMap?: Map<number,
 }
 
 export function findFieldSchema(node: any, paramKey: string): FieldSchema | undefined {
+    const chainMatch = findChainModuleParam(node, paramKey);
+    if (chainMatch) return chainMatch.schema;
+
     const stepMatch = paramKey.match(/^step_parameters\.(\d+)\.(.+)$/);
     const resolvedKey = stepMatch ? stepMatch[2] : paramKey;
 
@@ -508,6 +516,31 @@ export function applyRandomModulation(
             continue;
         }
 
+        const chainKey = parseChainParamFieldKey(dest.paramKey);
+        if (chainKey && Array.isArray(ownerNode.properties?.chain)) {
+            const nextChain = ownerNode.properties.chain.map((m: any) =>
+                m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m
+            );
+            const mod = nextChain.find((m: any) => m && String(m.id) === chainKey.moduleId);
+            if (mod) {
+                const curVal = mod.params?.[chainKey.paramKey];
+                if (dest.baseValue === undefined || !Number.isFinite(dest.baseValue)) {
+                    const parsed = Number(curVal);
+                    dest.baseValue = Number.isFinite(parsed) ? parsed : (field?.default !== undefined ? Number(field.default) : 0);
+                }
+                const newVal = evalDestValue(dest, dest.baseValue, field, destPrng());
+                dest.currentValue = newVal;
+                mod.params[chainKey.paramKey] = newVal;
+                if (typeof ownerNode.updateProperty === 'function') {
+                    ownerNode.updateProperty('chain', nextChain);
+                } else {
+                    ownerNode.properties.chain = nextChain;
+                }
+                updatedAny = true;
+            }
+            continue;
+        }
+
         const currentProp = ownerNode.properties?.[dest.paramKey];
         const isArrayProp = Array.isArray(currentProp);
         if (dest.baseValue === undefined || !Number.isFinite(dest.baseValue)) {
@@ -562,6 +595,26 @@ export function restoreBaseValues(modifierNode: any, ownerNode: any): void {
         : [];
 
     for (const dest of destinations) {
+        const chainKey = parseChainParamFieldKey(dest.paramKey);
+        if (chainKey && Array.isArray(ownerNode.properties?.chain)) {
+            if (dest.baseValue !== undefined && Number.isFinite(dest.baseValue)) {
+                const nextChain = ownerNode.properties.chain.map((m: any) =>
+                    m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m
+                );
+                const mod = nextChain.find((m: any) => m && String(m.id) === chainKey.moduleId);
+                if (mod) {
+                    mod.params[chainKey.paramKey] = dest.baseValue;
+                    dest.currentValue = dest.baseValue;
+                    if (typeof ownerNode.updateProperty === 'function') {
+                        ownerNode.updateProperty('chain', nextChain);
+                    } else {
+                        ownerNode.properties.chain = nextChain;
+                    }
+                }
+            }
+            continue;
+        }
+
         // Handle step_parameters.X.key restoration
         const stepMatch = dest.paramKey.match(/^step_parameters\.(\d+)\.(.+)$/);
         if (stepMatch && Array.isArray(ownerNode.properties?.step_parameters)) {
@@ -864,11 +917,17 @@ export function refreshArmedSeeds(
     // 3. Re-evaluate any node-level Field Operators (parameter operators or pool_query operators) at trigger_count = 0
     for (const node of allNodes) {
         if (!node?.properties || isNodeFrozen(node)) continue;
+        const poolItems = typeof node.getPoolItems === 'function'
+            ? node.getPoolItems()
+            : (Array.isArray(node.properties.selected_items) ? node.properties.selected_items : undefined);
+        const checkPoolExpr = (q: unknown): boolean => seedLocked
+            ? isFieldOperatorExpression(q, poolItems)
+            : isCalculatedPoolQuery(q, poolItems);
         const hasNodeOps = node.properties.field_operators && Object.keys(node.properties.field_operators).length > 0;
         const hasSlotOps = Array.isArray(node.properties.slots) && node.properties.slots.some((s: any) =>
-            (s?.field_operators && Object.keys(s.field_operators).length > 0) || isFieldOperatorExpression(s?.pool_query)
+            (s?.field_operators && Object.keys(s.field_operators).length > 0) || checkPoolExpr(s?.pool_query)
         );
-        const hasPoolOp = isFieldOperatorExpression(node.properties.pool_query);
+        const hasPoolOp = checkPoolExpr(node.properties.pool_query);
         if (!hasNodeOps && !hasSlotOps && !hasPoolOp) continue;
 
         if (node.properties.seed_refresh !== false) {

@@ -127,7 +127,10 @@ export function applySignalFlowColors(graphOrData: any): void {
                 const target = nodeMap.get(targetId);
                 if (!target) continue;
 
-                const isProcessor = target.type === 'Audio/Sequence' || target.type === 'Audio/Arrangement';
+                const isProcessor = target.type === 'Audio/Sequence'
+                    || target.type === 'Audio/Arrangement'
+                    || target.type === 'Audio/Null'
+                    || Boolean((target as any).isAudioProcessor);
                 if (isProcessor) {
                     if (!target.properties?.user_color) {
                         setNodeColor(target, stemColor);

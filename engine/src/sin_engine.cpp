@@ -75,10 +75,14 @@ struct ClipState {
     int32_t target_bus_index = -1;
     std::shared_ptr<const PcmBuffer> ram_pcm;
     std::unique_ptr<DiskStreamReader> stream_reader;
+    std::shared_ptr<LayeredTileStore> layered_tiles;
+    double   tile_sr_scale = 1.0;
     uint32_t src_sample_rate = SIN_DEFAULT_SAMPLE_RATE;
     uint64_t src_total_frames = 0;
     bool     is_streaming = false;
     bool     was_starved = false;
+    bool     was_using_tile = false;
+    uint32_t last_tile_gen = 0;
 };
 
 struct CompiledPlan {
@@ -250,6 +254,10 @@ struct SinEngine {
     std::array<std::atomic<uint32_t>, SIN_MAX_BUSES> tel_bus_ids{};
     std::array<std::atomic<float>, SIN_MAX_BUSES>    tel_bus_peaks{};
     std::array<std::atomic<float>, SIN_MAX_BUSES>    tel_bus_rms{};
+    std::atomic<uint32_t> tel_stage_count{0};
+    std::array<std::atomic<uint32_t>, SIN_MAX_STAGE_METERS> tel_stage_bus_ids{};
+    std::array<std::atomic<uint32_t>, SIN_MAX_STAGE_METERS> tel_stage_indices{};
+    std::array<std::atomic<float>, SIN_MAX_STAGE_METERS>    tel_stage_meters{};
     std::array<std::atomic<float>, SIN_MAX_SCOPE_SAMPLES> tel_scope{};
 
     // Background disk streaming thread (RT mode only; never locks audio thread)
@@ -701,6 +709,7 @@ struct SinEngine {
             master_peak_hold_frames_r = 0;
             const size_t bc = std::min<size_t>(plan->buses.size(), SIN_MAX_BUSES);
             tel_bus_count.store(static_cast<uint32_t>(bc), std::memory_order_relaxed);
+            uint32_t paused_sc = 0;
             for (size_t i = 0; i < bc; ++i) {
                 plan->buses[i]->rms_ms_state = 0.0;
                 plan->buses[i]->peak_hold = 0.0f;
@@ -710,12 +719,22 @@ struct SinEngine {
                 tel_bus_ids[i].store(plan->buses[i]->bus_id, std::memory_order_relaxed);
                 tel_bus_peaks[i].store(0.0f, std::memory_order_relaxed);
                 tel_bus_rms[i].store(0.0f, std::memory_order_relaxed);
+                for (const auto& st : plan->buses[i]->stages) {
+                    if (paused_sc < SIN_MAX_STAGE_METERS) {
+                        tel_stage_bus_ids[paused_sc].store(plan->buses[i]->bus_id, std::memory_order_relaxed);
+                        tel_stage_indices[paused_sc].store(st.stage_index, std::memory_order_relaxed);
+                        tel_stage_meters[paused_sc].store(0.0f, std::memory_order_relaxed);
+                        ++paused_sc;
+                    }
+                }
             }
+            tel_stage_count.store(paused_sc, std::memory_order_relaxed);
             return;
         }
 
         // Process in chunks <= max_block_size (never exceeds pre-allocated bus scratch buffers)
         uint32_t offset = 0;
+        uint32_t stage_tel_idx = 0;
         float block_peak_l = 0.0f, block_peak_r = 0.0f;
         double block_sum_sq_l = 0.0, block_sum_sq_r = 0.0;
 
@@ -826,8 +845,8 @@ struct SinEngine {
                     const float* ram_l = (!clip.is_streaming && clip.ram_pcm && !clip.ram_pcm->ch0.empty()) ? clip.ram_pcm->ch0.data() : nullptr;
                     const float* ram_r = (!clip.is_streaming && clip.ram_pcm && !clip.ram_pcm->ch1.empty()) ? clip.ram_pcm->ch1.data() : ram_l;
 
-                    // Unity fast path for RAM sources with no wrap
-                    if (!clip.is_streaming && ram_l && unity_rate && !wraps_in_block && !loop_src &&
+                    // Unity fast path for RAM sources with no wrap (skip when layered tile overlay is attached)
+                    if (!clip.is_streaming && !clip.layered_tiles && ram_l && unity_rate && !wraps_in_block && !loop_src &&
                         fade_in == 0 && fade_out == 0 && rel_len == 0) {
                         const int64_t s_begin = std::max<int64_t>(0, clip_t0 - block_start_frame);
                         const int64_t s_end   = std::min<int64_t>(active_n, std::min(clip_t1, clip_t0 + src_win_len) - block_start_frame);
@@ -839,6 +858,7 @@ struct SinEngine {
                         continue;
                     }
 
+                    bool hinted_raw_cursor_in_block = false;
                     int64_t tf = block_start_frame;
                     for (int64_t i = 0; i < active_n; ++i) {
                         if (eff_loop && tf >= eff_loop_end) {
@@ -875,18 +895,41 @@ struct SinEngine {
                                 if (env != 0.0f) {
                                     const double src_pos = static_cast<double>(src_win_start) + rel_src;
                                     float s_l = 0.0f, s_r = 0.0f;
-                                    if (clip.is_streaming && clip.stream_reader) {
-                                        const bool hit = clip.stream_reader->read_sample(
-                                            src_pos, src_win_start, src_win_end, loop_src, offline_mode, s_l, s_r);
-                                        if (!hit) {
-                                            clip.was_starved = true;
-                                        } else if (clip.was_starved) {
-                                            clip.was_starved = false;
-                                            trigger_declick(4.0f);
+                                    bool served_from_tile = false;
+                                    if (clip.layered_tiles) {
+                                        uint32_t tile_gen = 0;
+                                        const double tile_pos = src_pos * clip.tile_sr_scale;
+                                        if (clip.layered_tiles->read_sample(tile_pos, s_l, s_r, tile_gen)) {
+                                            served_from_tile = true;
+                                            if (!clip.was_using_tile || (clip.last_tile_gen != 0 && tile_gen != 0 && clip.last_tile_gen != tile_gen)) {
+                                                trigger_declick(10.0f);
+                                            }
+                                            clip.was_using_tile = true;
+                                            clip.last_tile_gen = tile_gen;
+                                            if (!hinted_raw_cursor_in_block && clip.stream_reader) {
+                                                clip.stream_reader->set_hint_cursor(static_cast<int64_t>(src_pos));
+                                                hinted_raw_cursor_in_block = true;
+                                            }
+                                        } else if (clip.was_using_tile) {
+                                            clip.was_using_tile = false;
+                                            clip.last_tile_gen = 0;
+                                            trigger_declick(10.0f);
                                         }
-                                    } else if (ram_l) {
-                                        sin_dsp::read_planar_resampled(
-                                            ram_l, ram_r, src_pos, src_win_start, src_win_end, loop_src, s_l, s_r);
+                                    }
+                                    if (!served_from_tile) {
+                                        if (clip.is_streaming && clip.stream_reader) {
+                                            const bool hit = clip.stream_reader->read_sample(
+                                                src_pos, src_win_start, src_win_end, loop_src, offline_mode, s_l, s_r);
+                                            if (!hit) {
+                                                clip.was_starved = true;
+                                            } else if (clip.was_starved) {
+                                                clip.was_starved = false;
+                                                trigger_declick(4.0f);
+                                            }
+                                        } else if (ram_l) {
+                                            sin_dsp::read_planar_resampled(
+                                                ram_l, ram_r, src_pos, src_win_start, src_win_end, loop_src, s_l, s_r);
+                                        }
                                     }
                                     dst_l[i] += s_l * env;
                                     dst_r[i] += s_r * env;
@@ -898,32 +941,60 @@ struct SinEngine {
                 }
             }
 
-            // 5. Evaluate buses bottom-up (DspProcessor stages -> PreGain -> Volume -> Pan -> PostGain -> Mute -> Tap -> Parent Sum)
+            // 5. Evaluate buses bottom-up (PreGain -> DspProcessor stages -> Volume -> Pan -> PostGain -> Mute -> Tap -> Parent Sum)
             const size_t num_buses = plan->buses.size();
+            stage_tel_idx = 0;
             for (size_t bi = 0; bi < num_buses; ++bi) {
                 auto& b = *plan->buses[bi];
                 float* bl = b.buf_l.data();
                 float* br = b.buf_r.data();
+
+                if (b.pre_gain_sm.is_smoothing()) {
+                    for (uint32_t i = 0; i < n; ++i) {
+                        const float pg = b.pre_gain_sm.next();
+                        bl[i] *= pg;
+                        br[i] *= pg;
+                    }
+                } else {
+                    const float pg = b.pre_gain_sm.current;
+                    if (pg == 0.0f) {
+                        std::memset(bl, 0, sizeof(float) * n);
+                        std::memset(br, 0, sizeof(float) * n);
+                    } else if (pg != 1.0f) {
+                        for (uint32_t i = 0; i < n; ++i) {
+                            bl[i] *= pg;
+                            br[i] *= pg;
+                        }
+                    }
+                }
 
                 if (!b.stages.empty()) {
                     const sin_dsp::ProcessContext proc_ctx{
                         sample_rate, n, bpm, playhead_frame, offline_mode
                     };
                     for (auto& st : b.stages) {
+                        float stage_meter = 0.0f;
                         if (st.enabled && st.processor) {
                             st.processor->process(bl, br, bl, br, proc_ctx);
+                            stage_meter = st.processor->get_meter();
+                        }
+                        if (stage_tel_idx < SIN_MAX_STAGE_METERS) {
+                            tel_stage_bus_ids[stage_tel_idx].store(b.bus_id, std::memory_order_relaxed);
+                            tel_stage_indices[stage_tel_idx].store(st.stage_index, std::memory_order_relaxed);
+                            tel_stage_meters[stage_tel_idx].store(stage_meter, std::memory_order_relaxed);
+                            ++stage_tel_idx;
                         }
                     }
                 }
 
-                const bool any_smooth = b.pre_gain_sm.is_smoothing() || b.vol_sm.is_smoothing() ||
+                const bool any_smooth = b.vol_sm.is_smoothing() ||
                                         b.post_gain_sm.is_smoothing() || b.pan_l_sm.is_smoothing() ||
                                         b.pan_r_sm.is_smoothing() || b.mute_sm.is_smoothing();
 
                 float b_peak = 0.0f;
                 double b_sum_sq = 0.0;
                 if (!any_smooth) {
-                    const float g_base = b.pre_gain_sm.current * b.vol_sm.current * b.post_gain_sm.current * b.mute_sm.current;
+                    const float g_base = b.vol_sm.current * b.post_gain_sm.current * b.mute_sm.current;
                     const float gl = g_base * b.pan_l_sm.current;
                     const float gr = g_base * b.pan_r_sm.current;
                     if (gl == 0.0f && gr == 0.0f) {
@@ -950,7 +1021,7 @@ struct SinEngine {
                     }
                 } else {
                     for (uint32_t i = 0; i < n; ++i) {
-                        const float g = b.pre_gain_sm.next() * b.vol_sm.next() * b.post_gain_sm.next() * b.mute_sm.next();
+                        const float g = b.vol_sm.next() * b.post_gain_sm.next() * b.mute_sm.next();
                         const float lv = bl[i] * g * b.pan_l_sm.next();
                         const float rv = br[i] * g * b.pan_r_sm.next();
                         bl[i] = lv;
@@ -1084,6 +1155,7 @@ struct SinEngine {
 
         // 7. Publish telemetry & downsampled mono scope snapshot
         tel_bus_count.store(static_cast<uint32_t>(std::min<size_t>(plan->buses.size(), SIN_MAX_BUSES)), std::memory_order_relaxed);
+        tel_stage_count.store(stage_tel_idx, std::memory_order_relaxed);
         if (applied_transport_gen >= desired_transport_gen.load(std::memory_order_acquire)) {
             tel_playhead_sec.store(static_cast<double>(playhead_frame) * inv_sr, std::memory_order_relaxed);
             tel_is_playing.store(is_playing ? 1u : 0u, std::memory_order_relaxed);
@@ -1298,6 +1370,54 @@ SIN_API int32_t sin_engine_register_pcm_source(
     return engine->source_pool.register_pcm(id, ch0, ch1, num_frames, src_sr, content_hash);
 }
 
+SIN_API int32_t sin_engine_register_layered_source(
+    SinEngine* engine,
+    SinSourceId id,
+    const char* base_utf8_path,
+    uint32_t tile_frames,
+    uint32_t num_tiles,
+    uint32_t tile_sr,
+    uint64_t total_tile_frames
+) {
+    if (!engine) return -1;
+    std::lock_guard<std::mutex> lk(engine->control_mutex);
+    return engine->source_pool.register_layered(id, base_utf8_path, tile_frames, num_tiles, tile_sr, total_tile_frames);
+}
+
+SIN_API int32_t sin_engine_set_layered_tile(
+    SinEngine* engine,
+    SinSourceId id,
+    uint32_t tile_index,
+    const float* ch0,
+    const float* ch1,
+    uint32_t num_frames,
+    uint32_t generation
+) {
+    if (!engine) return -1;
+    // Brief control lock just to fetch the shared_ptr<LayeredTileStore>; tile copy happens inside store->set_tile()
+    std::shared_ptr<sin_dsp::LayeredTileStore> store;
+    {
+        std::lock_guard<std::mutex> lk(engine->control_mutex);
+        auto entry = engine->source_pool.find(id);
+        if (!entry || !entry->layered_tiles) return -1;
+        store = entry->layered_tiles;
+    }
+    return store->set_tile(tile_index, ch0, ch1, num_frames, generation) ? 0 : -2;
+}
+
+SIN_API int32_t sin_engine_clear_layered_tiles(SinEngine* engine, SinSourceId id) {
+    if (!engine) return -1;
+    std::shared_ptr<sin_dsp::LayeredTileStore> store;
+    {
+        std::lock_guard<std::mutex> lk(engine->control_mutex);
+        auto entry = engine->source_pool.find(id);
+        if (!entry || !entry->layered_tiles) return -1;
+        store = entry->layered_tiles;
+    }
+    store->clear_all();
+    return 0;
+}
+
 SIN_API int32_t sin_engine_get_source_info(const SinEngine* engine, SinSourceId id, SinSourceInfo* out_info) {
     if (!engine || !out_info) return -1;
     std::lock_guard<std::mutex> lk(const_cast<SinEngine*>(engine)->control_mutex);
@@ -1506,17 +1626,23 @@ SIN_API int32_t sin_engine_load_plan_with_chains(
             cs.src_sample_rate = src->sample_rate;
             cs.src_total_frames = src->num_frames;
             cs.is_streaming = src->is_streaming;
+            cs.layered_tiles = src->layered_tiles;
+            if (cs.layered_tiles && cs.src_sample_rate > 0) {
+                cs.tile_sr_scale = static_cast<double>(cs.layered_tiles->sample_rate) / static_cast<double>(cs.src_sample_rate);
+            }
 
             if (src->is_streaming) {
                 auto reader = std::make_unique<sin_dsp::DiskStreamReader>();
                 if (!reader->open(src->filepath, &engine->source_pool.vfs())) {
-                    continue;
+                    if (!cs.layered_tiles) continue;
+                    cs.is_streaming = false;
+                } else {
+                    const int64_t init_frame = static_cast<int64_t>(std::floor(
+                        std::clamp(cs.desc.source_start_ratio, 0.0, 1.0) * static_cast<double>(src->num_frames)));
+                    reader->prewarm(init_frame);
+                    cs.stream_reader = std::move(reader);
+                    plan->has_streaming_clips = true;
                 }
-                const int64_t init_frame = static_cast<int64_t>(std::floor(
-                    std::clamp(cs.desc.source_start_ratio, 0.0, 1.0) * static_cast<double>(src->num_frames)));
-                reader->prewarm(init_frame);
-                cs.stream_reader = std::move(reader);
-                plan->has_streaming_clips = true;
             } else {
                 cs.ram_pcm = src->ram_pcm;
             }
@@ -1771,6 +1897,24 @@ SIN_API uint32_t sin_engine_read_bus_rms(
         return n;
     }
     return bc;
+}
+
+SIN_API uint32_t sin_engine_read_stage_meters(
+    const SinEngine* engine,
+    SinStageMeter* out_meters, uint32_t max_meters
+) {
+    if (!engine) return 0;
+    const uint32_t sc = engine->tel_stage_count.load(std::memory_order_relaxed);
+    if (out_meters && max_meters > 0) {
+        const uint32_t n = std::min<uint32_t>(sc, std::min<uint32_t>(max_meters, SIN_MAX_STAGE_METERS));
+        for (uint32_t i = 0; i < n; ++i) {
+            out_meters[i].bus_id      = engine->tel_stage_bus_ids[i].load(std::memory_order_relaxed);
+            out_meters[i].stage_index = engine->tel_stage_indices[i].load(std::memory_order_relaxed);
+            out_meters[i].meter_value = engine->tel_stage_meters[i].load(std::memory_order_relaxed);
+        }
+        return n;
+    }
+    return sc;
 }
 
 } // extern "C"

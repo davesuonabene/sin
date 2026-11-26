@@ -101,6 +101,7 @@ class AudioNodeModel(BaseModel):
     global_bars: Optional[float] = None
     global_seed: Optional[Union[str, float, int]] = None
     field_seed: Optional[Union[str, float, int]] = None
+    pool_node_id: Optional[int] = None
     probability: Optional[float] = None
     section_points: List[float] = []
     section_enabled: List[bool] = []
@@ -119,6 +120,8 @@ class AudioNodeModel(BaseModel):
     key_match_mode: Optional[str] = "off"
     key_match_algorithm: Optional[str] = "nearest"
     chain: List[FxModuleModel] = []
+    processor_params: Dict[str, Any] = {}
+    allow_bypassed_export: bool = False
     modulators: Optional[List[Dict[str, Any]]] = None
     children: List['AudioNodeModel'] = []
 

@@ -610,6 +610,231 @@ static int test_per_bus_rms_and_rt_peak_hold() {
     return 0;
 }
 
+static int test_fx_modules_serial_chain_and_meters() {
+    const uint32_t sr = 48000;
+    SinEngineConfig cfg{sr, 512, 1};
+    SinEngine* eng = sin_engine_create(&cfg);
+    CHECK(eng != nullptr, "fx engine create failed");
+
+    // 1. Param EQ: 1kHz sine with +6 dB boost at 1kHz (band 1 bell at 1000 Hz)
+    {
+        constexpr uint32_t N = 4096;
+        std::vector<float> sine(N);
+        for (uint32_t i = 0; i < N; ++i) {
+            sine[i] = 0.25f * std::sin(2.0f * 3.14159265f * 1000.0f * static_cast<float>(i) / static_cast<float>(sr));
+        }
+        CHECK(sin_engine_register_pcm_source(eng, 1, sine.data(), sine.data(), N, sr, 901) == 0, "reg sine eq");
+
+        SinBusDesc master{1, 0, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0, {0, 0}};
+        SinClipDesc clip{1, 1, 1, 0, N, 0.0, 1.0, 1.0f, 1.0f, 0, 0, 0, 0};
+
+        SinChainStageDesc eq{};
+        eq.bus_id = 1;
+        eq.stage_index = 0;
+        eq.processor_type = SIN_PROC_PARAM_EQ;
+        eq.enabled = 1;
+        eq.num_params = 20;
+        // 5 params per band: enabled, type (0=LC,1=LS,2=Bell,3=Notch,4=HS,5=HC), freq, gain, q
+        eq.params[0] = 1.0f; eq.params[1] = 1.0f; eq.params[2] = 100.0f;  eq.params[3] = 0.0f; eq.params[4] = 0.71f;
+        eq.params[5] = 1.0f; eq.params[6] = 2.0f; eq.params[7] = 1000.0f; eq.params[8] = 6.0f; eq.params[9] = 1.5f;
+        eq.params[10] = 1.0f; eq.params[11] = 2.0f; eq.params[12] = 2500.0f; eq.params[13] = 0.0f; eq.params[14] = 1.0f;
+        eq.params[15] = 1.0f; eq.params[16] = 4.0f; eq.params[17] = 8000.0f; eq.params[18] = 0.0f; eq.params[19] = 0.71f;
+
+        CHECK(sin_engine_load_plan_with_chains(eng, &master, 1, &clip, 1, &eq, 1, 0.0, 120.0) == 0, "load eq plan");
+
+        std::vector<float> out_l(512), out_r(512);
+        g_trapped_count.store(0, std::memory_order_relaxed);
+        g_trap_allocs.store(true, std::memory_order_release);
+        for (int b = 0; b < 4; ++b) {
+            sin_engine_process(eng, out_l.data(), out_r.data(), 512);
+        }
+        g_trap_allocs.store(false, std::memory_order_release);
+        CHECK(g_trapped_count.load() == 0, "ZERO heap allocs allowed in Param EQ process()");
+
+        float peak = 0.0f;
+        for (float v : out_l) peak = std::max(peak, std::abs(v));
+        // 0.25 * 10^(6/20) ~= 0.4988
+        CHECK(peak > 0.44f && peak < 0.56f, "Param EQ +6dB bell at 1kHz must boost 0.25 sine to ~0.50");
+
+        // 1b. Low Cut cutoff slope controlled by Q (250Hz sine cut by 1000Hz Low Cut: 6dB/oct vs 48dB/oct)
+        sin_engine_reset(eng);
+        std::vector<float> low_sine(N);
+        for (uint32_t i = 0; i < N; ++i) {
+            low_sine[i] = 0.5f * std::sin(2.0f * 3.14159265f * 250.0f * static_cast<float>(i) / static_cast<float>(sr));
+        }
+        CHECK(sin_engine_register_pcm_source(eng, 3, low_sine.data(), low_sine.data(), N, sr, 903) == 0, "reg 250hz sine");
+        SinClipDesc low_clip{1, 3, 1, 0, N, 0.0, 1.0, 1.0f, 1.0f, 0, 0, 0, 0};
+
+        SinChainStageDesc lcut{};
+        lcut.bus_id = 1; lcut.stage_index = 0; lcut.processor_type = SIN_PROC_PARAM_EQ;
+        lcut.enabled = 1; lcut.num_params = 20;
+        // Band 0 = Low Cut at 1000Hz, Q = 0.2 (order 1 -> 6 dB/oct)
+        lcut.params[0] = 1.0f; lcut.params[1] = 0.0f; lcut.params[2] = 1000.0f; lcut.params[3] = 0.0f; lcut.params[4] = 0.2f;
+        lcut.params[5] = 0.0f; lcut.params[10] = 0.0f; lcut.params[15] = 0.0f;
+        CHECK(sin_engine_load_plan_with_chains(eng, &master, 1, &low_clip, 1, &lcut, 1, 0.0, 120.0) == 0, "load low-cut gentle");
+        for (int b = 0; b < 4; ++b) sin_engine_process(eng, out_l.data(), out_r.data(), 512);
+        float gentle_peak = 0.0f;
+        for (float v : out_l) gentle_peak = std::max(gentle_peak, std::abs(v));
+
+        // Now steepen Q -> 12.0 (order 8 -> 48 dB/oct): must attenuate 250Hz dramatically more than 6 dB/oct
+        sin_engine_reset(eng);
+        lcut.params[4] = 12.0f;
+        CHECK(sin_engine_load_plan_with_chains(eng, &master, 1, &low_clip, 1, &lcut, 1, 0.0, 120.0) == 0, "load low-cut steep");
+        g_trapped_count.store(0, std::memory_order_relaxed);
+        g_trap_allocs.store(true, std::memory_order_release);
+        for (int b = 0; b < 4; ++b) sin_engine_process(eng, out_l.data(), out_r.data(), 512);
+        g_trap_allocs.store(false, std::memory_order_release);
+        CHECK(g_trapped_count.load() == 0, "ZERO heap allocs allowed in 48 dB/oct cascaded cutoff process()");
+        float steep_peak = 0.0f;
+        for (float v : out_l) steep_peak = std::max(steep_peak, std::abs(v));
+        CHECK(gentle_peak > 0.08f && gentle_peak < 0.20f, "6 dB/oct Low Cut @ 1kHz attenuates 250Hz by ~12dB");
+        CHECK(steep_peak < 0.005f && steep_peak < gentle_peak * 0.05f, "48 dB/oct Low Cut @ 1kHz attenuates 250Hz >> 6 dB/oct");
+
+        // 1c. Notch filter at 1kHz attenuates 1kHz sine even with gain_db == 0
+        sin_engine_reset(eng);
+        SinChainStageDesc notch{};
+        notch.bus_id = 1; notch.stage_index = 0; notch.processor_type = SIN_PROC_PARAM_EQ;
+        notch.enabled = 1; notch.num_params = 20;
+        notch.params[0] = 0.0f;
+        notch.params[5] = 1.0f; notch.params[6] = 3.0f; notch.params[7] = 1000.0f; notch.params[8] = 0.0f; notch.params[9] = 2.0f;
+        notch.params[10] = 0.0f; notch.params[15] = 0.0f;
+        CHECK(sin_engine_load_plan_with_chains(eng, &master, 1, &clip, 1, &notch, 1, 0.0, 120.0) == 0, "load notch");
+        for (int b = 0; b < 4; ++b) sin_engine_process(eng, out_l.data(), out_r.data(), 512);
+        float notch_peak = 0.0f;
+        for (float v : out_l) notch_peak = std::max(notch_peak, std::abs(v));
+        CHECK(notch_peak < 0.01f, "Notch at 1kHz must strongly attenuate 1kHz sine");
+    }
+
+    // 2. Serial PreGain -> Clipper -> Comp -> Limiter -> PostGain & live stage meters
+    {
+        sin_engine_reset(eng);
+        constexpr uint32_t N = 2048;
+        std::vector<float> hot_dc(N, 0.5f);
+        CHECK(sin_engine_register_pcm_source(eng, 2, hot_dc.data(), hot_dc.data(), N, sr, 902) == 0, "reg dc fx");
+
+        // PreGain = +12 dB (0.5 -> ~1.99), PostGain = -6 dB (post-FX trim ~0.5x)
+        SinBusDesc master{1, 0, 12.0f, 1.0f, -6.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0, {0, 0}};
+        SinClipDesc clip{1, 2, 1, 0, N, 0.0, 1.0, 1.0f, 1.0f, 0, 0, 0, 0};
+
+        SinChainStageDesc stages[3]{};
+        // Stage 0: Hard Clipper at -6 dB ceiling (0.501187)
+        stages[0].bus_id = 1; stages[0].stage_index = 0; stages[0].processor_type = SIN_PROC_CLIPPER;
+        stages[0].enabled = 1; stages[0].num_params = 5;
+        stages[0].params[0] = 0.0f; // Hard
+        stages[0].params[1] = 0.0f; // Drive
+        stages[0].params[2] = -6.0f; // Ceiling -6dB (~0.501)
+        stages[0].params[3] = 0.5f; // Softness
+        stages[0].params[4] = 0.0f; // Output 0dB
+
+        // Stage 1: Compressor (-20dB thresh, 4:1 ratio, fast attack 0.5ms, 50ms rel, 0 knee, 0 makeup, 100% mix)
+        stages[1].bus_id = 1; stages[1].stage_index = 1; stages[1].processor_type = SIN_PROC_COMP;
+        stages[1].enabled = 1; stages[1].num_params = 7;
+        stages[1].params[0] = -20.0f; stages[1].params[1] = 4.0f; stages[1].params[2] = 0.5f;
+        stages[1].params[3] = 50.0f; stages[1].params[4] = 0.0f; stages[1].params[5] = 0.0f; stages[1].params[6] = 100.0f;
+
+        // Stage 2: Limiter (+6 dB input, -12 dB ceiling (~0.251), 50ms release, 2ms lookahead)
+        stages[2].bus_id = 1; stages[2].stage_index = 2; stages[2].processor_type = SIN_PROC_LIMITER;
+        stages[2].enabled = 1; stages[2].num_params = 4;
+        stages[2].params[0] = 6.0f; stages[2].params[1] = -12.0f; stages[2].params[2] = 50.0f; stages[2].params[3] = 2.0f;
+
+        CHECK(sin_engine_load_plan_with_chains(eng, &master, 1, &clip, 1, stages, 3, 0.0, 120.0) == 0, "load 3-stage fx plan");
+
+        std::vector<float> out_l(512), out_r(512);
+        g_trapped_count.store(0, std::memory_order_relaxed);
+        g_trap_allocs.store(true, std::memory_order_release);
+        sin_engine_process(eng, out_l.data(), out_r.data(), 512);
+        g_trap_allocs.store(false, std::memory_order_release);
+        CHECK(g_trapped_count.load() == 0, "ZERO heap allocs allowed across Clipper+Comp+Limiter process()");
+
+        // Limiter caps at -12dB (~0.2512) and PostGain applies -6dB (~0.5012) => ~0.1259
+        CHECK(out_l[511] > 0.05f && out_l[511] <= 0.135f, "PreGain->Clipper->Comp->Limiter->PostGain serial cascade level");
+
+        SinStageMeter meters[8]{};
+        const uint32_t mc = sin_engine_read_stage_meters(eng, meters, 8);
+        CHECK(mc == 3, "expected 3 stage meters");
+        CHECK(meters[0].stage_index == 0 && meters[0].meter_value < -1.0f, "Clipper must report negative clip attenuation");
+        CHECK(meters[1].stage_index == 1 && meters[1].meter_value < -1.0f, "Compressor must report negative GR dB");
+        CHECK(meters[2].stage_index == 2 && meters[2].meter_value < -0.5f, "Limiter must report negative GR dB");
+
+        // Bypass limiter (stage 2) & set Clipper ceiling back to 0dB -> meter drops to 0
+        sin_engine_set_stage_enabled(eng, 1, 2, 0);
+        sin_engine_set_stage_param(eng, 1, 0, 2, 0.0f, 0.0f);
+        sin_engine_process(eng, out_l.data(), out_r.data(), 512);
+        const uint32_t mc2 = sin_engine_read_stage_meters(eng, meters, 8);
+        CHECK(mc2 == 3 && meters[2].meter_value == 0.0f, "Bypassed stage must publish 0.0f meter");
+    }
+
+    sin_engine_destroy(eng);
+    return 0;
+}
+
+static int test_layered_tile_streamer_zero_alloc_and_fallback() {
+    namespace fs = std::filesystem;
+    const fs::path tmp_dir = fs::temp_directory_path() / "sin_dsp_layered_tile_test";
+    std::error_code ec;
+    fs::create_directories(tmp_dir, ec);
+    const fs::path wav_path = tmp_dir / "layered_base.wav";
+
+    const uint32_t sr = 8000;
+    const uint32_t tile_frames = 2000; // 0.25s tiles
+    const uint32_t num_tiles = 4;      // 1.0s total
+    const uint32_t total_frames = tile_frames * num_tiles;
+    std::vector<float> base_samples(total_frames, 0.25f);
+    CHECK(write_wav_pcm16(wav_path, base_samples, sr), "write layered base wav failed");
+
+    SinEngineConfig cfg{sr, 256, 1};
+    SinEngine* eng = sin_engine_create(&cfg);
+    CHECK(eng != nullptr, "layered engine create failed");
+
+    const std::string path_str = wav_path.string();
+    CHECK(sin_engine_register_layered_source(eng, 50, path_str.c_str(), tile_frames, num_tiles, sr, total_frames) == 0,
+          "register layered source failed");
+
+    SinBusDesc master{1, 0, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0, {0, 0}};
+    SinClipDesc clip{};
+    clip.clip_id = 1;
+    clip.source_id = 50;
+    clip.target_bus_id = 1;
+    clip.source_end_ratio = 1.0;
+    clip.gain = 1.0f;
+    clip.playback_rate = 1.0f;
+    CHECK(sin_engine_load_plan(eng, &master, 1, &clip, 1, 0.0, 120.0) == 0, "load layered plan failed");
+
+    // 1. Initially tile 0 is uncooked -> must serve raw disk stream (~0.25f) with ZERO heap allocs in process()
+    std::vector<float> out_l(256), out_r(256);
+    g_trapped_count.store(0, std::memory_order_relaxed);
+    g_trap_allocs.store(true, std::memory_order_release);
+    sin_engine_process(eng, out_l.data(), out_r.data(), 256);
+    g_trap_allocs.store(false, std::memory_order_release);
+    CHECK(g_trapped_count.load() == 0, "ZERO heap allocs allowed during raw layered fallback");
+    CHECK(std::abs(out_l[128] - 0.25f) < 0.01f, "uncooked tile must fall back cleanly to raw disk audio");
+
+    // 2. Publish tile 0 atomically WITHOUT reloading plan -> next block serves cooked tile (~0.75f) with ZERO allocs!
+    std::vector<float> tile0_l(tile_frames, 0.75f);
+    std::vector<float> tile0_r(tile_frames, -0.50f);
+    CHECK(sin_engine_set_layered_tile(eng, 50, 0, tile0_l.data(), tile0_r.data(), tile_frames, 1) == 0,
+          "set layered tile 0 failed");
+
+    g_trapped_count.store(0, std::memory_order_relaxed);
+    g_trap_allocs.store(true, std::memory_order_release);
+    sin_engine_process(eng, out_l.data(), out_r.data(), 256);
+    g_trap_allocs.store(false, std::memory_order_release);
+    CHECK(g_trapped_count.load() == 0, "ZERO heap allocs allowed during cooked layered playback");
+    CHECK(std::abs(out_l[128] - 0.75f) < 1e-4f, "published tile 0 L must override raw immediately");
+    CHECK(std::abs(out_r[128] - (-0.50f)) < 1e-4f, "published tile 0 R must override raw immediately");
+
+    // 3. Evict tile 0 back to nullptr -> seamlessly reverts to raw disk audio (~0.25f)
+    CHECK(sin_engine_set_layered_tile(eng, 50, 0, nullptr, nullptr, 0, 0) == 0, "evict layered tile 0 failed");
+    sin_engine_process(eng, out_l.data(), out_r.data(), 256);
+    CHECK(std::abs(out_l[128] - 0.25f) < 0.01f, "evicted tile 0 must revert cleanly to raw disk audio");
+
+    sin_engine_release_all_sources(eng);
+    sin_engine_destroy(eng);
+    fs::remove(wav_path, ec);
+    fs::remove(tmp_dir, ec);
+    return 0;
+}
+
 int main() {
     if (test_default_sr_and_unity_passthrough() != 0) return 1;
     if (test_resampling_and_bus_solo_mute() != 0) return 1;
@@ -619,6 +844,8 @@ int main() {
     if (test_dsp_processor_gain_chain() != 0) return 1;
     if (test_multi_producer_cmd_and_live_crop_seek() != 0) return 1;
     if (test_per_bus_rms_and_rt_peak_hold() != 0) return 1;
+    if (test_fx_modules_serial_chain_and_meters() != 0) return 1;
+    if (test_layered_tile_streamer_zero_alloc_and_fallback() != 0) return 1;
     std::printf("ALL sin_dsp C++ TESTS PASSED!\n");
     return 0;
 }

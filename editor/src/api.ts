@@ -140,11 +140,22 @@ export async function resolveLibraryAssets(references: any[]): Promise<LibraryFi
     for (const reference of references || []) {
         if (!reference) continue;
         const id = reference.id ?? reference.library_item_id;
+        const idStr = id != null ? String(id) : '';
+        if (
+            reference.is_external
+            || reference.is_inline
+            || reference.source === 'external'
+            || reference.source === 'inline'
+            || idStr.startsWith('ext:')
+            || idStr.startsWith('inline:')
+        ) {
+            continue;
+        }
         const absolutePath = String(
             reference.absolute_path || reference.filepath || reference.path || ''
         ).trim();
         if (id == null && !absolutePath) continue;
-        const key = id != null ? `id:${String(id)}` : `path:${normalizeAssetPath(absolutePath)}`;
+        const key = id != null ? `id:${idStr}` : `path:${normalizeAssetPath(absolutePath)}`;
         if (!unique.has(key)) {
             unique.set(key, {
                 ...(id != null ? { id } : {}),

@@ -7,15 +7,21 @@ import { compositeSequenceBuffer, getNodeGainMultiplier } from '../audioComposit
 import {
     type NodeSlot,
     copyNodeSlotToClipboard,
+    deduplicatePoolItemName,
     formatPoolListExpression,
     getCopiedNodeSlotFromClipboard,
+    getPoolItemCallName,
+    getPoolItemIdentityKey,
+    isCalculatedPoolQuery,
+    isExternalPoolItem,
     isFieldOperatorExpression,
+    isInlinePoolItem,
     resolveStepSlots,
     resolveCycleSeeds,
     resolveModifierSlotSeeds
 } from '../../../ermes/ts/slotLanguage.ts';
 import { populateOwnerSlotsFromRandom } from '../../../ermes/ts/randomResolver.ts';
-import { populateOwnerSlotsFromPool, resolvePoolItemByQuery } from '../../../ermes/ts/assetResolver.ts';
+import { populateOwnerSlotsFromPool, resolveEffectivePoolSeed, resolvePoolItemByQuery } from '../../../ermes/ts/assetResolver.ts';
 
 export interface SequenceChannel {
     on: number[];
@@ -47,6 +53,13 @@ export class SequenceNode extends BaseNode {
                 sections: [
                     { type: 'sequence_grid' },
                     { type: 'fields', fields: ['sample_slot', 'total_bars', 'step_length', 'play_mode', 'release', 'fade_ms'] }
+                ]
+            },
+            {
+                id: 'POOL',
+                label: 'Pool',
+                sections: [
+                    { type: 'pool_editor' }
                 ]
             },
             {
@@ -89,7 +102,7 @@ export class SequenceNode extends BaseNode {
     static badgeLabel = "SEQ";
     static nodeType = "sequence";
     static defaultTab = "SEQUENCE";
-    static tabs = ["SEQUENCE", "CHAIN", "COMMON"];
+    static tabs = ["SEQUENCE", "POOL", "CHAIN", "COMMON"];
     static override defaultVisualizationType: VisualizationTypeId = 'sequence';
     static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['sequence', 'loop', 'realtime', 'spectrum'];
 
@@ -188,6 +201,8 @@ export class SequenceNode extends BaseNode {
         'filepath',
         'pool_query',
         'library_item_id',
+        'is_external',
+        'is_inline',
         'sequence_name',
         'node_name',
         'sequence',
@@ -231,6 +246,12 @@ export class SequenceNode extends BaseNode {
             pool_query: this.properties?.pool_query !== undefined ? String(this.properties.pool_query) : base?.pool_query,
             filepath: this.properties?.filepath !== undefined ? String(this.properties.filepath) : base?.filepath,
             library_item_id: this.properties?.library_item_id ?? base?.library_item_id,
+            is_external: this.properties?.is_external !== undefined
+                ? Boolean(this.properties.is_external)
+                : Boolean(base?.is_external || String(this.properties?.library_item_id ?? base?.library_item_id ?? '').startsWith('ext:')),
+            is_inline: this.properties?.is_inline !== undefined
+                ? Boolean(this.properties.is_inline)
+                : Boolean(base?.is_inline || String(this.properties?.library_item_id ?? base?.library_item_id ?? '').startsWith('inline:')),
             sequence_name: this.properties?.sequence_name !== undefined
                 ? String(this.properties.sequence_name)
                 : (this.properties?.node_name !== undefined ? String(this.properties.node_name) : base?.sequence_name),
@@ -335,6 +356,8 @@ export class SequenceNode extends BaseNode {
         if (slot.library_item_id !== undefined) {
             this.properties.library_item_id = slot.library_item_id;
         }
+        this.properties.is_external = Boolean(slot.is_external || String(slot.library_item_id ?? '').startsWith('ext:'));
+        this.properties.is_inline = Boolean(slot.is_inline || String(slot.library_item_id ?? '').startsWith('inline:'));
         if (slot.sequence_name !== undefined) {
             this.properties.sequence_name = String(slot.sequence_name);
         }
@@ -455,6 +478,7 @@ export class SequenceNode extends BaseNode {
     override evaluateAllFieldOperators(triggerOverride?: number): void {
         const triggerCount = triggerOverride !== undefined ? triggerOverride : this.getTriggerCount();
         const slots = this.getSlots();
+        const poolItems = this.getPoolItems();
         for (let idx = 0; idx < slots.length; idx++) {
             const slot = slots[idx];
             if (!slot) continue;
@@ -472,16 +496,28 @@ export class SequenceNode extends BaseNode {
                 }
             }
         }
-        const activeQuery = String(slots[this.activeSlotIndex]?.pool_query ?? this.properties?.pool_query ?? '').trim();
-        if (isFieldOperatorExpression(activeQuery)) {
-            void this.applyPoolQuery(activeQuery, false);
-        } else if (slots[this.activeSlotIndex]) {
+        const savedActive = this.activeSlotIndex;
+        const savedSelected = [...this.getSelectedSlotIndices()];
+        let anyPoolResolved = false;
+        for (let idx = 0; idx < slots.length; idx++) {
+            const slotQuery = String(slots[idx]?.pool_query ?? (idx === savedActive ? this.properties?.pool_query : '') ?? '').trim();
+            if (isCalculatedPoolQuery(slotQuery, poolItems)) {
+                this.activeSlotIndex = idx;
+                this.selectedSlotIndices = [idx];
+                anyPoolResolved = true;
+                void this.applyPoolQuery(slotQuery, false);
+            }
+        }
+        this.activeSlotIndex = savedActive;
+        this.selectedSlotIndices = savedSelected;
+        this.properties.active_slot = savedActive;
+        if (!anyPoolResolved && slots[this.activeSlotIndex]) {
             this.applySlotToProperties(slots[this.activeSlotIndex]);
         }
     }
 
-    private ensureItemsInPool(items: any[]): void {
-        if (!Array.isArray(items) || items.length === 0) return;
+    public ensureItemsInPool(items: any[]): any[] {
+        if (!Array.isArray(items) || items.length === 0) return [];
         if (!this.properties) this.properties = {};
         let modNode = this.getAttachedPoolNode();
         if (!modNode && typeof window !== 'undefined' && this.id != null) {
@@ -493,20 +529,55 @@ export class SequenceNode extends BaseNode {
         const targetContainer = modNode?.properties || this.properties;
         const existing: any[] = Array.isArray(targetContainer.selected_items)
             ? [...targetContainer.selected_items]
-            : [];
+            : (Array.isArray(this.properties.selected_items) ? [...this.properties.selected_items] : []);
         const byKey = new Map<string, any>();
         for (const it of existing) {
-            const k = String(it?.id ?? it?.filepath ?? it?.absolute_path ?? '');
+            const k = getPoolItemIdentityKey(it);
             if (k) byKey.set(k, it);
         }
+        const registered: any[] = [];
         for (const it of items) {
-            const fp = String(it?.filepath || it?.absolute_path || '');
+            const fp = String(it?.filepath || it?.absolute_path || '').trim();
+            const isInline = isInlinePoolItem(it) || (!fp && Array.isArray(it?.sequence));
+            if (!fp && !isInline) continue;
+            const isExt = !isInline && (isExternalPoolItem(it) || (!it?.id && !String(it?.id ?? '').trim()));
+            const normalizedCandidate = {
+                ...it,
+                filepath: isInline ? '' : fp,
+                absolute_path: isInline ? '' : fp,
+                is_inline: isInline,
+                is_external: isExt,
+                source: isInline ? 'inline' : (isExt ? 'external' : 'gaia'),
+            };
+            const candidateKey = getPoolItemIdentityKey(normalizedCandidate);
+            const existingEntry = candidateKey ? byKey.get(candidateKey) : undefined;
+            if (existingEntry) {
+                if (Array.isArray(it?.sequence) && it.sequence.length > 0) {
+                    existingEntry.sequence = [...it.sequence];
+                }
+                if (Array.isArray(it?.step_parameters) && it.step_parameters.length > 0) {
+                    existingEntry.step_parameters = it.step_parameters.map((s: any) => ({ ...(s || {}) }));
+                }
+                if (it?.bpm != null && existingEntry.bpm == null) existingEntry.bpm = it.bpm;
+                if (it?.key != null && !existingEntry.key) existingEntry.key = it.key;
+                registered.push(existingEntry);
+                continue;
+            }
+            const currentValues = [...byKey.values()];
+            const rawBaseName = getPoolItemCallName(normalizedCandidate, true);
+            const uniqueName = deduplicatePoolItemName(rawBaseName, currentValues);
+            const defaultId = isInline
+                ? `inline:${this.id ?? 'seq'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+                : `ext:${fp}`;
             const poolItem = {
-                id: it?.id ?? fp,
-                filepath: fp,
-                absolute_path: fp,
-                name: it?.name || fp.split(/[\\/]/).pop() || 'Sequence',
-                type: it?.itemType || it?.type || 'sequence',
+                id: it?.id != null && String(it.id).trim() ? it.id : defaultId,
+                filepath: isInline ? '' : fp,
+                absolute_path: isInline ? '' : fp,
+                name: uniqueName,
+                type: isInline ? 'sequence' : (it?.itemType || it?.type || (fp.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi')),
+                is_inline: isInline,
+                is_external: isExt,
+                source: isInline ? 'inline' : (isExt ? 'external' : 'gaia'),
                 bpm: it?.bpm ?? null,
                 key: it?.key ?? null,
                 duration_seconds: it?.duration_seconds ?? null,
@@ -515,34 +586,238 @@ export class SequenceNode extends BaseNode {
                     ? { step_parameters: it.step_parameters.map((s: any) => ({ ...(s || {}) })) }
                     : {}),
             };
-            const k = String(poolItem.id || poolItem.filepath);
+            const k = getPoolItemIdentityKey(poolItem);
             if (k) byKey.set(k, poolItem);
+            registered.push(poolItem);
         }
         const merged = [...byKey.values()];
         targetContainer.selected_items = merged;
         if (this.properties !== targetContainer) {
             this.properties.selected_items = merged;
         }
+        if (modNode?.properties && modNode.properties !== targetContainer) {
+            modNode.properties.selected_items = merged;
+        }
+        return registered;
+    }
+
+    private findPoolItemForSlot(slot: NodeSlot | undefined): any | null {
+        if (!slot) return null;
+        const items = this.getPoolItems();
+        if (items.length === 0) return null;
+        if (slot.library_item_id != null && String(slot.library_item_id).trim()) {
+            const idStr = String(slot.library_item_id).trim();
+            const byId = items.find(it => it?.id != null && String(it.id).trim() === idStr);
+            if (byId) return byId;
+        }
+        if (slot.filepath) {
+            const fpKey = getPoolItemIdentityKey({ filepath: slot.filepath });
+            const byFp = items.find(it => getPoolItemIdentityKey(it) === fpKey);
+            if (byFp) return byFp;
+        }
+        const q = String(slot.pool_query || '').trim().toLowerCase();
+        if (q && !isCalculatedPoolQuery(q, items)) {
+            const byName = items.find(it => String(it?.name || '').trim().toLowerCase() === q);
+            if (byName) return byName;
+        }
+        return null;
+    }
+
+    public ensureCurrentSequenceInPool(options?: {
+        forkIfFileBacked?: boolean;
+        forkIfSharedByOtherSlot?: boolean;
+        preferredName?: string;
+    }): any {
+        this.syncActiveSlotFromProperties();
+        const slots = this.getSlots();
+        const activeIdx = Math.min(Math.max(0, this.activeSlotIndex), slots.length - 1);
+        const activeSlot = slots[activeIdx];
+        const currentSeq = Array.isArray(this.properties?.sequence)
+            ? [...this.properties.sequence]
+            : (Array.isArray(activeSlot?.sequence) ? [...activeSlot.sequence] : [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+        const currentStepParams = Array.isArray(this.properties?.step_parameters)
+            ? this.properties.step_parameters.map((s: any) => ({ ...(s || {}) }))
+            : (Array.isArray(activeSlot?.step_parameters) ? activeSlot.step_parameters.map((s: any) => ({ ...(s || {}) })) : []);
+
+        const currentPoolItem = this.findPoolItemForSlot(activeSlot);
+        const isCurrentFileBacked = Boolean(
+            (currentPoolItem && !isInlinePoolItem(currentPoolItem))
+            || (!currentPoolItem && activeSlot?.filepath)
+        );
+
+        let isSharedWithOtherSlot = false;
+        if (currentPoolItem && isInlinePoolItem(currentPoolItem)) {
+            const itemId = String(currentPoolItem.id || '');
+            const itemNameLower = String(currentPoolItem.name || '').trim().toLowerCase();
+            isSharedWithOtherSlot = slots.some((s, idx) => {
+                if (idx === activeIdx || !s) return false;
+                if (itemId && String(s.library_item_id || '') === itemId) return true;
+                return Boolean(itemNameLower && String(s.pool_query || '').trim().toLowerCase() === itemNameLower);
+            });
+        }
+
+        const shouldForkFromFile = Boolean(options?.forkIfFileBacked && isCurrentFileBacked);
+        const shouldForkShared = Boolean(options?.forkIfSharedByOtherSlot && isSharedWithOtherSlot);
+
+        // Update owned inline pool item in-place
+        if (currentPoolItem && isInlinePoolItem(currentPoolItem) && !shouldForkShared) {
+            currentPoolItem.sequence = [...currentSeq];
+            currentPoolItem.step_parameters = currentStepParams.map((s: any) => ({ ...(s || {}) }));
+            const callName = getPoolItemCallName(currentPoolItem, true);
+            if (!activeSlot.pool_query || !isCalculatedPoolQuery(activeSlot.pool_query, this.getPoolItems())) {
+                activeSlot.pool_query = callName;
+                this.properties.pool_query = callName;
+            }
+            activeSlot.sequence_name = callName;
+            activeSlot.is_inline = true;
+            activeSlot.is_external = false;
+            activeSlot.library_item_id = currentPoolItem.id;
+            this.properties.sequence_name = callName;
+            this.properties.is_inline = true;
+            this.properties.is_external = false;
+            this.properties.library_item_id = currentPoolItem.id;
+            return currentPoolItem;
+        }
+
+        // Create a new inline pool item (either fresh "written by zero", forked from file, or forked from shared slot)
+        const existingName = currentPoolItem
+            ? getPoolItemCallName(currentPoolItem, true)
+            : String(activeSlot?.sequence_name || this.properties?.sequence_name || this.properties?.node_name || 'Sequence').trim();
+        const baseName = options?.preferredName?.trim()
+            || (shouldForkFromFile
+                ? `${existingName.replace(/\s*\(edit(?:\s*\d+)?\)$/i, '')} (edit)`
+                : (existingName || 'Sequence'));
+
+        const inlineId = `inline:${this.id ?? 'seq'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const [created] = this.ensureItemsInPool([{
+            id: inlineId,
+            name: baseName,
+            filepath: '',
+            absolute_path: '',
+            is_inline: true,
+            source: 'inline',
+            type: 'sequence',
+            sequence: currentSeq,
+            step_parameters: currentStepParams,
+        }]);
+        if (!created) return null;
+
+        const callName = getPoolItemCallName(created, true);
+        activeSlot.pool_query = callName;
+        activeSlot.filepath = '';
+        activeSlot.library_item_id = created.id;
+        activeSlot.is_inline = true;
+        activeSlot.is_external = false;
+        activeSlot.source = 'inline';
+        activeSlot.sequence_name = callName;
+        activeSlot.sequence = [...currentSeq];
+        activeSlot.step_parameters = currentStepParams.map((s: any) => ({ ...(s || {}) }));
+
+        this.properties.pool_query = callName;
+        this.properties.filepath = '';
+        this.properties.library_item_id = created.id;
+        this.properties.is_inline = true;
+        this.properties.is_external = false;
+        this.properties.sequence_name = callName;
+        this.properties.sequence = [...currentSeq];
+        this.properties.step_parameters = currentStepParams.map((s: any) => ({ ...(s || {}) }));
+        if (typeof window !== 'undefined' && this.id != null) {
+            window.dispatchEvent(new CustomEvent('modifier-assignment-changed', { detail: { nodeId: this.id } }));
+        }
+        return created;
+    }
+
+    public createNewInlineSequence(preferredName?: string): any {
+        const defaultSeq = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+        const defaultParams = Array.from({ length: SequenceNode.stepCount }, () => ({
+            sample_start: 0.0,
+            gate_length: 1.0,
+            offset: 0.0,
+            velocity: 1.0,
+            probability: 1.0,
+            subdivision_enabled: false,
+            subdivisions: 1
+        }));
+        const inlineId = `inline:${this.id ?? 'seq'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const [created] = this.ensureItemsInPool([{
+            id: inlineId,
+            name: preferredName?.trim() || 'Sequence',
+            filepath: '',
+            absolute_path: '',
+            is_inline: true,
+            source: 'inline',
+            type: 'sequence',
+            sequence: defaultSeq,
+            step_parameters: defaultParams,
+        }]);
+        if (!created) return null;
+        const callName = getPoolItemCallName(created, true);
+        void this.applyPoolQuery(callName, false);
+        return created;
+    }
+
+    public renamePoolItem(itemKeyOrId: string, nextName: string): boolean {
+        const clean = String(nextName || '').trim();
+        if (!clean) return false;
+        const modNode = this.getAttachedPoolNode();
+        const items = [...this.getPoolItems()];
+        const idx = items.findIndex(it =>
+            getPoolItemIdentityKey(it) === itemKeyOrId
+            || (it?.id != null && String(it.id) === itemKeyOrId)
+        );
+        if (idx === -1) return false;
+        const target = items[idx];
+        const prevName = String(target.name || '');
+        const uniqueName = deduplicatePoolItemName(clean, items, getPoolItemIdentityKey(target));
+        if (uniqueName === prevName) return false;
+        target.name = uniqueName;
+        if (modNode?.properties) modNode.properties.selected_items = items;
+        if (this.properties) this.properties.selected_items = items;
+
+        const slots = this.getSlots();
+        const prevLower = prevName.trim().toLowerCase();
+        for (const slot of slots) {
+            if (String(slot?.pool_query || '').trim().toLowerCase() === prevLower) {
+                slot.pool_query = uniqueName;
+            }
+            if (String(slot?.sequence_name || '').trim().toLowerCase() === prevLower) {
+                slot.sequence_name = uniqueName;
+            }
+        }
+        if (String(this.properties?.pool_query || '').trim().toLowerCase() === prevLower) {
+            this.properties.pool_query = uniqueName;
+        }
+        if (String(this.properties?.sequence_name || '').trim().toLowerCase() === prevLower) {
+            this.properties.sequence_name = uniqueName;
+        }
+        if (typeof window !== 'undefined' && this.id != null) {
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
+        }
+        return true;
     }
 
     public async createSlotsFromDroppedItems(items: any[], startSlotIndex?: number): Promise<void> {
         if (!Array.isArray(items) || items.length === 0) return;
         this.syncActiveSlotFromProperties();
+        const registeredItems = this.ensureItemsInPool(items);
+        if (registeredItems.length === 0) return;
+
         const slots = this.getSlots();
-        const isSingleEmptySlot = slots.length === 1 && !slots[0]?.filepath;
+        const isSingleEmptySlot = slots.length === 1 && !slots[0]?.filepath && !slots[0]?.pool_query;
         const baseIdx = startSlotIndex !== undefined
             ? Math.max(0, startSlotIndex)
             : (isSingleEmptySlot ? 0 : slots.length);
 
         const targetIndices: number[] = [];
-        for (let i = 0; i < items.length; i++) {
+        for (let i = 0; i < registeredItems.length; i++) {
             targetIndices.push(baseIdx + i);
         }
 
         const applySequence = typeof window !== 'undefined' ? (window as any).applyLibraryItemToSequence : undefined;
         for (let i = 0; i < targetIndices.length; i++) {
             const slotIdx = targetIndices[i];
-            const item = items[i];
+            const rawItem = items[i] || registeredItems[i];
+            const regItem = registeredItems[i];
             while (slots.length <= slotIdx) {
                 const template = slots[slots.length - 1] || slots[0] || {};
                 const nextIdx = slots.length;
@@ -556,34 +831,44 @@ export class SequenceNode extends BaseNode {
                         : []
                 });
             }
-            const filepath = String(item.filepath || item.absolute_path || '');
-            const seqName = item.name || filepath.split(/[\\/]/).pop() || 'Sequence';
+            const isInline = isInlinePoolItem(regItem);
+            const filepath = isInline ? '' : String(regItem.filepath || regItem.absolute_path || '');
+            const callName = getPoolItemCallName(regItem, true);
             this.activeSlotIndex = slotIdx;
             this.selectedSlotIndices = [slotIdx];
             slots[slotIdx] = {
                 ...(slots[slotIdx] || {}),
                 slot: slotIdx,
                 index: slotIdx,
-                pool_query: '',
+                pool_query: callName,
                 filepath,
-                library_item_id: item.id ?? slots[slotIdx]?.library_item_id,
-                sequence_name: seqName,
-                ...(Array.isArray(item.sequence) ? { sequence: [...item.sequence] } : {}),
-                ...(Array.isArray(item.step_parameters)
-                    ? { step_parameters: item.step_parameters.map((s: any) => ({ ...(s || {}) })) }
+                library_item_id: regItem.id ?? slots[slotIdx]?.library_item_id,
+                is_external: isExternalPoolItem(regItem),
+                is_inline: isInline,
+                source: isInline ? 'inline' : (isExternalPoolItem(regItem) ? 'external' : 'gaia'),
+                sequence_name: callName,
+                ...(Array.isArray(regItem.sequence) ? { sequence: [...regItem.sequence] } : {}),
+                ...(Array.isArray(regItem.step_parameters)
+                    ? { step_parameters: regItem.step_parameters.map((s: any) => ({ ...(s || {}) })) }
                     : {}),
             };
             this.applySlotToProperties(slots[slotIdx]);
-            if (typeof applySequence === 'function') {
+            if (!isInline && filepath && typeof applySequence === 'function') {
                 await applySequence(this, {
-                    id: item.id,
+                    id: regItem.id,
                     filepath,
-                    itemType: item.itemType || item.type || (filepath.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi'),
-                    name: seqName,
-                    bpm: item.bpm ?? null,
-                    key: item.key ?? null
+                    itemType: rawItem.itemType || regItem.type || (filepath.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi'),
+                    name: callName,
+                    is_external: isExternalPoolItem(regItem),
+                    bpm: regItem.bpm ?? null,
+                    key: regItem.key ?? null
                 });
-                this.properties.pool_query = '';
+                this.properties.pool_query = callName;
+                this.properties.sequence_name = callName;
+                if (Array.isArray(this.properties.sequence)) regItem.sequence = [...this.properties.sequence];
+                if (Array.isArray(this.properties.step_parameters)) {
+                    regItem.step_parameters = this.properties.step_parameters.map((s: any) => ({ ...(s || {}) }));
+                }
                 this.syncActiveSlotFromProperties();
             }
         }
@@ -592,6 +877,11 @@ export class SequenceNode extends BaseNode {
         this.selectedSlotIndices = targetIndices;
         this.properties.active_slot = this.activeSlotIndex;
         this.applySlotToProperties(slots[this.activeSlotIndex]);
+        this.invalidateDownstreamVisualCaches();
+        if (typeof window !== 'undefined' && this.id != null) {
+            window.dispatchEvent(new CustomEvent('arrangement-source-changed', { detail: { nodeId: this.id } }));
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
+        }
     }
 
     public async loadDroppedItemsIntoSlots(
@@ -607,21 +897,27 @@ export class SequenceNode extends BaseNode {
 
         const startSlotIndex = typeof target === 'number' ? target : target?.slotIndex;
 
-        // Multiple items dropped onto a slot pill, grid, or title field -> write a cycling text list operator
+        // Multiple items dropped onto a slot pill, grid, or title field -> add to pool and write name list operator
         if (items.length > 1) {
             this.syncActiveSlotFromProperties();
-            this.ensureItemsInPool(items);
+            const registered = this.ensureItemsInPool(items);
+            if (registered.length === 0) return;
             if (!this.properties) this.properties = {};
             this.properties.trigger_count = 0;
             if (startSlotIndex !== undefined) {
                 this.selectSlot(startSlotIndex);
             }
-            const listExpr = formatPoolListExpression(items);
+            const listExpr = formatPoolListExpression(registered, 'plain', true);
             await this.applyPoolQuery(listExpr, false);
             return;
         }
 
+        // Single item -> register in pool and call directly by string name
         this.syncActiveSlotFromProperties();
+        const registered = this.ensureItemsInPool([items[0]]);
+        const regItem = registered[0];
+        if (!regItem) return;
+
         const slots = this.getSlots();
         const baseIdx = startSlotIndex !== undefined
             ? Math.max(0, startSlotIndex)
@@ -632,7 +928,10 @@ export class SequenceNode extends BaseNode {
             : [baseIdx];
 
         const applySequence = typeof window !== 'undefined' ? (window as any).applyLibraryItemToSequence : undefined;
-        const item = items[0];
+        const rawItem = items[0];
+        const isInline = isInlinePoolItem(regItem);
+        const filepath = isInline ? '' : String(regItem.filepath || regItem.absolute_path || '');
+        const callName = getPoolItemCallName(regItem, true);
 
         for (const slotIdx of targetIndices) {
             while (slots.length <= slotIdx) {
@@ -648,34 +947,41 @@ export class SequenceNode extends BaseNode {
                         : []
                 });
             }
-            const filepath = String(item.filepath || item.absolute_path || '');
-            const seqName = item.name || filepath.split(/[\\/]/).pop() || 'Sequence';
             this.activeSlotIndex = slotIdx;
             this.selectedSlotIndices = [slotIdx];
             slots[slotIdx] = {
                 ...(slots[slotIdx] || {}),
                 slot: slotIdx,
                 index: slotIdx,
-                pool_query: '',
+                pool_query: callName,
                 filepath,
-                library_item_id: item.id ?? slots[slotIdx]?.library_item_id,
-                sequence_name: seqName,
-                ...(Array.isArray(item.sequence) ? { sequence: [...item.sequence] } : {}),
-                ...(Array.isArray(item.step_parameters)
-                    ? { step_parameters: item.step_parameters.map((s: any) => ({ ...(s || {}) })) }
+                library_item_id: regItem.id ?? slots[slotIdx]?.library_item_id,
+                is_external: isExternalPoolItem(regItem),
+                is_inline: isInline,
+                source: isInline ? 'inline' : (isExternalPoolItem(regItem) ? 'external' : 'gaia'),
+                sequence_name: callName,
+                ...(Array.isArray(regItem.sequence) ? { sequence: [...regItem.sequence] } : {}),
+                ...(Array.isArray(regItem.step_parameters)
+                    ? { step_parameters: regItem.step_parameters.map((s: any) => ({ ...(s || {}) })) }
                     : {}),
             };
             this.applySlotToProperties(slots[slotIdx]);
-            if (typeof applySequence === 'function') {
+            if (!isInline && filepath && typeof applySequence === 'function') {
                 await applySequence(this, {
-                    id: item.id,
+                    id: regItem.id,
                     filepath,
-                    itemType: item.itemType || item.type || (filepath.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi'),
-                    name: seqName,
-                    bpm: item.bpm ?? null,
-                    key: item.key ?? null
+                    itemType: rawItem.itemType || regItem.type || (filepath.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi'),
+                    name: callName,
+                    is_external: isExternalPoolItem(regItem),
+                    bpm: regItem.bpm ?? null,
+                    key: regItem.key ?? null
                 });
-                this.properties.pool_query = '';
+                this.properties.pool_query = callName;
+                this.properties.sequence_name = callName;
+                if (Array.isArray(this.properties.sequence)) regItem.sequence = [...this.properties.sequence];
+                if (Array.isArray(this.properties.step_parameters)) {
+                    regItem.step_parameters = this.properties.step_parameters.map((s: any) => ({ ...(s || {}) }));
+                }
                 this.syncActiveSlotFromProperties();
             }
         }
@@ -684,16 +990,21 @@ export class SequenceNode extends BaseNode {
         this.selectedSlotIndices = startSlotIndex !== undefined ? [baseIdx] : this.getSelectedSlotIndices();
         this.properties.active_slot = this.activeSlotIndex;
         this.applySlotToProperties(slots[this.activeSlotIndex]);
+        this.invalidateDownstreamVisualCaches();
+        if (typeof window !== 'undefined' && this.id != null) {
+            window.dispatchEvent(new CustomEvent('arrangement-source-changed', { detail: { nodeId: this.id } }));
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
+        }
     }
 
     public async applyPoolQuery(rawQuery: string, advanceSaltOnRand: boolean = true): Promise<boolean> {
         const query = String(rawQuery ?? '').trim();
         this.updateProperty('pool_query', query);
         const modNode = this.getAttachedPoolNode();
-        const rawItems = Array.isArray(modNode?.properties?.selected_items)
-            ? modNode.properties.selected_items
-            : (Array.isArray(this.properties?.selected_items) ? this.properties.selected_items : []);
-        const items = rawItems.filter((item: any) => Boolean(item?.absolute_path || item?.filepath));
+        const rawItems = this.getPoolItems();
+        const items = rawItems.filter((item: any) =>
+            Boolean(item?.absolute_path || item?.filepath || Array.isArray(item?.sequence))
+        );
         if (items.length === 0) return false;
 
         const slots = this.getSlots();
@@ -714,6 +1025,10 @@ export class SequenceNode extends BaseNode {
             Number(this.id || modNode?.id || 1) + seedSalt
         );
         const isSequential = modNode?.properties?.playbackMode === 'Sequential';
+        const poolSeed = resolveEffectivePoolSeed(modNode, this);
+        const poolNodeId = this.getPoolSalt();
+        const fieldSeed = this.getEffectiveSeed();
+        const isDynamicOp = isFieldOperatorExpression(query, items);
         const applySequence = typeof window !== 'undefined' ? (window as any).applyLibraryItemToSequence : undefined;
 
         const savedActive = this.activeSlotIndex;
@@ -725,18 +1040,21 @@ export class SequenceNode extends BaseNode {
                 ...(slots[idx] || {}),
                 pool_query: query
             };
+            const evalSeed = isDynamicOp ? fieldSeed : (isSequential ? slotSeeds[0] : slotSeeds[idx]);
             const chosen = resolvePoolItemByQuery(
                 items,
                 query,
                 idx,
-                isSequential ? slotSeeds[0] : slotSeeds[idx],
+                evalSeed,
                 isSequential,
-                triggerCount
+                triggerCount,
+                { seed: evalSeed, poolSeed, nodeId: poolNodeId, triggerCount }
             );
             if (!chosen) continue;
             anyMatched = true;
-            const filepath = String(chosen.absolute_path || chosen.filepath || '');
-            const seqName = chosen.name || filepath.split(/[\\/]/).pop() || slots[idx]?.sequence_name || 'Sequence';
+            const chosenInline = isInlinePoolItem(chosen);
+            const filepath = chosenInline ? '' : String(chosen.absolute_path || chosen.filepath || '');
+            const seqName = getPoolItemCallName(chosen, true) || slots[idx]?.sequence_name || 'Sequence';
             slots[idx] = {
                 ...(slots[idx] || {}),
                 slot: idx,
@@ -744,13 +1062,16 @@ export class SequenceNode extends BaseNode {
                 pool_query: query,
                 filepath,
                 library_item_id: chosen.id,
+                is_external: isExternalPoolItem(chosen),
+                is_inline: chosenInline,
+                source: chosenInline ? 'inline' : (isExternalPoolItem(chosen) ? 'external' : 'gaia'),
                 sequence_name: seqName,
                 ...(Array.isArray(chosen.sequence) ? { sequence: [...chosen.sequence] } : {}),
                 ...(Array.isArray(chosen.step_parameters)
                     ? { step_parameters: chosen.step_parameters.map((s: any) => ({ ...(s || {}) })) }
                     : {}),
             };
-            if (typeof applySequence === 'function') {
+            if (!chosenInline && filepath && typeof applySequence === 'function') {
                 this.activeSlotIndex = idx;
                 this.selectedSlotIndices = [idx];
                 await applySequence(this, {
@@ -758,10 +1079,16 @@ export class SequenceNode extends BaseNode {
                     filepath,
                     itemType: chosen.type || (filepath.toLowerCase().endsWith('.seq') ? 'sequence' : 'midi'),
                     name: seqName,
+                    is_external: isExternalPoolItem(chosen),
                     bpm: chosen.bpm ?? null,
                     key: chosen.key ?? null
                 });
                 this.properties.pool_query = query;
+                this.properties.sequence_name = seqName;
+                if (Array.isArray(this.properties.sequence)) chosen.sequence = [...this.properties.sequence];
+                if (Array.isArray(this.properties.step_parameters)) {
+                    chosen.step_parameters = this.properties.step_parameters.map((s: any) => ({ ...(s || {}) }));
+                }
                 this.syncActiveSlotFromProperties();
             }
         }
@@ -772,9 +1099,14 @@ export class SequenceNode extends BaseNode {
         if (!anyMatched) return false;
         const activeSlot = slots[savedActive] || slots[0];
         this.applySlotToProperties(activeSlot);
+        this.invalidateDownstreamVisualCaches();
         if (modNode?.properties) {
-            modNode.properties.output_value = activeSlot.filepath;
+            modNode.properties.output_value = activeSlot.filepath || '';
             if (activeSlot.library_item_id != null) modNode.properties.output_item_id = activeSlot.library_item_id;
+        }
+        if (typeof window !== 'undefined' && this.id != null) {
+            window.dispatchEvent(new CustomEvent('arrangement-source-changed', { detail: { nodeId: this.id } }));
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
         }
         return true;
     }
@@ -916,6 +1248,28 @@ export class SequenceNode extends BaseNode {
         this.activeSlotIndex = idx;
         this.selectedSlotIndices = [idx];
         this.properties.active_slot = idx;
+        // Hydrate any legacy slots with filepaths or authored sequences into the pool
+        const slotPoolCandidates = slots
+            .filter(s => Boolean(s?.filepath || (Array.isArray(s?.sequence) && s.sequence.length > 0 && (s?.is_inline || s?.sequence_name))))
+            .map((s, sIdx) => {
+                const isInline = !s.filepath;
+                return {
+                    id: s.library_item_id ?? (isInline ? `inline:${this.id ?? 'seq'}_slot${sIdx}` : undefined),
+                    filepath: isInline ? '' : String(s.filepath),
+                    absolute_path: isInline ? '' : String(s.filepath),
+                    name: s.sequence_name || (s.filepath ? String(s.filepath).split(/[\\/]/).pop() : `Sequence ${sIdx + 1}`),
+                    is_external: Boolean(s.is_external || String(s.library_item_id ?? '').startsWith('ext:')),
+                    is_inline: isInline,
+                    source: isInline ? 'inline' : (s.is_external ? 'external' : 'gaia'),
+                    sequence: Array.isArray(s.sequence) ? [...s.sequence] : undefined,
+                    step_parameters: Array.isArray(s.step_parameters)
+                        ? s.step_parameters.map((p: any) => ({ ...(p || {}) }))
+                        : undefined,
+                };
+            });
+        if (slotPoolCandidates.length > 0) {
+            this.ensureItemsInPool(slotPoolCandidates);
+        }
         if (slots[idx]) {
             this.applySlotToProperties(slots[idx]);
         }
@@ -1078,7 +1432,7 @@ export class SequenceNode extends BaseNode {
             // 2. Inspector live telemetry: NEVER switch slots; only update when the active slot itself has a Field Operator
             const inspectorSlot = Math.min(Math.max(0, this.activeSlotIndex), slotCount - 1);
             const activeSlotQuery = String(slots[inspectorSlot]?.pool_query ?? this.properties?.pool_query ?? '').trim();
-            const hasActiveSlotPoolOp = isFieldOperatorExpression(activeSlotQuery);
+            const hasActiveSlotPoolOp = isFieldOperatorExpression(activeSlotQuery, this.getPoolItems());
             const sampleSlotExpr = this.getFieldOperator('sample_slot') || String(this.properties?.sample_slot ?? '*');
             const hasSampleSlotOp = isFieldOperatorExpression(sampleSlotExpr);
             const activeSlotOps = slots[inspectorSlot]?.field_operators || this.properties?.field_operators;
@@ -1509,13 +1863,13 @@ export class SequenceNode extends BaseNode {
                 id: 'pool',
                 label: 'Pool',
                 icon: 'layers',
-                title: 'Toggle Sequence Pool view',
-                active: Boolean(this.isPoolViewOpen),
+                title: 'Toggle Sequence Pool tab',
+                active: Boolean(this.isPoolPanelOpen),
                 tone: 'sky',
                 onToggle: () => {
                     if (typeof window !== 'undefined') {
                         window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
-                            detail: { nodeId: this.id, toggleInline: true }
+                            detail: { nodeId: this.id, targetTab: 'POOL' }
                         }));
                     }
                 }
@@ -1530,15 +1884,34 @@ export class SequenceNode extends BaseNode {
                     if (typeof fetch !== 'function' || typeof window === 'undefined') return;
                     void (async () => {
                         try {
+                            const doc = this.toSequenceDocument();
                             const response = await fetch('/api/sequence/save', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(this.toSequenceDocument())
+                                body: JSON.stringify(doc)
                             });
                             const result = await response.json().catch(() => ({}));
                             if (!response.ok) return;
                             if (result.absolute_path) this.updateProperty('filepath', result.absolute_path);
                             if (result.id != null) this.updateProperty('library_item_id', result.id);
+                            this.updateProperty('is_inline', false);
+                            this.updateProperty('is_external', false);
+                            if (result.absolute_path) {
+                                const registered = this.ensureItemsInPool([{
+                                    id: result.id,
+                                    filepath: result.absolute_path,
+                                    absolute_path: result.absolute_path,
+                                    name: doc.name,
+                                    type: 'sequence',
+                                    sequence: Array.isArray(this.properties.sequence) ? [...this.properties.sequence] : undefined,
+                                    step_parameters: Array.isArray(this.properties.step_parameters)
+                                        ? this.properties.step_parameters.map((s: any) => ({ ...(s || {}) }))
+                                        : undefined,
+                                }]);
+                                if (registered[0]) {
+                                    this.updateProperty('pool_query', getPoolItemCallName(registered[0], true));
+                                }
+                            }
                             window.dispatchEvent(new CustomEvent('library-content-changed'));
                             notifyRefresh();
                         } catch {

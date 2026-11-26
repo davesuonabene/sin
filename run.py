@@ -6,6 +6,10 @@ import argparse
 import logging
 import uvicorn
 
+from core.env_config import load_sin_env
+
+load_sin_env()
+
 
 def main():
     parser = argparse.ArgumentParser(

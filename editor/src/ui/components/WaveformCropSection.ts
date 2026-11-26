@@ -1,32 +1,52 @@
 import { type BaseNode } from '../../nodes/BaseNode.ts';
 import { WaveformVisualizer } from '../WaveformVisualizer.ts';
 import { getCachedAudioBufferSync } from '../../audioBufferCache.ts';
-import { getDroppedAudioItems, hasAudioDragPayload } from '../dragPayload.ts';
-import { isFieldOperatorExpression } from '../../../../ermes/ts/slotLanguage.ts';
-import { resolvePoolItemByQuery } from '../../../../ermes/ts/assetResolver.ts';
+import { hasAudioDragPayload, resolveDroppedAudioItems } from '../dragPayload.ts';
+import {
+    getPoolItemCallName,
+    isCalculatedPoolQuery,
+    isFieldOperatorExpression,
+} from '../../../../ermes/ts/slotLanguage.ts';
+import { resolveEffectivePoolSeed, resolvePoolItemByQuery } from '../../../../ermes/ts/assetResolver.ts';
 import { SlotStrip } from './SlotStrip.ts';
 
-function getLoadedAssetBasename(node: BaseNode, poolItems?: any[], poolSeed?: any): string {
+function getLoadedAssetBasename(
+    node: BaseNode,
+    poolItems?: any[],
+    effPoolSeed?: number,
+    poolSalt?: number
+): string {
     const activeIdx = Math.max(0, Number((node as any).activeSlotIndex ?? node.properties?.active_slot ?? 0));
     const q = String(node.properties?.pool_query ?? '').trim();
-    if (isFieldOperatorExpression(q)) {
-        const liveFp = String(node._liveTriggeredFilepath || '');
-        if (liveFp) return liveFp.split(/[\\/]/).pop() || liveFp;
+    if (isCalculatedPoolQuery(q, poolItems)) {
+        if (isFieldOperatorExpression(q, poolItems)) {
+            const liveFp = String(node._liveTriggeredFilepath || '');
+            if (liveFp) {
+                const matchedLive = Array.isArray(poolItems)
+                    ? poolItems.find((it: any) => String(it?.filepath || it?.absolute_path || '') === liveFp)
+                    : null;
+                return matchedLive ? getPoolItemCallName(matchedLive, false) : (liveFp.split(/[\\/]/).pop() || liveFp);
+            }
+        }
         if (Array.isArray(poolItems) && poolItems.length > 0) {
             const chosen = resolvePoolItemByQuery(
                 poolItems,
                 q,
                 activeIdx,
-                node.properties?.seed ?? poolSeed ?? 42,
+                node.properties?.seed ?? 42,
                 false,
-                node.getTriggerCount()
+                node.getTriggerCount(),
+                { poolSeed: effPoolSeed, nodeId: poolSalt }
             );
-            const chosenFp = String(chosen?.name || chosen?.absolute_path || chosen?.filepath || '');
-            if (chosenFp) return chosenFp.split(/[\\/]/).pop() || chosenFp;
+            if (chosen) return getPoolItemCallName(chosen, false);
         }
     }
     const slotFp = Array.isArray(node.properties?.slots) ? String(node.properties.slots[activeIdx]?.filepath || '') : '';
     const filepath = String(node.properties?.filepath || slotFp || '');
+    if (filepath && Array.isArray(poolItems) && poolItems.length > 0) {
+        const matched = poolItems.find((it: any) => String(it?.filepath || it?.absolute_path || '') === filepath);
+        if (matched) return getPoolItemCallName(matched, false);
+    }
     if (filepath) return filepath.split(/[\\/]/).pop() || filepath;
     return '';
 }
@@ -58,41 +78,112 @@ export class WaveformCropSection {
         const timeEndEl = container.querySelector('.crop-time-end') as HTMLElement;
 
         if (!visContainer) return;
-        const assignedModifier = typeof node.getAttachedPoolNode === 'function'
-            ? node.getAttachedPoolNode()
-            : null;
-        const poolItems = Array.isArray(assignedModifier?.properties?.selected_items)
-            ? assignedModifier.properties.selected_items
-            : [];
-        const isPoolOpen = Boolean(node.isPoolViewOpen);
+
+        const getPoolContext = () => {
+            const assignedModifier = typeof node.getAttachedPoolNode === 'function'
+                ? node.getAttachedPoolNode()
+                : null;
+            const poolItems = typeof (node as any).getPoolItems === 'function'
+                ? (node as any).getPoolItems()
+                : (Array.isArray(assignedModifier?.properties?.selected_items) ? assignedModifier.properties.selected_items : []);
+            const effPoolSeed = resolveEffectivePoolSeed(assignedModifier, node);
+            const poolSalt = typeof (node as any).getPoolSalt === 'function'
+                ? (node as any).getPoolSalt()
+                : Number(assignedModifier?.id || node.id || 0);
+            return { assignedModifier, poolItems, effPoolSeed, poolSalt };
+        };
+
+        const initialCtx = getPoolContext();
+        const isPoolOpen = Boolean(node.isPoolPanelOpen);
 
         const assetRow = document.createElement('div');
         assetRow.className = 'waveform-asset-row';
         titleEl.replaceWith(assetRow);
 
+        const indexPill = document.createElement('button');
+        indexPill.type = 'button';
+        indexPill.className = 'td-pool-index-pill';
+        indexPill.style.display = 'none';
+        indexPill.title = 'Current-run pool index · Click to open POOL tab';
+        indexPill.addEventListener('click', () => {
+            window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
+                detail: { nodeId: node.id, forceOpen: true, targetTab: 'POOL' }
+            }));
+        });
+
         const selectorInput = document.createElement('input');
         selectorInput.type = 'text';
         selectorInput.className = 'waveform-asset-title td-pool-selector-input';
-        selectorInput.placeholder = (assignedModifier || isPoolOpen)
+        selectorInput.placeholder = (initialCtx.poolItems.length > 0 || initialCtx.assignedModifier)
             ? 'Pool: name, index (0..), or rand'
             : 'Drop sample or select from Pool';
-        selectorInput.title = 'Click to view/edit pool expression (name, index 0.., or "rand") · Drop sample to load';
+        selectorInput.title = 'Click to view/edit pool call (name, run index 0.., or "rand") · Drop sample to load';
         selectorInput.setAttribute('aria-label', 'Sample name or pool query');
 
+        const extBadge = document.createElement('span');
+        extBadge.className = 'pool-source-badge pool-source-badge--ext';
+        extBadge.textContent = 'EXT';
+        extBadge.style.display = 'none';
+
         const isPoolCalculated = (): boolean => {
-            return isFieldOperatorExpression(node.properties?.pool_query);
+            const { poolItems } = getPoolContext();
+            return isCalculatedPoolQuery(node.properties?.pool_query, poolItems);
         };
 
         const getEditableExpression = (): string => {
             const mixedPath = node.hasMixedSlotValues?.('filepath') ?? false;
             const mixedQuery = node.hasMixedSlotValues?.('pool_query') ?? false;
             if (mixedPath && mixedQuery) return '';
+            const { poolItems, effPoolSeed, poolSalt } = getPoolContext();
             const q = String(node.properties?.pool_query ?? '').trim();
-            if (isFieldOperatorExpression(q)) return q;
-            return getLoadedAssetBasename(node, poolItems, assignedModifier?.properties?.seed);
+            if (isCalculatedPoolQuery(q, poolItems)) return q;
+            return getLoadedAssetBasename(node, poolItems, effPoolSeed, poolSalt);
+        };
+
+        const assetActions = document.createElement('span');
+        assetActions.className = 'waveform-asset-actions';
+
+        const poolButton = document.createElement('button');
+        poolButton.type = 'button';
+        poolButton.className = `waveform-asset-button waveform-pool-button ${initialCtx.poolItems.length > 0 || initialCtx.assignedModifier ? 'is-assigned' : ''} ${isPoolOpen ? 'is-active' : ''}`;
+        poolButton.textContent = initialCtx.poolItems.length > 0 ? `POOL · ${initialCtx.poolItems.length}` : 'POOL';
+        poolButton.title = isPoolOpen ? 'Show Sample Parameters' : 'Open Sample Pool tab';
+        poolButton.setAttribute('aria-label', poolButton.title);
+        poolButton.setAttribute('aria-pressed', String(isPoolOpen));
+        poolButton.addEventListener('click', () => {
+            window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
+                detail: { nodeId: node.id, targetTab: 'POOL' }
+            }));
+        });
+
+        const syncBadges = () => {
+            const { assignedModifier, poolItems, effPoolSeed } = getPoolContext();
+            const calc = isPoolCalculated();
+            poolButton.textContent = poolItems.length > 0 ? `POOL · ${poolItems.length}` : 'POOL';
+            poolButton.classList.toggle('is-assigned', poolItems.length > 0 || Boolean(assignedModifier));
+
+            const fp = String((isFieldOperatorExpression(node.properties?.pool_query, poolItems) ? node._liveTriggeredFilepath : '') || node.properties?.filepath || '');
+            const runIdx = typeof (node as any).findPoolItemRunIndex === 'function'
+                ? (node as any).findPoolItemRunIndex({ filepath: fp, id: node.properties?.library_item_id })
+                : -1;
+            if (runIdx >= 0) {
+                indexPill.style.display = '';
+                indexPill.textContent = `#${runIdx}`;
+                indexPill.classList.toggle('is-pool-computed', calc);
+                indexPill.title = `Pool run index #${runIdx} (seed ${effPoolSeed}) · Click to open POOL tab`;
+            } else {
+                indexPill.style.display = 'none';
+            }
+
+            const isExt = Boolean((node as any).isActiveAssetExternal?.());
+            extBadge.style.display = isExt ? '' : 'none';
+            if (isExt) {
+                extBadge.title = `External local file: ${fp}`;
+            }
         };
 
         const syncSelectorDisplay = () => {
+            syncBadges();
             if (document.activeElement === selectorInput) return;
             const mixedPath = node.hasMixedSlotValues?.('filepath') ?? false;
             if (mixedPath) {
@@ -100,10 +191,12 @@ export class WaveformCropSection {
                 selectorInput.classList.remove('is-pool-computed');
                 return;
             }
-            const loadedBasename = getLoadedAssetBasename(node, poolItems, assignedModifier?.properties?.seed);
+            const { poolItems, effPoolSeed, poolSalt } = getPoolContext();
+            const loadedBasename = getLoadedAssetBasename(node, poolItems, effPoolSeed, poolSalt);
             const q = String(node.properties?.pool_query ?? '').trim();
-            selectorInput.value = loadedBasename || (isFieldOperatorExpression(q) ? q : '');
-            selectorInput.classList.toggle('is-pool-computed', isPoolCalculated());
+            const calc = isCalculatedPoolQuery(q, poolItems);
+            selectorInput.value = loadedBasename || (calc ? q : '');
+            selectorInput.classList.toggle('is-pool-computed', calc);
         };
         syncSelectorDisplay();
 
@@ -116,9 +209,10 @@ export class WaveformCropSection {
                 syncSelectorDisplay();
                 return;
             }
+            const { assignedModifier, poolItems } = getPoolContext();
             const sampleWithPool = node as BaseNode & { applyPoolQuery?: (q: string) => boolean };
-            if (typeof sampleWithPool.applyPoolQuery === 'function' && (assignedModifier || raw)) {
-                if (isFieldOperatorExpression(raw)) {
+            if (typeof sampleWithPool.applyPoolQuery === 'function' && (poolItems.length > 0 || assignedModifier || raw)) {
+                if (isFieldOperatorExpression(raw, poolItems)) {
                     node.resetTriggerCount?.();
                 }
                 const matched = sampleWithPool.applyPoolQuery(raw);
@@ -128,7 +222,7 @@ export class WaveformCropSection {
                     return;
                 }
             }
-            if (raw && !assignedModifier) {
+            if (raw && !assignedModifier && poolItems.length === 0) {
                 node.updateProperty('node_name', raw);
             }
             syncSelectorDisplay();
@@ -165,24 +259,8 @@ export class WaveformCropSection {
             }
         });
 
-        const assetActions = document.createElement('span');
-        assetActions.className = 'waveform-asset-actions';
-
-        const poolButton = document.createElement('button');
-        poolButton.type = 'button';
-        poolButton.className = `waveform-asset-button waveform-pool-button ${assignedModifier ? 'is-assigned' : ''} ${isPoolOpen ? 'is-active' : ''}`;
-        poolButton.textContent = poolItems.length > 0 ? `POOL · ${poolItems.length}` : 'POOL';
-        poolButton.title = isPoolOpen ? 'Show Sample Parameters' : 'Toggle Sample Pool';
-        poolButton.setAttribute('aria-label', poolButton.title);
-        poolButton.setAttribute('aria-pressed', String(isPoolOpen));
-        poolButton.addEventListener('click', () => {
-            window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
-                detail: { nodeId: node.id, toggleInline: true }
-            }));
-        });
-
         assetActions.append(poolButton);
-        assetRow.append(selectorInput, assetActions);
+        assetRow.append(indexPill, selectorInput, extBadge, assetActions);
 
         const sampleNode = node as BaseNode & {
             activeSlotIndex?: number;
@@ -196,7 +274,7 @@ export class WaveformCropSection {
         };
 
         const handleDroppedAudioItems = async (dataTransfer: DataTransfer, target?: number | 'plus') => {
-            const items = getDroppedAudioItems(dataTransfer);
+            const items = await resolveDroppedAudioItems(dataTransfer);
             if (items.length === 0) return;
             if (typeof sampleNode.loadDroppedItemsIntoSlots === 'function') {
                 await sampleNode.loadDroppedItemsIntoSlots(items, target);
@@ -235,8 +313,9 @@ export class WaveformCropSection {
             if (!visualizer) return;
             const activeSlot = sampleNode.activeSlotIndex ?? 0;
             const slotFp = Array.isArray(node.properties?.slots) ? String(node.properties.slots[activeSlot]?.filepath || '') : '';
-            const hasCalcPool = isFieldOperatorExpression(node.properties?.pool_query);
-            const liveFp = hasCalcPool ? String(node._liveTriggeredFilepath || '') : '';
+            const { poolItems } = getPoolContext();
+            const hasDynPool = isFieldOperatorExpression(node.properties?.pool_query, poolItems);
+            const liveFp = hasDynPool ? String(node._liveTriggeredFilepath || '') : '';
             const fp = String(liveFp || node.properties?.filepath || slotFp || '');
             const s = node.hasFieldOperator?.('crop_start')
                 ? Number(node.evaluateFieldOperatorForKey('crop_start', node.getFieldOperator('crop_start')))
@@ -378,9 +457,10 @@ export class WaveformCropSection {
             if (detail?.nodeId === node.id) {
                 const isLive = Boolean(detail?.liveTelemetry);
                 if (isLive) {
-                    const hasCalcPool = isFieldOperatorExpression(node.properties?.pool_query);
+                    const { poolItems } = getPoolContext();
+                    const hasDynPool = isFieldOperatorExpression(node.properties?.pool_query, poolItems);
                     const hasCalcCrop = Boolean(node.hasFieldOperator?.('crop_start') || node.hasFieldOperator?.('crop_end'));
-                    if (!hasCalcPool && !hasCalcCrop) {
+                    if (!hasDynPool && !hasCalcCrop) {
                         return;
                     }
                 }

@@ -333,6 +333,108 @@ class TestSinNativeEngine(unittest.TestCase):
         audio_off, _ = render_plan_offline(plan2, total_frames=512)
         np.testing.assert_allclose(audio_off[:, 64:], 0.4, atol=1e-4)
 
+    def test_fx_chain_packing_stage_meters_and_null_sample_bus_peaks(self) -> None:
+        from core.realtime_host import RealtimeAudioHost
+
+        wav = self._write_tone("fx_tone.wav", 1000.0, 0.5, sr=48000, amp=0.8)
+        host = RealtimeAudioHost(name="test-fx-chain", sample_rate=48000, include_scope=False)
+        try:
+            res = host.load_node_model_plan({
+                "node_id": 100,
+                "node_name": "Master",
+                "node_type": "track",
+                "bpm": 120.0,
+                "total_bars": 0.25,
+                "children": [{
+                    "node_id": 101,
+                    "node_name": "NullFX",
+                    "node_type": "null",
+                    "chain": [
+                        {"id": "pre_gain_a", "type": "gain", "name": "Pre Gain", "enabled": True, "fixed": True, "params": {"gain_db": 6.0}},
+                        {"id": "eq_1", "type": "param_eq", "enabled": True, "params": {"b2_freq": 1000.0, "b2_gain": 3.0}},
+                        {"id": "comp_1", "type": "comp", "enabled": True, "params": {"threshold_db": -24.0, "ratio": 6.0, "attack_ms": 1.0, "release_ms": 50.0, "knee_db": 0.0, "makeup_db": 0.0, "mix": 100.0}},
+                        {"id": "clip_1", "type": "clipper", "enabled": True, "params": {"mode": 0, "drive_db": 0.0, "ceiling_db": -6.0, "softness": 0.5, "output_db": 0.0}},
+                        {"id": "lim_1", "type": "limiter", "enabled": True, "params": {"input_gain_db": 0.0, "ceiling_db": -12.0, "release_ms": 50.0, "lookahead_ms": 2.0}},
+                        {"id": "post_gain_b", "type": "gain", "name": "Post Gain", "enabled": True, "fixed": True, "params": {"gain_db": 0.0}},
+                    ],
+                    "children": [{
+                        "node_id": 102,
+                        "node_name": "Src",
+                        "node_type": "sample",
+                        "filepath": str(wav),
+                        "sample_type": "one_shot",
+                        "stretch_mode": "off",
+                        "chain": [
+                            {"id": "pre_gain_s", "type": "gain", "name": "Pre Gain", "enabled": True, "fixed": True, "params": {"gain_db": 0.0}},
+                            {"id": "clip_s", "type": "clipper", "enabled": True, "params": {"mode": 0, "drive_db": 0.0, "ceiling_db": -3.0, "softness": 0.5, "output_db": 0.0}},
+                            {"id": "post_gain_s", "type": "gain", "name": "Post Gain", "enabled": True, "fixed": True, "params": {"gain_db": 0.0}},
+                        ],
+                    }],
+                }],
+            }, compute_peaks=True, peak_columns=32)
+
+            self.assertTrue(res["ok"])
+            self.assertIn("101", res["bus_peaks"])
+            self.assertIn("102", res["bus_peaks"])
+            # Limiter at -12dB (~0.251) on Null node must cap Null bus peak around 0.25
+            null_peak = max(abs(v) for v in res["bus_peaks"]["101"])
+            self.assertLessEqual(null_peak, 0.27)
+            self.assertGreater(null_peak, 0.15)
+
+            # Live stage param update (change Limiter ceiling to -18dB ~ 0.126) updates active plan & recomputed IRIDE bus_peaks
+            self.assertTrue(host.set_stage_param("101", 3, 1, -18.0, 0.0))
+            with host._lock:
+                snap = host._snapshot_active_plan_locked()
+            self.assertIsNotNone(snap)
+            _, updated_bus_peaks = host._compute_plan_peaks(snap, host._engine.sample_rate, 32)
+            self.assertLessEqual(max(abs(v) for v in updated_bus_peaks["101"]), 0.14)
+
+            # Live stage metering check via offline render
+            from core.audio_engine import SinAudioEngine
+            with SinAudioEngine(sample_rate=48000, max_block_size=512, offline_mode=True) as eng:
+                self.assertTrue(eng.load_plan(snap))
+                eng.render_offline(total_frames=2048)
+                meters = eng.read_stage_meters()
+                self.assertIn("101", meters)
+                self.assertLess(meters["101"][1], -0.5)  # Compressor GR < 0
+                self.assertLess(meters["101"][3], -0.5)  # Limiter GR < 0
+
+            # Verify 20-param Param EQ Low Cut packing & Q-controlled slope in native C++ engine
+            from core.render_plan import (
+                BusSpec, ChainStageSpec, ClipSpec, SIN_PROC_PARAM_EQ,
+                SinRenderPlan, SourceSpec, pack_processor_params,
+            )
+            t = np.arange(4096, dtype=np.float32) / 48000.0
+            s250 = np.stack([0.5 * np.sin(2.0 * np.pi * 250.0 * t)] * 2, axis=0).astype(np.float32)
+            p_gentle = pack_processor_params("param_eq", {"b1_type": 0, "b1_freq": 1000.0, "b1_q": 0.2})
+            p_steep = pack_processor_params("param_eq", {"b1_type": 0, "b1_freq": 1000.0, "b1_q": 12.0})
+            self.assertEqual(len(p_gentle), 20)
+            with SinAudioEngine(sample_rate=48000, max_block_size=512, offline_mode=True) as eng:
+                plan_g = SinRenderPlan(
+                    sample_rate=48000,
+                    sources=[SourceSpec(source_id=1, pcm=s250, sample_rate=48000, content_hash=4401)],
+                    buses=[BusSpec(bus_id=1, parent_bus_id=0, node_key="m")],
+                    clips=[ClipSpec(clip_id=1, source_id=1, target_bus_id=1, timeline_length_frames=4096)],
+                    stages=[ChainStageSpec(bus_id=1, stage_index=0, processor_type=SIN_PROC_PARAM_EQ, enabled=True, params=p_gentle)],
+                )
+                self.assertTrue(eng.load_plan(plan_g))
+                out_g, _ = eng.render_offline(total_frames=2048)
+                plan_s = SinRenderPlan(
+                    sample_rate=48000,
+                    sources=[SourceSpec(source_id=1, pcm=s250, sample_rate=48000, content_hash=4401)],
+                    buses=[BusSpec(bus_id=1, parent_bus_id=0, node_key="m")],
+                    clips=[ClipSpec(clip_id=1, source_id=1, target_bus_id=1, timeline_length_frames=4096)],
+                    stages=[ChainStageSpec(bus_id=1, stage_index=0, processor_type=SIN_PROC_PARAM_EQ, enabled=True, params=p_steep)],
+                )
+                self.assertTrue(eng.load_plan(plan_s))
+                out_s, _ = eng.render_offline(total_frames=2048)
+                pk_g = float(np.max(np.abs(out_g[:, 1024:])))
+                pk_s = float(np.max(np.abs(out_s[:, 1024:])))
+                self.assertGreater(pk_g, 0.08)
+                self.assertLess(pk_s, 0.005)
+        finally:
+            host.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

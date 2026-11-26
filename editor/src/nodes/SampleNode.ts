@@ -12,16 +12,22 @@ import {
 } from '../../../packages/iride/src/index.ts';
 import { fetchAudioBuffer, getCachedAudioBufferSync } from '../audioBufferCache.ts';
 import { getNodeGainMultiplier, applyGainToBuffer } from '../audioCompositor.ts';
+import { getUserFxStages } from '../dsp/processorRegistry.ts';
 import { globalAudioScheduler } from '../audioScheduler.ts';
 import {
     type NodeSlot,
     copyNodeSlotToClipboard,
+    deduplicatePoolItemName,
     formatPoolListExpression,
     getCopiedNodeSlotFromClipboard,
+    getPoolItemCallName,
+    getPoolItemIdentityKey,
+    isCalculatedPoolQuery,
+    isExternalPoolItem,
     isFieldOperatorExpression,
     resolveModifierSlotSeeds
 } from '../../../ermes/ts/slotLanguage.ts';
-import { populateOwnerSlotsFromPool, resolvePoolItemByQuery, parseBpmFromFilename } from '../../../ermes/ts/assetResolver.ts';
+import { populateOwnerSlotsFromPool, resolveEffectivePoolSeed, resolvePoolItemByQuery, parseBpmFromFilename } from '../../../ermes/ts/assetResolver.ts';
 
 type MusicalMode = 'major' | 'minor' | null;
 type KeyMatchAlgorithm = 'nearest' | 'higher' | 'lower';
@@ -36,6 +42,7 @@ export class SampleNode extends BaseNode {
         'filepath',
         'pool_query',
         'library_item_id',
+        'is_external',
         'duration_seconds',
         'sample_type',
         'start_beat',
@@ -87,6 +94,9 @@ export class SampleNode extends BaseNode {
             pool_query: this.properties?.pool_query !== undefined ? String(this.properties.pool_query) : base?.pool_query,
             filepath: String(this.properties?.filepath ?? base?.filepath ?? ''),
             library_item_id: this.properties?.library_item_id ?? base?.library_item_id,
+            is_external: this.properties?.is_external !== undefined
+                ? Boolean(this.properties.is_external)
+                : Boolean(base?.is_external || String(this.properties?.library_item_id ?? base?.library_item_id ?? '').startsWith('ext:')),
             duration_seconds: this.properties?.duration_seconds ?? base?.duration_seconds,
             sample_type: this.properties?.sample_type ?? base?.sample_type ?? 'loop',
             start_beat: Number(this.properties?.start_beat ?? base?.start_beat ?? 0),
@@ -213,6 +223,7 @@ export class SampleNode extends BaseNode {
         this.properties.pool_query = slot.pool_query !== undefined ? String(slot.pool_query) : '';
         this.properties.filepath = String(slot.filepath || '');
         if (slot.library_item_id !== undefined) this.properties.library_item_id = slot.library_item_id;
+        this.properties.is_external = Boolean(slot.is_external || String(slot.library_item_id ?? '').startsWith('ext:'));
         if (slot.duration_seconds !== undefined) this.properties.duration_seconds = slot.duration_seconds;
         if (slot.sample_type !== undefined) this.properties.sample_type = slot.sample_type;
         if (slot.start_beat !== undefined) this.properties.start_beat = Number(slot.start_beat);
@@ -323,9 +334,20 @@ export class SampleNode extends BaseNode {
         }
     }
 
+    public isActiveAssetExternal(): boolean {
+        const slots = this.getSlots();
+        const activeSlot = slots[this.activeSlotIndex];
+        return Boolean(
+            this.properties?.is_external
+            || activeSlot?.is_external
+            || String(this.properties?.library_item_id ?? activeSlot?.library_item_id ?? '').startsWith('ext:')
+        );
+    }
+
     override evaluateAllFieldOperators(triggerOverride?: number): void {
         const triggerCount = triggerOverride !== undefined ? triggerOverride : this.getTriggerCount();
         const slots = this.getSlots();
+        const poolItems = this.getPoolItems();
         for (let idx = 0; idx < slots.length; idx++) {
             const slot = slots[idx];
             if (!slot) continue;
@@ -343,16 +365,32 @@ export class SampleNode extends BaseNode {
                 }
             }
         }
-        const activeQuery = String(slots[this.activeSlotIndex]?.pool_query ?? this.properties?.pool_query ?? '').trim();
-        if (isFieldOperatorExpression(activeQuery)) {
-            this.applyPoolQuery(activeQuery, false);
-        } else if (slots[this.activeSlotIndex]) {
+        const savedActive = this.activeSlotIndex;
+        const savedSelected = [...this.getSelectedSlotIndices()];
+        let anyPoolResolved = false;
+        for (let idx = 0; idx < slots.length; idx++) {
+            const slotQuery = String(slots[idx]?.pool_query ?? (idx === savedActive ? this.properties?.pool_query : '') ?? '').trim();
+            if (isCalculatedPoolQuery(slotQuery, poolItems)) {
+                this.activeSlotIndex = idx;
+                this.selectedSlotIndices = [idx];
+                if (this.applyPoolQuery(slotQuery, false)) {
+                    anyPoolResolved = true;
+                }
+            }
+        }
+        this.activeSlotIndex = savedActive;
+        this.selectedSlotIndices = savedSelected;
+        this.properties.active_slot = savedActive;
+        if (slots[this.activeSlotIndex]) {
             this.applySlotToProperties(slots[this.activeSlotIndex]);
+        }
+        if (anyPoolResolved) {
+            this.invalidateDownstreamVisualCaches();
         }
     }
 
-    private ensureItemsInPool(items: any[]): void {
-        if (!Array.isArray(items) || items.length === 0) return;
+    public ensureItemsInPool(items: any[]): any[] {
+        if (!Array.isArray(items) || items.length === 0) return [];
         if (!this.properties) this.properties = {};
         let modNode = this.getAttachedPoolNode();
         if (!modNode && typeof window !== 'undefined' && this.id != null) {
@@ -364,37 +402,102 @@ export class SampleNode extends BaseNode {
         const targetContainer = modNode?.properties || this.properties;
         const existing: any[] = Array.isArray(targetContainer.selected_items)
             ? [...targetContainer.selected_items]
-            : [];
+            : (Array.isArray(this.properties.selected_items) ? [...this.properties.selected_items] : []);
         const byKey = new Map<string, any>();
         for (const it of existing) {
-            const k = String(it?.id ?? it?.filepath ?? it?.absolute_path ?? '');
+            const k = getPoolItemIdentityKey(it);
             if (k) byKey.set(k, it);
         }
+        const registered: any[] = [];
         for (const it of items) {
-            const fp = String(it?.filepath || it?.absolute_path || '');
+            const fp = String(it?.filepath || it?.absolute_path || '').trim();
+            if (!fp) continue;
+            const isExt = isExternalPoolItem(it) || (!it?.id && !String(it?.id ?? '').trim());
+            const candidateKey = getPoolItemIdentityKey({ ...it, filepath: fp, absolute_path: fp });
+            const existingEntry = candidateKey ? byKey.get(candidateKey) : undefined;
+            if (existingEntry) {
+                if (it?.bpm != null && existingEntry.bpm == null) existingEntry.bpm = it.bpm;
+                if (it?.key != null && !existingEntry.key) existingEntry.key = it.key;
+                if (it?.duration_seconds != null && existingEntry.duration_seconds == null) {
+                    existingEntry.duration_seconds = it.duration_seconds;
+                }
+                if (isExt && !existingEntry.is_external) {
+                    existingEntry.is_external = true;
+                    existingEntry.source = 'external';
+                }
+                registered.push(existingEntry);
+                continue;
+            }
+            const currentValues = [...byKey.values()];
+            const rawBaseName = getPoolItemCallName({ ...it, filepath: fp, absolute_path: fp }, false);
+            const uniqueName = deduplicatePoolItemName(rawBaseName, currentValues);
             const poolItem = {
-                id: it?.id ?? fp,
+                id: it?.id != null && String(it.id).trim() ? it.id : `ext:${fp}`,
                 filepath: fp,
                 absolute_path: fp,
-                name: it?.name || fp.split(/[\\/]/).pop() || 'Sample',
+                name: uniqueName,
                 type: it?.itemType || it?.type || 'audio',
+                is_external: isExt,
+                source: isExt ? 'external' : 'gaia',
                 bpm: it?.bpm ?? null,
                 key: it?.key ?? null,
                 duration_seconds: it?.duration_seconds ?? null,
             };
-            const k = String(poolItem.id || poolItem.filepath);
+            const k = getPoolItemIdentityKey(poolItem);
             if (k) byKey.set(k, poolItem);
+            registered.push(poolItem);
         }
         const merged = [...byKey.values()];
         targetContainer.selected_items = merged;
         if (this.properties !== targetContainer) {
             this.properties.selected_items = merged;
         }
+        if (modNode?.properties && modNode.properties !== targetContainer) {
+            modNode.properties.selected_items = merged;
+        }
+        return registered;
+    }
+
+    public renamePoolItem(itemKeyOrId: string, nextName: string): boolean {
+        const clean = String(nextName || '').trim();
+        if (!clean) return false;
+        const modNode = this.getAttachedPoolNode();
+        const items = [...this.getPoolItems()];
+        const idx = items.findIndex(it =>
+            getPoolItemIdentityKey(it) === itemKeyOrId
+            || (it?.id != null && String(it.id) === itemKeyOrId)
+        );
+        if (idx === -1) return false;
+        const target = items[idx];
+        const prevName = String(target.name || '');
+        const uniqueName = deduplicatePoolItemName(clean, items, getPoolItemIdentityKey(target));
+        if (uniqueName === prevName) return false;
+        target.name = uniqueName;
+        if (modNode?.properties) modNode.properties.selected_items = items;
+        if (this.properties) this.properties.selected_items = items;
+
+        const slots = this.getSlots();
+        const prevLower = prevName.trim().toLowerCase();
+        for (const slot of slots) {
+            if (String(slot?.pool_query || '').trim().toLowerCase() === prevLower) {
+                slot.pool_query = uniqueName;
+            }
+        }
+        if (String(this.properties?.pool_query || '').trim().toLowerCase() === prevLower) {
+            this.properties.pool_query = uniqueName;
+        }
+        if (typeof window !== 'undefined' && this.id != null) {
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
+        }
+        return true;
     }
 
     public async createSlotsFromDroppedItems(items: any[], startSlotIndex?: number): Promise<void> {
         if (!Array.isArray(items) || items.length === 0) return;
         this.syncActiveSlotFromProperties();
+        const registeredItems = this.ensureItemsInPool(items);
+        if (registeredItems.length === 0) return;
+
         const slots = this.getSlots();
         const isSingleEmptySlot = slots.length === 1 && !slots[0]?.filepath;
         const baseIdx = startSlotIndex !== undefined
@@ -402,14 +505,15 @@ export class SampleNode extends BaseNode {
             : (isSingleEmptySlot ? 0 : slots.length);
 
         const targetIndices: number[] = [];
-        for (let i = 0; i < items.length; i++) {
+        for (let i = 0; i < registeredItems.length; i++) {
             targetIndices.push(baseIdx + i);
         }
 
         const assignedPool = this.getAttachedPoolNode();
         for (let i = 0; i < targetIndices.length; i++) {
             const slotIdx = targetIndices[i];
-            const item = items[i];
+            const rawItem = items[i] || registeredItems[i];
+            const regItem = registeredItems[i];
             while (slots.length <= slotIdx) {
                 const template = slots[slots.length - 1] || slots[0] || {};
                 const nextIdx = slots.length;
@@ -419,20 +523,25 @@ export class SampleNode extends BaseNode {
                     index: nextIdx,
                 });
             }
-            const filepath = String(item.filepath || item.absolute_path || '');
-            const bpm = Number.isFinite(Number(item.bpm)) ? Number(item.bpm) : parseBpmFromFilename(filepath);
+            const filepath = String(regItem.filepath || regItem.absolute_path || '');
+            const callName = getPoolItemCallName(regItem, false);
+            const bpm = Number.isFinite(Number(regItem.bpm ?? rawItem.bpm))
+                ? Number(regItem.bpm ?? rawItem.bpm)
+                : parseBpmFromFilename(filepath);
             slots[slotIdx] = {
                 ...(slots[slotIdx] || {}),
                 slot: slotIdx,
                 index: slotIdx,
-                pool_query: '',
+                pool_query: callName,
                 filepath,
-                library_item_id: item.id ?? slots[slotIdx]?.library_item_id,
-                sample_type: item.itemType === 'one_shot' ? 'one_shot' : 'loop',
+                library_item_id: regItem.id ?? slots[slotIdx]?.library_item_id,
+                is_external: isExternalPoolItem(regItem),
+                source: isExternalPoolItem(regItem) ? 'external' : 'gaia',
+                sample_type: rawItem.itemType === 'one_shot' ? 'one_shot' : 'loop',
                 original_bpm: bpm ?? slots[slotIdx]?.original_bpm ?? 120,
-                key: item.key ? String(item.key) : (slots[slotIdx]?.key || ''),
-                ...(Number.isFinite(Number(item.duration_seconds)) && Number(item.duration_seconds) > 0
-                    ? { duration_seconds: Number(item.duration_seconds) }
+                key: regItem.key ? String(regItem.key) : (slots[slotIdx]?.key || ''),
+                ...(Number.isFinite(Number(regItem.duration_seconds)) && Number(regItem.duration_seconds) > 0
+                    ? { duration_seconds: Number(regItem.duration_seconds) }
                     : {}),
             };
             this.slotBuffers.delete(slotIdx);
@@ -444,13 +553,18 @@ export class SampleNode extends BaseNode {
         this.properties.active_slot = this.activeSlotIndex;
         this.applySlotToProperties(slots[this.activeSlotIndex]);
         SampleNode.propagateKeyMatch(this.graph);
+        this.invalidateDownstreamVisualCaches();
 
-        if (items[0]?.name && !assignedPool) {
-            this.updateProperty('node_name', items[0].name);
+        if (registeredItems[0]?.name && (!this.properties?.node_name || this.properties.node_name === 'New Sample' || this.properties.node_name === 'Sample')) {
+            this.updateProperty('node_name', registeredItems[0].name);
         }
         if (assignedPool?.properties) {
             assignedPool.properties.output_value = this.properties.filepath;
-            if (items[0]?.id != null) assignedPool.properties.output_item_id = items[0].id;
+            if (registeredItems[0]?.id != null) assignedPool.properties.output_item_id = registeredItems[0].id;
+        }
+        if (typeof window !== 'undefined' && this.id != null) {
+            window.dispatchEvent(new CustomEvent('arrangement-source-changed', { detail: { nodeId: this.id } }));
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
         }
         void this.preloadAllSlotBuffers();
     }
@@ -468,22 +582,27 @@ export class SampleNode extends BaseNode {
 
         const startSlotIndex = typeof target === 'number' ? target : target?.slotIndex;
 
-        // Multiple items dropped onto a slot pill, waveform, or title field -> write a cycling text list operator
+        // Multiple items dropped onto a slot pill, waveform, or title field -> add to pool and write name list operator
         if (items.length > 1) {
             this.syncActiveSlotFromProperties();
-            this.ensureItemsInPool(items);
+            const registered = this.ensureItemsInPool(items);
+            if (registered.length === 0) return;
             if (!this.properties) this.properties = {};
             this.properties.trigger_count = 0;
             if (startSlotIndex !== undefined) {
                 this.selectSlot(startSlotIndex);
             }
-            const listExpr = formatPoolListExpression(items);
+            const listExpr = formatPoolListExpression(registered, 'plain', false);
             this.applyPoolQuery(listExpr, false);
             return;
         }
 
-        // Single item dropped onto a slot pill, waveform, or title field -> fixed asset on target slot(s)
+        // Single item dropped onto a slot pill, waveform, or title field -> ensure in pool and call directly by string name
         this.syncActiveSlotFromProperties();
+        const registered = this.ensureItemsInPool([items[0]]);
+        const regItem = registered[0];
+        if (!regItem) return;
+
         const slots = this.getSlots();
         const baseIdx = startSlotIndex !== undefined
             ? Math.max(0, startSlotIndex)
@@ -494,7 +613,8 @@ export class SampleNode extends BaseNode {
             : [baseIdx];
 
         const assignedPool = this.getAttachedPoolNode();
-        const item = items[0];
+        const rawItem = items[0];
+        const callName = getPoolItemCallName(regItem, false);
 
         for (const slotIdx of targetIndices) {
             while (slots.length <= slotIdx) {
@@ -506,20 +626,24 @@ export class SampleNode extends BaseNode {
                     index: nextIdx,
                 });
             }
-            const filepath = String(item.filepath || item.absolute_path || '');
-            const bpm = Number.isFinite(Number(item.bpm)) ? Number(item.bpm) : parseBpmFromFilename(filepath);
+            const filepath = String(regItem.filepath || regItem.absolute_path || '');
+            const bpm = Number.isFinite(Number(regItem.bpm ?? rawItem.bpm))
+                ? Number(regItem.bpm ?? rawItem.bpm)
+                : parseBpmFromFilename(filepath);
             slots[slotIdx] = {
                 ...(slots[slotIdx] || {}),
                 slot: slotIdx,
                 index: slotIdx,
-                pool_query: '',
+                pool_query: callName,
                 filepath,
-                library_item_id: item.id ?? slots[slotIdx]?.library_item_id,
-                sample_type: item.itemType === 'one_shot' ? 'one_shot' : 'loop',
+                library_item_id: regItem.id ?? slots[slotIdx]?.library_item_id,
+                is_external: isExternalPoolItem(regItem),
+                source: isExternalPoolItem(regItem) ? 'external' : 'gaia',
+                sample_type: rawItem.itemType === 'one_shot' ? 'one_shot' : 'loop',
                 original_bpm: bpm ?? slots[slotIdx]?.original_bpm ?? 120,
-                key: item.key ? String(item.key) : (slots[slotIdx]?.key || ''),
-                ...(Number.isFinite(Number(item.duration_seconds)) && Number(item.duration_seconds) > 0
-                    ? { duration_seconds: Number(item.duration_seconds) }
+                key: regItem.key ? String(regItem.key) : (slots[slotIdx]?.key || ''),
+                ...(Number.isFinite(Number(regItem.duration_seconds)) && Number(regItem.duration_seconds) > 0
+                    ? { duration_seconds: Number(regItem.duration_seconds) }
                     : {}),
             };
             this.slotBuffers.delete(slotIdx);
@@ -531,13 +655,18 @@ export class SampleNode extends BaseNode {
         this.properties.active_slot = this.activeSlotIndex;
         this.applySlotToProperties(slots[this.activeSlotIndex]);
         SampleNode.propagateKeyMatch(this.graph);
+        this.invalidateDownstreamVisualCaches();
 
-        if (item?.name && !assignedPool) {
-            this.updateProperty('node_name', item.name);
+        if (regItem?.name && (!this.properties?.node_name || this.properties.node_name === 'New Sample' || this.properties.node_name === 'Sample')) {
+            this.updateProperty('node_name', regItem.name);
         }
         if (assignedPool?.properties) {
             assignedPool.properties.output_value = this.properties.filepath;
-            if (item?.id != null) assignedPool.properties.output_item_id = item.id;
+            if (regItem?.id != null) assignedPool.properties.output_item_id = regItem.id;
+        }
+        if (typeof window !== 'undefined' && this.id != null) {
+            window.dispatchEvent(new CustomEvent('arrangement-source-changed', { detail: { nodeId: this.id } }));
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
         }
         void this.preloadAllSlotBuffers();
     }
@@ -546,9 +675,7 @@ export class SampleNode extends BaseNode {
         const query = String(rawQuery ?? '').trim();
         this.updateProperty('pool_query', query);
         const modNode = this.getAttachedPoolNode();
-        const rawItems = Array.isArray(modNode?.properties?.selected_items)
-            ? modNode.properties.selected_items
-            : (Array.isArray(this.properties?.selected_items) ? this.properties.selected_items : []);
+        const rawItems = this.getPoolItems();
         const items = rawItems.filter((item: any) => Boolean(item?.absolute_path || item?.filepath));
         if (items.length === 0) return false;
 
@@ -570,6 +697,10 @@ export class SampleNode extends BaseNode {
             Number(this.id || modNode?.id || 1) + seedSalt
         );
         const isSequential = modNode?.properties?.playbackMode === 'Sequential';
+        const poolSeed = resolveEffectivePoolSeed(modNode, this);
+        const poolNodeId = this.getPoolSalt();
+        const fieldSeed = this.getEffectiveSeed();
+        const isDynamicOp = isFieldOperatorExpression(query, items);
 
         let anyMatched = false;
         for (const idx of targets) {
@@ -577,13 +708,15 @@ export class SampleNode extends BaseNode {
                 ...(slots[idx] || {}),
                 pool_query: query
             };
+            const evalSeed = isDynamicOp ? fieldSeed : (isSequential ? slotSeeds[0] : slotSeeds[idx]);
             const chosen = resolvePoolItemByQuery(
                 items,
                 query,
                 idx,
-                isSequential ? slotSeeds[0] : slotSeeds[idx],
+                evalSeed,
                 isSequential,
-                triggerCount
+                triggerCount,
+                { seed: evalSeed, poolSeed, nodeId: poolNodeId, triggerCount }
             );
             if (!chosen) continue;
             anyMatched = true;
@@ -598,6 +731,8 @@ export class SampleNode extends BaseNode {
                 pool_query: query,
                 filepath,
                 library_item_id: chosen.id,
+                is_external: isExternalPoolItem(chosen),
+                source: isExternalPoolItem(chosen) ? 'external' : 'gaia',
                 original_bpm: bpm ?? slots[idx]?.original_bpm,
                 key: key || slots[idx]?.key || 'C',
                 ...(Number.isFinite(Number(chosen.duration_seconds)) && Number(chosen.duration_seconds) > 0
@@ -611,9 +746,15 @@ export class SampleNode extends BaseNode {
         if (!anyMatched) return false;
         const activeSlot = slots[this.activeSlotIndex] || slots[0];
         this.applySlotToProperties(activeSlot);
+        SampleNode.propagateKeyMatch(this.graph);
+        this.invalidateDownstreamVisualCaches();
         if (modNode?.properties) {
             modNode.properties.output_value = activeSlot.filepath;
             if (activeSlot.library_item_id != null) modNode.properties.output_item_id = activeSlot.library_item_id;
+        }
+        if (typeof window !== 'undefined' && this.id != null) {
+            window.dispatchEvent(new CustomEvent('arrangement-source-changed', { detail: { nodeId: this.id } }));
+            window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
         }
         void this.preloadAllSlotBuffers();
         return true;
@@ -736,14 +877,11 @@ export class SampleNode extends BaseNode {
                 // Ignore individual slot load error
             }
         }));
-        const hasCyclingPoolQuery = slots.some(s => isFieldOperatorExpression(s?.pool_query))
-            || isFieldOperatorExpression(this.properties?.pool_query);
+        const poolItems = this.getPoolItems();
+        const hasCyclingPoolQuery = slots.some(s => isFieldOperatorExpression(s?.pool_query, poolItems))
+            || isFieldOperatorExpression(this.properties?.pool_query, poolItems);
         if (hasCyclingPoolQuery) {
-            const modNode = this.getAttachedPoolNode();
-            const rawItems = Array.isArray(modNode?.properties?.selected_items)
-                ? modNode.properties.selected_items
-                : (Array.isArray(this.properties?.selected_items) ? this.properties.selected_items : []);
-            const poolPaths = rawItems
+            const poolPaths = poolItems
                 .map((item: any) => String(item?.absolute_path || item?.filepath || ''))
                 .filter(Boolean);
             await Promise.all(poolPaths.map((fp: string) => fetchAudioBuffer(fp).catch(() => null)));
@@ -861,6 +999,13 @@ export class SampleNode extends BaseNode {
                 ]
             },
             {
+                id: 'POOL',
+                label: 'Pool',
+                sections: [
+                    { type: 'pool_editor' }
+                ]
+            },
+            {
                 id: 'CHAIN',
                 label: 'FX Chain',
                 sections: [
@@ -966,7 +1111,7 @@ export class SampleNode extends BaseNode {
     static badgeLabel = "SMPL";
     static nodeType = "sample";
     static defaultTab = "SAMPLE";
-    static tabs = ["SAMPLE", "CHAIN", "COMMON"];
+    static tabs = ["SAMPLE", "POOL", "CHAIN", "COMMON"];
     static override defaultVisualizationType: VisualizationTypeId = 'sample';
     static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['sample', 'realtime', 'spectrum'];
 
@@ -1025,6 +1170,25 @@ export class SampleNode extends BaseNode {
         }
         if (key === 'filepath') {
             const pathStr = String(value || '');
+            if (pathStr) {
+                const alreadyInPool = this.getPoolItems().some(it =>
+                    getPoolItemIdentityKey(it) === getPoolItemIdentityKey({ filepath: pathStr })
+                );
+                if (!alreadyInPool) {
+                    const extFlag = this.isActiveAssetExternal();
+                    this.ensureItemsInPool([{
+                        id: this.properties?.library_item_id ?? (extFlag ? `ext:${pathStr}` : undefined),
+                        filepath: pathStr,
+                        absolute_path: pathStr,
+                        name: pathStr.split(/[\\/]/).pop() || 'Sample',
+                        is_external: extFlag,
+                        source: extFlag ? 'external' : 'gaia',
+                        bpm: this.properties?.original_bpm ?? null,
+                        key: this.properties?.key || null,
+                        duration_seconds: this.properties?.duration_seconds ?? null,
+                    }]);
+                }
+            }
             if (pathStr !== this.loadedFilepath || !this.audioBuffer) {
                 this.loadedFilepath = pathStr;
                 this.audioBuffer = null;
@@ -1033,6 +1197,16 @@ export class SampleNode extends BaseNode {
                 if (pathStr) {
                     void this.ensureAudioLoaded();
                 }
+            }
+        }
+        if (key === 'library_item_id' && value != null && this.properties?.filepath) {
+            const targetKey = getPoolItemIdentityKey({ filepath: String(this.properties.filepath) });
+            const match = this.getPoolItems().find(it => getPoolItemIdentityKey(it) === targetKey);
+            if (match) {
+                match.id = value;
+                const isExt = String(value).startsWith('ext:');
+                match.is_external = isExt;
+                match.source = isExt ? 'external' : 'gaia';
             }
         }
         if (!this.graph) return;
@@ -1064,6 +1238,22 @@ export class SampleNode extends BaseNode {
         this.activeSlotIndex = idx;
         this.selectedSlotIndices = [idx];
         this.properties.active_slot = idx;
+        // Hydrate any legacy slots with filepaths into the node's pool so every loaded asset has an index
+        const slotPoolCandidates = slots
+            .filter(s => Boolean(s?.filepath))
+            .map(s => ({
+                id: s.library_item_id ?? undefined,
+                filepath: String(s.filepath),
+                absolute_path: String(s.filepath),
+                name: String(s.filepath).split(/[\\/]/).pop() || 'Sample',
+                is_external: Boolean(s.is_external || String(s.library_item_id ?? '').startsWith('ext:')),
+                bpm: s.original_bpm ?? null,
+                key: s.key || null,
+                duration_seconds: s.duration_seconds ?? null,
+            }));
+        if (slotPoolCandidates.length > 0) {
+            this.ensureItemsInPool(slotPoolCandidates);
+        }
         if (slots[idx]) {
             this.applySlotToProperties(slots[idx]);
         }
@@ -1079,6 +1269,7 @@ export class SampleNode extends BaseNode {
     override preparePropertyEdit(key: string, value: any, previousValue: any): boolean {
         if (key !== 'key' && key !== 'original_bpm') return true;
         if (Object.is(value, previousValue)) return true;
+        if (this.isActiveAssetExternal()) return true;
 
         const overrideKey = key === 'key' ? 'key_is_local_override' : 'original_bpm_is_local_override';
         if (this.properties?.[overrideKey]) return true;
@@ -1110,7 +1301,7 @@ export class SampleNode extends BaseNode {
     async syncMetadataFromLibrary(files?: LibraryFile[], preferredId?: number | string | null): Promise<LibraryFile | null> {
         this.ensurePoolSlotsPopulated();
         const filepath = String(this.properties?.filepath || '');
-        if (!filepath) return null;
+        if (!filepath || this.isActiveAssetExternal()) return null;
         const libraryFiles = files || await resolveLibraryAssets([{
             id: preferredId ?? this.properties?.library_item_id,
             absolute_path: filepath
@@ -1192,6 +1383,9 @@ export class SampleNode extends BaseNode {
             return;
         }
         if (key === 'key' || key === 'original_bpm') {
+            if (this.isActiveAssetExternal()) {
+                return;
+            }
             const field = key === 'key' ? 'key' : 'bpm';
             const proposalKey = key === 'key' ? 'key_proposal' : 'original_bpm_proposal';
             const stagedProposal = {
@@ -1232,9 +1426,27 @@ export class SampleNode extends BaseNode {
         }
         if (key === 'filepath') {
             this.updateProperty('library_item_id', null);
+            this.updateProperty('is_external', false);
             this.updateProperty('key_is_local_override', false);
             this.updateProperty('original_bpm_is_local_override', false);
-            await this.syncMetadataFromLibrary();
+            const libFile = await this.syncMetadataFromLibrary();
+            const fp = String(this.properties?.filepath || value || '');
+            if (fp) {
+                const registered = this.ensureItemsInPool([{
+                    id: libFile?.id ?? this.properties?.library_item_id ?? undefined,
+                    filepath: fp,
+                    absolute_path: fp,
+                    name: libFile?.name || fp.split(/[\\/]/).pop() || 'Sample',
+                    is_external: !libFile,
+                    bpm: libFile?.bpm ?? this.properties?.original_bpm ?? null,
+                    key: libFile?.key ?? this.properties?.key ?? null,
+                    duration_seconds: libFile?.duration_seconds ?? this.properties?.duration_seconds ?? null,
+                }]);
+                if (registered[0]) {
+                    this.updateProperty('is_external', isExternalPoolItem(registered[0]));
+                    this.updateProperty('pool_query', getPoolItemCallName(registered[0], false));
+                }
+            }
             return;
         }
     }
@@ -1532,7 +1744,7 @@ export class SampleNode extends BaseNode {
                     // 2. Inspector live telemetry: NEVER switch slots; only update when the active slot itself has a Field Operator
                     const inspectorSlot = Math.min(Math.max(0, this.activeSlotIndex), slotCount - 1);
                     const activeSlotQuery = String(slots[inspectorSlot]?.pool_query ?? this.properties?.pool_query ?? '').trim();
-                    const hasActiveSlotPoolOp = isFieldOperatorExpression(activeSlotQuery);
+                    const hasActiveSlotPoolOp = isFieldOperatorExpression(activeSlotQuery, this.getPoolItems());
                     const activeSlotOps = slots[inspectorSlot]?.field_operators || this.properties?.field_operators;
                     const hasActiveSlotFieldOp = hasActiveSlotPoolOp || Boolean(activeSlotOps && Object.keys(activeSlotOps).length > 0);
 
@@ -1617,8 +1829,13 @@ export class SampleNode extends BaseNode {
             }
         }
 
+        const hasUserFx = getUserFxStages(this.properties?.chain).length > 0;
+        const nodeRealtimePeaks = (this as any).realtimePeaks as Float32Array | undefined;
+        const usePostFxPeaks = Boolean(win?.__sinRealtimeLoaded && nodeRealtimePeaks && hasUserFx);
+
         return {
-            buffer: displayBuffer,
+            buffer: usePostFxPeaks ? undefined : displayBuffer,
+            peaks: usePostFxPeaks ? nodeRealtimePeaks : undefined,
             duration: sampleActiveDuration,
             cropStart,
             cropEnd,
@@ -1834,13 +2051,13 @@ export class SampleNode extends BaseNode {
                 id: 'pool',
                 label: 'Pool',
                 icon: 'layers',
-                title: 'Toggle Asset Pool view',
-                active: Boolean(this.isPoolViewOpen),
+                title: 'Toggle Asset Pool tab',
+                active: Boolean(this.isPoolPanelOpen),
                 tone: 'sky',
                 onToggle: () => {
                     if (typeof window !== 'undefined') {
                         window.dispatchEvent(new CustomEvent('add-asset-filter-to-param', {
-                            detail: { nodeId: this.id, toggleInline: true }
+                            detail: { nodeId: this.id, targetTab: 'POOL' }
                         }));
                     }
                 }

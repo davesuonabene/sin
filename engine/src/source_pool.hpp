@@ -6,11 +6,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -29,10 +31,141 @@ struct PcmBuffer {
     uint64_t content_hash = 0;
 };
 
+struct LayeredTileBuffer {
+    std::vector<float> ch0;
+    std::vector<float> ch1;
+    uint32_t num_frames = 0;
+    uint32_t generation = 0;
+};
+
+/*
+ * Lock-free sparse tile overlay for long-track Tier-2/Tier-3 cooked processors.
+ * Audio thread reads `slots[tile_idx].load(acquire)` with ZERO locks and ZERO allocations;
+ * control thread publishes or evicts individual tiles atomically with timed retired-buffer GC.
+ */
+class LayeredTileStore {
+public:
+    uint32_t tile_frames = 0;
+    uint32_t num_tiles = 0;
+    uint64_t total_frames = 0;
+    uint32_t sample_rate = SIN_DEFAULT_SAMPLE_RATE;
+
+    void init(uint32_t t_frames, uint32_t n_tiles, uint64_t tot_frames, uint32_t sr) {
+        std::lock_guard<std::mutex> lk(write_mutex_);
+        tile_frames = t_frames;
+        num_tiles = n_tiles;
+        total_frames = tot_frames;
+        sample_rate = sr > 0 ? sr : SIN_DEFAULT_SAMPLE_RATE;
+        slots_ = std::make_unique<std::atomic<const LayeredTileBuffer*>[]>(n_tiles);
+        for (uint32_t i = 0; i < n_tiles; ++i) {
+            slots_[i].store(nullptr, std::memory_order_relaxed);
+        }
+        live_owners_.assign(n_tiles, nullptr);
+        retired_.clear();
+    }
+
+    bool set_tile(uint32_t idx, const float* ch0, const float* ch1, uint32_t n_frames, uint32_t gen) {
+        if (idx >= num_tiles || !slots_) return false;
+        std::shared_ptr<LayeredTileBuffer> next_buf;
+        if (ch0 && n_frames > 0) {
+            next_buf = std::make_shared<LayeredTileBuffer>();
+            next_buf->num_frames = n_frames;
+            next_buf->generation = gen;
+            next_buf->ch0.assign(ch0, ch0 + n_frames);
+            if (ch1) {
+                next_buf->ch1.assign(ch1, ch1 + n_frames);
+            }
+        }
+        std::lock_guard<std::mutex> lk(write_mutex_);
+        auto prev = std::move(live_owners_[idx]);
+        live_owners_[idx] = next_buf;
+        slots_[idx].store(next_buf.get(), std::memory_order_release);
+        if (prev) {
+            retired_.push_back({std::move(prev), std::chrono::steady_clock::now()});
+        }
+        gc_retired_locked();
+        return true;
+    }
+
+    void clear_all() {
+        std::lock_guard<std::mutex> lk(write_mutex_);
+        if (!slots_) return;
+        const auto now = std::chrono::steady_clock::now();
+        for (uint32_t i = 0; i < num_tiles; ++i) {
+            slots_[i].store(nullptr, std::memory_order_release);
+            if (live_owners_[i]) {
+                retired_.push_back({std::move(live_owners_[i]), now});
+            }
+        }
+        gc_retired_locked();
+    }
+
+    inline bool read_sample(double pos, float& out_l, float& out_r, uint32_t& out_gen) const noexcept {
+        if (!slots_ || tile_frames == 0 || num_tiles == 0 || pos < 0.0) return false;
+        const uint64_t i1 = static_cast<uint64_t>(pos);
+        const uint64_t tidx = i1 / static_cast<uint64_t>(tile_frames);
+        if (tidx >= num_tiles) return false;
+        const LayeredTileBuffer* tile = slots_[static_cast<size_t>(tidx)].load(std::memory_order_acquire);
+        if (!tile || tile->num_frames == 0 || tile->ch0.empty()) return false;
+
+        const uint32_t local = static_cast<uint32_t>(i1 - tidx * static_cast<uint64_t>(tile_frames));
+        if (local >= tile->num_frames) return false;
+
+        out_gen = tile->generation;
+        const float frac = static_cast<float>(pos - static_cast<double>(i1));
+        const float* l_ptr = tile->ch0.data();
+        const float* r_ptr = tile->ch1.empty() ? l_ptr : tile->ch1.data();
+        if (frac < 1e-6f) {
+            out_l = l_ptr[local];
+            out_r = r_ptr[local];
+            return true;
+        }
+        float l1 = l_ptr[local];
+        float r1 = r_ptr[local];
+        float l2 = l1;
+        float r2 = r1;
+        if (local + 1 < tile->num_frames) {
+            l2 = l_ptr[local + 1];
+            r2 = r_ptr[local + 1];
+        } else if (tidx + 1 < num_tiles) {
+            const LayeredTileBuffer* next_tile = slots_[static_cast<size_t>(tidx + 1)].load(std::memory_order_acquire);
+            if (next_tile && next_tile->num_frames > 0 && !next_tile->ch0.empty()) {
+                l2 = next_tile->ch0[0];
+                r2 = next_tile->ch1.empty() ? l2 : next_tile->ch1[0];
+            }
+        }
+        out_l = l1 + frac * (l2 - l1);
+        out_r = r1 + frac * (r2 - r1);
+        return true;
+    }
+
+private:
+    struct RetiredTile {
+        std::shared_ptr<LayeredTileBuffer> buf;
+        std::chrono::steady_clock::time_point retired_at;
+    };
+
+    void gc_retired_locked() {
+        const auto cutoff = std::chrono::steady_clock::now() - std::chrono::milliseconds(250);
+        retired_.erase(
+            std::remove_if(retired_.begin(), retired_.end(), [&](const RetiredTile& r) {
+                return r.retired_at < cutoff;
+            }),
+            retired_.end()
+        );
+    }
+
+    std::unique_ptr<std::atomic<const LayeredTileBuffer*>[]> slots_;
+    std::mutex write_mutex_;
+    std::vector<std::shared_ptr<LayeredTileBuffer>> live_owners_;
+    std::vector<RetiredTile> retired_;
+};
+
 struct SourceEntry {
     SinSourceId id = 0;
     std::string filepath;
     std::shared_ptr<const PcmBuffer> ram_pcm; /* Non-null when RAM-resident */
+    std::shared_ptr<LayeredTileStore> layered_tiles; /* Non-null for layered tiled processor sources */
     uint32_t sample_rate = SIN_DEFAULT_SAMPLE_RATE;
     uint32_t channels = 1;
     uint64_t num_frames = 0;
@@ -487,6 +620,100 @@ public:
         entry->ram_pcm = std::move(pcm);
         entry->is_streaming = false;
         sources_[id] = std::move(entry);
+        return 0;
+    }
+
+    int32_t register_layered(
+        SinSourceId id,
+        const char* base_utf8_path,
+        uint32_t tile_frames,
+        uint32_t num_tiles,
+        uint32_t tile_sr,
+        uint64_t total_tile_frames
+    ) {
+        if (tile_frames == 0 || num_tiles == 0) return -1;
+        std::string base_path = base_utf8_path ? std::string(base_utf8_path) : std::string();
+
+        // Reuse existing layered tile store if geometry & base file match (preserves published tiles across plan edits)
+        auto existing = sources_.find(id);
+        if (existing != sources_.end() && existing->second && existing->second->layered_tiles) {
+            auto& ex = existing->second;
+            auto& lt = ex->layered_tiles;
+            if (ex->filepath == base_path &&
+                lt->tile_frames == tile_frames &&
+                lt->num_tiles == num_tiles &&
+                lt->sample_rate == (tile_sr > 0 ? tile_sr : SIN_DEFAULT_SAMPLE_RATE)) {
+                return 0;
+            }
+        }
+
+        auto entry = std::make_shared<SourceEntry>();
+        entry->id = id;
+        entry->filepath = base_path;
+        entry->sample_rate = tile_sr > 0 ? tile_sr : SIN_DEFAULT_SAMPLE_RATE;
+        entry->channels = 2;
+        entry->num_frames = total_tile_frames;
+        entry->is_streaming = false;
+
+        if (!base_path.empty()) {
+            // Probe base file (never force RAM for long files — always stream raw fallback when >=30s or probe matches)
+            ma_decoder dec{};
+            ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+            if (ma_decoder_init_vfs(vfs_.handle(), base_path.c_str(), &cfg, &dec) == MA_SUCCESS) {
+                const uint32_t ch = dec.outputChannels > 0 ? dec.outputChannels : 1;
+                const uint32_t sr = dec.outputSampleRate > 0 ? dec.outputSampleRate : entry->sample_rate;
+                ma_uint64 len = 0;
+                ma_result len_res = ma_decoder_get_length_in_pcm_frames(&dec, &len);
+                entry->sample_rate = sr;
+                entry->channels = ch;
+                if (len_res == MA_SUCCESS && len > 0) {
+                    entry->num_frames = static_cast<uint64_t>(len);
+                }
+                entry->is_streaming = true;
+                ma_decoder_uninit(&dec);
+            } else {
+                // Fallback via ffmpeg for non-miniaudio containers (e.g. m4a/aac/ogg)
+                auto pcm = std::make_shared<PcmBuffer>();
+                if (decode_via_ffmpeg_to_pcm(base_path, *pcm, entry->sample_rate)) {
+                    entry->sample_rate = pcm->sample_rate;
+                    entry->channels = pcm->channels;
+                    entry->num_frames = pcm->num_frames;
+                    entry->ram_pcm = std::move(pcm);
+                    entry->is_streaming = false;
+                    entry->use_ffmpeg = true;
+                }
+            }
+        }
+
+        auto store = std::make_shared<LayeredTileStore>();
+        store->init(
+            tile_frames,
+            num_tiles,
+            total_tile_frames > 0 ? total_tile_frames : entry->num_frames,
+            tile_sr > 0 ? tile_sr : entry->sample_rate
+        );
+        entry->layered_tiles = std::move(store);
+        sources_[id] = std::move(entry);
+        return 0;
+    }
+
+    int32_t set_layered_tile(
+        SinSourceId id,
+        uint32_t tile_index,
+        const float* ch0,
+        const float* ch1,
+        uint32_t num_frames,
+        uint32_t generation
+    ) {
+        auto it = sources_.find(id);
+        if (it == sources_.end() || !it->second || !it->second->layered_tiles) return -1;
+        return it->second->layered_tiles->set_tile(tile_index, ch0, ch1, num_frames, generation) ? 0 : -2;
+    }
+
+    int32_t clear_layered_tiles(SinSourceId id) {
+        auto it = sources_.find(id);
+        if (it == sources_.end() || !it->second || !it->second->layered_tiles) return -1;
+        it->second->layered_tiles->clear_all();
         return 0;
     }
 

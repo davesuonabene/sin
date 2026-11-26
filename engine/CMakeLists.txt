@@ -14,6 +14,7 @@ target_include_directories(sin_dsp_objs PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${CMAKE_CURRENT_SOURCE_DIR}/../dsp_modules/include
 )
 set_target_properties(sin_dsp_objs PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
@@ -64,6 +65,7 @@ target_include_directories(sin_dsp_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${CMAKE_CURRENT_SOURCE_DIR}/../dsp_modules/include
 )
 if(MSVC)
     target_compile_options(sin_dsp_tests PRIVATE /W3 /O2 /EHsc /utf-8)

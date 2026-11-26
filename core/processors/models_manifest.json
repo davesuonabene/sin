@@ -1,0 +1,115 @@
+{
+  "schema": "sin-processor-models-v1",
+  "models": [
+    {
+      "id": "deepfilternet3_onnx",
+      "name": "DeepFilterNet3 (ONNX 48kHz)",
+      "node_type": "voice_isolator",
+      "backend_tier": "fast_onnx",
+      "runtime": "onnxruntime",
+      "size_mb": 8.5,
+      "license": "MIT / Apache-2.0",
+      "description": "Lightweight 48 kHz complex deep-filtering speech/ambience separator running cross-OS on CPU via ONNX Runtime, paired with zero-download Block WPE dereverberation.",
+      "files": [
+        {
+          "filename": "enc.onnx",
+          "url": "https://huggingface.co/bitsydarel/deepfilternet3-onnx/resolve/main/enc.onnx",
+          "sha256": ""
+        },
+        {
+          "filename": "erb_dec.onnx",
+          "url": "https://huggingface.co/bitsydarel/deepfilternet3-onnx/resolve/main/erb_dec.onnx",
+          "sha256": ""
+        },
+        {
+          "filename": "df_dec.onnx",
+          "url": "https://huggingface.co/bitsydarel/deepfilternet3-onnx/resolve/main/df_dec.onnx",
+          "sha256": ""
+        },
+        {
+          "filename": "config.ini",
+          "url": "https://huggingface.co/bitsydarel/deepfilternet3-onnx/resolve/main/config.ini",
+          "sha256": ""
+        }
+      ],
+      "global_cache_hints": {
+        "hf_repos": ["bitsydarel/deepfilternet3-onnx", "Alice-Sabrina-Ivy/deepfilternet3-onnx"],
+        "torch_files": []
+      }
+    },
+    {
+      "id": "mossformer2_se_48k",
+      "name": "MossFormer2 SE 48kHz (ClearerVoice)",
+      "node_type": "voice_isolator",
+      "backend_tier": "speech_hq",
+      "runtime": "torch_or_onnx",
+      "size_mb": 210.0,
+      "license": "Apache-2.0",
+      "description": "High-accuracy 48 kHz speech enhancement model for heavy street, cafe, and crowd noise dialogue isolation.",
+      "files": [
+        {
+          "filename": "last_best_checkpoint.pt",
+          "url": "https://huggingface.co/alibabasglab/MossFormer2_SE_48K/resolve/main/last_best_checkpoint.pt",
+          "sha256": ""
+        }
+      ],
+      "global_cache_hints": {
+        "hf_repos": ["alibabasglab/MossFormer2_SE_48K"],
+        "torch_files": ["MossFormer2_SE_48K.pt"]
+      }
+    },
+    {
+      "id": "melband_roformer_voice_hq",
+      "name": "Mel-Band RoFormer Studio Pack (Denoise + DeReverb)",
+      "node_type": "voice_isolator",
+      "backend_tier": "studio_hq",
+      "runtime": "torch",
+      "size_mb": 860.0,
+      "license": "MIT code / Community weights (verify commercial terms)",
+      "description": "Studio-grade 48 kHz stereo Mel-Band RoFormer pair (aufr33 Denoise + anvuew DeReverb) for maximum voice/reverb/ambience fidelity.",
+      "files": [
+        {
+          "filename": "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt",
+          "url": "https://huggingface.co/poiqazwsx/melband-roformer-denoise/resolve/main/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt",
+          "sha256": ""
+        },
+        {
+          "filename": "dereverb_mel_band_roformer_less_aggressive_anvuew_sdr_18.8050.ckpt",
+          "url": "https://huggingface.co/anvuew/dereverb_mel_band_roformer/resolve/main/dereverb_mel_band_roformer_less_aggressive_anvuew_sdr_18.8050.ckpt",
+          "sha256": ""
+        }
+      ],
+      "global_cache_hints": {
+        "hf_repos": [
+          "poiqazwsx/melband-roformer-denoise",
+          "anvuew/dereverb_mel_band_roformer"
+        ],
+        "torch_files": [
+          "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt",
+          "dereverb_mel_band_roformer_less_aggressive_anvuew_sdr_18.8050.ckpt"
+        ]
+      }
+    },
+    {
+      "id": "htdemucs",
+      "name": "HTDemucs 4-Stem (Global Cache Compatible)",
+      "node_type": "master_rebalance",
+      "backend_tier": "balanced",
+      "runtime": "torch_or_cli",
+      "size_mb": 84.0,
+      "license": "MIT code / MUSDB18-HQ research dataset notice",
+      "description": "Meta Hybrid Transformer Demucs 4-stem separator. Automatically detects existing global Hugging Face / Torch hub caches.",
+      "files": [
+        {
+          "filename": "htdemucs.th",
+          "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th",
+          "sha256": ""
+        }
+      ],
+      "global_cache_hints": {
+        "hf_repos": ["adefossez/HTDemucs", "adefossez/HTDemucs-ft"],
+        "torch_files": ["955717e8-8726e21a.th", "htdemucs.th"]
+      }
+    }
+  ]
+}

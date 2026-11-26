@@ -106,14 +106,19 @@ export class WaveformRenderer extends BaseSignalRenderer {
             this.maskFingerprint = '';
         }
 
-        const peaks = this.cachedPeaks;
+        const rawPeaks = this.cachedPeaks;
         const hasTriggerState = signal?.isTriggered !== undefined;
         const isTriggerActive = hasTriggerState ? Boolean(signal?.isTriggered) : true;
         const isDimmed = isPlaying && hasTriggerState && !isTriggerActive;
+        const peaks = rawPeaks;
 
         if (peaks && peaks.length >= 2) {
-            const columns = Math.floor(peaks.length / 2);
-            const colWidth = width / columns;
+            const rawCols = Math.floor(peaks.length / 2);
+            const wInt = Math.max(1, Math.floor(width));
+            const hInt = Math.max(1, Math.floor(height));
+            // Downsample dense peak arrays cleanly to <= 1 bar per pixel so long tracks stay crisp and legible
+            const renderCols = Math.max(1, Math.min(rawCols, wInt));
+            const colWidth = width / renderCols;
             const halfHeight = (height - 4) * 0.5;
 
             const cropStartNorm = signal?.cropStart != null ? Math.max(0, Math.min(1, signal.cropStart)) : 0;
@@ -128,18 +133,45 @@ export class WaveformRenderer extends BaseSignalRenderer {
 
             if (this.cachedPeakHashRef !== peaks) {
                 let peakChecksum = 0;
-                for (let i = 0; i < peaks.length; i++) {
+                const step = Math.max(1, Math.floor(peaks.length / 256));
+                for (let i = 0; i < peaks.length; i += step) {
                     peakChecksum = ((peakChecksum * 31) + Math.round(peaks[i] * 1000)) | 0;
                 }
                 this.cachedPeakHashRef = peaks;
                 this.cachedPeakHash = `${peaks.length}_${peakChecksum}`;
             }
             const bufId = signal?.buffer ? `${signal.buffer.length}_${signal.buffer.duration.toFixed(3)}` : 'nobuf';
-            const wInt = Math.floor(width);
-            const hInt = Math.floor(height);
-            const currentFp = `${bufId}_${this.cachedPeakHash}_${columns}_${wInt}_${hInt}_${cropStartNorm}_${cropEndNorm}`;
+            const currentFp = `${bufId}_${this.cachedPeakHash}_${renderCols}_${wInt}_${hInt}_${cropStartNorm}_${cropEndNorm}`;
             const mask = getOrCreateOffscreenCanvas(this.maskCanvas, width, height);
             const tint = getOrCreateOffscreenCanvas(this.tintCanvas, width, height);
+
+            const drawDownsampledBars = (
+                targetCtx: CanvasRenderingContext2D,
+                offsetX: number,
+                baseMidY: number,
+                resolveColor: (colX: number) => string
+            ) => {
+                const barW = Math.max(1, colWidth > 1.5 ? colWidth - 0.5 : colWidth);
+                for (let i = 0; i < renderCols; i++) {
+                    const sIdx = Math.floor((i / renderCols) * rawCols);
+                    const eIdx = Math.max(sIdx + 1, Math.floor(((i + 1) / renderCols) * rawCols));
+                    let min = 1;
+                    let max = -1;
+                    for (let k = sIdx; k < eIdx && k < rawCols; k++) {
+                        const lo = peaks[k * 2];
+                        const hi = peaks[k * 2 + 1];
+                        if (lo < min) min = lo;
+                        if (hi > max) max = hi;
+                    }
+                    if (min > max) { min = 0; max = 0; }
+                    const top = baseMidY - max * halfHeight;
+                    const bottom = baseMidY - min * halfHeight;
+                    const colX = offsetX + i * colWidth;
+                    const h = Math.max(1, bottom - top);
+                    targetCtx.fillStyle = resolveColor(colX);
+                    targetCtx.fillRect(colX, top, barW, h);
+                }
+            };
 
             if (mask && tint) {
                 this.maskCanvas = mask;
@@ -154,20 +186,11 @@ export class WaveformRenderer extends BaseSignalRenderer {
                         this.tintFingerprint = '';
                         mCtx.clearRect(0, 0, width, height);
                         const maskMidY = height * 0.5;
-
-                        for (let i = 0; i < columns; i++) {
-                            const min = peaks[i * 2];
-                            const max = peaks[i * 2 + 1];
-                            const top = maskMidY - max * halfHeight;
-                            const bottom = maskMidY - min * halfHeight;
-                            const colX = i * colWidth;
-                            const h = Math.max(1, bottom - top);
-
-                            mCtx.fillStyle = (colX < cropStartNorm * width || colX > cropEndNorm * width)
+                        drawDownsampledBars(mCtx, 0, maskMidY, (colX) =>
+                            (colX < cropStartNorm * width || colX > cropEndNorm * width)
                                 ? 'rgba(255, 255, 255, 0.18)'
-                                : '#ffffff';
-                            mCtx.fillRect(colX, top, Math.max(1, colWidth - 0.5), h);
-                        }
+                                : '#ffffff'
+                        );
                     }
 
                     const tintFill = isInvalidated
@@ -187,25 +210,12 @@ export class WaveformRenderer extends BaseSignalRenderer {
                     ctx.drawImage(tint, x, y);
                 }
             } else {
-                for (let i = 0; i < columns; i++) {
-                    const min = peaks[i * 2];
-                    const max = peaks[i * 2 + 1];
-                    const top = midY - max * halfHeight;
-                    const bottom = midY - min * halfHeight;
-                    const colX = x + i * colWidth;
-                    const h = Math.max(1, bottom - top);
-
-                    if (colX < cropStartX || colX > cropEndX) {
-                        ctx.fillStyle = 'rgba(17, 17, 17, 0.18)';
-                    } else if (isInvalidated) {
-                        ctx.fillStyle = 'rgba(17, 17, 17, 0.45)';
-                    } else if (isDimmed) {
-                        ctx.fillStyle = 'rgba(17, 17, 17, 0.24)';
-                    } else {
-                        ctx.fillStyle = dataColor;
-                    }
-                    ctx.fillRect(colX, top, Math.max(1, colWidth - 0.5), h);
-                }
+                drawDownsampledBars(ctx, x, midY, (colX) => {
+                    if (colX < cropStartX || colX > cropEndX) return 'rgba(17, 17, 17, 0.18)';
+                    if (isInvalidated) return 'rgba(17, 17, 17, 0.45)';
+                    if (isDimmed) return 'rgba(17, 17, 17, 0.24)';
+                    return dataColor;
+                });
             }
 
             if (bufferFrontX != null) {
@@ -236,7 +246,7 @@ export class WaveformRenderer extends BaseSignalRenderer {
                     ctx.stroke();
                 }
             }
-        } else {
+        } else if (!signal?.isLoading) {
             ctx.strokeStyle = isDimmed ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.22)';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
@@ -250,6 +260,90 @@ export class WaveformRenderer extends BaseSignalRenderer {
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillText('Ready for preview', x + width / 2, midY - 8);
+            }
+        }
+
+        // Loading / Cooking Indicator (makes unloaded or still-cooking playback state unmistakable)
+        if (signal?.isLoading) {
+            const hasPeaksBehind = Boolean(peaks && peaks.length >= 2);
+            const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            const angle = (nowMs * 0.006) % (Math.PI * 2);
+            const label = signal.loadingLabel || (hasPeaksBehind ? 'Processing…' : 'Loading…');
+
+            if (!hasPeaksBehind) {
+                // Centered spinner + label on unloaded visualizer
+                const r = Math.min(7, Math.max(4, height * 0.16));
+                const showText = !this.options.minified && width >= 92;
+                const cx = showText ? x + width * 0.5 - 32 : x + width * 0.5;
+                const cy = midY;
+                ctx.strokeStyle = 'rgba(15, 23, 42, 0.16)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.strokeStyle = '#0284c7';
+                ctx.lineWidth = 2;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, angle, angle + Math.PI * 1.35);
+                ctx.stroke();
+                ctx.lineCap = 'butt';
+
+                if (showText) {
+                    ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+                    ctx.font = '600 9.5px Inter, system-ui, sans-serif';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(label, cx + r + 6, cy + 0.5);
+                }
+            } else {
+                // Subtle frosted wash + compact spinner pill when cooking over raw/partial peaks
+                ctx.fillStyle = 'rgba(248, 250, 252, 0.34)';
+                ctx.fillRect(x, y, width, height);
+
+                const r = 4.2;
+                if (!this.options.minified && width >= 96) {
+                    ctx.font = '600 8.5px Inter, system-ui, sans-serif';
+                    const textW = ctx.measureText(label).width;
+                    const pillW = Math.min(width - 8, textW + 24);
+                    const pillH = 16;
+                    const px = x + width - pillW - 4;
+                    const py = y + 4;
+
+                    ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+                    drawRoundRect(ctx, px, py, pillW, pillH, 4);
+                    ctx.fill();
+
+                    const cx = px + 9;
+                    const cy = py + pillH * 0.5;
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                    ctx.lineWidth = 1.6;
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    ctx.strokeStyle = '#38bdf8';
+                    ctx.lineWidth = 1.6;
+                    ctx.lineCap = 'round';
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r, angle, angle + Math.PI * 1.35);
+                    ctx.stroke();
+                    ctx.lineCap = 'butt';
+
+                    ctx.fillStyle = '#f8fafc';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(label, px + 17, cy + 0.5);
+                } else {
+                    const cx = x + width - 10;
+                    const cy = y + 10;
+                    ctx.strokeStyle = '#0284c7';
+                    ctx.lineWidth = 1.8;
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r, angle, angle + Math.PI * 1.35);
+                    ctx.stroke();
+                }
             }
         }
 

@@ -41,8 +41,11 @@ from ermes import (
     collect_graph_warnings,
     graph_to_workspace,
 )
+from core.env_config import load_sin_env
 from core.engines import get_renderer_for_node
 from core.runtime_trace import collect_runtime_trace
+
+load_sin_env()
 from core.system import System
 from core.qa import analyze_audio_buffer, analyze_audio_file, AudioQAResult
 
@@ -156,6 +159,11 @@ def render(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON metrics to stdout"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Compile and validate graph without running DSP render"),
     snapshot: Optional[str] = typer.Option(None, "--snapshot", "-S", help="Path or name of sin-snapshot JSON override"),
+    allow_bypass_missing: bool = typer.Option(
+        False,
+        "--allow-bypass-missing",
+        help="Allow exporting dry audio for processor nodes whose selected model is not installed or in manual stale mode",
+    ),
 ):
     """Headless audio DSP rendering of composition graphs or workspace saves."""
     start_time = time.perf_counter()
@@ -233,8 +241,29 @@ def render(
             typer.echo(f"  BPM: {model.bpm} | Bars: {model.total_bars} | Submix children: {len(model.children)}")
         return
 
+    # Hybrid preflight check for cooked processor nodes
+    if mode == "offline":
+        from core.processor_nodes import inspect_export_preflight
+
+        preflight = inspect_export_preflight(model)
+        if preflight.get("has_warnings"):
+            for issue in preflight.get("issues", []):
+                typer.secho(f"[WARN] {issue['detail']}", fg=typer.colors.YELLOW, err=True)
+            missing_issues = [i for i in preflight.get("issues", []) if i.get("state") == "model_missing"]
+            if missing_issues and not allow_bypass_missing:
+                typer.secho(
+                    "Aborting offline render: missing required model(s). Download the model or pass --allow-bypass-missing.",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+
     # Execute DSP rendering
-    sys_env = System(bpm=model.bpm, render_mode=mode)
+    sys_env = System(
+        bpm=model.bpm,
+        render_mode=mode,
+        allow_bypassed_export=bool(allow_bypass_missing),
+    )
     renderer = get_renderer_for_node(model.node_type)
 
     with collect_runtime_trace():
@@ -648,6 +677,70 @@ def library_verify(
                 typer.echo(f"  - [{m.get('id', 'N/A')}] {m.get('path', 'Unknown path')}")
     if not is_verified:
         raise typer.Exit(code=1)
+
+
+@app.command("calibrate-preamp")
+def calibrate_preamp(
+    wav: Path = typer.Argument(..., help="Path to 3-5 second quiet/dark hardware noise WAV capture"),
+    profile_id: str = typer.Option(..., "--id", help="Profile identifier (e.g. 'my_zoom_h4_xy')"),
+    label: Optional[str] = typer.Option(None, "--label", help="Human-readable label for SIN/GAIA UI"),
+    device_family: str = typer.Option("custom", "--family", help="Device family tag (e.g. 'zoom_h4', 'interface')"),
+    topology: str = typer.Option(
+        "mono_or_dual_mono",
+        "--topology",
+        help="Default input topology: mono_or_dual_mono | coincident_xy_stereo | spaced_stereo",
+    ),
+    gain: Optional[float] = typer.Option(None, "--gain", help="Recorder/interface analog gain setting used during capture"),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON result"),
+):
+    """Calibrate a hardware preamp/ADC noise profile into `.gaia/profiles/preamp_profiles/`."""
+    from core.processors.preamp_profiles import calibrate_preamp_from_wav
+
+    try:
+        res = calibrate_preamp_from_wav(
+            wav,
+            profile_id=profile_id,
+            label=label,
+            device_family=device_family,
+            default_topology=topology,
+            calibrated_gain_setting=gain,
+        )
+    except Exception as exc:
+        typer.secho(f"Calibration failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    if json_output:
+        print(json.dumps(res, indent=2))
+    else:
+        typer.secho(f"[OK] Saved preamp profile '{res['id']}' -> {res['path']}", fg=typer.colors.GREEN, bold=True)
+        typer.echo(
+            f"     Topology: {res['default_topology']} | 1/f corner: {res['flicker_corner_hz']} Hz "
+            f"(slope {res['flicker_slope']}) | Spurs detected: {res['spurs_detected']}"
+        )
+
+
+@app.command("models")
+def list_models_cli(
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON status"),
+):
+    """Show cross-OS runtime discovery, `.env` paths, and installed/global model status."""
+    from core.env_config import get_env_config
+    from core.processors.model_manager import GLOBAL_MODEL_MANAGER
+    from core.processors.runtime_env import detect_runtime_capabilities
+
+    cfg = get_env_config()
+    caps = detect_runtime_capabilities(cfg=cfg)
+    models = GLOBAL_MODEL_MANAGER.list_models_status()
+    payload = {"env": cfg.to_public_dict(), "runtime": caps.to_dict(), "models": models}
+    if json_output:
+        print(json.dumps(payload, indent=2))
+        return
+    typer.secho(f"Models Dir: {cfg.models_dir}", bold=True)
+    typer.echo(f"In-venv ONNX: {caps.onnxruntime_version or 'not installed'} | Torch: {caps.torch_version or 'not installed'}")
+    typer.echo(f"External Python: {caps.external_python or 'none'} | Global CLIs: {caps.global_clis or {}}")
+    for m in models:
+        status_tag = f"INSTALLED ({m['source']})" if m["installed"] else "NOT INSTALLED"
+        typer.echo(f"  - {m['id']} [{m['size_mb']} MB] -> {status_tag} ({m['location']})")
 
 
 if __name__ == "__main__":

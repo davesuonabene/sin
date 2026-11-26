@@ -796,6 +796,128 @@ class TestSlotLanguageAndMultiSlotDsp(unittest.TestCase):
             self.assertAlmostEqual(peaks[2], 0.8, places=2)
             self.assertAlmostEqual(peaks[3], 0.8, places=2)
 
+    def test_is_calculated_pool_query_and_pool_node_id_parity_and_inline_sequence(self):
+        from ermes.py.slot_language import (
+            is_calculated_pool_query,
+            is_field_operator_expression,
+        )
+        from core.plan_packer import _resolve_sample_leaf_filepath
+
+        pool_items = [
+            {"id": 1, "name": "Kick 01.wav", "filepath": "/vault/Kick 01.wav"},
+            {"id": 2, "name": "Snare 02.wav", "filepath": "/vault/Snare 02.wav"},
+            {"id": 3, "name": "Hat 03.wav", "filepath": "/vault/Hat 03.wav"},
+        ]
+
+        # Direct string names (with spaces or quotes) are fixed, NOT calculated
+        self.assertFalse(is_calculated_pool_query("Kick 01.wav", pool_items))
+        self.assertFalse(is_field_operator_expression("Kick 01.wav", pool_items))
+        self.assertFalse(is_calculated_pool_query('"Kick 01.wav"', pool_items))
+        self.assertFalse(is_field_operator_expression('"Kick 01.wav"', pool_items))
+
+        # Integer indices are calculated (blue in UI), NOT dynamic multi-event operators
+        self.assertTrue(is_calculated_pool_query("0", pool_items))
+        self.assertTrue(is_calculated_pool_query("1", pool_items))
+        self.assertTrue(is_calculated_pool_query("-1", pool_items))
+        self.assertFalse(is_field_operator_expression("0", pool_items))
+
+        # Dynamic operators are both calculated and field operators
+        for expr in ("rand", "[0 1]", "<0 1>", "Kick 01.wav Snare 02.wav"):
+            self.assertTrue(is_calculated_pool_query(expr, pool_items), expr)
+            self.assertTrue(is_field_operator_expression(expr, pool_items), expr)
+
+        sr = 44100
+        system = System(sample_rate=sr, bpm=120.0, render_mode="preview")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p0 = os.path.join(tmpdir, "a.wav")
+            p1 = os.path.join(tmpdir, "b.wav")
+            p2 = os.path.join(tmpdir, "c.wav")
+            sf.write(p0, np.full((sr // 10, 1), 0.2, dtype=np.float32), sr)
+            sf.write(p1, np.full((sr // 10, 1), 0.5, dtype=np.float32), sr)
+            sf.write(p2, np.full((sr // 10, 1), 0.9, dtype=np.float32), sr)
+            items = [
+                {"id": "ext:" + p0, "name": "a.wav", "filepath": p0, "is_external": True},
+                {"id": "ext:" + p1, "name": "b.wav", "filepath": p1, "is_external": True},
+                {"id": "ext:" + p2, "name": "c.wav", "filepath": p2, "is_external": True},
+            ]
+
+            # 1. Direct string name call stays pinned to b.wav regardless of global_seed and stays on fast path
+            sample_name = SampleObject(
+                filepath=p0,
+                sample_type="one_shot",
+                stretch_mode="off",
+                selected_items=items,
+                pool_query="b.wav",
+                global_seed=5,
+                node_id=10,
+            )
+            sample_name.pool_node_id = 77
+            leaf_name = _resolve_sample_leaf_filepath(sample_name, 120.0)
+            self.assertIsNotNone(leaf_name)
+            self.assertEqual(os.path.normcase(leaf_name[0]), os.path.normcase(p1))
+            buf_name = sample_name.render(system)
+            self.assertAlmostEqual(float(np.max(np.abs(buf_name))), 0.5, places=2)
+
+            # 2. Integer index call "0" resolves permute_pool_items(items, 5, 77)[0] and stays on fast path
+            expected_perm_0 = permute_pool_items(items, 5, 77)[0]
+            expected_peak = {p0: 0.2, p1: 0.5, p2: 0.9}[expected_perm_0["filepath"]]
+            sample_idx = SampleObject(
+                filepath=p0,
+                sample_type="one_shot",
+                stretch_mode="off",
+                selected_items=items,
+                pool_query="0",
+                global_seed=5,
+                node_id=10,
+            )
+            sample_idx.pool_node_id = 77
+            leaf_idx = _resolve_sample_leaf_filepath(sample_idx, 120.0)
+            self.assertIsNotNone(leaf_idx)
+            self.assertEqual(os.path.normcase(leaf_idx[0]), os.path.normcase(expected_perm_0["filepath"]))
+            buf_idx = sample_idx.render(system)
+            self.assertAlmostEqual(float(np.max(np.abs(buf_idx))), expected_peak, places=2)
+
+            # 3. Dynamic operator "rand" is NOT treated as static fast path
+            sample_rand = SampleObject(
+                filepath=p0,
+                sample_type="one_shot",
+                stretch_mode="off",
+                selected_items=items,
+                pool_query="rand",
+                global_seed=5,
+                node_id=10,
+            )
+            self.assertIsNone(_resolve_sample_leaf_filepath(sample_rand, 120.0))
+
+            # 4. SequenceObject with inline sequence item in pool resolves and renders it
+            seq_inline = SequenceObject(
+                sequence=[1, 0, 0, 0],
+                step_length=1.0,
+                total_bars=1.0,
+                selected_items=[
+                    {
+                        "id": "inline:test_1",
+                        "name": "Offbeat Inline",
+                        "filepath": "",
+                        "is_inline": True,
+                        "source": "inline",
+                        "sequence": [0, 1, 0, 0],
+                    }
+                ],
+                pool_query="Offbeat Inline",
+                node_id=20,
+            )
+            seq_inline.add_child(
+                SampleObject(filepath=p2, sample_type="one_shot", stretch_mode="off", node_id=21),
+                0.0,
+            )
+            rendered_seq = seq_inline.render(system)
+            flat_seq = rendered_seq.reshape(-1) if rendered_seq.ndim == 1 else np.max(np.abs(rendered_seq), axis=0)
+            beat_samples = int((60.0 / 120.0) * sr)
+            # Beat 0 must be silent (step 0 == 0), Beat 1 must hit (step 1 == 1, amplitude 0.9)
+            self.assertAlmostEqual(float(np.max(np.abs(flat_seq[:beat_samples // 2]))), 0.0, places=3)
+            self.assertAlmostEqual(float(np.max(np.abs(flat_seq[beat_samples : beat_samples + beat_samples // 4]))), 0.9, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

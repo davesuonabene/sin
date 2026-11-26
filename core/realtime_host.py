@@ -31,7 +31,16 @@ import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
 
 from core.audio_engine import SinAudioEngine, is_native_engine_available, render_plan_offline
+from core.env_config import get_env_config
 from core.plan_packer import pack_audio_node_model, pack_canonical_graph
+from core.processors.cook_scheduler import ProcessorCookScheduler
+from core.processors.tile_cache import (
+    GLOBAL_PEAK_PYRAMID_CACHE,
+    GLOBAL_TILE_CACHE,
+    PeakPyramid,
+    TIER_RAW,
+)
+from core.processors.tile_scheduler import TiledCookScheduler
 from core.render_plan import (
     BusSpec,
     ChainStageSpec,
@@ -105,9 +114,134 @@ class RealtimeAudioHost:
         self._active_plan: Optional[SinRenderPlan] = None
         self._load_generation: int = 0
         self._last_peak_columns: int = 512
+        self._last_node_model_payload: Optional[Dict[str, Any]] = None
+        self._ws_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._cook_scheduler = ProcessorCookScheduler(
+            on_status=self._on_processor_cook_status,
+            on_hot_swap=self._on_processor_cook_hot_swap,
+        )
+        self._tile_scheduler = TiledCookScheduler(
+            on_tile_publish=self._on_layered_tile_publish,
+            on_tile_visual=self._on_layered_tile_visual,
+            on_status=self._on_processor_cook_status,
+        )
+        self._wait_for_fx: bool = bool(get_env_config().wait_for_fx_default)
+        self._active_peak_filepath: Optional[str] = None
+        self._active_base_pyramid: Optional[PeakPyramid] = None
+        self._active_peak_window: Tuple[float, float, float] = (0.0, 1.0, 0.0)  # (src_s0, rate, tl_dur)
         # 16-slot LRU of preview source IDs (90001..90016) so re-auditioning recent samples is 0ms RAM hit
         self._preview_lru: OrderedDict[str, int] = OrderedDict()
         self._preview_slot_pool: list[int] = list(range(90001, 90017))
+
+    def _on_layered_tile_publish(self, source_id: int, tile_idx: int, pcm: Optional[np.ndarray], gen: int) -> None:
+        eng = self._engine
+        if eng is not None and eng.supports_layered_tiles():
+            eng.set_layered_tile(source_id, tile_idx, pcm, generation=gen)
+
+    def _on_layered_tile_visual(self, payload: Dict[str, Any]) -> None:
+        self._broadcast_async_event(payload)
+
+    def get_engine_settings(self) -> Dict[str, Any]:
+        cfg = get_env_config()
+        return {
+            "wait_for_fx": bool(self._wait_for_fx),
+            "tile_sec": float(cfg.tile_sec),
+            "default_precook_sec": float(cfg.default_precook_sec),
+            "cache_stats": GLOBAL_TILE_CACHE.stats(),
+        }
+
+    def update_engine_settings(self, settings: Dict[str, Any]) -> Dict[str, Any]:
+        if "wait_for_fx" in settings:
+            self._wait_for_fx = bool(settings["wait_for_fx"])
+        if settings.get("tile_ram_mb") is not None:
+            try:
+                GLOBAL_TILE_CACHE.set_ram_budget_mb(int(settings["tile_ram_mb"]))
+            except (TypeError, ValueError):
+                pass
+        if settings.get("dsp_cache_max_gb") is not None:
+            try:
+                GLOBAL_TILE_CACHE.set_disk_budget_gb(float(settings["dsp_cache_max_gb"]))
+            except (TypeError, ValueError):
+                pass
+        if bool(settings.get("clear_tile_cache", False)):
+            GLOBAL_TILE_CACHE.clear()
+        return self.get_engine_settings()
+
+    def query_viewport_peaks(self, start_sec: float, end_sec: float, columns: int = 512) -> Dict[str, Any]:
+        cols = max(16, min(2048, int(columns or 512)))
+        overlay = self._tile_scheduler.overlay
+        if overlay is not None:
+            peaks, tiers = overlay.query_viewport(start_sec, end_sec, cols)
+            return {
+                "ok": True,
+                "start_sec": float(start_sec),
+                "end_sec": float(end_sec),
+                "duration_sec": overlay.duration_sec,
+                "peaks": peaks,
+                "tiers": tiers,
+                "coverage": overlay.coverage_summary(),
+            }
+        pyr = self._active_base_pyramid
+        if pyr is not None:
+            win_s0, win_rate, win_dur = self._active_peak_window
+            eff_dur = win_dur if win_dur > 0.0 else pyr.duration_sec
+            eff_rate = max(0.05, float(win_rate or 1.0))
+            src_s0 = win_s0 + max(0.0, float(start_sec)) * eff_rate
+            src_s1 = win_s0 + max(float(start_sec) + 1e-4, float(end_sec)) * eff_rate
+            peaks = pyr.query(src_s0, src_s1, cols)
+            return {
+                "ok": True,
+                "start_sec": float(start_sec),
+                "end_sec": float(end_sec),
+                "duration_sec": eff_dur,
+                "peaks": peaks,
+                "tiers": [TIER_RAW] * (len(peaks) // 2),
+                "coverage": None,
+            }
+        return {"ok": False, "peaks": [], "tiers": []}
+
+    def _broadcast_async_event(self, payload: Dict[str, Any]) -> None:
+        loop = self._ws_loop
+        if loop is None or loop.is_closed():
+            return
+        with self._lock:
+            senders = list(self._client_senders.values())
+        for sender in senders:
+            try:
+                asyncio.run_coroutine_threadsafe(sender(payload), loop)
+            except Exception:
+                pass
+
+    def _on_processor_cook_status(self, node_id: str, status: Dict[str, Any]) -> None:
+        self._broadcast_async_event({"type": "processor_status", **status})
+
+    def _on_processor_cook_hot_swap(self, node_id: str, stage: str) -> None:
+        """Silently re-pack & 5ms hot-swap the active node model once a background cook completes."""
+        with self._lock:
+            payload = copy.deepcopy(self._last_node_model_payload)
+            gen = self._load_generation
+            cols = self._last_peak_columns
+        if payload is None:
+            return
+        try:
+            res = self.load_node_model_plan(
+                payload,
+                compute_peaks=True,
+                peak_columns=cols,
+                expected_gen=gen,
+                allow_async_cook=True,
+            )
+            if not res.get("ok") or res.get("superseded"):
+                return
+            res.pop("_plan", None)
+            self._broadcast_async_event({
+                "type": "plan_hot_swapped",
+                "node_id": str(node_id),
+                "stage": stage,
+                **res,
+            })
+        except Exception as exc:
+            logger.debug("[%s] Processor hot-swap skipped: %s", self.name, exc)
 
     def status(self) -> Dict[str, Any]:
         available = is_native_engine_available()
@@ -143,6 +277,8 @@ class RealtimeAudioHost:
         return ok
 
     def stop_and_release(self) -> None:
+        self._cook_scheduler.cancel_all()
+        self._tile_scheduler.clear_session()
         with self._lock:
             self._load_generation += 1
             if self._engine is not None:
@@ -150,16 +286,26 @@ class RealtimeAudioHost:
                 self._engine.release_all_sources()
                 self._engine.stop_device()
             self._active_plan = None
+            self._last_node_model_payload = None
+            self._active_peak_filepath = None
+            self._active_base_pyramid = None
+            self._active_peak_window = (0.0, 1.0, 0.0)
             self._preview_lru.clear()
             self._preview_slot_pool = list(range(90001, 90017))
 
     def shutdown(self) -> None:
+        self._cook_scheduler.cancel_all()
+        self._tile_scheduler.shutdown()
         with self._lock:
             self._load_generation += 1
             if self._engine is not None:
                 self._engine.close()
                 self._engine = None
             self._active_plan = None
+            self._last_node_model_payload = None
+            self._active_peak_filepath = None
+            self._active_base_pyramid = None
+            self._active_peak_window = (0.0, 1.0, 0.0)
             self._preview_lru.clear()
             self._preview_slot_pool = list(range(90001, 90017))
 
@@ -321,6 +467,8 @@ class RealtimeAudioHost:
         compute_peaks: bool = True,
         peak_columns: int = 512,
         expected_gen: Optional[int] = None,
+        allow_async_cook: bool = True,
+        force_cook_node_ids: Optional[Set[str]] = None,
     ) -> Dict[str, Any]:
         """Pack & load a SIN AudioNodeModel synchronously (used by tests & direct callers).
         Packing runs outside `self._lock` so real-time telemetry and controls never block."""
@@ -331,8 +479,21 @@ class RealtimeAudioHost:
             return {"ok": False, "error": "Native libsin_dsp library unavailable"}
 
         t0 = perf_counter()
+        cur_playhead = 0.0
+        try:
+            cur_playhead = float(eng.read_telemetry(include_scope=False).get("playhead_sec") or 0.0)
+        except Exception:
+            cur_playhead = 0.0
+
         model = AudioNodeModel(**model_payload) if isinstance(model_payload, dict) else model_payload
-        sys_obj = System(bpm=float(model.bpm or 120.0), sample_rate=sr, render_mode="preview")
+        sys_obj = System(
+            bpm=float(model.bpm or 120.0),
+            sample_rate=sr,
+            render_mode="preview",
+            allow_async_cook=allow_async_cook,
+            playhead_sec=cur_playhead,
+            force_cook_node_ids=force_cook_node_ids,
+        )
 
         # Heavy procedural packing + Tier-2 Rubber Band cooking happens OUTSIDE self._lock!
         plan = pack_audio_node_model(model, sys_obj)
@@ -344,12 +505,59 @@ class RealtimeAudioHost:
             if not ok:
                 return {"ok": False, "error": "Failed to load node model plan into libsin_dsp"}
             self._active_plan = plan
+            if isinstance(model_payload, dict):
+                self._last_node_model_payload = copy.deepcopy(model_payload)
             tel = eng.read_telemetry(include_scope=False)
 
+        # Start tiled streaming cook session(s) for long tracks, OR legacy short-clip cooks
+        has_tiled = bool(getattr(sys_obj, "pending_tiled_cooks", None))
         duration_sec = float(tel["duration_sec"] or 0.0)
+        if has_tiled:
+            tiled_spec = sys_obj.pending_tiled_cooks[0]
+            # Sync exact decoded duration from C++ ma_decoder so crop_start aligns to 0.0ms even on VBR MP3s!
+            try:
+                src_info = eng.get_source_info(tiled_spec.source_id)
+                if src_info and src_info.get("num_frames", 0) > 0 and src_info.get("sample_rate", 0) > 0:
+                    ma_sr = int(src_info["sample_rate"])
+                    ma_dur = float(src_info["num_frames"]) / float(ma_sr)
+                    if ma_dur > 0.0:
+                        tiled_spec.file_sample_rate = ma_sr
+                        tiled_spec.duration_sec = ma_dur
+                        tiled_spec.total_frames = min(
+                            tiled_spec.total_frames,
+                            max(1, int(round(ma_dur * tiled_spec.sample_rate))),
+                        )
+            except Exception:
+                pass
+            if duration_sec > 0.0:
+                tiled_spec.timeline_duration_sec = duration_sec
+            # Include all non-monitor node keys in bus_node_ids so IRIDE canvas nodes get waveforms too!
+            all_bus_keys = list(tiled_spec.bus_node_ids)
+            for k in plan.bus_id_map.keys():
+                if k != "__monitor__" and k not in all_bus_keys:
+                    all_bus_keys.append(k)
+            tiled_spec.bus_node_ids = all_bus_keys
+            self._active_peak_filepath = tiled_spec.base_filepath
+            self._active_peak_window = (
+                tiled_spec.crop_start_sec,
+                max(0.05, float(tiled_spec.playback_rate or 1.0)),
+                tiled_spec.active_timeline_sec,
+            )
+            self._tile_scheduler.start_session(tiled_spec, playhead_sec=cur_playhead)
+            sys_obj.processor_statuses.update(self._tile_scheduler.get_all_statuses())
+        else:
+            self._tile_scheduler.clear_session()
+            # Track primary file source for long-file (>60s) peak pyramid support even without RX nodes
+            primary_fp = next((s.filepath for s in plan.sources if s.filepath), None)
+            self._active_peak_filepath = primary_fp
+            self._active_peak_window = (0.0, 1.0, duration_sec)
+
+        for job in sys_obj.pending_cooks:
+            self._cook_scheduler.schedule(job)
+
         master_peaks: list[float] = []
         bus_peaks: Dict[str, list[float]] = {}
-        if compute_peaks and 0.0 < duration_sec <= 60.0:
+        if compute_peaks and not has_tiled and 0.0 < duration_sec <= 60.0:
             master_peaks, bus_peaks = self._compute_plan_peaks(plan, sr, peak_columns)
 
         elapsed_ms = round((perf_counter() - t0) * 1000.0, 2)
@@ -360,8 +568,11 @@ class RealtimeAudioHost:
             "bpm": plan.bpm,
             "bus_ids": list(plan.bus_id_map.keys()),
             "manifest": {"nodes": plan.manifest_nodes},
+            "processor_statuses": dict(sys_obj.processor_statuses),
             "master_peaks": master_peaks,
             "bus_peaks": bus_peaks,
+            "tiled": has_tiled,
+            "has_peak_pyramid": bool(self._active_peak_filepath and (has_tiled or duration_sec > 60.0)),
             "pack_ms": elapsed_ms,
             "_plan": plan,
         }
@@ -398,15 +609,15 @@ class RealtimeAudioHost:
         self, plan: SinRenderPlan, sr: int, peak_columns: int = 512
     ) -> Tuple[list[float], Dict[str, list[float]]]:
         try:
-            # Tap intermediate track/bus/sequence/arrangement nodes (skipping transparent __monitor__)
-            # in the same single C++ offline pass so IRIDE panels get DSP-accurate waveforms!
+            # Tap intermediate track/bus/sequence/arrangement/null/sample nodes (skipping transparent __monitor__)
+            # in the same single C++ offline pass so IRIDE panels get DSP-accurate post-FX waveforms!
             tap_bus_ids = [
                 b.bus_id
                 for b in plan.buses
                 if b.parent_bus_id != 0
                 and b.node_key != "__monitor__"
-                and b.node_type in ("track", "bus", "master", "sequence", "arrangement")
-            ][:32]
+                and b.node_type in ("track", "bus", "master", "sequence", "arrangement", "null", "sample", "preamp_denoise", "voice_isolator")
+            ][:64]
             master_buf, tapped = render_plan_offline(
                 plan, sample_rate=sr, bus_tap_ids=tap_bus_ids or None
             )
@@ -489,10 +700,38 @@ class RealtimeAudioHost:
                         b.solo = (fval >= 0.5)
                     elif pid == SIN_PARAM_CROP_START:
                         b.crop_start = max(0.0, min(b.crop_end, fval))
+                        tl_dur = float(self._engine.read_telemetry(include_scope=False).get("duration_sec") or 0.0)
+                        self._tile_scheduler.update_crop_window(
+                            crop_start=b.crop_start,
+                            timeline_duration_sec=tl_dur,
+                        )
+                        if self._tile_scheduler.active_session is not None:
+                            s = self._tile_scheduler.active_session
+                            self._active_peak_window = (s.crop_start_sec, max(0.05, float(s.playback_rate or 1.0)), s.active_timeline_sec)
+                        elif self._active_base_pyramid is not None:
+                            self._active_peak_window = (b.crop_start * self._active_base_pyramid.duration_sec, max(0.05, float(b.playback_rate or 1.0)), tl_dur or self._active_peak_window[2])
                     elif pid == SIN_PARAM_CROP_END:
                         b.crop_end = max(b.crop_start, min(1.0, fval))
+                        tl_dur = float(self._engine.read_telemetry(include_scope=False).get("duration_sec") or 0.0)
+                        self._tile_scheduler.update_crop_window(
+                            crop_end=b.crop_end,
+                            timeline_duration_sec=tl_dur,
+                        )
+                        if self._tile_scheduler.active_session is not None:
+                            s = self._tile_scheduler.active_session
+                            self._active_peak_window = (s.crop_start_sec, max(0.05, float(s.playback_rate or 1.0)), s.active_timeline_sec)
                     elif pid == SIN_PARAM_PLAYBACK_RATE:
                         b.playback_rate = max(0.05, fval)
+                        tl_dur = float(self._engine.read_telemetry(include_scope=False).get("duration_sec") or 0.0)
+                        self._tile_scheduler.update_crop_window(
+                            playback_rate=b.playback_rate,
+                            timeline_duration_sec=tl_dur,
+                        )
+                        if self._tile_scheduler.active_session is not None:
+                            s = self._tile_scheduler.active_session
+                            self._active_peak_window = (s.crop_start_sec, max(0.05, float(s.playback_rate or 1.0)), s.active_timeline_sec)
+                        elif self._active_base_pyramid is not None:
+                            self._active_peak_window = (self._active_peak_window[0], b.playback_rate, tl_dur or self._active_peak_window[2])
             return True
 
     def set_stage_param(
@@ -518,7 +757,9 @@ class RealtimeAudioHost:
             if self._active_plan is not None:
                 bid_set = set(target_bids)
                 for st in self._active_plan.stages:
-                    if st.bus_id in bid_set and st.stage_index == sidx and 0 <= pidx < len(st.params):
+                    if st.bus_id in bid_set and st.stage_index == sidx and 0 <= pidx < 32:
+                        if pidx >= len(st.params):
+                            st.params.extend([0.0] * (pidx + 1 - len(st.params)))
                         st.params[pidx] = fval
             return True
 
@@ -609,6 +850,7 @@ class RealtimeAudioHost:
                 "master_rms_r": 0.0,
                 "bus_peaks": {},
                 "bus_rms": {},
+                "stage_meters": {},
             }
         return eng.read_telemetry(include_scope=self._include_scope)
 
@@ -657,6 +899,16 @@ class RealtimeAudioHost:
                         continue
                     tel = self.read_telemetry()
                     playing = bool(tel.get("is_playing"))
+                    if playing:
+                        self._tile_scheduler.update_playhead(
+                            float(tel.get("playhead_sec") or 0.0),
+                            is_playing=True,
+                        )
+                    elif was_playing:
+                        self._tile_scheduler.update_playhead(
+                            float(tel.get("playhead_sec") or 0.0),
+                            is_playing=False,
+                        )
                     if playing or was_playing:
                         await _send_json({"type": "telemetry", **tel})
                     was_playing = playing
@@ -693,7 +945,38 @@ class RealtimeAudioHost:
                     if plan_snap is None:
                         return
                     dur_sec = float(self.read_telemetry().get("duration_sec") or 0.0)
-                    if not (0.0 < dur_sec <= 60.0):
+                    if dur_sec <= 0.0:
+                        return
+                    sess = self._tile_scheduler.active_session
+                    if sess is not None or dur_sec > 60.0:
+                        # Fast pyramid / quick-overview refresh on live crop or rate edits (zero offline full-track render!)
+                        ov = self._tile_scheduler.overlay
+                        if sess is not None and ov is not None and ov.base_pyramid is None and self._active_peak_filepath:
+                            src_s0 = sess.crop_start_sec
+                            rate = max(0.05, float(sess.playback_rate or 1.0))
+                            quick = await asyncio.to_thread(
+                                GLOBAL_PEAK_PYRAMID_CACHE.scan_quick_overview,
+                                self._active_peak_filepath,
+                                src_s0,
+                                src_s0 + dur_sec * rate,
+                                peak_cols,
+                            )
+                            if quick is not None and self._load_generation == expected_g:
+                                ov.set_quick_raw_peaks(quick[0])
+                        vp = await asyncio.to_thread(self.query_viewport_peaks, 0.0, dur_sec, peak_cols)
+                        if vp.get("ok") and vp.get("peaks") and self._load_generation == expected_g:
+                            bus_keys = list(sess.bus_node_ids) if sess is not None else [
+                                k for k in plan_snap.bus_id_map.keys() if k != "__monitor__"
+                            ]
+                            await _send_json({
+                                "type": "master_peaks",
+                                "duration_sec": dur_sec,
+                                "master_peaks": vp["peaks"],
+                                "bus_peaks": {k: vp["peaks"] for k in bus_keys},
+                                "peak_tiers": vp.get("tiers"),
+                                "has_peak_pyramid": True,
+                                "coverage": vp.get("coverage"),
+                            })
                         return
                     peaks, bus_peaks = await asyncio.to_thread(self._compute_plan_peaks, plan_snap, sr, peak_cols)
                     if (peaks or bus_peaks) and self._load_generation == expected_g:
@@ -767,6 +1050,11 @@ class RealtimeAudioHost:
                     seek_req = float(msg.get("seek_sec", -1.0))
                     if playing_req or seek_req >= 0.0:
                         await _claim_ownership()
+                    target_sec = seek_req if seek_req >= 0.0 else float(self.read_telemetry().get("playhead_sec") or 0.0)
+                    self._tile_scheduler.update_playhead(target_sec, is_playing=playing_req)
+                    # Optional DAW 'Wait for FX' preroll before transport starts on an uncooked playhead tile
+                    if playing_req and self._wait_for_fx and self._tile_scheduler.active_session is not None:
+                        await asyncio.to_thread(self._tile_scheduler.wait_for_playhead_tile, target_sec, 2.5)
                     tel = self.set_transport(
                         playing=playing_req,
                         seek_sec=seek_req,
@@ -817,6 +1105,7 @@ class RealtimeAudioHost:
                     active_load_task = asyncio.create_task(_run_canonical())
 
                 elif mtype == "load_node_model":
+                    self._ws_loop = asyncio.get_running_loop()
                     await _claim_ownership()
                     gen = _next_generation()
                     if active_load_task and not active_load_task.done():
@@ -846,18 +1135,128 @@ class RealtimeAudioHost:
                         dur_sec = float(result.get("duration_sec") or 0.0)
                         sr = int(result.get("sample_rate") or self._requested_sr)
                         cols = int(m.get("peak_columns", 512))
-                        if result.get("ok") and want_peaks and plan_obj is not None and 0.0 < dur_sec <= 60.0:
-                            async def _run_peaks(p=plan_obj, p_sr=sr, p_cols=cols, p_dur=dur_sec, p_g=g) -> None:
-                                peaks, bus_peaks = await asyncio.to_thread(self._compute_plan_peaks, p, p_sr, p_cols)
-                                if (peaks or bus_peaks) and self._load_generation == p_g:
-                                    await _send_json({
-                                        "type": "master_peaks",
-                                        "duration_sec": p_dur,
-                                        "master_peaks": peaks,
-                                        "bus_peaks": bus_peaks,
-                                    })
+                        is_tiled = bool(result.get("tiled", False))
+                        peak_fp = self._active_peak_filepath
 
-                            active_peaks_task = asyncio.create_task(_run_peaks())
+                        if result.get("ok") and want_peaks and plan_obj is not None and dur_sec > 0.0:
+                            if not is_tiled and dur_sec <= 60.0:
+                                async def _run_peaks(p=plan_obj, p_sr=sr, p_cols=cols, p_dur=dur_sec, p_g=g) -> None:
+                                    peaks, bus_peaks = await asyncio.to_thread(self._compute_plan_peaks, p, p_sr, p_cols)
+                                    if (peaks or bus_peaks) and self._load_generation == p_g:
+                                        await _send_json({
+                                            "type": "master_peaks",
+                                            "duration_sec": p_dur,
+                                            "master_peaks": peaks,
+                                            "bus_peaks": bus_peaks,
+                                        })
+
+                                active_peaks_task = asyncio.create_task(_run_peaks())
+                            elif peak_fp:
+                                # Long track (>60s) or tiled RX track:
+                                # Stage 1 (<90-350ms): Instant overview peaks across active cropped span + bus_peaks for IRIDE nodes!
+                                # Stage 2 (background): Full sequential multi-res pyramid cached to disk for crisp zooming.
+                                async def _run_pyramid_peaks(fp=peak_fp, p=plan_obj, p_cols=cols, p_dur=dur_sec, p_g=g) -> None:
+                                    sess = self._tile_scheduler.active_session
+                                    if sess is not None:
+                                        src_s0 = sess.crop_start_sec
+                                        rate = max(0.05, float(sess.playback_rate or 1.0))
+                                        src_s1 = src_s0 + p_dur * rate
+                                        bus_keys = list(sess.bus_node_ids)
+                                    else:
+                                        # Respect primary clip crop_start/playback_rate even without RX nodes
+                                        clip0 = p.clips[0] if p.clips else None
+                                        bus0 = next((b for b in p.buses if clip0 and b.bus_id == clip0.target_bus_id), None)
+                                        cs = float(bus0.crop_start if bus0 else (clip0.source_start_ratio if clip0 else 0.0))
+                                        rate = max(0.05, float(bus0.playback_rate if bus0 else 1.0))
+                                        src_s0 = 0.0
+                                        src_s1 = p_dur * rate
+                                        if cs > 0.0:
+                                            f_dur = 0.0
+                                            try:
+                                                if clip0 is not None and self._engine is not None:
+                                                    si = self._engine.get_source_info(clip0.source_id)
+                                                    if si and si.get("num_frames", 0) > 0 and si.get("sample_rate", 0) > 0:
+                                                        f_dur = float(si["num_frames"]) / float(si["sample_rate"])
+                                            except Exception:
+                                                f_dur = 0.0
+                                            if f_dur <= 0.0:
+                                                try:
+                                                    import soundfile as _sf
+                                                    f_dur = float(_sf.info(fp).duration or 0.0)
+                                                except Exception:
+                                                    f_dur = 0.0
+                                            if f_dur > 0.0:
+                                                src_s0 = cs * f_dur
+                                                src_s1 = min(f_dur, src_s0 + p_dur * rate)
+                                        self._active_peak_window = (src_s0, rate, p_dur)
+                                        bus_keys = [k for k in p.bus_id_map.keys() if k != "__monitor__"]
+
+                                    sample_bus_keys = {
+                                        b.node_key for b in p.buses if str(b.node_type or "").lower() == "sample"
+                                    }
+
+                                    # Stage 1: Fast overview scan (<90-350ms)
+                                    quick = await asyncio.to_thread(
+                                        GLOBAL_PEAK_PYRAMID_CACHE.scan_quick_overview,
+                                        fp,
+                                        src_s0,
+                                        src_s1,
+                                        p_cols,
+                                    )
+                                    if self._load_generation != p_g:
+                                        return
+                                    if quick is not None:
+                                        q_peaks, _ = quick
+                                        ov = self._tile_scheduler.overlay
+                                        if ov is not None:
+                                            ov.set_quick_raw_peaks(q_peaks)
+                                            vp = self.query_viewport_peaks(0.0, p_dur, p_cols)
+                                            out_peaks = vp["peaks"] if vp.get("ok") else q_peaks
+                                            out_tiers = vp["tiers"] if vp.get("ok") else [TIER_RAW] * (len(out_peaks) // 2)
+                                            out_cov = vp.get("coverage")
+                                        else:
+                                            out_peaks = q_peaks
+                                            out_tiers = [TIER_RAW] * (len(q_peaks) // 2)
+                                            out_cov = None
+                                        # Keep Sample nodes showing dry input peaks while processor/master nodes show post-FX peaks!
+                                        b_peaks = {
+                                            k: (q_peaks if k in sample_bus_keys else out_peaks)
+                                            for k in bus_keys
+                                        }
+                                        await _send_json({
+                                            "type": "master_peaks",
+                                            "duration_sec": p_dur,
+                                            "master_peaks": out_peaks,
+                                            "bus_peaks": b_peaks,
+                                            "peak_tiers": out_tiers,
+                                            "has_peak_pyramid": True,
+                                            "coverage": out_cov,
+                                        })
+
+                                    # Stage 2: Build/load full sequential multi-res pyramid in background for razor-sharp zoom
+                                    pyr = await asyncio.to_thread(GLOBAL_PEAK_PYRAMID_CACHE.get_or_build, fp)
+                                    if pyr is None or self._load_generation != p_g:
+                                        return
+                                    self._active_base_pyramid = pyr
+                                    self._tile_scheduler.attach_base_pyramid(pyr)
+                                    vp2 = self.query_viewport_peaks(0.0, p_dur, p_cols)
+                                    if vp2.get("ok") and self._load_generation == p_g:
+                                        raw_pyr_peaks = pyr.query(src_s0, src_s1, p_cols) if sample_bus_keys else None
+                                        b_peaks2 = {
+                                            k: (raw_pyr_peaks if (k in sample_bus_keys and raw_pyr_peaks) else vp2["peaks"])
+                                            for k in bus_keys
+                                        }
+                                        await _send_json({
+                                            "type": "master_peaks",
+                                            "duration_sec": p_dur,
+                                            "master_peaks": vp2["peaks"],
+                                            "bus_peaks": b_peaks2,
+                                            "peak_tiers": vp2["tiers"],
+                                            "has_peak_pyramid": True,
+                                            "coverage": vp2.get("coverage"),
+                                        })
+
+                                active_peaks_task = asyncio.create_task(_run_pyramid_peaks())
 
                     active_load_task = asyncio.create_task(_run_node_model())
 
@@ -915,6 +1314,74 @@ class RealtimeAudioHost:
                     await _send_json({"type": "telemetry", **tel})
                     if req_id is not None:
                         await _send_json({"type": "ack", "req_id": req_id, "ok": True})
+
+                elif mtype == "cook_node":
+                    await _claim_ownership()
+                    target_nid = str(msg.get("node_id") or "")
+                    if target_nid and self._tile_scheduler.has_node(target_nid):
+                        ok = self._tile_scheduler.request_manual_cook(target_nid)
+                        await _send_json({"type": "ack", "req_id": req_id, "ok": ok, "tiled": True})
+                        continue
+                    model_data = msg.get("model") or self._last_node_model_payload
+                    if not target_nid or not model_data:
+                        await _send_json({"type": "ack", "req_id": req_id, "ok": False})
+                    else:
+                        gen = _next_generation()
+
+                        async def _run_forced_cook(m_payload=model_data, nid=target_nid, rid=req_id, g=gen) -> None:
+                            self._ws_loop = asyncio.get_running_loop()
+                            res = await asyncio.to_thread(
+                                self.load_node_model_plan,
+                                m_payload,
+                                compute_peaks=False,
+                                expected_gen=g,
+                                allow_async_cook=True,
+                                force_cook_node_ids={nid},
+                            )
+                            if not res.get("superseded"):
+                                res.pop("_plan", None)
+                                await _send_json({"type": "plan_loaded", "req_id": rid, **res})
+
+                        active_load_task = asyncio.create_task(_run_forced_cook())
+
+                elif mtype == "cook_full_track":
+                    target_nid = str(msg.get("node_id") or "")
+                    enable = bool(msg.get("enable", True))
+                    ok = self._tile_scheduler.request_cook_full_track(target_nid, enable=enable) if target_nid else False
+                    if req_id is not None:
+                        await _send_json({"type": "ack", "req_id": req_id, "ok": ok})
+
+                elif mtype == "update_processor_param":
+                    target_nid = str(msg.get("node_id") or "")
+                    key = str(msg.get("key") or "")
+                    value = msg.get("value")
+                    commit = bool(msg.get("commit", True))
+                    res = self._tile_scheduler.update_param(target_nid, key, value, commit=commit) if target_nid and key else None
+                    if req_id is not None:
+                        await _send_json({"type": "ack", "req_id": req_id, "ok": bool(res and res.get("ok")), **(res or {})})
+
+                elif mtype == "query_peaks":
+                    s_sec = float(msg.get("start_sec", 0.0))
+                    e_sec = float(msg.get("end_sec", 0.0))
+                    cols = int(msg.get("columns", 512))
+                    vp = await asyncio.to_thread(self.query_viewport_peaks, s_sec, e_sec, cols)
+                    await _send_json({"type": "peaks_viewport", "req_id": req_id, **vp})
+
+                elif mtype == "set_engine_settings":
+                    updated = await asyncio.to_thread(self.update_engine_settings, msg.get("settings") or msg)
+                    await _send_json({"type": "engine_settings", "req_id": req_id, "ok": True, **updated})
+
+                elif mtype == "get_engine_settings":
+                    cur_settings = await asyncio.to_thread(self.get_engine_settings)
+                    await _send_json({"type": "engine_settings", "req_id": req_id, "ok": True, **cur_settings})
+
+                elif mtype == "cancel_cook":
+                    target_nid = str(msg.get("node_id") or "")
+                    cancelled = False
+                    if target_nid:
+                        cancelled = self._tile_scheduler.cancel_node(target_nid) or self._cook_scheduler.cancel_node(target_nid)
+                    if req_id is not None:
+                        await _send_json({"type": "ack", "req_id": req_id, "ok": True, "cancelled": cancelled})
 
                 elif mtype == "ping":
                     await _send_json({"type": "pong", "req_id": req_id})

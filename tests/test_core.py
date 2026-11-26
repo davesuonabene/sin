@@ -1003,11 +1003,12 @@ class TestRenderExportResolution(unittest.TestCase):
         self.assertEqual(node_obj.chain[0]["type"], "gain")
         self.assertAlmostEqual(node_obj.chain[0]["params"]["gain_db"], -6.0, places=4)
 
-    def test_dsp_processor_registry_gain_only_and_passthrough(self):
+    def test_dsp_processor_registry_and_passthrough(self):
         from ermes.py.compiler import KNOWN_FX_TYPES
 
-        self.assertEqual(PROCESSOR_REGISTRY.types(), frozenset({"gain"}))
-        self.assertEqual(KNOWN_FX_TYPES, frozenset({"gain"}))
+        expected_types = frozenset({"gain", "param_eq", "comp", "clipper", "limiter"})
+        self.assertEqual(PROCESSOR_REGISTRY.types(), expected_types)
+        self.assertEqual(KNOWN_FX_TYPES, expected_types)
         proc = PROCESSOR_REGISTRY.get("gain")
         self.assertIsNotNone(proc)
         self.assertIsInstance(proc, DspProcessor)
@@ -1015,6 +1016,82 @@ class TestRenderExportResolution(unittest.TestCase):
         buf = np.ones((2, 32), dtype=np.float32) * 0.5
         out = process_chain(buf, [{"type": "unregistered_noop", "params": {"x": 1}}, {"type": "gain", "params": {"gain": 0.5}}], sample_rate=48000)
         np.testing.assert_allclose(out, 0.25, atol=1e-6)
+
+    def test_external_sample_stage_inspect_and_pool_resolve(self):
+        import asyncio
+        import shutil
+
+        sr = 22050
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_wav = Path(tmpdir) / "os_kick_128bpm.wav"
+            sf.write(str(src_wav), np.full((sr // 2, 1), 0.4, dtype=np.float32), sr)
+            wav_bytes = src_wav.read_bytes()
+
+            # 1. Inspect existing local path via /api/external/inspect
+            inspected = sin_api.inspect_external_file(sin_api.ExternalInspectRequest(filepath=str(src_wav)))
+            self.assertTrue(inspected["is_external"])
+            self.assertEqual(inspected["source"], "external")
+            self.assertEqual(inspected["name"], "os_kick_128bpm.wav")
+            self.assertTrue(str(inspected["id"]).startswith("ext:"))
+            self.assertAlmostEqual(float(inspected["duration_seconds"]), 0.5, places=2)
+
+            # 2. Stage raw bytes via /api/external/stage into .runtime/external_samples/<hash>/
+            staged_path = None
+            try:
+                async def _make_request(payload_bytes: bytes) -> Request:
+                    sent = False
+                    async def receive():
+                        nonlocal sent
+                        if not sent:
+                            sent = True
+                            return {"type": "http.request", "body": payload_bytes, "more_body": False}
+                        return {"type": "http.request", "body": b"", "more_body": False}
+                    return Request({"type": "http", "method": "POST", "path": "/api/external/stage", "headers": []}, receive)
+
+                req1 = asyncio.run(_make_request(wav_bytes))
+                staged1 = asyncio.run(sin_api.stage_external_file(filename="os_kick_128bpm.wav", request=req1))
+                staged_path = Path(staged1["filepath"])
+                self.assertTrue(staged_path.exists())
+                self.assertTrue(staged1["is_external"])
+                self.assertEqual(staged1["source"], "external")
+                self.assertAlmostEqual(float(staged1["duration_seconds"]), 0.5, places=2)
+
+                # Identical bytes deduplicate to the same staged local path
+                req2 = asyncio.run(_make_request(wav_bytes))
+                staged2 = asyncio.run(sin_api.stage_external_file(filename="os_kick_128bpm.wav", request=req2))
+                self.assertEqual(staged2["filepath"], staged1["filepath"])
+
+                # Unsupported file extension is rejected with HTTP 400
+                req_bad = asyncio.run(_make_request(b"not audio"))
+                with self.assertRaises(HTTPException) as ctx:
+                    asyncio.run(sin_api.stage_external_file(filename="notes.txt", request=req_bad))
+                self.assertEqual(ctx.exception.status_code, 400)
+
+                # 3. resolve_pool accepts external and inline items without hitting GAIA DB,
+                #    while still rejecting unknown plain GAIA IDs with HTTP 422.
+                with patch.object(sin_api, "get_library", side_effect=AssertionError("should not load full GAIA library for external/inline")):
+                    ext_resolved = resolve_pool(PoolResolveRequest(
+                        selected_items=[staged1],
+                        playbackMode="Sequential",
+                    ))
+                    self.assertEqual(ext_resolved["sample"], str(staged_path))
+                    self.assertTrue(ext_resolved["items"][0]["is_external"])
+
+                    inline_resolved = resolve_pool(PoolResolveRequest(
+                        selected_items=[{
+                            "id": "inline:seq_1",
+                            "name": "Scratch Seq",
+                            "filepath": "",
+                            "is_inline": True,
+                            "source": "inline",
+                            "sequence": [1, 0, 1, 0],
+                        }],
+                        playbackMode="Sequential",
+                    ))
+                    self.assertTrue(inline_resolved["items"][0]["is_inline"])
+            finally:
+                if staged_path is not None and staged_path.parent.exists():
+                    shutil.rmtree(staged_path.parent, ignore_errors=True)
 
 
 if __name__ == "__main__":

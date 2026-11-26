@@ -140,6 +140,66 @@ class TestSharedDSP(unittest.TestCase):
         target_lin = 10.0 ** (-6.0 / 20.0)
         self.assertAlmostEqual(peak_lin, target_lin, places=2)
 
+    def test_null_node_validation_and_python_fx_fallback_parity(self):
+        from core.fx import process_chain
+        from ermes.py.compiler import validate_graph
+
+        # Null node rejects >1 incoming connection
+        bad_doc = {
+            "format": "sin-graph",
+            "version": 1,
+            "settings": {"bpm": 120.0, "total_bars": 1.0},
+            "output": "master",
+            "nodes": [
+                {"id": "s1", "type": "sample"},
+                {"id": "s2", "type": "sample"},
+                {"id": "n1", "type": "null"},
+                {"id": "master", "type": "track", "role": "master"},
+            ],
+            "connections": [
+                {"from": "s1", "to": "n1", "type": "audio"},
+                {"from": "s2", "to": "n1", "type": "audio"},
+                {"from": "n1", "to": "master", "type": "audio"},
+            ],
+        }
+        ok, errors = validate_graph(bad_doc)
+        self.assertFalse(ok)
+        self.assertTrue(any("Null node" in e for e in errors))
+
+        # Python NumPy fallback processors execute serially
+        dry = np.ones((2, 2048), dtype=np.float32) * 0.8
+        fx_out = process_chain(
+            dry,
+            [
+                {"id": "eq", "type": "param_eq", "enabled": True, "params": {"b2_freq": 1000.0, "b2_gain": 3.0}},
+                {"id": "cp", "type": "comp", "enabled": True, "params": {"threshold_db": -12.0, "ratio": 4.0, "attack_ms": 1.0, "release_ms": 50.0, "knee_db": 0.0, "makeup_db": 0.0, "mix": 100.0}},
+                {"id": "cl", "type": "clipper", "enabled": True, "params": {"mode": 0, "drive_db": 0.0, "ceiling_db": -6.0, "softness": 0.5, "output_db": 0.0}},
+                {"id": "lm", "type": "limiter", "enabled": True, "params": {"input_gain_db": 0.0, "ceiling_db": -12.0, "release_ms": 50.0, "lookahead_ms": 2.0}},
+            ],
+            sample_rate=48000,
+        )
+        self.assertEqual(fx_out.shape, dry.shape)
+        self.assertLessEqual(float(np.max(np.abs(fx_out))), 0.255)
+
+        # Param EQ Low Cut Q controls dB/oct slope (6 dB/oct vs 48 dB/oct on 200Hz sine cut at 1000Hz)
+        t_eq = np.arange(4096, dtype=np.float32) / 48000.0
+        low_sine = np.stack([0.5 * np.sin(2.0 * np.pi * 200.0 * t_eq)] * 2, axis=0).astype(np.float32)
+        gentle = process_chain(
+            low_sine,
+            [{"id": "eq", "type": "param_eq", "enabled": True, "params": {"b1_type": 0, "b1_freq": 1000.0, "b1_q": 0.2}}],
+            sample_rate=48000,
+        )
+        steep = process_chain(
+            low_sine,
+            [{"id": "eq", "type": "param_eq", "enabled": True, "params": {"b1_type": 0, "b1_freq": 1000.0, "b1_q": 12.0}}],
+            sample_rate=48000,
+        )
+        gentle_peak = float(np.max(np.abs(gentle[:, 2048:])))
+        steep_peak = float(np.max(np.abs(steep[:, 2048:])))
+        self.assertGreater(gentle_peak, 0.05)
+        self.assertLess(steep_peak, 0.005)
+        self.assertLess(steep_peak, gentle_peak * 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()

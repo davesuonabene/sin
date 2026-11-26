@@ -27,6 +27,9 @@ export interface RealtimePlanLoadedResult {
     master_peaks?: number[];
     bus_peaks?: Record<string, number[]>;
     bus_waveforms?: Record<string, number[]>;
+    processor_statuses?: Record<string, any>;
+    tiled?: boolean;
+    has_peak_pyramid?: boolean;
     pack_ms?: number;
 }
 
@@ -34,6 +37,61 @@ export interface RealtimeMasterPeaks {
     duration_sec: number;
     master_peaks: number[];
     bus_peaks?: Record<string, number[]>;
+    peak_tiers?: number[];
+    has_peak_pyramid?: boolean;
+    coverage?: {
+        num_tiles: number;
+        tile_sec: number;
+        fast_tiles: number;
+        ml_tiles: number;
+        stale_tiles: number;
+    } | null;
+}
+
+export interface RealtimeTileUpdate {
+    type: 'tile_update';
+    tile_index?: number;
+    num_tiles?: number;
+    start_sec?: number;
+    end_sec?: number;
+    duration_sec: number;
+    tier?: number;
+    stale?: boolean;
+    stale_all?: boolean;
+    clear_all?: boolean;
+    peaks?: number[];
+    coverage?: {
+        num_tiles: number;
+        tile_sec: number;
+        fast_tiles: number;
+        ml_tiles: number;
+        stale_tiles: number;
+    };
+}
+
+export interface RealtimePeaksViewport {
+    ok: boolean;
+    start_sec?: number;
+    end_sec?: number;
+    duration_sec?: number;
+    peaks?: number[];
+    tiers?: number[];
+    coverage?: RealtimeTileUpdate['coverage'] | null;
+}
+
+export interface RealtimeEngineSettings {
+    ok?: boolean;
+    wait_for_fx: boolean;
+    tile_sec?: number;
+    default_precook_sec?: number;
+    cache_stats?: {
+        ram_used_mb: number;
+        ram_budget_mb: number;
+        disk_used_mb: number;
+        disk_budget_gb: number;
+        ram_entries: number;
+        disk_entries: number;
+    };
 }
 
 export interface RealtimeStatus {
@@ -90,9 +148,21 @@ export class RealtimeAudioClient {
         startSec?: number;
         endSec?: number;
     }): boolean;
+    cookNode(nodeId: string | number, model?: any): Promise<RealtimePlanLoadedResult>;
+    cancelCook(nodeId: string | number): boolean;
+    cookFullTrack(nodeId: string | number, enable?: boolean): Promise<{ ok: boolean }>;
+    updateProcessorParam(opts: { nodeId: string | number; key: string; value: any; commit?: boolean }): boolean;
+    queryPeaks(opts: { startSec: number; endSec: number; columns?: number; signal?: AbortSignal | null }): Promise<RealtimePeaksViewport>;
+    setEngineSettings(settings: { wait_for_fx?: boolean; tile_ram_mb?: number; dsp_cache_max_gb?: number; clear_tile_cache?: boolean }): Promise<RealtimeEngineSettings>;
+    getEngineSettings(): Promise<RealtimeEngineSettings>;
     release(): boolean;
     onTelemetry(cb: (tel: RealtimeTelemetry) => void): () => void;
     onPlanLoaded(cb: (res: RealtimePlanLoadedResult) => void): () => void;
     onMasterPeaks(cb: (res: RealtimeMasterPeaks) => void): () => void;
+    onTileUpdate(cb: (msg: RealtimeTileUpdate) => void): () => void;
+    onEngineSettings(cb: (msg: RealtimeEngineSettings) => void): () => void;
+    onProcessorStatus(cb: (msg: Record<string, any>) => void): () => void;
+    onPlanHotSwapped(cb: (msg: RealtimePlanLoadedResult & { node_id?: string; stage?: string }) => void): () => void;
+    onModelDownload(cb: (msg: Record<string, any>) => void): () => void;
     onStatusChange(cb: (status: RealtimeStatus) => void): () => void;
 }

@@ -6,8 +6,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
 
+from core.env_config import load_sin_env
 from . import import_jobs, models, database, profiles, vaults, project_manifest
-from .routers import catalog as catalog_router, items, media_edits, tags, projects, sin_proposals, vaults as vault_router, playlists, editor
+from .routers import catalog as catalog_router, items, media_edits, tags, projects, sin_proposals, vaults as vault_router, playlists, editor, preamp_profiles
+
+load_sin_env()
 
 # Migrate the removed SamplePack subtype before ORM mappings query legacy rows.
 database.migrate_sample_pack_profiles()
@@ -65,6 +68,7 @@ app.include_router(sin_proposals.router)
 app.include_router(vault_router.router)
 app.include_router(playlists.router)
 app.include_router(editor.router)
+app.include_router(preamp_profiles.router)
 
 # Mount static files
 static_path = os.path.join(os.path.dirname(__file__), "static")

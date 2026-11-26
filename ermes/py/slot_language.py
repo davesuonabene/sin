@@ -124,6 +124,33 @@ def is_default_slot_token(token: Any) -> bool:
     return t in ("*", "default", "active")
 
 
+def is_pool_index_token(expr: Any) -> bool:
+    raw = str(expr if expr is not None else "").strip()
+    return bool(re.match(r"^-?\d+$", raw))
+
+
+def is_external_pool_item(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    return bool(
+        item.get("is_external")
+        or item.get("source") == "external"
+        or str(item.get("id") or "").startswith("ext:")
+    )
+
+
+def is_inline_pool_item(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    fp = str(item.get("absolute_path") or item.get("filepath") or item.get("path") or "").strip()
+    return bool(
+        item.get("is_inline")
+        or item.get("source") == "inline"
+        or str(item.get("id") or "").startswith("inline:")
+        or (isinstance(item.get("sequence"), list) and not fp)
+    )
+
+
 def is_range_operator_token(token: Any) -> Optional[Tuple[float, float]]:
     """Parses a range operator token such as '-12..12', '0.1..0.9', or 'rand(-5, 5)'."""
     raw = str(token if token is not None else "").strip()
@@ -292,6 +319,14 @@ def is_field_operator_expression(expr: Any, pool_items: Optional[List[Any]] = No
     if not raw:
         return False
 
+    unwrapped: Optional[str] = None
+    if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"' and '"' not in raw[1:-1]:
+        unwrapped = raw[1:-1].strip()
+    elif len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'" and "'" not in raw[1:-1]:
+        unwrapped = raw[1:-1].strip()
+    if unwrapped is not None:
+        return is_random_token(unwrapped) or (is_range_operator_token(unwrapped) is not None)
+
     if (
         isinstance(pool_items, list)
         and pool_items
@@ -321,6 +356,16 @@ def is_field_operator_expression(expr: Any, pool_items: Optional[List[Any]] = No
         return True
     single = tokens[0]
     return is_random_token(single) or (is_range_operator_token(single) is not None)
+
+
+def is_calculated_pool_query(expr: Any, pool_items: Optional[List[Any]] = None) -> bool:
+    """Returns True when `expr` is a calculated pool lookup (index or field operator, not a direct name call)."""
+    raw = str(expr if expr is not None else "").strip()
+    if not raw:
+        return False
+    if is_pool_index_token(raw):
+        return True
+    return is_field_operator_expression(raw, pool_items)
 
 
 def resolve_field_operator_leaf(
@@ -571,11 +616,17 @@ def resolve_pool_item_by_query(
         base_stem = re.sub(r"\.[^.]+$", "", base)
         return {"name": name, "name_stem": name_stem, "base": base, "base_stem": base_stem, "fp_lower": fp.lower()}
 
-    # 1. Check if raw is an exact match for a single item name (even if it contains spaces)
-    if raw and not re.search(r"[,\[\]<>]", raw) and not is_random_token(raw) and is_range_operator_token(raw) is None:
+    # 1. Check if raw is an exact match for a single item name (even if it contains spaces or quotes)
+    unquoted = raw
+    if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"' and '"' not in raw[1:-1]:
+        unquoted = raw[1:-1].strip()
+    elif len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'" and "'" not in raw[1:-1]:
+        unquoted = raw[1:-1].strip()
+    unquoted_lower = unquoted.lower()
+    if unquoted and not re.search(r"[,\[\]<>]", unquoted) and not is_random_token(unquoted) and is_range_operator_token(unquoted) is None:
         for item in active_items:
             n = _extract_names(item)
-            if lower in (n["name"], n["name_stem"], n["base"], n["base_stem"]):
+            if unquoted_lower in (n["name"], n["name_stem"], n["base"], n["base_stem"]):
                 return item
 
     eff_w_idx = wrapper_idx if wrapper_idx is not None else global_idx
