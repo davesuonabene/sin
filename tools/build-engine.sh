@@ -22,7 +22,7 @@ if [[ "$UNAME_S" == "Darwin" ]]; then
   echo "Building $OUT_LIB using $CXX (CoreAudio)..."
   "$CXX" -O3 -std=c++20 -fPIC -dynamiclib \
     -DSIN_DSP_BUILD \
-    -I"$ENGINE_DIR/include" -I"$ENGINE_DIR/src" -I"$ENGINE_DIR/third_party" \
+    -I"$ENGINE_DIR/include" -I"$ENGINE_DIR/src" -I"$ENGINE_DIR/third_party" -I"$ROOT_DIR/dsp_modules/include" \
     "$ENGINE_DIR/src/miniaudio_impl.cpp" "$ENGINE_DIR/src/sin_engine.cpp" \
     -framework CoreAudio -framework AudioToolbox -framework CoreFoundation \
     -lpthread -ldl -lm \
@@ -32,7 +32,7 @@ else
   echo "Building $OUT_LIB using $CXX..."
   "$CXX" -O3 -std=c++20 -fPIC -shared \
     -DSIN_DSP_BUILD \
-    -I"$ENGINE_DIR/include" -I"$ENGINE_DIR/src" -I"$ENGINE_DIR/third_party" \
+    -I"$ENGINE_DIR/include" -I"$ENGINE_DIR/src" -I"$ENGINE_DIR/third_party" -I"$ROOT_DIR/dsp_modules/include" \
     "$ENGINE_DIR/src/miniaudio_impl.cpp" "$ENGINE_DIR/src/sin_engine.cpp" \
     -lpthread -ldl -lm \
     -o "$OUT_LIB"
@@ -44,13 +44,13 @@ if [[ "${1:-}" == "--test" ]]; then
   TEST_BIN="$BIN_DIR/sin_dsp_tests"
   if [[ "$UNAME_S" == "Darwin" ]]; then
     "$CXX" -O2 -std=c++20 -DSIN_DSP_STATIC \
-      -I"$ENGINE_DIR/include" -I"$ENGINE_DIR/src" -I"$ENGINE_DIR/third_party" \
+      -I"$ENGINE_DIR/include" -I"$ENGINE_DIR/src" -I"$ENGINE_DIR/third_party" -I"$ROOT_DIR/dsp_modules/include" \
       "$ENGINE_DIR/tests/test_sin_dsp.cpp" "$ENGINE_DIR/src/miniaudio_impl.cpp" "$ENGINE_DIR/src/sin_engine.cpp" \
       -framework CoreAudio -framework AudioToolbox -framework CoreFoundation \
       -lpthread -ldl -lm -o "$TEST_BIN"
   else
     "$CXX" -O2 -std=c++20 -DSIN_DSP_STATIC \
-      -I"$ENGINE_DIR/include" -I"$ENGINE_DIR/src" -I"$ENGINE_DIR/third_party" \
+      -I"$ENGINE_DIR/include" -I"$ENGINE_DIR/src" -I"$ENGINE_DIR/third_party" -I"$ROOT_DIR/dsp_modules/include" \
       "$ENGINE_DIR/tests/test_sin_dsp.cpp" "$ENGINE_DIR/src/miniaudio_impl.cpp" "$ENGINE_DIR/src/sin_engine.cpp" \
       -lpthread -ldl -lm -o "$TEST_BIN"
   fi

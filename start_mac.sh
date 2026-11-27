@@ -86,7 +86,7 @@ ensure_native_audio_engine() {
   local needs_build=false
   if [[ "$REBUILD_ENGINE" == "true" || ! -f "$lib_path" ]]; then
     needs_build=true
-  elif [[ -n "$(find "$ROOT_DIR/engine/include" "$ROOT_DIR/engine/src" -type f -newer "$lib_path" 2>/dev/null)" ]]; then
+  elif [[ -n "$(find "$ROOT_DIR/engine/include" "$ROOT_DIR/engine/src" "$ROOT_DIR/dsp_modules/include" -type f -newer "$lib_path" 2>/dev/null)" ]]; then
     needs_build=true
   fi
 
