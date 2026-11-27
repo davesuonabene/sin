@@ -134,6 +134,10 @@ export class VoiceIsolatorNode extends AudioProcessorNode {
     static override nodeType = 'voice_isolator';
     static override defaultTab = 'ISOLATOR';
     static override tabs = ['ISOLATOR', 'CHAIN', 'EXPORT', 'COMMON'];
+    static override compactCardSpec = {
+        visualizer: 'voice_isolator' as const,
+        paramKeys: ['backend', 'mix'] as const,
+    };
 
     constructor() {
         super();

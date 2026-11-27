@@ -718,6 +718,319 @@ class TestGaiaEditorArchitecture(GaiaTestCase):
         self.assertTrue(after_reset["is_empty"])
         self.assertEqual(after_reset["layers"], [])
 
+    def _create_zoom_multitrack(self, name: str = "260720_mt_simple", seconds: float = 1.0):
+        mt_dir = vaults.vault_store(self.vault) / name
+        mt_dir.mkdir(parents=True, exist_ok=True)
+        zoom = crud.create_item(
+            self.db,
+            schemas.ZoomH4ItemCreate(
+                absolute_path=str(mt_dir.resolve()),
+                vault_id=self.vault.id,
+                title=name,
+                source_kind="managed",
+                source_path=str(mt_dir.resolve()),
+            ),
+        )
+        tr1_p = self.write_audio(mt_dir, f"{name}_Tr1.WAV", seconds=seconds)
+        tr_mic_p = self.write_audio(mt_dir, f"{name}_TrMic.WAV", seconds=seconds)
+        tr_lr_p = self.write_audio(mt_dir, f"{name}_TrLR.WAV", seconds=seconds)
+
+        stems = {}
+        for label, p, role in (
+            ("Tr1", tr1_p, "source_channel"),
+            ("TrMic", tr_mic_p, "source_channel"),
+            ("TrLR", tr_lr_p, "mixdown"),
+        ):
+            stems[label] = crud.create_item(
+                self.db,
+                schemas.TrackItemCreate(
+                    absolute_path=str(p.resolve()),
+                    vault_id=self.vault.id,
+                    parent_id=zoom.id,
+                    title=label,
+                    mime_type="audio/wav",
+                    file_hash=f"h-{name}-{label}",
+                    size_bytes=p.stat().st_size,
+                    attributes={"profile_role": role},
+                ),
+            )
+        self.db.commit()
+        return zoom, stems
+
+    def test_simple_media_multitrack_ephemeral_and_project_persistence(self):
+        zoom, stems = self._create_zoom_multitrack("260720_ephemeral_mt", seconds=1.0)
+
+        sess = editor_router.open_editor_session(zoom.id, db=self.db)
+        self.assertEqual(sess["persistence"], "ephemeral")
+        self.assertEqual(sess["editor_engine"], "simple_media")
+        self.assertTrue(sess["is_multitrack"])
+        self.assertEqual(len(sess["targets"]), 1)
+
+        cur = sess["current_target"]
+        self.assertEqual(cur["id"], f"item:{zoom.id}")
+        self.assertTrue(cur["is_multitrack"])
+        self.assertEqual(cur["layer_count"], 3)
+        layers_by_id = {l["item_id"]: l for l in cur["layers"]}
+        self.assertEqual(set(layers_by_id.keys()), {stems["Tr1"].id, stems["TrMic"].id, stems["TrLR"].id})
+        self.assertFalse(layers_by_id[stems["Tr1"].id]["default_muted"])
+        self.assertFalse(layers_by_id[stems["TrMic"].id]["default_muted"])
+        self.assertTrue(layers_by_id[stems["TrLR"].id]["default_muted"])
+        self.assertTrue(layers_by_id[stems["TrLR"].id]["is_mixdown"])
+
+        # Realtime graph contains per-stem channels feeding single group bus -> master
+        rt_graph = cur["realtime_graph"]
+        self.assertIsNotNone(rt_graph)
+        rt_nodes = {n["id"] for n in rt_graph["nodes"]}
+        self.assertIn(f"grp-{zoom.id}", rt_nodes)
+        self.assertIn("master", rt_nodes)
+        for s in stems.values():
+            self.assertIn(f"src-{s.id}", rt_nodes)
+            self.assertIn(f"ch-{s.id}", rt_nodes)
+
+        # Save and reload per-layer gain/mute/solo + global cuts in a Simple Media project
+        created = projects_router.create_projects_from_items(
+            schemas.ProjectFromItemsRequest(
+                item_ids=[zoom.id],
+                mode="single",
+                name="Simple MT Proj",
+                project_kind="audio",
+                editor_engine="simple_media",
+                vault_id=self.vault.id,
+            ),
+            self.db,
+        )
+        proj = created[0]
+        editor_router.save_project_editor_session(
+            proj.id,
+            schemas.ProjectSessionSaveRequest(
+                engine="simple_media",
+                data={
+                    "active_target_id": f"item:{zoom.id}",
+                    "targets": {
+                        f"item:{zoom.id}": {
+                            "main_start_sec": 0.1,
+                            "main_end_sec": 0.9,
+                            "pre_gain_db": -2.0,
+                            "volume": 0.85,
+                            "layers": [
+                                {"item_id": stems["Tr1"].id, "pre_gain_db": 4.5, "volume": 1.0, "muted": False, "solo": False},
+                                {"item_id": stems["TrMic"].id, "pre_gain_db": -3.0, "volume": 1.0, "muted": True, "solo": False},
+                                {"item_id": stems["TrLR"].id, "pre_gain_db": 0.0, "volume": 1.0, "muted": True, "solo": True},
+                            ],
+                            "cuts": [
+                                {"id": "gcut-1", "label": "Intro", "start_sec": 0.1, "end_sec": 0.5},
+                                {"id": "gcut-2", "label": "Outro", "start_sec": 0.5, "end_sec": 0.9},
+                            ],
+                        }
+                    },
+                },
+            ),
+            self.db,
+        )
+
+        reopened = editor_router.open_editor_session(proj.id, db=self.db)
+        saved_state = reopened["session_data"]["targets"][f"item:{zoom.id}"]
+        self.assertTrue(saved_state["is_multitrack"])
+        self.assertEqual([c["label"] for c in saved_state["cuts"]], ["Intro", "Outro"])
+        saved_layers = {l["item_id"]: l for l in saved_state["layers"]}
+        self.assertAlmostEqual(saved_layers[stems["Tr1"].id]["pre_gain_db"], 4.5)
+        self.assertTrue(saved_layers[stems["TrMic"].id]["muted"])
+        self.assertTrue(saved_layers[stems["TrLR"].id]["solo"])
+
+    def test_simple_media_multitrack_sum_export_and_global_cuts(self):
+        import soundfile as sf
+
+        zoom, stems = self._create_zoom_multitrack("260720_export_mt", seconds=1.0)
+        sr = sf.info(stems["Tr1"].absolute_path).samplerate
+        vault_store_root = vaults.vault_store(self.vault).resolve()
+
+        # All-muted export is rejected cleanly
+        with self.assertRaises(HTTPException) as muted_err:
+            editor_router.start_media_export(
+                schemas.MediaExportRequest(
+                    source_item_id=zoom.id,
+                    target_id=f"item:{zoom.id}",
+                    layers=[
+                        schemas.MediaEditLayer(item_id=stems["Tr1"].id, muted=True),
+                        schemas.MediaEditLayer(item_id=stems["TrMic"].id, muted=True),
+                        schemas.MediaEditLayer(item_id=stems["TrLR"].id, muted=True),
+                    ],
+                    output_format="wav",
+                    destination=schemas.MediaExportDestination(mode="vault", vault_id=self.vault.id, filename="bad_mute"),
+                ),
+                self.db,
+            )
+        self.assertEqual(muted_err.exception.status_code, 400)
+
+        # Export 2 global summed cuts to vault (must land in vault root, not inside multitrack folder)
+        start_job = editor_router.start_media_export(
+            schemas.MediaExportRequest(
+                source_item_id=zoom.id,
+                target_id=f"item:{zoom.id}",
+                segments=[
+                    schemas.MediaEditSegment(id="c1", label="Verse", start_frame=0, end_frame=int(sr * 0.4)),
+                    schemas.MediaEditSegment(id="c2", label="Hook", start_frame=int(sr * 0.4), end_frame=int(sr * 0.9)),
+                ],
+                layers=[
+                    schemas.MediaEditLayer(item_id=stems["Tr1"].id, pre_gain_db=-6.0, muted=False, solo=False),
+                    schemas.MediaEditLayer(item_id=stems["TrMic"].id, pre_gain_db=0.0, muted=False, solo=True),
+                    schemas.MediaEditLayer(item_id=stems["TrLR"].id, pre_gain_db=0.0, muted=True, solo=False),
+                ],
+                pre_gain_db=-3.0,
+                volume=1.0,
+                output_format="wav",
+                destination=schemas.MediaExportDestination(
+                    mode="vault",
+                    vault_id=self.vault.id,
+                    filename="mt_sum",
+                    existing_output="cancel",
+                ),
+            ),
+            self.db,
+        )
+        job = self._poll_media_job(start_job["job_id"])
+        self.assertEqual(job["status"], "completed", job.get("error"))
+        paths = [Path(p).resolve() for p in job["result"]["exported_paths"]]
+        self.assertEqual(len(paths), 2)
+        for p in paths:
+            self.assertTrue(p.is_file())
+            self.assertEqual(p.parent, vault_store_root)
+        self.assertAlmostEqual(sf.info(str(paths[0])).duration, 0.4, places=2)
+        self.assertAlmostEqual(sf.info(str(paths[1])).duration, 0.5, places=2)
+
+    def test_simple_media_multitrack_upgrade_to_sin_project_and_add_to_sin(self):
+        zoom, stems = self._create_zoom_multitrack("260720_upgrade_mt", seconds=1.0)
+
+        # 1) Upgrade ephemeral Simple Media multitrack session -> full SIN bus project
+        promo = projects_router.create_projects_from_items(
+            schemas.ProjectFromItemsRequest(
+                item_ids=[zoom.id],
+                mode="single",
+                name="Upgraded Multitrack SIN",
+                project_kind="audio",
+                editor_engine="sin",
+                vault_id=self.vault.id,
+                initial_session={
+                    "engine": "simple_media",
+                    "data": {
+                        "active_target_id": f"item:{zoom.id}",
+                        "targets": {
+                            f"item:{zoom.id}": {
+                                "item_id": zoom.id,
+                                "target_id": f"item:{zoom.id}",
+                                "is_multitrack": True,
+                                "main_start_sec": 0.1,
+                                "main_end_sec": 0.8,
+                                "pre_gain_db": -2.0,
+                                "volume": 0.9,
+                                "normalize": True,
+                                "layers": [
+                                    {"item_id": stems["Tr1"].id, "pre_gain_db": 3.0, "volume": 1.0, "muted": False, "solo": False},
+                                    {"item_id": stems["TrMic"].id, "pre_gain_db": -6.0, "volume": 1.0, "muted": True, "solo": False},
+                                    {"item_id": stems["TrLR"].id, "pre_gain_db": 0.0, "volume": 1.0, "muted": False, "solo": False},
+                                ],
+                                "cuts": [
+                                    {"id": "cut-a", "label": "Part A", "start_sec": 0.1, "end_sec": 0.4},
+                                    {"id": "cut-b", "label": "Part B", "start_sec": 0.4, "end_sec": 0.8},
+                                ],
+                            }
+                        },
+                    },
+                },
+            ),
+            self.db,
+        )
+        proj = promo[0]
+        sess = editor_router.open_editor_session(proj.id, db=self.db)
+        graph = sess["session_data"]["graph"]
+        nodes_by_id = {n["id"]: n for n in graph["nodes"]}
+        conns = {(c["from"], c["to"]) for c in graph["connections"]}
+
+        grp_id = f"grp-{zoom.id}"
+        self.assertIn(grp_id, nodes_by_id)
+        self.assertIn((grp_id, "master"), conns)
+        self.assertTrue(graph["settings"]["output"]["normalize"])
+
+        # Group bus carries global pre_gain_db & volume
+        grp_chain = {m["id"]: m for m in nodes_by_id[grp_id]["properties"]["chain"]}
+        self.assertAlmostEqual(grp_chain["pre"]["params"]["gain"], 10.0 ** (-2.0 / 20.0), places=3)
+        self.assertAlmostEqual(grp_chain["fader"]["params"]["gain"], 0.9, places=3)
+
+        # Every stem routes src-{id} -> ch-{id} -> grp-{zoom.id} -> master with global trim & per-layer gain/mute
+        layers_by_id = {l["item_id"]: l for l in sess["layers"]}
+        for label, stem in stems.items():
+            src_id = f"src-{stem.id}"
+            ch_id = f"ch-{stem.id}"
+            self.assertIn((src_id, ch_id), conns)
+            self.assertIn((ch_id, grp_id), conns)
+            self.assertAlmostEqual(nodes_by_id[src_id]["properties"]["crop_start"], 0.1, places=2)
+            self.assertAlmostEqual(nodes_by_id[src_id]["properties"]["crop_end"], 0.8, places=2)
+            self.assertEqual(layers_by_id[stem.id]["group_node_id"], grp_id)
+
+        self.assertAlmostEqual(layers_by_id[stems["Tr1"].id]["pre_gain_db"], 3.0, places=1)
+        self.assertFalse(layers_by_id[stems["Tr1"].id]["muted"])
+        self.assertAlmostEqual(layers_by_id[stems["TrMic"].id]["pre_gain_db"], -6.0, places=1)
+        self.assertTrue(layers_by_id[stems["TrMic"].id]["muted"])
+        self.assertFalse(layers_by_id[stems["TrLR"].id]["muted"])
+
+        # Global cuts turned into multi-stem SIN snapshots covering all stems
+        snaps = sess["session_data"]["snapshots"]
+        self.assertEqual([s["label"] for s in snaps], ["Part A", "Part B"])
+        for stem in stems.values():
+            ov_a = snaps[0]["overrides"][f"src-{stem.id}"]
+            self.assertAlmostEqual(ov_a["crop_start"], 0.1, places=2)
+            self.assertAlmostEqual(ov_a["crop_end"], 0.4, places=2)
+            ov_b = snaps[1]["overrides"][f"src-{stem.id}"]
+            self.assertAlmostEqual(ov_b["crop_start"], 0.4, places=2)
+            self.assertAlmostEqual(ov_b["crop_end"], 0.8, places=2)
+
+        # Offline preview render of upgraded SIN multitrack succeeds
+        preview = media_edits_router.render_item_preview(
+            proj.id,
+            media_edits_router.PreviewRenderRequest(),
+            self.db,
+        )
+        self.assertEqual(preview["status"], "success")
+        self.assertAlmostEqual(preview["duration_seconds"], 0.7, places=1)
+
+        # 2) + SIN into an existing empty SIN project also preserves per-layer gains/solo and global cuts
+        existing_sin = projects_router.create_project(
+            schemas.ProjectCreateRequest(
+                name="Target SIN",
+                project_kind="audio",
+                editor_engine="sin",
+                vault_id=self.vault.id,
+            ),
+            self.db,
+        )
+        added_sess = editor_router.add_item_to_project_graph(
+            existing_sin.id,
+            editor_router.GraphAddItemRequest(
+                item_id=zoom.id,
+                crop_start=0.2,
+                crop_end=0.7,
+                pre_gain_db=-1.5,
+                volume=0.8,
+                layers=[
+                    {"item_id": stems["Tr1"].id, "pre_gain_db": 2.0, "volume": 1.0, "muted": False, "solo": True},
+                    {"item_id": stems["TrMic"].id, "pre_gain_db": 0.0, "volume": 1.0, "muted": False, "solo": False},
+                    {"item_id": stems["TrLR"].id, "pre_gain_db": 0.0, "volume": 1.0, "muted": True, "solo": False},
+                ],
+                cuts=[{"id": "add-cut-1", "label": "Drop", "start_sec": 0.25, "end_sec": 0.6}],
+            ),
+            self.db,
+        )
+        added_layers = {l["item_id"]: l for l in added_sess["layers"]}
+        self.assertFalse(added_layers[stems["Tr1"].id]["muted"])
+        self.assertTrue(added_layers[stems["TrMic"].id]["muted"])
+        self.assertTrue(added_layers[stems["TrLR"].id]["muted"])
+        self.assertAlmostEqual(added_layers[stems["Tr1"].id]["pre_gain_db"], 2.0, places=1)
+        self.assertEqual(len(added_sess["session_data"]["snapshots"]), 1)
+        self.assertEqual(
+            set(added_sess["session_data"]["snapshots"][0]["overrides"].keys()),
+            {f"src-{s.id}" for s in stems.values()},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

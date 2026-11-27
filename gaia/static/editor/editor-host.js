@@ -11,6 +11,7 @@ const OPENABLE_TYPES = new Set([
     'multitrack',
     'zoom_h4',
     'folder',
+    'collection',
 ]);
 
 function resolveEntryItemId(entry) {
@@ -81,8 +82,12 @@ export function createEditorHost({ exportModal, transport }) {
                 if (t.fps) parts.push(`${Number(t.fps).toFixed(2).replace(/\.00$/, '')} fps`);
                 if (t.video_codec) parts.push(String(t.video_codec).toUpperCase());
             } else if (t) {
+                if (t.is_multitrack) {
+                    const lc = Array.isArray(t.layers) ? t.layers.length : (t.layer_count || 0);
+                    parts.push(`${lc} ${lc === 1 ? 'track' : 'tracks'} · Sum`);
+                }
                 if (t.sample_rate) parts.push(`${Math.round(Number(t.sample_rate) / 100) / 10} kHz`);
-                if (t.channels) parts.push(t.channels === 1 ? 'Mono' : `${t.channels} ch`);
+                if (!t.is_multitrack && t.channels) parts.push(t.channels === 1 ? 'Mono' : `${t.channels} ch`);
             }
         }
         return parts.join(' · ');
@@ -412,9 +417,11 @@ export function createEditorHost({ exportModal, transport }) {
             || mountedEngine?.getSavePayload?.()?.data
             || {};
 
+        const targetKind = currentSession.project_kind || 'audio';
         window.gaiaAppBridge.openProjectDialog({
             sources: [sourceEntry],
-            projectKind: currentSession.project_kind || 'audio',
+            projectKind: targetKind,
+            editorEngine: targetKind === 'video' ? 'simple_media' : 'sin',
             defaultName: currentSession.title || '',
             title: 'Save as Project',
             initialSession: {

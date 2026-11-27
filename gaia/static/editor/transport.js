@@ -223,8 +223,9 @@ export function createTransportController() {
                 if (timeLabel) timeLabel.textContent = `${formatTime(val)} / ${formatTime(dur)}`;
                 if (meta?.scrubbing) {
                     scheduleSeek(val, { scrubbing: true, keepPlaying: seeking ? seekStartedPlaying : null });
-                } else {
-                    dispatchSeekNow(val, { scrubbing: false, keepPlaying: seekStartedPlaying, setCue: true });
+                } else if (!seeking) {
+                    // Keyboard step (ArrowLeft/Right/Home/End): commit directly without duplicate pointerup dispatch
+                    dispatchSeekNow(val, { scrubbing: false, keepPlaying: Boolean(currentSnapshot()?.playing), setCue: true });
                 }
             },
             onSeekEnd(progress) {
@@ -244,7 +245,18 @@ export function createTransportController() {
         activeWaveformKey = '__explicit__';
         waveformAbortController?.abort();
         waveformAbortController = null;
-        const dur = Math.max(0, Number(durationSec) || lastDurationSec || 0);
+        const explicitDur = Number(durationSec);
+        const dur = (Number.isFinite(explicitDur) && explicitDur > 0) ? explicitDur : Math.max(0, lastDurationSec || 0);
+        if (dur > 0) {
+            if (Math.abs(dur - lastDurationSec) > 0.05 && !seeking) {
+                seekHoldUntil = 0;
+                seekHoldValue = 0;
+            }
+            lastDurationSec = dur;
+            if (cuePointSec > dur) {
+                cuePointSec = 0;
+            }
+        }
         if (Array.isArray(pairs) && pairs.length > 0) {
             waveformScrub.setPeakPairs(pairs, dur);
         } else if (dur > 0) {
@@ -479,7 +491,7 @@ export function createTransportController() {
         rafId = requestAnimationFrame(tick);
     }
 
-    function renderTargetSelector(targets, activeTargetId, fallbackLabel = null) {
+    function renderTargetSelector(targets, activeTargetId, fallbackLabel = null, displayLabel = null) {
         if (!targetButton || !targetLabel || !targetMenu) return;
         const list = Array.isArray(targets) ? targets : [];
         targetButton.classList.remove('hidden');
@@ -489,7 +501,8 @@ export function createTransportController() {
             targetButton.setAttribute('aria-expanded', 'false');
         }
         const active = list.find(t => t.id === activeTargetId) || list[0] || null;
-        const label = active?.label
+        const label = displayLabel
+            || active?.label
             || fallbackLabel
             || quickVideoEntry?.title
             || selectedEntryLabel
@@ -570,9 +583,9 @@ export function createTransportController() {
                 : '0:00 / 0:00';
         }
         if (snap && 'targets' in snap) {
-            renderTargetSelector(snap.targets, snap.activeTargetId, snap.targetLabel || null);
+            renderTargetSelector(snap.targets, snap.activeTargetId, snap.targetLabel || null, snap.displayLabel || null);
         } else {
-            renderTargetSelector([], null, snap?.targetLabel || null);
+            renderTargetSelector([], null, snap?.targetLabel || null, snap?.displayLabel || null);
         }
     }
 

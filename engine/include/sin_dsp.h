@@ -41,10 +41,11 @@ typedef enum {
 } SinParamId;
 
 typedef enum {
-    SIN_CLIP_LOOP_SOURCE     = 1u << 0, /* wrap/tile inside cropped source window */
-    SIN_CLIP_LIVE_CROP_BOUND = 1u << 1, /* live bus CROP_START/END overrides source_start/end_ratio */
-    SIN_CLIP_LIVE_RATE_BOUND = 1u << 2, /* live bus PLAYBACK_RATE multiplies clip playback_rate */
-    SIN_CLIP_CROP_IN_PLACE   = 1u << 3, /* crop gates inside timeline position rather than shifting to start */
+    SIN_CLIP_LOOP_SOURCE         = 1u << 0, /* wrap/tile inside cropped source window */
+    SIN_CLIP_LIVE_CROP_BOUND     = 1u << 1, /* live bus CROP_START/END overrides source_start/end_ratio */
+    SIN_CLIP_LIVE_RATE_BOUND     = 1u << 2, /* live bus PLAYBACK_RATE multiplies clip playback_rate */
+    SIN_CLIP_CROP_IN_PLACE       = 1u << 3, /* crop gates inside timeline position rather than shifting to start */
+    SIN_CLIP_TILE_TIME_STRETCHED = 1u << 4, /* layered tiles store already time-stretched audio at unity engine rate */
 } SinClipFlags;
 
 typedef struct {

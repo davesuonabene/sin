@@ -55,7 +55,7 @@ test('BaseNode and node subclasses expose polymorphic toolbar controls cleanly',
     const sample = new SampleNode();
     const sampleCtrls = sample.getToolbarControls();
     assertValidIcons(sampleCtrls);
-    assert.deepEqual(sampleCtrls.map(c => c.id), ['slots', 'sample_type', 'pool']);
+    assert.deepEqual(sampleCtrls.map(c => c.id), ['slots', 'repeat', 'warp', 'pool']);
 
     const slotCtrl = sampleCtrls.find(c => c.id === 'slots');
     assert.equal(slotCtrl?.kind, 'slot-strip');
@@ -71,11 +71,20 @@ test('BaseNode and node subclasses expose polymorphic toolbar controls cleanly',
         assert.equal(afterRemove?.kind === 'slot-strip' && afterRemove.count, 1);
     }
 
-    const sampleMode = sample.getToolbarControls().find(c => c.id === 'sample_type');
-    assert.equal(sampleMode?.kind, 'segmented');
-    if (sampleMode?.kind === 'segmented') {
-        sampleMode.onChange('one_shot');
-        assert.equal(sample.properties.sample_type, 'one_shot');
+    const repeatCtrl = sample.getToolbarControls().find(c => c.id === 'repeat');
+    assert.equal(repeatCtrl?.kind, 'toggle');
+    if (repeatCtrl?.kind === 'toggle') {
+        repeatCtrl.onToggle();
+        assert.equal(sample.properties.repeat, true);
+        assert.equal(sample.properties.sample_type, 'loop');
+    }
+
+    const warpCtrl = sample.getToolbarControls().find(c => c.id === 'warp');
+    assert.equal(warpCtrl?.kind, 'toggle');
+    if (warpCtrl?.kind === 'toggle') {
+        warpCtrl.onToggle();
+        assert.equal(sample.properties.warp, true);
+        assert.equal(sample.properties.stretch_mode, 'time_stretch');
     }
 
     const seq = new SequenceNode();

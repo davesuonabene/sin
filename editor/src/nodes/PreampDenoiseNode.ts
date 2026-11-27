@@ -183,6 +183,10 @@ export class PreampDenoiseNode extends AudioProcessorNode {
     static override nodeType = 'preamp_denoise';
     static override defaultTab = 'DENOISE';
     static override tabs = ['DENOISE', 'CHAIN', 'EXPORT', 'COMMON'];
+    static override compactCardSpec = {
+        visualizer: 'preamp' as const,
+        paramKeys: ['profile_id', 'reduction_db', 'sensitivity', 'mix'] as const,
+    };
 
     constructor() {
         super();

@@ -835,6 +835,84 @@ static int test_layered_tile_streamer_zero_alloc_and_fallback() {
     return 0;
 }
 
+static int test_layered_tile_time_stretched_unity_tile_read() {
+    namespace fs = std::filesystem;
+    const fs::path tmp_dir = fs::temp_directory_path() / "sin_dsp_stretched_tile_test";
+    std::error_code ec;
+    fs::create_directories(tmp_dir, ec);
+    const fs::path wav_path = tmp_dir / "stretched_base.wav";
+
+    const uint32_t sr = 8000;
+    const uint32_t raw_frames = 8000;   // 1.0s raw file
+    const float tempo_rate = 2.0f;      // 2x faster => 0.5s (4000 frames) stretched output
+    const uint32_t out_frames = 4000;
+    const uint32_t tile_frames = 2000;  // 2 tiles covering 4000 stretched frames
+    const uint32_t num_tiles = 2;
+
+    std::vector<float> base_samples(raw_frames, 0.20f);
+    CHECK(write_wav_pcm16(wav_path, base_samples, sr), "write stretched base wav failed");
+
+    SinEngineConfig cfg{sr, 256, 1};
+    SinEngine* eng = sin_engine_create(&cfg);
+    CHECK(eng != nullptr, "stretched layered engine create failed");
+
+    const std::string path_str = wav_path.string();
+    CHECK(sin_engine_register_layered_source(eng, 51, path_str.c_str(), tile_frames, num_tiles, sr, out_frames) == 0,
+          "register stretched layered source failed");
+
+    SinBusDesc master{1, 0, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, tempo_rate, 0, 0, {0, 0}};
+    SinClipDesc clip{};
+    clip.clip_id = 1;
+    clip.source_id = 51;
+    clip.target_bus_id = 1;
+    clip.source_start_ratio = 0.0;
+    clip.source_end_ratio = 1.0;
+    clip.gain = 1.0f;
+    clip.playback_rate = 1.0f;
+    clip.flags = SIN_CLIP_LIVE_RATE_BOUND | SIN_CLIP_TILE_TIME_STRETCHED;
+    CHECK(sin_engine_load_plan(eng, &master, 1, &clip, 1, 0.0, 120.0) == 0, "load stretched layered plan failed");
+
+    // Stretched duration must equal raw_dur / tempo_rate = 0.5s
+    SinTelemetry tel{};
+    sin_engine_read_telemetry(eng, &tel, nullptr, 0, nullptr, 0);
+    CHECK(std::abs(tel.duration_seconds - 0.5) < 1e-3, "stretched clip duration must be 0.5s");
+
+    // Publish tile 0 with a linear ramp [0 .. 1) across 2000 stretched output frames.
+    // With SIN_CLIP_TILE_TIME_STRETCHED, reading 256 engine frames at playback_rate=2.0
+    // MUST advance tile_pos at unity speed (frame i -> ramp[i], NOT ramp[2*i])!
+    std::vector<float> ramp_l(tile_frames), ramp_r(tile_frames);
+    for (uint32_t i = 0; i < tile_frames; ++i) {
+        ramp_l[i] = static_cast<float>(i) / static_cast<float>(tile_frames);
+        ramp_r[i] = -ramp_l[i];
+    }
+    CHECK(sin_engine_set_layered_tile(eng, 51, 0, ramp_l.data(), ramp_r.data(), tile_frames, 1) == 0,
+          "set stretched tile 0 failed");
+
+    std::vector<float> out_l(256), out_r(256);
+    g_trapped_count.store(0, std::memory_order_relaxed);
+    g_trap_allocs.store(true, std::memory_order_release);
+    sin_engine_process(eng, out_l.data(), out_r.data(), 256);
+    g_trap_allocs.store(false, std::memory_order_release);
+    CHECK(g_trapped_count.load() == 0, "ZERO heap allocs allowed during stretched tile read");
+
+    const float expected_at_100 = 100.0f / static_cast<float>(tile_frames);
+    CHECK(std::abs(out_l[100] - expected_at_100) < 1e-4f,
+          "stretched tile must read at unity output rate (frame 100 -> tile[100])");
+    CHECK(std::abs(out_r[100] - (-expected_at_100)) < 1e-4f,
+          "stretched tile R channel must match unity output rate");
+
+    // Tile 1 is uncooked -> seeking into second half (0.25s = 2000 engine frames) must fall back to raw (0.20f)
+    sin_engine_set_transport(eng, 1, 0.25, 120.0, 0.0, 0.0, 0);
+    sin_engine_process(eng, out_l.data(), out_r.data(), 256);
+    CHECK(std::abs(out_l[128] - 0.20f) < 0.01f, "uncooked stretched tile 1 must fall back to raw beat-locked varispeed");
+
+    sin_engine_release_all_sources(eng);
+    sin_engine_destroy(eng);
+    fs::remove(wav_path, ec);
+    fs::remove(tmp_dir, ec);
+    return 0;
+}
+
 int main() {
     if (test_default_sr_and_unity_passthrough() != 0) return 1;
     if (test_resampling_and_bus_solo_mute() != 0) return 1;
@@ -846,6 +924,7 @@ int main() {
     if (test_per_bus_rms_and_rt_peak_hold() != 0) return 1;
     if (test_fx_modules_serial_chain_and_meters() != 0) return 1;
     if (test_layered_tile_streamer_zero_alloc_and_fallback() != 0) return 1;
+    if (test_layered_tile_time_stretched_unity_tile_read() != 0) return 1;
     std::printf("ALL sin_dsp C++ TESTS PASSED!\n");
     return 0;
 }

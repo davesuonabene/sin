@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import datetime
 from pathlib import Path
 from sqlalchemy import delete, func, insert, or_, update
@@ -1118,6 +1119,24 @@ def save_collection_contents(
     return _populate_item_fields(item)
 
 
+CONTAINER_RECLASSIFY_TYPES = frozenset({"folder", "collection", "multitrack", "zoom_h4"})
+CONTAINER_TARGET_TYPES = frozenset({"folder", "sample_pack", "multitrack", "zoom_h4"})
+_H4_ROLE_PATTERN = re.compile(r"(?:^|[_\s-])tr(?P<role>lr|mic|\d{1,2})(?=$|[_\s.-])", re.I)
+
+
+def effective_item_type(item: models.Item | None) -> str:
+    """Return the user-facing logical type for an item, distinguishing sample packs from plain folders."""
+    if not item:
+        return "item"
+    raw_type = getattr(item, "type", None) or "item"
+    if raw_type in {"folder", "collection"}:
+        attrs = getattr(item, "attributes", None) or {}
+        if attrs.get("profile_id") == "sample_pack":
+            return "sample_pack"
+        return "folder"
+    return raw_type
+
+
 def reclassify_audio(db: Session, item_id: int, new_type: str):
     """Move an item among the concrete audio, sample, and track types."""
     db_item = get_item(db, item_id)
@@ -1127,15 +1146,338 @@ def reclassify_audio(db: Session, item_id: int, new_type: str):
     if db_item.type == new_type:
         return db_item
 
+    attrs = dict(getattr(db_item, "attributes", None) or {})
+    analysis = attrs.get("analysis") if isinstance(attrs.get("analysis"), dict) else {}
+    preserved_bpm = getattr(db_item, "bpm", None)
+    if preserved_bpm is None:
+        preserved_bpm = analysis.get("bpm")
+    preserved_key = getattr(db_item, "key", None)
+    if not preserved_key:
+        preserved_key = analysis.get("key")
+    preserved_is_loop = bool(getattr(db_item, "is_loop", False) or analysis.get("is_loop", False))
+
     db.expunge(db_item)
     db.execute(delete(models.TrackItem.__table__).where(models.TrackItem.__table__.c.id == item_id))
     if new_type != "sample":
         db.execute(delete(models.SampleItem.__table__).where(models.SampleItem.__table__.c.id == item_id))
     if new_type == "sample":
-        db.execute(insert(models.SampleItem.__table__).prefix_with("OR IGNORE").values(id=item_id, is_loop=False))
+        db.execute(
+            insert(models.SampleItem.__table__)
+            .prefix_with("OR IGNORE")
+            .values(
+                id=item_id,
+                key=preserved_key,
+                bpm=preserved_bpm,
+                is_loop=preserved_is_loop,
+            )
+        )
     elif new_type == "track":
         db.execute(insert(models.TrackItem.__table__).prefix_with("OR IGNORE").values(id=item_id))
-    db.execute(update(models.Item.__table__).where(models.Item.__table__.c.id == item_id).values(type=new_type))
+    db.execute(
+        update(models.Item.__table__)
+        .where(models.Item.__table__.c.id == item_id)
+        .values(type=new_type, updated_at=datetime.datetime.utcnow())
+    )
+    db.commit()
+    return get_item(db, item_id)
+
+
+def _sync_zoom_h4_child_roles(db: Session, direct_audio_children: list[models.Item], *, assign: bool) -> None:
+    """Assign or clear Zoom H4 mixdown/source_channel role metadata on direct audio children."""
+    now = datetime.datetime.utcnow()
+    if not assign:
+        for child in direct_audio_children:
+            attrs = dict(getattr(child, "attributes", None) or {})
+            if "profile_role" in attrs or "profile_role_reason" in attrs:
+                attrs.pop("profile_role", None)
+                attrs.pop("profile_role_reason", None)
+                db.execute(
+                    update(models.Item.__table__)
+                    .where(models.Item.__table__.c.id == child.id)
+                    .values(metadata_json=json.dumps(attrs), updated_at=now)
+                )
+        return
+
+    role_pairs: list[tuple[models.Item, str | None]] = []
+    for child in direct_audio_children:
+        stem = Path(child.absolute_path).stem.casefold()
+        match = _H4_ROLE_PATTERN.search(stem)
+        role_pairs.append((child, match.group("role") if match else None))
+
+    has_lr = any(role == "lr" for _, role in role_pairs)
+    unnamed_audio = [child for child, role in role_pairs if role is None]
+    inferred_mixdown_id = unnamed_audio[0].id if (not has_lr and len(role_pairs) > 1 and len(unnamed_audio) == 1) else None
+
+    for child, role in role_pairs:
+        attrs = dict(getattr(child, "attributes", None) or {})
+        if role == "lr":
+            attrs["profile_role"] = "mixdown"
+            attrs["profile_role_reason"] = "Zoom TrLR mixdown"
+        elif role:
+            attrs["profile_role"] = "source_channel"
+            attrs["profile_role_reason"] = f"Zoom Tr{role} source channel"
+        elif child.id == inferred_mixdown_id:
+            attrs["profile_role"] = "mixdown"
+            attrs["profile_role_reason"] = "Only renamed audio file; inferred Zoom mixdown because TrLR is absent"
+        else:
+            attrs.pop("profile_role", None)
+            attrs.pop("profile_role_reason", None)
+        db.execute(
+            update(models.Item.__table__)
+            .where(models.Item.__table__.c.id == child.id)
+            .values(metadata_json=json.dumps(attrs), updated_at=now)
+        )
+
+
+def _promote_subtree_audio_to_samples(db: Session, root_folder_id: int) -> set[int]:
+    """Upgrade unclassified 'audio' descendants under a Sample pack to concrete 'sample' items."""
+    folder_ids = [root_folder_id]
+    frontier = [root_folder_id]
+    while frontier:
+        sub_ids = [
+            row[0]
+            for row in db.query(models.Item.id)
+            .filter(
+                models.Item.parent_id.in_(frontier),
+                models.Item.type.in_(["folder", "collection"]),
+            )
+            .all()
+            if row[0] not in folder_ids
+        ]
+        folder_ids.extend(sub_ids)
+        frontier = sub_ids
+
+    audio_rows = (
+        db.query(models.Item.id, models.Item.metadata_json)
+        .filter(
+            models.Item.parent_id.in_(folder_ids),
+            models.Item.type == "audio",
+        )
+        .all()
+    )
+    if not audio_rows:
+        return set()
+
+    promoted_ids: set[int] = set()
+    now = datetime.datetime.utcnow()
+    for child_id, meta_json in audio_rows:
+        promoted_ids.add(int(child_id))
+        analysis = {}
+        if meta_json and meta_json != "{}":
+            try:
+                parsed = json.loads(meta_json)
+                if isinstance(parsed, dict) and isinstance(parsed.get("analysis"), dict):
+                    analysis = parsed["analysis"]
+            except (TypeError, ValueError):
+                pass
+        db.execute(
+            insert(models.SampleItem.__table__)
+            .prefix_with("OR IGNORE")
+            .values(
+                id=int(child_id),
+                key=analysis.get("key"),
+                bpm=analysis.get("bpm"),
+                is_loop=bool(analysis.get("is_loop", False)),
+            )
+        )
+
+    id_list = sorted(promoted_ids)
+    for offset in range(0, len(id_list), 500):
+        batch = id_list[offset : offset + 500]
+        db.execute(
+            update(models.Item.__table__)
+            .where(models.Item.__table__.c.id.in_(batch))
+            .values(type="sample", updated_at=now)
+        )
+    return promoted_ids
+
+
+def reclassify_container(db: Session, item_id: int, target_type: str) -> models.Item:
+    """Switch a library container among Folder, Sample pack, Multitrack, and Zoom H4."""
+    from . import multitrack_analyzer, project_service
+
+    db_item = get_item(db, item_id)
+    if not db_item:
+        raise ValueError("Item not found")
+    if isinstance(db_item, models.ProjectItem) or db_item.type == "project":
+        raise ValueError("Projects cannot be converted to another container type")
+    if db_item.type not in CONTAINER_RECLASSIFY_TYPES:
+        raise ValueError("This asset cannot be changed to the selected container type")
+    if target_type not in CONTAINER_TARGET_TYPES:
+        raise ValueError(f"Unsupported container type: {target_type}")
+    if project_service._find_owning_project(db, db_item) is not None:
+        raise ValueError("Folders inside a project cannot be changed to another container type")
+
+    current_effective = effective_item_type(db_item)
+    previous_type = db_item.type
+    target_db_type = "folder" if target_type in {"folder", "sample_pack"} else target_type
+    if current_effective == target_type and previous_type == target_db_type:
+        return db_item
+
+    attrs = dict(getattr(db_item, "attributes", None) or {})
+    import_meta = dict(attrs["import"]) if isinstance(attrs.get("import"), dict) else None
+    source_kind = getattr(db_item, "source_kind", "folder") or "folder"
+    abs_path = db_item.absolute_path
+    existing_bpm = getattr(db_item, "bpm", None)
+    existing_key = getattr(db_item, "key", None)
+    existing_warnings = list(getattr(db_item, "warnings", None) or [])
+    cleaned_warnings = [
+        w for w in existing_warnings
+        if not str(w).startswith("Stem lengths differ by ")
+    ]
+
+    direct_audio_children = (
+        db.query(models.Item)
+        .filter(
+            models.Item.parent_id == item_id,
+            models.Item.type.in_(["audio", "track", "sample"]),
+        )
+        .order_by(models.Item.absolute_path, models.Item.id)
+        .all()
+    )
+
+    manifest_entries = _manifest_contents(db_item) if isinstance(db_item, models.FolderItem) else []
+    now = datetime.datetime.utcnow()
+
+    # Prepare target attributes & subtype rows
+    multitrack_values: dict | None = None
+    if target_type == "folder":
+        attrs["is_folder"] = True
+        attrs["profile_id"] = "folder"
+        attrs["profile_label"] = "Folder"
+        attrs.pop("profile_bundle_id", None)
+        if import_meta is not None:
+            import_meta["immutable"] = False
+            attrs["import"] = import_meta
+        new_mime = "application/zip" if source_kind == "zip" else "inode/directory"
+    elif target_type == "sample_pack":
+        attrs.pop("is_folder", None)
+        attrs["profile_id"] = "sample_pack"
+        attrs["profile_bundle_id"] = "sample-packs"
+        attrs["profile_label"] = "Sample pack"
+        if import_meta is not None:
+            import_meta["immutable"] = True
+            attrs["import"] = import_meta
+        else:
+            attrs["import"] = {"immutable": True}
+        new_mime = "application/zip" if source_kind == "zip" else "inode/directory"
+    else:
+        # multitrack or zoom_h4
+        attrs.pop("is_folder", None)
+        if target_type == "zoom_h4":
+            attrs["profile_id"] = "zoom_h4"
+            attrs["profile_bundle_id"] = "zoom-recorders"
+            attrs["profile_label"] = "Zoom H4"
+        else:
+            attrs.pop("profile_id", None)
+            attrs.pop("profile_bundle_id", None)
+            attrs.pop("profile_label", None)
+        if import_meta is not None:
+            import_meta["immutable"] = False
+            attrs["import"] = import_meta
+        new_mime = "audio/multitrack"
+
+        analysis: dict = {}
+        if abs_path and os.path.isdir(abs_path):
+            try:
+                analysis = multitrack_analyzer.analyze_multitrack_folder(
+                    abs_path,
+                    recursive=False,
+                    detect_key_from_audio=False,
+                )
+            except Exception:
+                analysis = {}
+        stems = list(analysis.get("stems") or [])
+        if not stems and direct_audio_children:
+            child_paths = [c.absolute_path for c in direct_audio_children if c.absolute_path and os.path.isfile(c.absolute_path)]
+            if child_paths:
+                try:
+                    analysis = multitrack_analyzer.analyze_multitrack_files(
+                        abs_path or str(Path(child_paths[0]).parent),
+                        child_paths,
+                        detect_key_from_audio=False,
+                    )
+                    stems = list(analysis.get("stems") or [])
+                except Exception:
+                    stems = []
+
+        for stem in stems:
+            stem_path = stem.get("absolute_path")
+            if stem_path:
+                try:
+                    stem["absolute_path"] = str(Path(stem_path).resolve())
+                except OSError:
+                    pass
+
+        is_valid_length = bool(analysis.get("is_valid_length", False)) if stems else True
+        length_variance = float(analysis.get("length_variance") or 0.0) if stems else 0.0
+        if stems and not is_valid_length:
+            cleaned_warnings.append(f"Stem lengths differ by {length_variance:.4f} seconds.")
+
+        detected_bpm = existing_bpm if existing_bpm is not None else analysis.get("bpm")
+        detected_key = existing_key or analysis.get("key")
+        multitrack_values = {
+            "stems_json": json.dumps(stems),
+            "key": detected_key,
+            "bpm": detected_bpm,
+            "is_valid_length": is_valid_length,
+            "length_variance": length_variance,
+        }
+
+    # Expunge before core SQL polymorphic table changes
+    db.expunge(db_item)
+    for child in direct_audio_children:
+        if child in db:
+            db.expunge(child)
+
+    if target_type in {"folder", "sample_pack"}:
+        db.execute(delete(models.MultitrackItem.__table__).where(models.MultitrackItem.__table__.c.id == item_id))
+        if previous_type == "zoom_h4":
+            _sync_zoom_h4_child_roles(db, direct_audio_children, assign=False)
+    else:
+        existing_mt = db.execute(
+            models.MultitrackItem.__table__.select().where(models.MultitrackItem.__table__.c.id == item_id)
+        ).first()
+        if existing_mt:
+            db.execute(
+                update(models.MultitrackItem.__table__)
+                .where(models.MultitrackItem.__table__.c.id == item_id)
+                .values(**multitrack_values)
+            )
+        else:
+            db.execute(
+                insert(models.MultitrackItem.__table__).values(id=item_id, **multitrack_values)
+            )
+        if target_type == "zoom_h4":
+            _sync_zoom_h4_child_roles(db, direct_audio_children, assign=True)
+        elif previous_type == "zoom_h4":
+            _sync_zoom_h4_child_roles(db, direct_audio_children, assign=False)
+
+    if target_type == "sample_pack":
+        promoted_ids = _promote_subtree_audio_to_samples(db, item_id)
+        if promoted_ids and manifest_entries:
+            for entry in manifest_entries:
+                if entry.get("child_id") in promoted_ids:
+                    entry["type"] = "sample"
+
+    col_updates: dict = {"warnings_json": json.dumps(cleaned_warnings)}
+    if manifest_entries:
+        col_updates["manifest_json"] = json.dumps(manifest_entries)
+    db.execute(
+        update(models.FolderItem.__table__)
+        .where(models.FolderItem.__table__.c.id == item_id)
+        .values(**col_updates)
+    )
+    db.execute(
+        update(models.Item.__table__)
+        .where(models.Item.__table__.c.id == item_id)
+        .values(
+            type=target_db_type,
+            mime_type=new_mime,
+            metadata_json=json.dumps(attrs),
+            updated_at=now,
+        )
+    )
     db.commit()
     return get_item(db, item_id)
 

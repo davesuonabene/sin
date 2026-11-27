@@ -2066,6 +2066,184 @@ class TestGaiaLibrary(GaiaTestCase):
         # Partial pack has a new audio file so the folder itself must NOT be marked already_in_db
         self.assertFalse(folders_by_path["partial-pack"]["already_in_db"])
 
+    def test_post_import_container_type_switching_round_trip(self):
+        """Containers can switch post-import among Folder, Sample pack, Multitrack, and Zoom H4 with full manager behavior."""
+        from gaia import catalog, graph_builder, media_editor, project_service, reference_service
+        from gaia.routers import editor as editor_router
+
+        source = self.temp_path / "live-session-source"
+        self.write_audio(source, "Tr1_Drums.wav", seconds=0.5)
+        self.write_audio(source, "Tr2_Bass.wav", seconds=0.5)
+        self.write_audio(source, "TrLR_Mix.wav", seconds=0.5)
+        self.write_audio(source / "Extras", "OneShot_Kick.wav", seconds=0.15)
+
+        preview = self.preview_import(source)
+        job = self.start_import(
+            preview,
+            transfer_mode="copy",
+            folder_assignments={".": "type:folder"},
+        )
+        self.assertEqual(job["status"], "completed")
+        folder_id = job["result_items"][0]["id"]
+
+        folder = crud.get_item(self.db, folder_id)
+        self.assertEqual(folder.type, "folder")
+        self.assertNotIsInstance(folder, models.MultitrackItem)
+        self.assertIn(folder_id, [f["id"] for f in editor_router.list_vault_export_folders(self.vault.id, self.db)["folders"]])
+
+        # 1. Folder -> Sample pack: updates profile metadata, promotes audio children to samples, excludes from export/dissolve
+        as_pack = items_router.update_item(folder_id, schemas.ItemUpdate(type="sample_pack"), self.db)
+        self.assertEqual(as_pack.type, "folder")
+        self.assertEqual(as_pack.attributes.get("profile_id"), "sample_pack")
+        self.assertEqual(as_pack.attributes.get("profile_label"), "Sample pack")
+        self.assertEqual(as_pack.attributes.get("profile_bundle_id"), "sample-packs")
+        self.assertNotIn("is_folder", as_pack.attributes)
+        self.assertTrue((as_pack.attributes.get("import") or {}).get("immutable"))
+
+        # Descendant audio files were promoted to concrete samples
+        promoted_children = (
+            self.db.query(models.Item)
+            .filter(models.Item.vault_id == self.vault.id, models.Item.absolute_path.like("%.wav"))
+            .all()
+        )
+        self.assertTrue(len(promoted_children) >= 4)
+        self.assertTrue(all(child.type == "sample" for child in promoted_children))
+
+        # Catalog snapshot carries profile_id and profile_label so GAIA Manager & SIN render "Sample pack"
+        snap = catalog.build_snapshot_dict(self.db, vault_id=self.vault.id)
+        pack_row = next(row for row in snap["rows"] if row[0] == folder_id)
+        self.assertEqual(pack_row[23]["profile_id"], "sample_pack")
+        self.assertEqual(pack_row[23]["profile_label"], "Sample pack")
+
+        # Dissolve and plain export target exclude sample packs
+        with self.assertRaises(ValueError):
+            project_service.dissolve_folder(self.db, folder_id)
+        self.assertNotIn(folder_id, [f["id"] for f in editor_router.list_vault_export_folders(self.vault.id, self.db)["folders"]])
+
+        # 2. Sample pack -> Multitrack: creates multitrack_items row, populates stems, enables SIN/media editor multitrack behavior
+        as_mt = items_router.update_item(folder_id, schemas.ItemUpdate(type="multitrack"), self.db)
+        self.assertEqual(as_mt.type, "multitrack")
+        self.assertIsInstance(as_mt, models.MultitrackItem)
+        self.assertEqual(as_mt.mime_type, "audio/multitrack")
+        self.assertNotIn("profile_id", as_mt.attributes)
+        self.assertNotIn("profile_label", as_mt.attributes)
+        self.assertEqual(len(as_mt.stems or []), 3)
+        self.assertTrue(as_mt.is_valid_length)
+
+        # Stems endpoint, BPM/Key edit, media editor, and SIN graph loading all work on the converted multitrack
+        stems_resp = items_router.get_item_stems(folder_id, self.db)
+        self.assertEqual(len(stems_resp["stems"]), 3)
+
+        bpm_updated = items_router.update_item(folder_id, schemas.ItemUpdate(bpm=124, key="Amin"), self.db)
+        self.assertEqual(bpm_updated.bpm, 124)
+        self.assertEqual(bpm_updated.key, "Amin")
+
+        editor_sess = media_editor.build_editor_session(self.db, folder_id)
+        self.assertEqual(editor_sess["session"]["root_type"], "multitrack")
+        self.assertEqual(len(editor_sess["editor"]["layers"]), 3)
+
+        project = project_service.create_project(self.db, "SwitchTestProject", "project", self.vault.id)
+        graph = graph_builder.add_sample_to_project_graph(self.db, project, crud.get_item(self.db, folder_id))
+        node_ids = {n["id"] for n in graph["nodes"]}
+        self.assertIn(f"grp-{folder_id}", node_ids)
+
+        # 3. Multitrack -> Zoom H4: preserves BPM/key, sets Zoom H4 profile, annotates TrLR mixdown & source channels
+        as_h4 = items_router.update_item(folder_id, schemas.ItemUpdate(type="zoom_h4"), self.db)
+        self.assertEqual(as_h4.type, "zoom_h4")
+        self.assertIsInstance(as_h4, models.ZoomH4Item)
+        self.assertEqual(as_h4.attributes.get("profile_id"), "zoom_h4")
+        self.assertEqual(as_h4.attributes.get("profile_label"), "Zoom H4")
+        self.assertEqual(as_h4.bpm, 124)
+        self.assertEqual(as_h4.key, "Amin")
+
+        h4_children = self.db.query(models.Item).filter(models.Item.parent_id == folder_id, models.Item.type.in_(["audio", "track", "sample"])).all()
+        roles_by_name = {Path(c.absolute_path).name: c.attributes.get("profile_role") for c in h4_children}
+        self.assertEqual(roles_by_name["TrLR_Mix.wav"], "mixdown")
+        self.assertEqual(roles_by_name["Tr1_Drums.wav"], "source_channel")
+        self.assertEqual(roles_by_name["Tr2_Bass.wav"], "source_channel")
+
+        # Zoom H4 preview resolves to mixdown, and media editor mutes mixdown by default
+        preview_target = reference_service.resolve_item_preview(self.db, folder_id)
+        self.assertEqual(Path(preview_target.absolute_path).name, "TrLR_Mix.wav")
+        h4_sess = media_editor.build_editor_session(self.db, folder_id)
+        self.assertEqual(h4_sess["session"]["root_type"], "zoom_h4")
+        active_names = {
+            layer["filename"]
+            for layer in h4_sess["editor"]["layers"]
+            if layer["active"]
+        }
+        self.assertEqual(active_names, {"Tr1_Drums.wav", "Tr2_Bass.wav"})
+
+        # 4. Zoom H4 -> Folder: drops multitrack_items row, clears Zoom child roles, restores standard Folder metadata
+        back_to_folder = items_router.update_item(folder_id, schemas.ItemUpdate(type="folder"), self.db)
+        self.assertEqual(back_to_folder.type, "folder")
+        self.assertNotIsInstance(back_to_folder, models.MultitrackItem)
+        self.assertTrue(back_to_folder.attributes.get("is_folder"))
+        self.assertEqual(back_to_folder.attributes.get("profile_id"), "folder")
+        self.assertEqual(back_to_folder.attributes.get("profile_label"), "Folder")
+        self.assertIsNone(
+            self.db.execute(
+                models.MultitrackItem.__table__.select().where(models.MultitrackItem.__table__.c.id == folder_id)
+            ).first()
+        )
+        cleared_children = self.db.query(models.Item).filter(models.Item.parent_id == folder_id, models.Item.type.in_(["audio", "track", "sample"])).all()
+        self.assertTrue(all("profile_role" not in (c.attributes or {}) for c in cleared_children))
+        self.assertIn(folder_id, [f["id"] for f in editor_router.list_vault_export_folders(self.vault.id, self.db)["folders"]])
+
+        # 5. Sample pack -> Folder directly (when db type is already "folder") must NOT be treated as a no-op
+        items_router.update_item(folder_id, schemas.ItemUpdate(type="sample_pack"), self.db)
+        reverted_pack = items_router.update_item(folder_id, schemas.ItemUpdate(type="folder"), self.db)
+        self.assertEqual(reverted_pack.type, "folder")
+        self.assertEqual(reverted_pack.attributes.get("profile_id"), "folder")
+        self.assertEqual(reverted_pack.attributes.get("profile_label"), "Folder")
+        self.assertTrue(reverted_pack.attributes.get("is_folder"))
+
+    def test_post_import_type_switching_guards_and_nested_subfolders(self):
+        """Projects and project-internal folders cannot change container type; nested library subfolders & external folders can."""
+        from gaia import project_service
+
+        # Guard 1: Projects cannot be converted to folders/multitracks
+        project = project_service.create_project(self.db, "ProtectedProject", "project", self.vault.id)
+        with self.assertRaises(HTTPException) as proj_err:
+            items_router.update_item(project.id, schemas.ItemUpdate(type="folder"), self.db)
+        self.assertEqual(proj_err.exception.status_code, 400)
+
+        # Guard 2: Logical folder inside a project cannot be converted to sample_pack/multitrack
+        proj_bin = project_service.create_folder(self.db, "ProjectBin", vault_id=self.vault.id, parent_id=project.id)
+        with self.assertRaises(HTTPException) as bin_err:
+            items_router.update_item(proj_bin.id, schemas.ItemUpdate(type="multitrack"), self.db)
+        self.assertEqual(bin_err.exception.status_code, 400)
+
+        # Nested library subfolder (external_reference) can switch Folder -> Multitrack -> Folder without mutating disk
+        ext_root = self.temp_path / "external-umbrella"
+        ext_sub = ext_root / "BandStems"
+        s1 = self.write_audio(ext_sub, "Drums.wav", seconds=0.4)
+        s2 = self.write_audio(ext_sub, "Bass.wav", seconds=0.4)
+        preview = self.preview_import(ext_root)
+        job = self.start_import(
+            preview,
+            transfer_mode="keep",
+            folder_assignments={".": "type:folder", "BandStems": "type:folder"},
+        )
+        self.assertEqual(job["status"], "completed")
+        sub_item = (
+            self.db.query(models.FolderItem)
+            .filter(models.FolderItem.vault_id == self.vault.id, models.FolderItem.title == "BandStems")
+            .first()
+        )
+        self.assertIsNotNone(sub_item)
+        self.assertEqual(sub_item.storage_mode, "external_reference")
+
+        switched = items_router.update_item(sub_item.id, schemas.ItemUpdate(type="multitrack"), self.db)
+        self.assertEqual(switched.type, "multitrack")
+        self.assertEqual(switched.storage_mode, "external_reference")
+        self.assertEqual(len(switched.stems or []), 2)
+        self.assertTrue(s1.is_file() and s2.is_file())
+
+        reverted = items_router.update_item(sub_item.id, schemas.ItemUpdate(type="folder"), self.db)
+        self.assertEqual(reverted.type, "folder")
+        self.assertEqual(reverted.storage_mode, "external_reference")
+
 
 if __name__ == "__main__":
     unittest.main()

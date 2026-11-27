@@ -866,13 +866,34 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
         if str(target_bpm).lower() == "global":
             target_bpm = global_bpm
 
+        raw_repeat = props.get("repeat")
+        raw_sample_type = props.get("sample_type")
+        if raw_repeat is not None:
+            is_repeat = bool(raw_repeat)
+        elif raw_sample_type is not None:
+            is_repeat = str(raw_sample_type).lower() == "loop"
+        else:
+            is_repeat = True
+        sample_type_val = "loop" if is_repeat else "one_shot"
+
+        raw_warp = props.get("warp")
+        raw_stretch_mode = props.get("stretch_mode")
+        if raw_warp is not None:
+            is_warp: Optional[bool] = bool(raw_warp)
+            stretch_mode_val = "time_stretch" if is_warp else (
+                "off" if str(raw_stretch_mode or "").lower() == "off" else "pitch_shift"
+            )
+        else:
+            is_warp = None
+            stretch_mode_val = str(raw_stretch_mode or "time_stretch")
+
         raw_total_bars = props.get("total_bars")
         if _is_auto_bars(raw_total_bars):
             total_bars = None
         elif raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
             if ntype == "sample":
-                is_loop = props.get("sample_type", "loop") == "loop"
-                total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track", "null")) else None
+                # Standalone sample preview (parent_ntype is None) uses its exact cropped duration.
+                total_bars = parent_total_bars if (is_repeat and parent_ntype in ("track", "null")) else None
             elif ntype == "track":
                 total_bars = parent_total_bars if parent_total_bars is not None else global_bars
             elif ntype == "null":
@@ -913,7 +934,9 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             node_id=node_id_val,
             node_name=name,
             node_type=ntype,
-            sample_type=props.get("sample_type", "loop"),
+            repeat=is_repeat if raw_repeat is not None else None,
+            warp=is_warp,
+            sample_type=sample_type_val,
             filepath=props.get("filepath"),
             original_bpm=props.get("original_bpm"),
             target_bpm=float(target_bpm),
@@ -951,7 +974,7 @@ def compile_canonical_graph_to_audio_node_model(doc: Dict[str, Any], root_id: Op
             crop_end=float(props.get("crop_end", 1.0)),
             transpose=base_transpose,
             cents=float(props.get("cents", 0.0)),
-            stretch_mode=props.get("stretch_mode", "time_stretch"),
+            stretch_mode=stretch_mode_val,
             stretch_factor=float(props.get("stretch_factor", 1.0)),
             stretch_algorithm=props.get("stretch_algorithm", "rubberband"),
             key_match_mode=props.get("key_match_mode", "off"),
@@ -1072,13 +1095,34 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
         if str(target_bpm).lower() == "global":
             target_bpm = global_bpm
 
+        raw_repeat = props.get("repeat")
+        raw_sample_type = props.get("sample_type")
+        if raw_repeat is not None:
+            is_repeat = bool(raw_repeat)
+        elif raw_sample_type is not None:
+            is_repeat = str(raw_sample_type).lower() == "loop"
+        else:
+            is_repeat = True
+        sample_type_val = "loop" if is_repeat else "one_shot"
+
+        raw_warp = props.get("warp")
+        raw_stretch_mode = props.get("stretch_mode")
+        if raw_warp is not None:
+            is_warp: Optional[bool] = bool(raw_warp)
+            stretch_mode_val = "time_stretch" if is_warp else (
+                "off" if str(raw_stretch_mode or "").lower() == "off" else "pitch_shift"
+            )
+        else:
+            is_warp = None
+            stretch_mode_val = str(raw_stretch_mode or "time_stretch")
+
         raw_total_bars = props.get("total_bars")
         if _is_auto_bars(raw_total_bars):
             total_bars = None
         elif raw_total_bars is None or str(raw_total_bars).lower() == "global" or props.get("length_inherited"):
             if ntype == "sample":
-                is_loop = props.get("sample_type", "loop") == "loop"
-                total_bars = parent_total_bars if (is_loop and parent_ntype in (None, "track", "null")) else None
+                # Standalone sample preview (parent_ntype is None) uses its exact cropped duration.
+                total_bars = parent_total_bars if (is_repeat and parent_ntype in ("track", "null")) else None
             elif ntype == "track":
                 total_bars = parent_total_bars if parent_total_bars is not None else global_bars
             elif ntype == "null":
@@ -1117,7 +1161,9 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             node_id=int(num_id),
             node_name=name,
             node_type=ntype,
-            sample_type=props.get("sample_type", "loop"),
+            repeat=is_repeat if raw_repeat is not None else None,
+            warp=is_warp,
+            sample_type=sample_type_val,
             filepath=props.get("filepath"),
             original_bpm=props.get("original_bpm"),
             target_bpm=float(target_bpm),
@@ -1155,7 +1201,7 @@ def compile_workspace_to_audio_node_model(preset: Dict[str, Any], root_num_id: O
             crop_end=float(props.get("crop_end", 1.0)),
             transpose=base_transpose,
             cents=float(props.get("cents", 0.0)),
-            stretch_mode=props.get("stretch_mode", "time_stretch"),
+            stretch_mode=stretch_mode_val,
             stretch_factor=float(props.get("stretch_factor", 1.0)),
             stretch_algorithm=props.get("stretch_algorithm", "rubberband"),
             key_match_mode=props.get("key_match_mode", "off"),

@@ -341,7 +341,7 @@ export class VoiceIsolatorSection {
             copyPathBtn.className = 'sin-proc-btn sin-proc-btn-ghost';
             copyPathBtn.textContent = 'Copy Path';
             copyPathBtn.addEventListener('click', () => {
-                navigator.clipboard?.writeText?.(pathStr).catch(() => {});
+                navigator.clipboard?.writeText?.(pathStr).catch(() => { });
                 copyPathBtn.textContent = 'Copied!';
                 setTimeout(() => { copyPathBtn.textContent = 'Copy Path'; }, 1200);
             });

@@ -105,6 +105,10 @@ export class SequenceNode extends BaseNode {
     static tabs = ["SEQUENCE", "POOL", "CHAIN", "COMMON"];
     static override defaultVisualizationType: VisualizationTypeId = 'sequence';
     static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['sequence', 'loop', 'realtime', 'spectrum'];
+    static override compactCardSpec = {
+        visualizer: 'sequence_grid' as const,
+        paramKeys: ['step_length', 'total_bars', 'play_mode', 'sample_slot'] as const,
+    };
 
     override get supportsStepLighting(): boolean {
         return true;

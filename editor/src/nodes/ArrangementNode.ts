@@ -69,6 +69,10 @@ export class ArrangementNode extends BaseNode {
     static tabs = ["ARRANGEMENT", "CHAIN", "COMMON"];
     static override defaultVisualizationType: VisualizationTypeId = 'arrangement';
     static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['arrangement', 'loop', 'realtime', 'spectrum'];
+    static override compactCardSpec = {
+        visualizer: 'arrangement' as const,
+        paramKeys: ['section_quant', 'section_probability', 'section_slots'] as const,
+    };
 
     constructor() {
         super();

@@ -40,13 +40,19 @@ export type IconName =
   | 'pencil'
   | 'undo'
   | 'arrowLeft'
+  | 'arrowRight'
+  | 'copy'
+  | 'clipboard'
   | 'palette'
   | 'activity'
   | 'fit'
   | 'globe'
   | 'check'
   | 'layers'
-  | 'more';
+  | 'more'
+  | 'graphView'
+  | 'timelineView'
+  | 'magnet';
 
 export const ICONS: Record<IconName, string>;
 export function renderIcon(name: IconName, className?: string): string;

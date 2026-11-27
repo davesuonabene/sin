@@ -73,39 +73,31 @@ def _instrument_label(filename: str) -> str:
             return label
     return "other"
 
-def analyze_multitrack_folder(folder_path: str, tolerance_seconds: float = 0.05, recursive: bool = True) -> Dict[str, Any]:
-    """
-    Analyzes a directory containing multitrack audio stems.
-    
-    Inspects each audio stem for duration, sample rate, channels, and stem type.
-    Performs length analysis to verify that all stems share equal playback durations.
-    """
-    abs_folder = os.path.abspath(folder_path.strip().strip("\"'"))
-    if not os.path.isdir(abs_folder):
-        raise ValueError(f"Folder path '{abs_folder}' is not a valid directory.")
-
+def _analyze_stem_entries(
+    abs_folder: str,
+    file_entries: List[tuple[str, str]],
+    *,
+    tolerance_seconds: float = 0.05,
+    detect_key_from_audio: bool = True,
+) -> Dict[str, Any]:
     stems: List[Dict[str, Any]] = []
 
-    if recursive:
-        file_entries = []
-        for root, dirs, files in os.walk(abs_folder):
-            dirs.sort()
-            file_entries.extend((root, filename) for filename in sorted(files))
-    else:
-        file_entries = [(abs_folder, os.path.basename(path)) for path in _direct_audio_files(abs_folder)]
-
-    # Find audio files
     for root, file in file_entries:
         ext = os.path.splitext(file)[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
             stem_abs_path = os.path.join(root, file)
-            rel_path = os.path.relpath(stem_abs_path, abs_folder)
-            
+            if not os.path.isfile(stem_abs_path):
+                continue
+            try:
+                rel_path = os.path.relpath(stem_abs_path, abs_folder)
+            except ValueError:
+                rel_path = file
+
             duration = 0.0
             sample_rate = 44100
             channels = 2
             frames = 0
-            
+
             try:
                 info = sf.info(stem_abs_path)
                 duration = float(info.duration)
@@ -170,7 +162,7 @@ def analyze_multitrack_folder(folder_path: str, tolerance_seconds: float = 0.05,
                 overall_key = stem_analysis.get("key")
                 break
 
-    if overall_key is None:
+    if overall_key is None and detect_key_from_audio:
         from core.analyzers import KeyAnalyzer
         harmonic_stems = [s for s in stems if s.get("stem_type") in ("keys", "synth", "guitar")]
         if not harmonic_stems:
@@ -199,3 +191,56 @@ def analyze_multitrack_folder(folder_path: str, tolerance_seconds: float = 0.05,
         "bpm": bpm_int,
         "key": overall_key
     }
+
+
+def analyze_multitrack_files(
+    folder_path: str,
+    file_paths: List[str],
+    tolerance_seconds: float = 0.05,
+    detect_key_from_audio: bool = False,
+) -> Dict[str, Any]:
+    """Analyze an explicit list of audio stem file paths belonging to a folder."""
+    abs_folder = os.path.abspath(folder_path.strip().strip("\"'"))
+    file_entries = [
+        (os.path.dirname(os.path.abspath(path)), os.path.basename(os.path.abspath(path)))
+        for path in sorted(file_paths, key=lambda value: str(value).casefold())
+        if path and os.path.isfile(path)
+    ]
+    return _analyze_stem_entries(
+        abs_folder,
+        file_entries,
+        tolerance_seconds=tolerance_seconds,
+        detect_key_from_audio=detect_key_from_audio,
+    )
+
+
+def analyze_multitrack_folder(
+    folder_path: str,
+    tolerance_seconds: float = 0.05,
+    recursive: bool = True,
+    detect_key_from_audio: bool = True,
+) -> Dict[str, Any]:
+    """
+    Analyzes a directory containing multitrack audio stems.
+    
+    Inspects each audio stem for duration, sample rate, channels, and stem type.
+    Performs length analysis to verify that all stems share equal playback durations.
+    """
+    abs_folder = os.path.abspath(folder_path.strip().strip("\"'"))
+    if not os.path.isdir(abs_folder):
+        raise ValueError(f"Folder path '{abs_folder}' is not a valid directory.")
+
+    if recursive:
+        file_entries = []
+        for root, dirs, files in os.walk(abs_folder):
+            dirs.sort()
+            file_entries.extend((root, filename) for filename in sorted(files))
+    else:
+        file_entries = [(abs_folder, os.path.basename(path)) for path in _direct_audio_files(abs_folder)]
+
+    return _analyze_stem_entries(
+        abs_folder,
+        file_entries,
+        tolerance_seconds=tolerance_seconds,
+        detect_key_from_audio=detect_key_from_audio,
+    )

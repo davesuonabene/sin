@@ -39,7 +39,7 @@ export class RuntimeLogPanel {
     static readonly ERROR_DECAY_MS = 6000;
     static readonly ERROR_FADE_MS = 350;
 
-    constructor(parent: HTMLElement) {
+    constructor(panelParent: HTMLElement, controlsParent: HTMLElement = panelParent) {
         this.toggle = document.createElement('button');
         this.toggle.type = 'button';
         this.toggle.className = 'runtime-log-toggle';
@@ -116,7 +116,8 @@ export class RuntimeLogPanel {
             });
         });
 
-        parent.append(this.panel, this.toggle, this.errorEcho);
+        panelParent.append(this.panel);
+        controlsParent.append(this.toggle, this.errorEcho);
         this.unsubscribe = subscribeRuntimeLog((entries, appendedEntries) => this.render(entries, appendedEntries));
         this.unsubscribeTelemetry = subscribeEngineTelemetry(t => this.renderTelemetry(t));
 

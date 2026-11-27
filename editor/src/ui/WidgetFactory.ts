@@ -1,10 +1,29 @@
 import { type FieldSchema } from '../fields/FieldSchema.ts';
+import {
+    AUDIO_POSITION_UNITS,
+    canonicalToUnit,
+    formatUnitValue,
+    getUnitDefinition,
+    parseUnitInput,
+    resolveFieldUnit,
+    resolveNodeUnitContext,
+    setFieldUnit,
+    unitToCanonical,
+    type MeasurementUnitId,
+    type UnitFieldConfig,
+} from '../fields/UnitConverter.ts';
 import { type BaseNode } from '../nodes/BaseNode.ts';
 import { fetchLibrary } from '../api.ts';
 import { groupFileVersions } from '../libraryVersioning.ts';
 import { RadioGroup } from './components/RadioGroup.ts';
 import { getParameterWheelStep, registerParameterWheelControl, roundStepValue } from './ParameterWheelMenu.ts';
-import { isFieldOperatorExpression } from '../../../ermes/ts/slotLanguage.ts';
+import {
+    getPoolItemCallName,
+    isCalculatedPoolQuery,
+    isFieldOperatorExpression,
+} from '../../../ermes/ts/slotLanguage.ts';
+import { resolveEffectivePoolSeed, resolvePoolItemByQuery } from '../../../ermes/ts/assetResolver.ts';
+import { hasAudioDragPayload, resolveDroppedAudioItems } from './dragPayload.ts';
 import { findChainModuleParam, parseChainParamFieldKey } from '../dsp/processorRegistry.ts';
 import { renderIcon } from '../../../packages/ui/src/icons.js';
 import { enhanceSelect } from '../../../packages/ui/src/dropdown.js';
@@ -19,6 +38,9 @@ function formatDb(db: number): string {
 
 export class WidgetFactory {
     static getFieldValue<T = any>(node: BaseNode, field: FieldSchema<T>): T {
+        if (typeof field.getValue === 'function') {
+            return field.getValue(node);
+        }
         const chainKey = parseChainParamFieldKey(field.key);
         if (chainKey) {
             const found = findChainModuleParam(node, field.key);
@@ -48,7 +70,7 @@ export class WidgetFactory {
             validatedVal = Math.round(num) as unknown as T;
         } else if (field.type === 'global_float' && String(val).toLowerCase() === 'global') {
             validatedVal = 'global' as unknown as T;
-        } else if (field.type === 'float' || field.type === 'global_float' || field.type === 'db' || field.type === 'slider') {
+        } else if (field.type === 'float' || field.type === 'unit_float' || field.type === 'global_float' || field.type === 'db' || field.type === 'slider') {
             let num = typeof val === 'number' ? val : parseFloat(String(val));
             if (isNaN(num)) {
                 num = typeof field.default === 'number' ? field.default : (field.key === 'target_bpm' || field.key === 'bpm' ? 120 : 0);
@@ -59,6 +81,12 @@ export class WidgetFactory {
         } else if (field.type === 'select' && typeof field.default === 'number') {
             const num = Number(val);
             if (Number.isFinite(num)) validatedVal = num as unknown as T;
+        } else if ((field.type === 'radio' || field.type === 'select') && typeof field.default === 'boolean') {
+            validatedVal = (val === true || String(val).toLowerCase() === 'true') as unknown as T;
+        }
+
+        if (typeof field.setValue === 'function') {
+            return field.setValue(node, validatedVal);
         }
 
         const chainKey = parseChainParamFieldKey(field.key);
@@ -83,8 +111,353 @@ export class WidgetFactory {
         return node.preparePropertyEdit(field.key, value, previousValue) !== false;
     }
 
+    static isFieldDynamicAllowed(field: FieldSchema): boolean {
+        if (field.dynamic !== undefined) return field.dynamic;
+        const nonDynamicKeys = new Set([
+            'node_name',
+            'key',
+            'original_bpm',
+            'scope_mode',
+            'scope_window',
+            'scope_gain',
+        ]);
+        if (nonDynamicKeys.has(field.key) || field.key.startsWith('export_')) {
+            return false;
+        }
+        switch (field.type) {
+            case 'int':
+            case 'float':
+            case 'unit_float':
+            case 'global_float':
+            case 'slider':
+            case 'db':
+            case 'select':
+            case 'radio':
+            case 'boolean':
+            case 'seed':
+            case 'asset_call':
+            case 'tuple':
+                return true;
+            case 'string':
+                return field.key === 'sample_slot' || field.key === 'section_slots' || field.key === 'pool_query';
+            default:
+                return false;
+        }
+    }
+
+    private static resolveNodeAssetBasename(node: BaseNode): string {
+        const assignedModifier = typeof node.getAttachedPoolNode === 'function' ? node.getAttachedPoolNode() : null;
+        const poolItems = typeof (node as any).getPoolItems === 'function'
+            ? (node as any).getPoolItems()
+            : (Array.isArray(assignedModifier?.properties?.selected_items) ? assignedModifier.properties.selected_items : []);
+        const effPoolSeed = resolveEffectivePoolSeed(assignedModifier, node);
+        const poolSalt = typeof (node as any).getPoolSalt === 'function'
+            ? (node as any).getPoolSalt()
+            : Number(assignedModifier?.id || node.id || 0);
+        const activeIdx = Math.max(0, Number((node as any).activeSlotIndex ?? node.properties?.active_slot ?? 0));
+        const q = String(node.properties?.pool_query ?? '').trim();
+        if (node.isFieldDynamicActive?.('pool_query') && isCalculatedPoolQuery(q, poolItems)) {
+            if (isFieldOperatorExpression(q, poolItems)) {
+                const liveFp = String(node._liveTriggeredFilepath || '');
+                if (liveFp) {
+                    const matchedLive = Array.isArray(poolItems)
+                        ? poolItems.find((it: any) => String(it?.filepath || it?.absolute_path || '') === liveFp)
+                        : null;
+                    return matchedLive ? getPoolItemCallName(matchedLive, false) : (liveFp.split(/[\\/]/).pop() || liveFp);
+                }
+            }
+            if (Array.isArray(poolItems) && poolItems.length > 0) {
+                const chosen = resolvePoolItemByQuery(
+                    poolItems,
+                    q,
+                    activeIdx,
+                    node.properties?.seed ?? 42,
+                    false,
+                    node.getTriggerCount(),
+                    { poolSeed: effPoolSeed, nodeId: poolSalt }
+                );
+                if (chosen) return getPoolItemCallName(chosen, false);
+            }
+        }
+        const slotFp = Array.isArray(node.properties?.slots) ? String(node.properties.slots[activeIdx]?.filepath || '') : '';
+        const filepath = String(node.properties?.filepath || slotFp || '');
+        if (filepath && Array.isArray(poolItems) && poolItems.length > 0) {
+            const matched = poolItems.find((it: any) => String(it?.filepath || it?.absolute_path || '') === filepath);
+            if (matched) return getPoolItemCallName(matched, false);
+        }
+        if (filepath) return filepath.split(/[\\/]/).pop() || filepath;
+        return '';
+    }
+
+    static createDynamicExpressionDrawer(options: {
+        placeholder?: string;
+        ariaLabel: string;
+        isDynamicActive: () => boolean;
+        getExpression: () => string;
+        onToggle: (nextActive: boolean) => void | Promise<void>;
+        onCommitExpression: (expr: string) => void | Promise<void>;
+    }): {
+        element: HTMLDivElement;
+        toggleBtn: HTMLButtonElement;
+        input: HTMLInputElement;
+        sync: () => void;
+        focusInput: () => void;
+    } {
+        const drawer = document.createElement('div');
+        drawer.className = 'td-dynamic-drawer';
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'td-dynamic-toggle';
+        toggleBtn.setAttribute('aria-label', `Toggle dynamic expression for ${options.ariaLabel}`);
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'td-dynamic-input';
+        input.placeholder = options.placeholder || 'rand, min..max, or list';
+        input.setAttribute('aria-label', `${options.ariaLabel} dynamic expression`);
+
+        drawer.append(toggleBtn, input);
+
+        const sync = () => {
+            const active = Boolean(options.isDynamicActive());
+            const expr = String(options.getExpression() ?? '');
+            drawer.classList.toggle('is-active', active);
+            drawer.classList.toggle('is-inactive', !active);
+            toggleBtn.classList.toggle('is-active', active);
+            toggleBtn.setAttribute('aria-pressed', String(active));
+            toggleBtn.title = active
+                ? 'Dynamic expression ON — click to fall back to static value'
+                : 'Dynamic expression OFF — click to enable pseudolang expression';
+            input.disabled = !active;
+            input.dataset.dynamicActive = active ? 'true' : 'false';
+            input.classList.toggle('is-disabled', !active);
+            input.classList.toggle('is-pool-computed', active && Boolean(expr));
+            if (typeof document === 'undefined' || document.activeElement !== input) {
+                input.value = expr;
+            }
+        };
+
+        const focusInput = () => {
+            if (!input.disabled) {
+                input.focus();
+                input.select();
+            }
+        };
+
+        toggleBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const nextActive = !options.isDynamicActive();
+            void Promise.resolve(options.onToggle(nextActive)).then(() => {
+                sync();
+                if (nextActive && !options.getExpression()) {
+                    focusInput();
+                }
+            });
+        });
+
+        let committedOnEnter = false;
+        const commit = () => {
+            if (input.disabled) return;
+            const raw = input.value.trim();
+            void Promise.resolve(options.onCommitExpression(raw)).then(() => {
+                sync();
+            });
+        };
+
+        input.addEventListener('focus', () => {
+            committedOnEnter = false;
+        });
+        input.addEventListener('blur', () => {
+            if (!committedOnEnter) {
+                commit();
+            } else {
+                sync();
+            }
+        });
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                committedOnEnter = true;
+                commit();
+                input.blur();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                committedOnEnter = true;
+                input.blur();
+                sync();
+            }
+        });
+
+        sync();
+        return { element: drawer, toggleBtn, input, sync, focusInput };
+    }
+
+    private static buildFieldDynamicDrawer(
+        field: FieldSchema,
+        node: BaseNode,
+        syncTargetWidget: () => void,
+        onChange: (key: string, val: any, previousValue: any) => void,
+        onAfterSync?: () => void
+    ) {
+        const isAssetCall = field.type === 'asset_call' || field.key === 'pool_query';
+        const dynamicPlaceholder = isAssetCall
+            ? 'rand, 0 1, [a b], <0 1>'
+            : field.type === 'radio' || field.type === 'select'
+                ? 'rand, or space-separated options'
+                : field.type === 'boolean'
+                    ? 'rand, 0 1, or <off on>'
+                    : field.type === 'unit_float'
+                        ? 'rand, 0..0.5, or 0 0.25'
+                        : 'rand, min..max, or list';
+
+        return this.createDynamicExpressionDrawer({
+            placeholder: dynamicPlaceholder,
+            ariaLabel: field.label,
+            isDynamicActive: () => Boolean(node.isFieldDynamicActive?.(field.key)),
+            getExpression: () => String(node.getSavedDynamicExpression?.(field.key) ?? ''),
+            onToggle: (nextActive) => {
+                if (isAssetCall) {
+                    const prevVal = String(node.properties?.pool_query ?? '');
+                    const poolItems = typeof (node as any).getPoolItems === 'function' ? (node as any).getPoolItems() : [];
+                    const resolvedBasename = this.resolveNodeAssetBasename(node);
+                    const rawQuery = prevVal.trim();
+                    const staticFallback = (node.isFieldDynamicActive?.('pool_query') && isCalculatedPoolQuery(rawQuery, poolItems))
+                        ? resolvedBasename
+                        : (rawQuery || resolvedBasename);
+                    const result = node.toggleFieldDynamic('pool_query', nextActive, field, {
+                        currentStaticFallback: staticFallback,
+                        currentResolvedValue: resolvedBasename,
+                    });
+                    syncTargetWidget();
+                    onAfterSync?.();
+                    if (result.changed || !Object.is(result.value, prevVal)) {
+                        onChange('pool_query', result.value, prevVal);
+                    }
+                    return;
+                }
+
+                const prevVal = this.getFieldValue(node, field);
+                const result = node.toggleFieldDynamic(field.key, nextActive, field, {
+                    currentStaticFallback: prevVal,
+                    currentResolvedValue: prevVal,
+                });
+                syncTargetWidget();
+                onAfterSync?.();
+                if (result.changed || !Object.is(result.value, prevVal)) {
+                    onChange(field.key, result.value, prevVal);
+                }
+            },
+            onCommitExpression: (rawExpr) => {
+                const trimmed = rawExpr.trim();
+                if (isAssetCall) {
+                    const prevVal = String(node.properties?.pool_query ?? '');
+                    const poolItems = typeof (node as any).getPoolItems === 'function' ? (node as any).getPoolItems() : [];
+                    const assignedModifier = typeof node.getAttachedPoolNode === 'function' ? node.getAttachedPoolNode() : null;
+                    const resolvedBasename = this.resolveNodeAssetBasename(node);
+
+                    if (!trimmed) {
+                        node.setSavedDynamicExpression?.('pool_query', '');
+                        const result = node.toggleFieldDynamic('pool_query', false, field, {
+                            currentResolvedValue: resolvedBasename,
+                        });
+                        syncTargetWidget();
+                        onAfterSync?.();
+                        onChange('pool_query', result.value, prevVal);
+                        return;
+                    }
+
+                    if (!node.hasStaticFieldValue?.('pool_query')) {
+                        const rawQ = prevVal.trim();
+                        const initialStatic = (node.isFieldDynamicActive?.('pool_query') && isCalculatedPoolQuery(rawQ, poolItems))
+                            ? resolvedBasename
+                            : (rawQ || resolvedBasename);
+                        node.setStaticFieldValue?.('pool_query', initialStatic);
+                    }
+
+                    node.setSavedDynamicExpression?.('pool_query', trimmed);
+                    node.setFieldDynamicActive?.('pool_query', true);
+                    const sampleWithPool = node as BaseNode & { applyPoolQuery?: (q: string, advanceSaltOnRand?: boolean, opts?: { forceStatic?: boolean; forceDynamic?: boolean }) => boolean };
+                    if (typeof sampleWithPool.applyPoolQuery === 'function' && (poolItems.length > 0 || assignedModifier)) {
+                        if (isFieldOperatorExpression(trimmed, poolItems)) {
+                            node.resetTriggerCount?.();
+                        }
+                        sampleWithPool.applyPoolQuery(trimmed, false, { forceDynamic: true });
+                        node.setSavedDynamicExpression?.('pool_query', trimmed);
+                        node.setFieldDynamicActive?.('pool_query', true);
+                    } else {
+                        node.updateProperty('pool_query', trimmed);
+                    }
+                    syncTargetWidget();
+                    onAfterSync?.();
+                    onChange('pool_query', trimmed, prevVal);
+                    return;
+                }
+
+                const prevVal = this.getFieldValue(node, field);
+                if (!trimmed) {
+                    node.setSavedDynamicExpression?.(field.key, '');
+                    const result = node.toggleFieldDynamic(field.key, false, field, {
+                        currentResolvedValue: prevVal,
+                    });
+                    syncTargetWidget();
+                    onAfterSync?.();
+                    if (result.changed || !Object.is(result.value, prevVal)) {
+                        onChange(field.key, result.value, prevVal);
+                    }
+                    return;
+                }
+                if (!node.hasStaticFieldValue?.(field.key)) {
+                    node.setStaticFieldValue?.(field.key, prevVal);
+                }
+                node.setSavedDynamicExpression?.(field.key, trimmed);
+                if (isFieldOperatorExpression(trimmed)) {
+                    node.resetTriggerCount?.();
+                    const evaluated = node.applyFieldOperator(field.key, trimmed, field);
+                    const updated = (field.key === 'sample_slot' || field.key === 'seed')
+                        ? this.setFieldValue(node, field, trimmed as any)
+                        : this.setFieldValue(node, field, evaluated);
+                    node.setFieldOperator(field.key, trimmed);
+                    syncTargetWidget();
+                    onAfterSync?.();
+                    onChange(field.key, updated, prevVal);
+                    return;
+                }
+                node.clearFieldOperator?.(field.key);
+                node.setSavedDynamicExpression?.(field.key, trimmed);
+                node.setFieldDynamicActive?.(field.key, true);
+                let evaluated: any;
+                if (field.type === 'unit_float') {
+                    const unitConfig = field.unitConfig || {
+                        family: 'audio_position' as const,
+                        canonical: 'fraction' as const,
+                        units: AUDIO_POSITION_UNITS,
+                    };
+                    const ctx = resolveNodeUnitContext(node);
+                    const activeUnit = resolveFieldUnit(node, field.key, unitConfig, ctx);
+                    const parsed = parseUnitInput(trimmed, activeUnit);
+                    evaluated = parsed
+                        ? unitToCanonical(parsed.value, parsed.unit, unitConfig.canonical, ctx)
+                        : node.evaluateFieldOperatorForKey(field.key, trimmed, field);
+                } else if (field.key === 'sample_slot' || field.key === 'seed') {
+                    evaluated = trimmed;
+                } else {
+                    evaluated = node.evaluateFieldOperatorForKey(field.key, trimmed, field);
+                }
+                const updated = this.setFieldValue(node, field, evaluated);
+                node.setFieldDynamicActive?.(field.key, true);
+                syncTargetWidget();
+                onAfterSync?.();
+                onChange(field.key, updated, prevVal);
+            },
+        });
+    }
+
     static isFieldCalculated(node: BaseNode, key: string): boolean {
+        if (node.properties?.field_dynamic_enabled?.[key] === false) return false;
         if (node.hasFieldOperator?.(key)) return true;
+        if (node.isFieldDynamicActive?.(key) && Boolean(node.getSavedDynamicExpression?.(key))) return true;
         if (key === 'sample_slot' || key === 'seed') {
             if (isFieldOperatorExpression(node.properties?.[key])) return true;
         }
@@ -109,6 +482,10 @@ export class WidgetFactory {
         node: BaseNode,
         onChange: (key: string, val: any, previousValue: any) => void
     ): HTMLDivElement {
+        if (field.type === 'tuple') {
+            return this.createTupleRow(field, node, onChange);
+        }
+
         const row = document.createElement('div');
         row.className = 'td-param-row';
         row.setAttribute('data-field-key', field.key);
@@ -116,7 +493,7 @@ export class WidgetFactory {
 
         const labelEl = document.createElement('div');
         labelEl.className = 'td-param-label';
-        labelEl.textContent = field.label + (field.unit ? ` (${field.unit})` : '');
+        labelEl.textContent = field.label + (field.unit && field.type !== 'unit_float' ? ` (${field.unit})` : '');
         row.appendChild(labelEl);
         if (field.description) row.title = field.description;
 
@@ -124,10 +501,83 @@ export class WidgetFactory {
         controlEl.className = 'td-param-control';
         row.appendChild(controlEl);
 
-        const widget = this.createWidget(field, node, onChange);
+        let syncDynamicUI: (() => void) | null = null;
+        const wrappedOnChange = (key: string, val: any, previousValue: any) => {
+            if (!node.isFieldDynamicActive?.(field.key) && !node.hasFieldOperator?.(field.key)) {
+                node.setStaticFieldValue?.(field.key, val);
+            }
+            syncDynamicUI?.();
+            onChange(key, val, previousValue);
+        };
+
+        const widget = this.createWidget(field, node, wrappedOnChange);
         controlEl.appendChild(widget);
         if (field.type === 'select' && widget instanceof HTMLSelectElement) {
             enhanceSelect(widget);
+        }
+
+        if (this.isFieldDynamicAllowed(field)) {
+            row.classList.add('td-param-row-dynamic');
+            labelEl.classList.add('is-dynamic-capable');
+            labelEl.title = field.description
+                ? `${field.description} · Click field name to toggle dynamic expression`
+                : 'Click field name to toggle dynamic expression';
+
+            if (!((node as any).__openDynamicFieldDrawers instanceof Set)) {
+                (node as any).__openDynamicFieldDrawers = new Set<string>();
+            }
+            const openDrawers: Set<string> = (node as any).__openDynamicFieldDrawers;
+
+            const drawerCtrl = this.buildFieldDynamicDrawer(
+                field,
+                node,
+                () => (widget as any).__syncDisplay?.(),
+                onChange,
+                () => syncDynamicUI?.()
+            );
+
+            const isOpenInitially = openDrawers.has(field.key);
+            drawerCtrl.element.hidden = !isOpenInitially;
+            row.classList.toggle('is-dynamic-open', isOpenInitially);
+
+            syncDynamicUI = () => {
+                drawerCtrl.sync();
+                const isActive = Boolean(node.isFieldDynamicActive?.(field.key));
+                row.classList.toggle('is-dynamic-active', isActive);
+            };
+            syncDynamicUI();
+
+            labelEl.addEventListener('click', (event) => {
+                const target = event.target as HTMLElement | null;
+                if (target?.closest('.ghost-binding-toggle')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const nextOpen = Boolean(drawerCtrl.element.hidden);
+                drawerCtrl.element.hidden = !nextOpen;
+                row.classList.toggle('is-dynamic-open', nextOpen);
+                if (nextOpen) {
+                    openDrawers.add(field.key);
+                    drawerCtrl.sync();
+                } else {
+                    openDrawers.delete(field.key);
+                }
+            });
+
+            if (typeof window !== 'undefined') {
+                const onRowRefreshed = (evt: Event) => {
+                    if (!row.isConnected) {
+                        window.removeEventListener('node-properties-refreshed', onRowRefreshed);
+                        return;
+                    }
+                    const detail = (evt as CustomEvent)?.detail;
+                    if (!detail || detail.nodeId === node.id) {
+                        syncDynamicUI?.();
+                    }
+                };
+                window.addEventListener('node-properties-refreshed', onRowRefreshed);
+            }
+
+            row.appendChild(drawerCtrl.element);
         }
 
         if (field.nestedFields?.length) {
@@ -156,6 +606,202 @@ export class WidgetFactory {
         return row;
     }
 
+    private static createTupleRow(
+        field: FieldSchema,
+        node: BaseNode,
+        onChange: (key: string, val: any, previousValue: any) => void
+    ): HTMLDivElement {
+        const row = document.createElement('div');
+        row.className = 'td-param-row td-param-row-tuple';
+        row.setAttribute('data-field-key', field.key);
+        row.setAttribute('data-param-label', field.label);
+
+        const labelEl = document.createElement('div');
+        labelEl.className = 'td-param-label';
+        labelEl.textContent = field.label;
+        row.appendChild(labelEl);
+        if (field.description) row.title = field.description;
+
+        const controlEl = document.createElement('div');
+        controlEl.className = 'td-param-control';
+        row.appendChild(controlEl);
+
+        const allNodeFields = node.getFields();
+        const subFields = (field.subFields || [])
+            .map(key => allNodeFields.find(candidate => candidate.key === key))
+            .filter((candidate): candidate is FieldSchema => Boolean(candidate));
+
+        const tupleWrap = document.createElement('div');
+        tupleWrap.className = 'td-tuple-control';
+        controlEl.appendChild(tupleWrap);
+
+        const sharedUnitConfig = field.unitConfig;
+        const subSyncHandlers: Array<() => void> = [];
+        const drawerSyncHandlers: Array<() => void> = [];
+
+        const syncAllSubDrawers = () => {
+            for (const fn of drawerSyncHandlers) fn();
+            const anyActive = subFields.some(sf => Boolean(node.isFieldDynamicActive?.(sf.key)));
+            row.classList.toggle('is-dynamic-active', anyActive);
+        };
+
+        const subWidgets: HTMLElement[] = [];
+
+        if (sharedUnitConfig) {
+            tupleWrap.classList.add('td-tuple-control--with-unit');
+
+            const unitSelect = document.createElement('select');
+            unitSelect.className = 'td-unit-select td-tuple-unit-select';
+            unitSelect.setAttribute('aria-label', `${field.label} unit`);
+            for (const u of sharedUnitConfig.units) {
+                const def = getUnitDefinition(u);
+                const opt = document.createElement('option');
+                opt.value = u;
+                opt.textContent = def.shortLabel;
+                opt.title = def.label;
+                unitSelect.appendChild(opt);
+            }
+
+            const syncSharedUnitSelect = () => {
+                const ctx = resolveNodeUnitContext(node);
+                const anchorKey = subFields[0]?.key || field.key;
+                const unit = resolveFieldUnit(node, anchorKey, sharedUnitConfig, ctx);
+                if (unitSelect.value !== unit) unitSelect.value = unit;
+                unitSelect.title = `Unit: ${getUnitDefinition(unit).label}`;
+            };
+
+            for (const subField of subFields) {
+                const subUnitConfig = subField.unitConfig || sharedUnitConfig;
+                const wrappedSubOnChange = (key: string, val: any, prev: any) => {
+                    if (!node.isFieldDynamicActive?.(subField.key) && !node.hasFieldOperator?.(subField.key)) {
+                        node.setStaticFieldValue?.(subField.key, val);
+                    }
+                    syncAllSubDrawers();
+                    onChange(key, val, prev);
+                };
+                const inputEl = this.createUnitFloatInputPart(subField, node, subUnitConfig, wrappedSubOnChange);
+                inputEl.classList.add('td-tuple-input');
+                inputEl.placeholder = subField.label;
+                inputEl.setAttribute('aria-label', `${field.label} ${subField.label}`);
+                tupleWrap.appendChild(inputEl);
+                subWidgets.push(inputEl);
+                subSyncHandlers.push(() => (inputEl as any).__syncDisplay?.());
+            }
+
+            unitSelect.addEventListener('change', () => {
+                const nextUnit = unitSelect.value as MeasurementUnitId;
+                if (!sharedUnitConfig.units.includes(nextUnit)) return;
+                const anchorKey = subFields[0]?.key || field.key;
+                setFieldUnit(node, anchorKey, sharedUnitConfig, nextUnit);
+                syncSharedUnitSelect();
+                for (const fn of subSyncHandlers) fn();
+            });
+
+            syncSharedUnitSelect();
+            tupleWrap.appendChild(unitSelect);
+
+            if (typeof window !== 'undefined') {
+                const onUnitOrProp = (evt: Event) => {
+                    if (!tupleWrap.isConnected) {
+                        window.removeEventListener('node-field-unit-changed', onUnitOrProp);
+                        window.removeEventListener('node-property-changed', onUnitOrProp);
+                        window.removeEventListener('node-properties-refreshed', onUnitOrProp);
+                        return;
+                    }
+                    const detail = (evt as CustomEvent)?.detail;
+                    if (!detail || detail.nodeId === node.id) {
+                        syncSharedUnitSelect();
+                        syncAllSubDrawers();
+                    }
+                };
+                window.addEventListener('node-field-unit-changed', onUnitOrProp);
+                window.addEventListener('node-property-changed', onUnitOrProp);
+                window.addEventListener('node-properties-refreshed', onUnitOrProp);
+            }
+        } else {
+            for (const subField of subFields) {
+                const wrappedSubOnChange = (key: string, val: any, prev: any) => {
+                    if (!node.isFieldDynamicActive?.(subField.key) && !node.hasFieldOperator?.(subField.key)) {
+                        node.setStaticFieldValue?.(subField.key, val);
+                    }
+                    syncAllSubDrawers();
+                    onChange(key, val, prev);
+                };
+                const subWidget = this.createWidget(subField, node, wrappedSubOnChange);
+                subWidget.classList.add('td-tuple-input');
+                tupleWrap.appendChild(subWidget);
+                subWidgets.push(subWidget);
+                subSyncHandlers.push(() => (subWidget as any).__syncDisplay?.());
+            }
+        }
+
+        const dynamicSubFields = subFields.filter(sf => this.isFieldDynamicAllowed(sf));
+        if (dynamicSubFields.length > 0 && this.isFieldDynamicAllowed(field)) {
+            row.classList.add('td-param-row-dynamic');
+            labelEl.classList.add('is-dynamic-capable');
+            labelEl.title = field.description
+                ? `${field.description} · Click field name to toggle dynamic expressions`
+                : 'Click field name to toggle dynamic expressions';
+
+            if (!((node as any).__openDynamicFieldDrawers instanceof Set)) {
+                (node as any).__openDynamicFieldDrawers = new Set<string>();
+            }
+            const openDrawers: Set<string> = (node as any).__openDynamicFieldDrawers;
+
+            const drawerStack = document.createElement('div');
+            drawerStack.className = 'td-tuple-dynamic-drawer';
+
+            subFields.forEach((subField, idx) => {
+                if (!this.isFieldDynamicAllowed(subField)) return;
+                const subWidget = subWidgets[idx];
+                const subRowEl = document.createElement('div');
+                subRowEl.className = 'td-tuple-dynamic-item';
+
+                const subLabel = document.createElement('span');
+                subLabel.className = 'td-tuple-sublabel';
+                subLabel.textContent = subField.label;
+
+                const drawerCtrl = this.buildFieldDynamicDrawer(
+                    subField,
+                    node,
+                    () => (subWidget as any).__syncDisplay?.(),
+                    onChange,
+                    syncAllSubDrawers
+                );
+                drawerCtrl.element.classList.add('td-tuple-dynamic-subdrawer');
+                drawerSyncHandlers.push(drawerCtrl.sync);
+
+                subRowEl.append(subLabel, drawerCtrl.element);
+                drawerStack.appendChild(subRowEl);
+            });
+
+            const isOpenInitially = openDrawers.has(field.key);
+            drawerStack.hidden = !isOpenInitially;
+            row.classList.toggle('is-dynamic-open', isOpenInitially);
+            syncAllSubDrawers();
+
+            labelEl.addEventListener('click', (event) => {
+                const target = event.target as HTMLElement | null;
+                if (target?.closest('.ghost-binding-toggle')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const nextOpen = Boolean(drawerStack.hidden);
+                drawerStack.hidden = !nextOpen;
+                row.classList.toggle('is-dynamic-open', nextOpen);
+                if (nextOpen) {
+                    openDrawers.add(field.key);
+                    syncAllSubDrawers();
+                } else {
+                    openDrawers.delete(field.key);
+                }
+            });
+
+            row.appendChild(drawerStack);
+        }
+
+        return row;
+    }
+
     static createWidget(
         field: FieldSchema,
         node: BaseNode,
@@ -164,6 +810,8 @@ export class WidgetFactory {
         switch (field.type) {
             case 'filepath':
                 return this.createFilepathWidget(field, node, onChange);
+            case 'asset_call':
+                return this.createAssetCallWidget(field, node, onChange);
             case 'directory':
                 return this.createDirectoryWidget(field, node, onChange);
             case 'slider':
@@ -173,6 +821,8 @@ export class WidgetFactory {
             case 'int':
             case 'float':
                 return this.createNumberWidget(field, node, onChange);
+            case 'unit_float':
+                return this.createUnitFloatWidget(field, node, onChange);
             case 'global_float':
                 return this.createGlobalNumberWidget(field, node, onChange);
             case 'select':
@@ -188,6 +838,152 @@ export class WidgetFactory {
             default:
                 return this.createStringWidget(field, node, onChange);
         }
+    }
+
+    private static createAssetCallWidget(
+        field: FieldSchema,
+        node: BaseNode,
+        onChange: (key: string, val: any, previousValue: any) => void
+    ): HTMLInputElement {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'td-param-input td-asset-call-input';
+        input.placeholder = field.placeholder || 'Drop sample or select from Pool';
+        input.title = field.description || 'Asset call (name, pool index, or dynamic expression) · Drop audio file here to load';
+        input.setAttribute('aria-label', field.label);
+
+        const getPoolItems = () => typeof (node as any).getPoolItems === 'function' ? (node as any).getPoolItems() : [];
+
+        const syncDisplay = () => {
+            if (typeof document !== 'undefined' && document.activeElement === input) return;
+            const mixedPath = node.hasMixedSlotValues?.('filepath') ?? false;
+            if (mixedPath) {
+                input.value = '';
+                input.classList.remove('is-pool-computed');
+                return;
+            }
+            const loadedBasename = this.resolveNodeAssetBasename(node);
+            const q = String(node.properties?.pool_query ?? '').trim();
+            const dynActive = Boolean(node.isFieldDynamicActive?.('pool_query'));
+            input.value = loadedBasename || (dynActive ? q : '');
+            input.classList.toggle('is-pool-computed', dynActive && Boolean(q || node.getSavedDynamicExpression?.('pool_query')));
+        };
+        syncDisplay();
+
+        let beforeFocus = '';
+        let hasUserTyped = false;
+        let committedOnEnter = false;
+
+        const commit = () => {
+            const raw = input.value.trim();
+            if (!hasUserTyped && raw === beforeFocus && !node.hasMixedSlotValues?.('pool_query')) {
+                syncDisplay();
+                return;
+            }
+            const prevVal = String(node.properties?.pool_query ?? '');
+            const poolItems = getPoolItems();
+            const assignedModifier = typeof node.getAttachedPoolNode === 'function' ? node.getAttachedPoolNode() : null;
+            const sampleWithPool = node as BaseNode & {
+                applyPoolQuery?: (q: string, advanceSaltOnRand?: boolean, opts?: { forceStatic?: boolean; forceDynamic?: boolean }) => boolean;
+            };
+            if (typeof sampleWithPool.applyPoolQuery === 'function' && (poolItems.length > 0 || assignedModifier || raw)) {
+                const matched = sampleWithPool.applyPoolQuery(raw, false, { forceStatic: true });
+                syncDisplay();
+                if (matched || !Object.is(prevVal, raw) || hasUserTyped) {
+                    onChange('pool_query', raw, prevVal);
+                }
+                return;
+            }
+            node.setFieldDynamicActive?.('pool_query', false);
+            node.setStaticFieldValue?.('pool_query', raw);
+            node.updateProperty('pool_query', raw);
+            syncDisplay();
+            onChange('pool_query', raw, prevVal);
+        };
+
+        input.addEventListener('input', () => {
+            hasUserTyped = true;
+        });
+
+        input.addEventListener('focus', () => {
+            committedOnEnter = false;
+            hasUserTyped = false;
+            const mixedPath = node.hasMixedSlotValues?.('filepath') ?? false;
+            beforeFocus = mixedPath ? '' : (this.resolveNodeAssetBasename(node) || input.value.trim());
+            input.value = beforeFocus;
+            input.classList.remove('is-pool-computed');
+            input.select();
+        });
+
+        input.addEventListener('blur', () => {
+            if (!committedOnEnter) {
+                commit();
+            } else {
+                syncDisplay();
+            }
+        });
+
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                committedOnEnter = true;
+                commit();
+                input.blur();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                committedOnEnter = true;
+                input.blur();
+                syncDisplay();
+            }
+        });
+
+        // Preserve audio drag-and-drop directly onto the Asset field input
+        input.addEventListener('dragover', (event) => {
+            if (!hasAudioDragPayload(event.dataTransfer)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+            input.classList.add('is-dragover');
+        });
+        input.addEventListener('dragleave', () => {
+            input.classList.remove('is-dragover');
+        });
+        input.addEventListener('drop', (event) => {
+            if (!hasAudioDragPayload(event.dataTransfer)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            input.classList.remove('is-dragover');
+            if (!event.dataTransfer) return;
+            const prevVal = String(node.properties?.pool_query ?? '');
+            void resolveDroppedAudioItems(event.dataTransfer).then(async (items) => {
+                if (items.length === 0) return;
+                const sampleAny = node as any;
+                if (typeof sampleAny.loadDroppedItemsIntoSlots === 'function') {
+                    await sampleAny.loadDroppedItemsIntoSlots(items);
+                    syncDisplay();
+                    onChange('pool_query', node.properties?.pool_query ?? '', prevVal);
+                }
+            });
+        });
+
+        if (typeof window !== 'undefined') {
+            const onUpdated = (evt: Event) => {
+                if (!input.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onUpdated);
+                    window.removeEventListener('node-property-changed', onUpdated);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncDisplay();
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onUpdated);
+            window.addEventListener('node-property-changed', onUpdated);
+        }
+
+        (input as any).__syncDisplay = syncDisplay;
+        return input;
     }
 
     private static createFilepathWidget(
@@ -370,12 +1166,16 @@ export class WidgetFactory {
             editInput.type = 'text';
             editInput.className = 'td-param-input';
             editInput.style.width = '54px';
-            editInput.value = node.hasFieldOperator?.(field.key)
-                ? node.getFieldOperator(field.key)
-                : String(this.getFieldValue(node, field) ?? field.default ?? 0);
+            const resolvedStr = String(this.getFieldValue(node, field) ?? field.default ?? 0);
+            editInput.value = resolvedStr;
             valDisplay.replaceWith(editInput);
             editInput.focus();
             editInput.select();
+
+            let hasUserTyped = false;
+            editInput.addEventListener('input', () => {
+                hasUserTyped = true;
+            });
 
             let done = false;
             const finishEdit = (cancel = false) => {
@@ -383,17 +1183,18 @@ export class WidgetFactory {
                 done = true;
                 if (!cancel) {
                     const rawStr = editInput.value.trim();
-                    const previousValue = this.getFieldValue(node, field);
-                    if (isFieldOperatorExpression(rawStr)) {
-                        node.resetTriggerCount?.();
-                        const evaluated = node.applyFieldOperator(field.key, rawStr, field);
-                        const updated = this.setFieldValue(node, field, evaluated);
-                        node.setFieldOperator(field.key, rawStr);
-                        onChange(field.key, updated, previousValue);
-                    } else if (rawStr !== '') {
+                    if (hasUserTyped || rawStr !== resolvedStr) {
                         const parsed = parseFloat(rawStr);
                         if (Number.isFinite(parsed)) {
-                            update(parsed);
+                            const wasDynamic = Boolean(node.isFieldDynamicActive?.(field.key) || node.hasFieldOperator?.(field.key));
+                            const previousValue = this.getFieldValue(node, field);
+                            node.clearFieldOperator?.(field.key);
+                            if (this.mayEditField(node, field, parsed)) {
+                                const updated = this.setFieldValue(node, field, parsed);
+                                if (wasDynamic || !Object.is(updated, previousValue)) {
+                                    onChange(field.key, updated, previousValue);
+                                }
+                            }
                         }
                     }
                 }
@@ -435,6 +1236,21 @@ export class WidgetFactory {
             update(roundStepValue(currentValue + direction * step, step));
         }, { passive: false });
 
+        (wrapper as any).__syncDisplay = syncSliderDisplay;
+        if (typeof window !== 'undefined') {
+            const onRefreshed = (evt: Event) => {
+                if (!wrapper.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefreshed);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncSliderDisplay();
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onRefreshed);
+        }
+
         return wrapper;
     }
 
@@ -470,14 +1286,21 @@ export class WidgetFactory {
         syncDisplay();
 
         let committedOnEnter = false;
+        let valueBeforeFocus = '';
+        let hasUserTyped = false;
         const commit = () => {
             const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
             const rawStr = input.value.trim();
+            if (!hasUserTyped && rawStr === valueBeforeFocus && !isMixed) {
+                syncDisplay();
+                return;
+            }
             if (isMixed && rawStr === '') {
                 syncDisplay();
                 return;
             }
             const previousValue = this.getFieldValue(node, field);
+            const wasDynamic = Boolean(node.isFieldDynamicActive?.(field.key) || node.hasFieldOperator?.(field.key));
 
             if (field.key === 'sample_slot') {
                 const nextExpr = rawStr || '*';
@@ -485,32 +1308,17 @@ export class WidgetFactory {
                     syncDisplay();
                     return;
                 }
+                node.clearFieldOperator?.('sample_slot');
                 const updated = this.setFieldValue(node, field, nextExpr);
-                if (isFieldOperatorExpression(nextExpr)) {
-                    node.setFieldOperator('sample_slot', nextExpr);
-                    node.resetTriggerCount?.();
-                } else {
-                    node.clearFieldOperator?.('sample_slot');
-                }
                 syncDisplay();
-                if (isMixed || !Object.is(previousValue, nextExpr)) {
+                if (isMixed || wasDynamic || !Object.is(previousValue, nextExpr)) {
                     onChange(field.key, updated, previousValue);
                 }
                 return;
             }
 
-            if (isFieldOperatorExpression(rawStr)) {
-                node.resetTriggerCount?.();
-                const evaluated = node.applyFieldOperator(field.key, rawStr, field);
-                const updated = this.setFieldValue(node, field, evaluated);
-                node.setFieldOperator(field.key, rawStr);
-                syncDisplay();
-                onChange(field.key, updated, previousValue);
-                return;
-            }
-
             node.clearFieldOperator?.(field.key);
-            if (!isMixed && Object.is(previousValue, input.value)) {
+            if (!isMixed && !wasDynamic && Object.is(previousValue, input.value)) {
                 syncDisplay();
                 return;
             }
@@ -523,15 +1331,14 @@ export class WidgetFactory {
             onChange(field.key, updated, previousValue);
         };
 
+        input.addEventListener('input', () => {
+            hasUserTyped = true;
+        });
+
         input.addEventListener('focus', () => {
             committedOnEnter = false;
-            if (field.key === 'sample_slot') {
-                const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
-                const opExpr = node.getFieldOperator?.('sample_slot');
-                input.value = isMixed ? '' : String((opExpr || this.getFieldValue(node, field)) ?? '*');
-            } else if (node.hasFieldOperator?.(field.key)) {
-                input.value = node.getFieldOperator(field.key);
-            }
+            hasUserTyped = false;
+            valueBeforeFocus = input.value.trim();
             input.classList.remove('is-pool-computed');
             input.select();
         });
@@ -572,6 +1379,7 @@ export class WidgetFactory {
             window.addEventListener('node-properties-refreshed', onRefreshed);
         }
 
+        (input as any).__syncDisplay = syncDisplay;
         return input;
     }
 
@@ -652,9 +1460,12 @@ export class WidgetFactory {
         input.type = 'text';
         input.inputMode = 'decimal';
         input.className = 'td-param-input';
-        input.title = field.description
-            ? `${field.description} · Supports Field Operators (rand, min..max, or space-separated list)`
-            : 'Supports Field Operators (rand, min..max, or space-separated list)';
+        const dynamicAllowed = this.isFieldDynamicAllowed(field);
+        input.title = dynamicAllowed
+            ? (field.description
+                ? `${field.description} · Supports Field Operators (rand, min..max, or space-separated list)`
+                : 'Supports Field Operators (rand, min..max, or space-separated list)')
+            : (field.description || field.label);
 
         const syncDisplay = () => {
             if (typeof document !== 'undefined' && document.activeElement === input) return;
@@ -674,31 +1485,28 @@ export class WidgetFactory {
         syncDisplay();
 
         let committedOnEnter = false;
+        let valueBeforeFocus = '';
+        let hasUserTyped = false;
         const commit = () => {
             const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
             const rawStr = input.value.trim();
+            if (!hasUserTyped && rawStr === valueBeforeFocus && !isMixed) {
+                syncDisplay();
+                return;
+            }
             if (rawStr === '') {
                 if (isMixed) return;
                 syncDisplay();
                 return;
             }
             const previousValue = this.getFieldValue(node, field);
-            if (isFieldOperatorExpression(rawStr)) {
-                node.resetTriggerCount?.();
-                const evaluated = node.applyFieldOperator(field.key, rawStr, field);
-                const updated = this.setFieldValue(node, field, evaluated);
-                node.setFieldOperator(field.key, rawStr);
-                syncDisplay();
-                onChange(field.key, updated, previousValue);
-                return;
-            }
-            node.clearFieldOperator?.(field.key);
+            const wasDynamic = Boolean(node.isFieldDynamicActive?.(field.key) || node.hasFieldOperator?.(field.key));
             const raw = field.type === 'int' ? parseInt(rawStr, 10) : parseFloat(rawStr);
             if (!Number.isFinite(raw)) {
                 syncDisplay();
                 return;
             }
-            if (!isMixed && Object.is(previousValue, raw)) {
+            if (!isMixed && !wasDynamic && Object.is(previousValue, raw)) {
                 syncDisplay();
                 return;
             }
@@ -706,27 +1514,31 @@ export class WidgetFactory {
                 syncDisplay();
                 return;
             }
+            node.clearFieldOperator?.(field.key);
             const updated = this.setFieldValue(node, field, raw);
             syncDisplay();
-            if (isMixed || !Object.is(updated, previousValue)) {
+            if (isMixed || wasDynamic || !Object.is(updated, previousValue)) {
                 onChange(field.key, updated, previousValue);
             }
         };
 
         let numDebounceTimer: any = null;
         input.addEventListener('input', () => {
+            hasUserTyped = true;
+            if (field.commitOnChange) return;
             clearTimeout(numDebounceTimer);
             numDebounceTimer = setTimeout(() => {
                 const rawStr = input.value.trim();
-                if (rawStr === '' || isFieldOperatorExpression(rawStr) || !/^-?\d*\.?\d+$/.test(rawStr)) return;
+                if (rawStr === '' || !/^-?\d*\.?\d+$/.test(rawStr)) return;
                 const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
                 const raw = field.type === 'int' ? parseInt(rawStr, 10) : parseFloat(rawStr);
                 const previousValue = this.getFieldValue(node, field);
-                if (!isMixed && Object.is(previousValue, raw)) return;
+                const wasDynamic = Boolean(node.isFieldDynamicActive?.(field.key) || node.hasFieldOperator?.(field.key));
+                if (!isMixed && !wasDynamic && Object.is(previousValue, raw)) return;
                 if (Number.isFinite(raw) && this.mayEditField(node, field, raw)) {
                     node.clearFieldOperator?.(field.key);
                     const updated = this.setFieldValue(node, field, raw);
-                    if (isMixed || !Object.is(updated, previousValue)) {
+                    if (isMixed || wasDynamic || !Object.is(updated, previousValue)) {
                         onChange(field.key, updated, previousValue);
                     }
                 }
@@ -735,9 +1547,8 @@ export class WidgetFactory {
 
         input.addEventListener('focus', () => {
             committedOnEnter = false;
-            if (node.hasFieldOperator?.(field.key)) {
-                input.value = node.getFieldOperator(field.key);
-            }
+            hasUserTyped = false;
+            valueBeforeFocus = input.value.trim();
             input.classList.remove('is-pool-computed');
             input.select();
         });
@@ -819,7 +1630,332 @@ export class WidgetFactory {
             window.addEventListener('node-properties-refreshed', onRefreshed);
         }
 
+        (input as any).__syncDisplay = syncDisplay;
         return input;
+    }
+
+    private static createUnitFloatInputPart(
+        field: FieldSchema,
+        node: BaseNode,
+        unitConfig: UnitFieldConfig,
+        onChange: (key: string, val: any, previousValue: any) => void
+    ): HTMLInputElement {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.inputMode = 'decimal';
+        input.className = 'td-param-input td-unit-float-input';
+
+        const getContext = () => resolveNodeUnitContext(node);
+        const getActiveUnit = (): MeasurementUnitId => resolveFieldUnit(node, field.key, unitConfig, getContext());
+
+        const getCanonicalValue = (): number => {
+            const opExpr = node.getFieldOperator?.(field.key);
+            if (opExpr) {
+                const evaluated = Number(node.evaluateFieldOperatorForKey(field.key, opExpr, field));
+                if (Number.isFinite(evaluated)) return evaluated;
+            }
+            const raw = Number(this.getFieldValue(node, field));
+            return Number.isFinite(raw) ? raw : Number(field.default ?? 0);
+        };
+
+        const syncDisplay = () => {
+            const ctx = getContext();
+            const unit = resolveFieldUnit(node, field.key, unitConfig, ctx);
+            const unitDef = getUnitDefinition(unit);
+            input.title = field.description
+                ? `${field.label}: ${field.description} · Unit: ${unitDef.label}`
+                : `${field.label} · Unit: ${unitDef.label}`;
+
+            if (typeof document !== 'undefined' && document.activeElement === input) return;
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            if (isMixed) {
+                input.value = '';
+                input.classList.remove('is-pool-computed');
+                return;
+            }
+            const canonical = getCanonicalValue();
+            const displayVal = canonicalToUnit(canonical, unitConfig.canonical, unit, ctx);
+            input.value = formatUnitValue(displayVal, unit);
+            input.classList.toggle('is-pool-computed', this.isFieldCalculated(node, field.key));
+        };
+        syncDisplay();
+
+        const applyCanonicalValue = (nextCanonical: number) => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            const previousValue = this.getFieldValue(node, field);
+            node.clearFieldOperator?.(field.key);
+            if (!Number.isFinite(nextCanonical)) {
+                syncDisplay();
+                return;
+            }
+            const clamped = Math.round(nextCanonical * 1e6) / 1e6;
+            if (!isMixed && Math.abs(Number(previousValue) - clamped) < 1e-7) {
+                syncDisplay();
+                return;
+            }
+            if (!this.mayEditField(node, field, clamped)) {
+                syncDisplay();
+                return;
+            }
+            const updated = this.setFieldValue(node, field, clamped);
+            syncDisplay();
+            if (isMixed || !Object.is(updated, previousValue)) {
+                onChange(field.key, updated, previousValue);
+            }
+        };
+
+        let committedOnEnter = false;
+        let valueBeforeFocus = '';
+        let hasUserTyped = false;
+        const commit = () => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            const rawStr = input.value.trim();
+            if (!hasUserTyped && rawStr === valueBeforeFocus && !isMixed) {
+                syncDisplay();
+                return;
+            }
+            if (rawStr === '') {
+                if (isMixed) return;
+                syncDisplay();
+                return;
+            }
+            const wasDynamic = Boolean(node.isFieldDynamicActive?.(field.key) || node.hasFieldOperator?.(field.key));
+            const ctx = getContext();
+            const activeUnit = resolveFieldUnit(node, field.key, unitConfig, ctx);
+            const parsed = parseUnitInput(rawStr, activeUnit);
+            if (!parsed) {
+                syncDisplay();
+                return;
+            }
+            const canonical = unitToCanonical(parsed.value, parsed.unit, unitConfig.canonical, ctx);
+            const previousValue = this.getFieldValue(node, field);
+            node.clearFieldOperator?.(field.key);
+            if (!Number.isFinite(canonical)) {
+                syncDisplay();
+                return;
+            }
+            const clamped = Math.round(canonical * 1e6) / 1e6;
+            if (!isMixed && !wasDynamic && Math.abs(Number(previousValue) - clamped) < 1e-7) {
+                syncDisplay();
+                return;
+            }
+            if (!this.mayEditField(node, field, clamped)) {
+                syncDisplay();
+                return;
+            }
+            const updated = this.setFieldValue(node, field, clamped);
+            syncDisplay();
+            if (isMixed || wasDynamic || !Object.is(updated, previousValue)) {
+                onChange(field.key, updated, previousValue);
+            }
+        };
+
+        input.addEventListener('input', () => {
+            hasUserTyped = true;
+        });
+
+        input.addEventListener('focus', () => {
+            committedOnEnter = false;
+            hasUserTyped = false;
+            valueBeforeFocus = input.value.trim();
+            input.classList.remove('is-pool-computed');
+            input.select();
+        });
+
+        input.addEventListener('blur', () => {
+            if (!committedOnEnter) {
+                commit();
+            } else {
+                syncDisplay();
+            }
+        });
+
+        input.addEventListener('change', () => {
+            if (!committedOnEnter) {
+                commit();
+            }
+        });
+
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                committedOnEnter = true;
+                commit();
+                input.blur();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                committedOnEnter = true;
+                input.blur();
+                syncDisplay();
+            }
+        });
+
+        registerParameterWheelControl(input, {
+            isInteger: () => getUnitDefinition(getActiveUnit()).isInteger,
+            getSteps: () => getUnitDefinition(getActiveUnit()).wheelSteps,
+            getDefaultStep: () => getUnitDefinition(getActiveUnit()).defaultStep,
+            getValue: () => {
+                const ctx = getContext();
+                const unit = resolveFieldUnit(node, field.key, unitConfig, ctx);
+                return canonicalToUnit(getCanonicalValue(), unitConfig.canonical, unit, ctx);
+            },
+            setValue: (nextDisplayVal) => {
+                const ctx = getContext();
+                const unit = resolveFieldUnit(node, field.key, unitConfig, ctx);
+                const canonical = unitToCanonical(nextDisplayVal, unit, unitConfig.canonical, ctx);
+                applyCanonicalValue(canonical);
+            },
+            formatValue: (val) => {
+                const unit = getActiveUnit();
+                const def = getUnitDefinition(unit);
+                const formatted = formatUnitValue(val, unit);
+                return unit === 'time' ? formatted : `${formatted} ${def.shortLabel}`;
+            },
+        });
+
+        input.addEventListener('wheel', (event) => {
+            event.preventDefault();
+            if (event.altKey || input.disabled) return;
+            const ctx = getContext();
+            const unit = resolveFieldUnit(node, field.key, unitConfig, ctx);
+            const def = getUnitDefinition(unit);
+            const curDisplay = canonicalToUnit(getCanonicalValue(), unitConfig.canonical, unit, ctx);
+            const direction = event.deltaY < 0 ? 1 : -1;
+            const step = def.defaultStep;
+            const nextDisplay = def.isInteger
+                ? Math.round(curDisplay + direction * step)
+                : roundStepValue(curDisplay + direction * step, step);
+            const canonical = unitToCanonical(nextDisplay, unit, unitConfig.canonical, ctx);
+            applyCanonicalValue(canonical);
+        }, { passive: false });
+
+        if (typeof window !== 'undefined') {
+            const onRefresh = (evt: Event) => {
+                if (!input.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefresh);
+                    window.removeEventListener('node-field-unit-changed', onUnitChange);
+                    window.removeEventListener('node-property-changed', onPropChange);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncDisplay();
+                }
+            };
+            const onUnitChange = (evt: Event) => {
+                if (!input.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefresh);
+                    window.removeEventListener('node-field-unit-changed', onUnitChange);
+                    window.removeEventListener('node-property-changed', onPropChange);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (detail?.nodeId === node.id) {
+                    if (detail.key === field.key || (unitConfig.unitGroup && detail.unitGroup === unitConfig.unitGroup)) {
+                        syncDisplay();
+                    }
+                }
+            };
+            const onPropChange = (evt: Event) => {
+                if (!input.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefresh);
+                    window.removeEventListener('node-field-unit-changed', onUnitChange);
+                    window.removeEventListener('node-property-changed', onPropChange);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (detail?.nodeId === node.id) {
+                    const k = detail.key;
+                    if (
+                        k === field.key
+                        || k === 'crop_start'
+                        || k === 'crop_end'
+                        || k === 'duration_seconds'
+                        || k === 'original_bpm'
+                        || k === 'target_bpm'
+                        || k === 'warp'
+                        || k === 'stretch_mode'
+                        || k === 'sample_type'
+                    ) {
+                        syncDisplay();
+                    }
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onRefresh);
+            window.addEventListener('node-field-unit-changed', onUnitChange);
+            window.addEventListener('node-property-changed', onPropChange);
+        }
+
+        (input as any).__syncDisplay = syncDisplay;
+        return input;
+    }
+
+    private static createUnitFloatWidget(
+        field: FieldSchema,
+        node: BaseNode,
+        onChange: (key: string, val: any, previousValue: any) => void
+    ): HTMLElement {
+        const unitConfig: UnitFieldConfig = field.unitConfig || {
+            family: 'audio_position',
+            canonical: 'fraction',
+            units: AUDIO_POSITION_UNITS,
+        };
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'td-unit-float';
+
+        const input = this.createUnitFloatInputPart(field, node, unitConfig, onChange);
+
+        const unitSelect = document.createElement('select');
+        unitSelect.className = 'td-unit-select';
+        unitSelect.setAttribute('aria-label', `${field.label} unit`);
+        for (const u of unitConfig.units) {
+            const def = getUnitDefinition(u);
+            const opt = document.createElement('option');
+            opt.value = u;
+            opt.textContent = def.shortLabel;
+            opt.title = def.label;
+            unitSelect.appendChild(opt);
+        }
+
+        wrapper.append(input, unitSelect);
+
+        const syncAll = () => {
+            const ctx = resolveNodeUnitContext(node);
+            const unit = resolveFieldUnit(node, field.key, unitConfig, ctx);
+            if (unitSelect.value !== unit) {
+                unitSelect.value = unit;
+            }
+            unitSelect.title = `Unit: ${getUnitDefinition(unit).label}`;
+            (input as any).__syncDisplay?.();
+        };
+        syncAll();
+
+        unitSelect.addEventListener('change', () => {
+            const nextUnit = unitSelect.value as MeasurementUnitId;
+            if (!unitConfig.units.includes(nextUnit)) return;
+            setFieldUnit(node, field.key, unitConfig, nextUnit);
+            syncAll();
+        });
+
+        if (typeof window !== 'undefined') {
+            const onUnitSync = (evt: Event) => {
+                if (!wrapper.isConnected) {
+                    window.removeEventListener('node-field-unit-changed', onUnitSync);
+                    window.removeEventListener('node-properties-refreshed', onUnitSync);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncAll();
+                }
+            };
+            window.addEventListener('node-field-unit-changed', onUnitSync);
+            window.addEventListener('node-properties-refreshed', onUnitSync);
+        }
+
+        (wrapper as any).__syncDisplay = syncAll;
+        return wrapper;
     }
 
     private static createGlobalNumberWidget(
@@ -911,33 +2047,31 @@ export class WidgetFactory {
         };
         window.addEventListener('global-parameters-changed', onGlobalParamChange);
         let committedOnEnter = false;
+        let valueBeforeFocus = '';
+        let hasUserTyped = false;
         const commit = () => {
             const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
             const rawStr = input.value.trim();
-            if (rawStr === '' && isMixed) return;
-            const previousValue = this.getFieldValue(node, field);
-            if (isFieldOperatorExpression(rawStr)) {
-                node.resetTriggerCount?.();
-                const evaluated = node.applyFieldOperator(field.key, rawStr, field);
-                const updated = this.setFieldValue(node, field, evaluated);
-                node.setFieldOperator(field.key, rawStr);
+            if (!hasUserTyped && rawStr === valueBeforeFocus && !isMixed) {
                 refresh();
-                onChange(field.key, updated, previousValue);
                 return;
             }
-            node.clearFieldOperator?.(field.key);
+            if (rawStr === '' && isMixed) return;
+            const previousValue = this.getFieldValue(node, field);
+            const wasDynamic = Boolean(node.isFieldDynamicActive?.(field.key) || node.hasFieldOperator?.(field.key));
             const raw = parseFloat(rawStr);
             if (!Number.isFinite(raw)) {
                 refresh();
                 return;
             }
-            if (!isMixed && Object.is(previousValue, raw)) {
+            if (!isMixed && !wasDynamic && Object.is(previousValue, raw)) {
                 refresh();
                 return;
             }
+            node.clearFieldOperator?.(field.key);
             const updated = this.setFieldValue(node, field, raw);
             refresh();
-            if (isMixed || !Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
+            if (isMixed || wasDynamic || !Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
         };
 
         scope.addEventListener('click', () => {
@@ -952,11 +2086,13 @@ export class WidgetFactory {
             refresh();
             if (!Object.is(updated, previousValue)) onChange(field.key, updated, previousValue);
         });
+        input.addEventListener('input', () => {
+            hasUserTyped = true;
+        });
         input.addEventListener('focus', () => {
             committedOnEnter = false;
-            if (node.hasFieldOperator?.(field.key)) {
-                input.value = node.getFieldOperator(field.key);
-            }
+            hasUserTyped = false;
+            valueBeforeFocus = input.value.trim();
             input.classList.remove('is-pool-computed');
             input.select();
         });
@@ -1019,6 +2155,21 @@ export class WidgetFactory {
 
         wrapper.append(scope, input);
         refresh();
+        (wrapper as any).__syncDisplay = refresh;
+        if (typeof window !== 'undefined') {
+            const onRefreshed = (evt: Event) => {
+                if (!wrapper.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefreshed);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    refresh();
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onRefreshed);
+        }
+
         return wrapper;
     }
 
@@ -1058,13 +2209,50 @@ export class WidgetFactory {
             select.appendChild(optionEl);
         }
 
+        const syncDisplay = () => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            const latest = this.getFieldValue(node, field);
+            if (!isMixed) {
+                const targetStr = String(latest ?? '');
+                if (select.value !== targetStr) {
+                    select.value = targetStr;
+                }
+            }
+            const isCalc = !isMixed && this.isFieldCalculated(node, field.key);
+            select.classList.toggle('is-pool-computed', isCalc);
+            const trigger = select.closest?.('.ui-dropdown')?.querySelector('.ui-dropdown-trigger');
+            trigger?.classList.toggle('is-pool-computed', isCalc);
+            (select as any).__sinDropdownController?.sync?.();
+        };
+        syncDisplay();
+
         select.addEventListener('change', () => {
             const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
             const previousValue = this.getFieldValue(node, field);
-            if (!isMixed && Object.is(previousValue, select.value)) return;
+            node.clearFieldOperator?.(field.key);
+            if (!isMixed && Object.is(previousValue, select.value)) {
+                syncDisplay();
+                return;
+            }
             const updated = this.setFieldValue(node, field, select.value);
+            syncDisplay();
             onChange(field.key, updated, previousValue);
         });
+
+        (select as any).__syncDisplay = syncDisplay;
+        if (typeof window !== 'undefined') {
+            const onRefreshed = (evt: Event) => {
+                if (!select.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefreshed);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncDisplay();
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onRefreshed);
+        }
 
         return select;
     }
@@ -1075,7 +2263,7 @@ export class WidgetFactory {
         onChange: (key: string, val: any, previousValue: any) => void
     ): HTMLElement {
         const isMixedInit = node.hasMixedSlotValues?.(field.key) ?? false;
-        return RadioGroup.create({
+        const group = RadioGroup.create({
             name: `${field.key}-${node.id}`,
             value: isMixedInit ? '' : String(this.getFieldValue(node, field)),
             options: (field.options || []).map(option => typeof option === 'object'
@@ -1085,11 +2273,48 @@ export class WidgetFactory {
             onChange: value => {
                 const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
                 const previousValue = this.getFieldValue(node, field);
-                if (!isMixed && Object.is(previousValue, value)) return;
+                node.clearFieldOperator?.(field.key);
+                if (!isMixed && Object.is(previousValue, value)) {
+                    syncDisplay();
+                    return;
+                }
                 const updated = this.setFieldValue(node, field, value);
+                syncDisplay();
                 onChange(field.key, updated, previousValue);
             }
         });
+
+        const syncDisplay = () => {
+            const isMixed = node.hasMixedSlotValues?.(field.key) ?? false;
+            const targetVal = isMixed ? '' : String(this.getFieldValue(node, field) ?? '').toLowerCase();
+            group.querySelectorAll<HTMLLabelElement>('.td-radio-option').forEach(optLabel => {
+                const radio = optLabel.querySelector<HTMLInputElement>('input[type="radio"]');
+                if (!radio) return;
+                const checked = !isMixed && radio.value.toLowerCase() === targetVal;
+                radio.checked = checked;
+                optLabel.classList.toggle('is-checked', checked);
+                optLabel.classList.toggle('is-active', checked);
+            });
+            group.classList.toggle('is-pool-computed', !isMixed && this.isFieldCalculated(node, field.key));
+        };
+        syncDisplay();
+        (group as any).__syncDisplay = syncDisplay;
+
+        if (typeof window !== 'undefined') {
+            const onRefreshed = (evt: Event) => {
+                if (!group.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefreshed);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncDisplay();
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onRefreshed);
+        }
+
+        return group;
     }
 
     private static createBooleanWidget(
@@ -1100,14 +2325,39 @@ export class WidgetFactory {
         const input = document.createElement('input');
         input.type = 'checkbox';
         input.className = 'td-param-checkbox ui-checkbox';
-        input.checked = Boolean(this.getFieldValue(node, field));
+
+        const syncDisplay = () => {
+            input.checked = Boolean(this.getFieldValue(node, field));
+            input.classList.toggle('is-pool-computed', this.isFieldCalculated(node, field.key));
+        };
+        syncDisplay();
 
         input.addEventListener('change', () => {
             const previousValue = this.getFieldValue(node, field);
-            if (Object.is(previousValue, input.checked)) return;
+            node.clearFieldOperator?.(field.key);
+            if (Object.is(previousValue, input.checked)) {
+                syncDisplay();
+                return;
+            }
             const updated = this.setFieldValue(node, field, input.checked);
+            syncDisplay();
             onChange(field.key, updated, previousValue);
         });
+
+        (input as any).__syncDisplay = syncDisplay;
+        if (typeof window !== 'undefined') {
+            const onRefreshed = (evt: Event) => {
+                if (!input.isConnected) {
+                    window.removeEventListener('node-properties-refreshed', onRefreshed);
+                    return;
+                }
+                const detail = (evt as CustomEvent)?.detail;
+                if (!detail || detail.nodeId === node.id) {
+                    syncDisplay();
+                }
+            };
+            window.addEventListener('node-properties-refreshed', onRefreshed);
+        }
 
         return input;
     }
@@ -1163,9 +2413,8 @@ export class WidgetFactory {
         const openDirectInput = () => {
             const input = document.createElement('input');
             input.type = 'text';
-            input.value = node.hasFieldOperator?.(field.key)
-                ? node.getFieldOperator(field.key)
-                : activeDb.toFixed(1);
+            const resolvedDbStr = activeDb.toFixed(1);
+            input.value = resolvedDbStr;
             input.className = 'td-float-direct-input';
 
             container.innerHTML = '';
@@ -1173,29 +2422,26 @@ export class WidgetFactory {
             input.focus();
             input.select();
 
+            let hasUserTyped = false;
+            input.addEventListener('input', () => {
+                hasUserTyped = true;
+            });
+
             let committed = false;
             const commitInput = () => {
                 if (committed) return;
                 committed = true;
                 const rawStr = input.value.trim();
-                const previousValue = this.getFieldValue(node, field);
-                if (isFieldOperatorExpression(rawStr)) {
-                    node.resetTriggerCount?.();
-                    const evaluated = node.applyFieldOperator(field.key, rawStr, field);
-                    const updated = Number(this.setFieldValue(node, field, evaluated));
-                    node.setFieldOperator(field.key, rawStr);
-                    updateUI(updated);
-                    onChange(field.key, updated, previousValue);
-                } else {
+                if (hasUserTyped || rawStr !== resolvedDbStr) {
+                    const previousValue = this.getFieldValue(node, field);
+                    const wasDynamic = Boolean(node.isFieldDynamicActive?.(field.key) || node.hasFieldOperator?.(field.key));
                     const parsed = parseFloat(rawStr);
                     if (!isNaN(parsed)) {
                         node.clearFieldOperator?.(field.key);
-                        if (!Object.is(previousValue, parsed)) {
-                            updateUI(parsed);
-                            const updated = this.setFieldValue(node, field, activeDb);
+                        updateUI(parsed);
+                        const updated = this.setFieldValue(node, field, activeDb);
+                        if (wasDynamic || !Object.is(updated, previousValue)) {
                             onChange(field.key, updated, previousValue);
-                        } else {
-                            updateUI(activeDb);
                         }
                     }
                 }
@@ -1225,7 +2471,7 @@ export class WidgetFactory {
             hasDragged = false;
             startX = e.clientX;
             startDb = activeDb;
-            try { container.setPointerCapture(e.pointerId); } catch (_) {}
+            try { container.setPointerCapture(e.pointerId); } catch (_) { }
             container.classList.add('dragging');
             e.preventDefault();
         });
@@ -1251,7 +2497,7 @@ export class WidgetFactory {
             if (isDragging) {
                 isDragging = false;
                 container.classList.remove('dragging');
-                try { container.releasePointerCapture(e.pointerId); } catch (_) {}
+                try { container.releasePointerCapture(e.pointerId); } catch (_) { }
                 if (!hasDragged && node.hasFieldOperator?.(field.key)) {
                     openDirectInput();
                 }
@@ -1302,6 +2548,7 @@ export class WidgetFactory {
             window.addEventListener('node-properties-refreshed', onRefreshed);
         }
 
+        (container as any).__syncDisplay = () => updateUI(Number(this.getFieldValue(node, field) ?? field.default ?? 0.0));
         return container;
     }
 
@@ -1357,23 +2604,22 @@ export class WidgetFactory {
         syncToggleUI();
 
         let committedOnEnter = false;
-        const commitValue = (rawVal: string | number) => {
+        let valueBeforeFocus = '';
+        let hasUserTyped = false;
+        const commitValue = (rawVal: string | number, forceCommit = false) => {
             const trimmed = String(rawVal ?? '').trim() || '42';
-            const previousValue = this.getFieldValue(node, field);
-            if (isFieldOperatorExpression(trimmed)) {
-                node.resetTriggerCount?.();
-                node.setFieldOperator(field.key, trimmed);
-                const updated = this.setFieldValue(node, field, trimmed as any);
+            if (!forceCommit && !hasUserTyped && trimmed === valueBeforeFocus) {
                 syncSeedDisplay();
-                onChange(field.key, updated, previousValue);
                 return;
             }
+            const previousValue = this.getFieldValue(node, field);
+            const wasDynamic = Boolean(node.isFieldDynamicActive?.(field.key) || node.hasFieldOperator?.(field.key));
             node.clearFieldOperator?.(field.key);
             const asNum = Number(trimmed);
             const normalized: string | number = (!trimmed.includes(' ') && Number.isFinite(asNum))
                 ? Math.round(asNum)
                 : trimmed;
-            if (Object.is(previousValue, normalized)) {
+            if (!wasDynamic && Object.is(previousValue, normalized)) {
                 syncSeedDisplay();
                 return;
             }
@@ -1382,10 +2628,14 @@ export class WidgetFactory {
             onChange(field.key, updated, previousValue);
         };
 
+        input.addEventListener('input', () => {
+            hasUserTyped = true;
+        });
+
         input.addEventListener('focus', () => {
             committedOnEnter = false;
-            const currentVal = String(this.getFieldValue(node, field) ?? '42');
-            input.value = node.hasFieldOperator?.(field.key) ? node.getFieldOperator(field.key) : currentVal;
+            hasUserTyped = false;
+            valueBeforeFocus = input.value.trim();
             input.classList.remove('is-pool-computed');
             input.select();
         });
@@ -1420,7 +2670,7 @@ export class WidgetFactory {
             event.preventDefault();
             if (event.altKey || input.disabled) return;
             const direction = event.deltaY < 0 ? 1 : -1;
-            commitValue(Math.max(0, Math.round(currentNumeric + direction * getParameterWheelStep(true))));
+            commitValue(Math.max(0, Math.round(currentNumeric + direction * getParameterWheelStep(true))), true);
         }, { passive: false });
 
         refreshToggle.addEventListener('click', (e) => {
@@ -1447,6 +2697,10 @@ export class WidgetFactory {
 
         wrapper.appendChild(input);
         wrapper.appendChild(refreshToggle);
+        (wrapper as any).__syncDisplay = () => {
+            syncSeedDisplay();
+            syncToggleUI();
+        };
         return wrapper;
     }
 }

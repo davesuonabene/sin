@@ -32,7 +32,7 @@ from . import (
 
 
 AUDIO_TYPES = frozenset({"audio", "track", "sample"})
-PLAYABLE_TYPES = AUDIO_TYPES | {"multitrack"}
+PLAYABLE_TYPES = AUDIO_TYPES | {"multitrack", "zoom_h4"}
 _MAX_WAVEFORM_RESOLUTION = 10_000
 _RENDER_BLOCK_FRAMES = 65_536
 _MIN_GAIN_DB = -60.0
@@ -222,7 +222,7 @@ def build_editor_session(
 
     if root.type in AUDIO_TYPES:
         candidates = [root]
-    elif root.type == "multitrack":
+    elif isinstance(root, models.MultitrackItem):
         candidates = [root, *_multitrack_layers(root)]
     elif isinstance(root, models.ProjectItem):
         candidates = _project_playables(db, root)
@@ -259,7 +259,7 @@ def build_editor_session(
 
     if requested_item_id is not None:
         current = candidate_by_id[requested_item_id]
-    elif root.type == "multitrack":
+    elif isinstance(root, models.MultitrackItem):
         current = root
     elif isinstance(root, models.ProjectItem):
         current = _default_project_item(db, root, candidates)

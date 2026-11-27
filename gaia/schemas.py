@@ -571,6 +571,7 @@ class MediaEditLayer(BaseModel):
     volume: Optional[float] = None
     gain_db: Optional[float] = 0.0
     muted: bool = False
+    solo: bool = False
 
 
 class MediaEditDestination(BaseModel):
@@ -874,6 +875,7 @@ class MediaExportRequest(BaseModel):
     main_start_sec: Optional[float] = None
     main_end_sec: Optional[float] = None
     segments: List[MediaEditSegment] = Field(default_factory=list)
+    layers: List[MediaEditLayer] = Field(default_factory=list)
     pre_gain_db: float = 0.0
     volume: float = 1.0
     normalize: bool = False

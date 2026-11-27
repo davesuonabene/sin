@@ -29,10 +29,11 @@ SIN_PARAM_CROP_END      = 8
 SIN_PARAM_PLAYBACK_RATE = 9
 
 # Matches SinClipFlags in engine/include/sin_dsp.h
-SIN_CLIP_LOOP_SOURCE     = 1 << 0
-SIN_CLIP_LIVE_CROP_BOUND = 1 << 1
-SIN_CLIP_LIVE_RATE_BOUND = 1 << 2
-SIN_CLIP_CROP_IN_PLACE   = 1 << 3
+SIN_CLIP_LOOP_SOURCE         = 1 << 0
+SIN_CLIP_LIVE_CROP_BOUND     = 1 << 1
+SIN_CLIP_LIVE_RATE_BOUND     = 1 << 2
+SIN_CLIP_CROP_IN_PLACE       = 1 << 3
+SIN_CLIP_TILE_TIME_STRETCHED = 1 << 4
 
 # Matches SinProcessorType & ABI limits in engine/include/sin_dsp.h
 SIN_MAX_PROC_PARAMS  = 32

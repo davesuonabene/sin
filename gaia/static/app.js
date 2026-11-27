@@ -487,11 +487,13 @@ function initializeGaiaLibrary() {
     }
 
     function typeLabel(typeId) {
-        return typeDefinition(typeId)?.label || typeId.replaceAll('_', ' ');
+        if (typeId === 'sample_pack') return 'Sample pack';
+        if (typeId === 'multitrack') return typeDefinition(typeId)?.label || 'Multitrack';
+        return typeDefinition(typeId)?.label || String(typeId || '').replaceAll('_', ' ');
     }
 
     function typeIsContainer(typeId) {
-        return Boolean(typeDefinition(typeId)?.container);
+        return Boolean(typeDefinition(typeId)?.container) || ['folder', 'collection', 'multitrack', 'zoom_h4', 'project'].includes(typeId);
     }
 
     function typeIsProject(typeId) {
@@ -571,6 +573,62 @@ function initializeGaiaLibrary() {
             .join(' ')
             .toLocaleLowerCase();
         return profile.includes('sample_pack') || profile.includes('sample pack');
+    }
+
+    const AUDIO_TYPE_SWITCH_OPTIONS = Object.freeze([
+        { value: 'audio', label: 'Audio', hint: 'Unclassified audio' },
+        { value: 'sample', label: 'Sample', hint: 'One-shot or loop · BPM & key' },
+        { value: 'track', label: 'Track', hint: 'Music track · album metadata' },
+    ]);
+
+    const CONTAINER_TYPE_SWITCH_OPTIONS = Object.freeze([
+        { value: 'folder', label: 'Folder', hint: 'Standard directory' },
+        { value: 'sample_pack', label: 'Sample pack', hint: 'Pack · audio as samples' },
+        { value: 'multitrack', label: 'Multitrack', hint: 'Aligned stems · SIN group' },
+        { value: 'zoom_h4', label: 'Zoom H4', hint: 'Stems + TrLR mixdown' },
+    ]);
+
+    function effectiveEntryType(entry) {
+        if (!entry) return 'item';
+        const record = entry.kind === 'content' ? entry.content : (entry.item || entry);
+        const rawType = String(entry.type || record?.type || '').toLowerCase();
+        if ((rawType === 'folder' || rawType === 'collection') && isSamplePackCollection(record)) {
+            return 'sample_pack';
+        }
+        if (rawType === 'collection') return 'folder';
+        return rawType || 'item';
+    }
+
+    function isEntryInsideProject(entry) {
+        if (!entry) return false;
+        if (entry.kind === 'subfolder' && typeIsProject(entry.collection?.type)) return true;
+        const itemId = entry.kind === 'subfolder' ? entryFolderItemId(entry) : numericItemId(entry);
+        if (!itemId) return false;
+        let current = catalogStore.getItem(itemId);
+        const seen = new Set();
+        while (current && current.parent_id != null && !seen.has(current.parent_id)) {
+            seen.add(current.parent_id);
+            const parent = catalogStore.getItem(current.parent_id);
+            if (!parent) break;
+            if (typeIsProject(parent.type)) return true;
+            current = parent;
+        }
+        return false;
+    }
+
+    function switchableTypeOptions(entry) {
+        if (!entry) return null;
+        const rawType = String(entry.type || entry.item?.type || entry.content?.type || '').toLowerCase();
+        if (['audio', 'sample', 'track'].includes(rawType)) {
+            return AUDIO_TYPE_SWITCH_OPTIONS;
+        }
+        if (['folder', 'collection', 'multitrack', 'zoom_h4'].includes(rawType)) {
+            if (typeIsProject(rawType) || isEntryInsideProject(entry)) return null;
+            const id = entry.kind === 'subfolder' ? entryFolderItemId(entry) : numericItemId(entry);
+            if (!id) return null;
+            return CONTAINER_TYPE_SWITCH_OPTIONS;
+        }
+        return null;
     }
 
     function collectionRowLayout(collection) {
@@ -756,6 +814,10 @@ function initializeGaiaLibrary() {
 
     function assetType(item) {
         const declaredType = normalizeFacetValue(item?.type);
+        if ((declaredType === 'folder' || declaredType === 'collection') && isSamplePackCollection(item)) {
+            return 'sample_pack';
+        }
+        if (declaredType === 'collection') return 'folder';
         if (declaredType && declaredType !== 'item') return declaredType;
         const source = normalizeFacetValue(item?.name || item?.title || item?.absolute_path);
         if (source.endsWith('.mid') || source.endsWith('.midi')) return 'midi';
@@ -904,7 +966,7 @@ function initializeGaiaLibrary() {
             }
             if (assetMatchesFilters(item, { vaultIds: selection.vaultIds, tags: selection.tags })) {
                 const type = assetType(item);
-                if (typeDefinition(type)) types.add(type);
+                if (type === 'sample_pack' || typeDefinition(type)) types.add(type);
             }
             if (assetMatchesFilters(item, selection)) {
                 assetTags(item).forEach(tag => {
@@ -1108,7 +1170,7 @@ function initializeGaiaLibrary() {
         for (let i = 0; i < rawChildren.length; i++) {
             const child = rawChildren[i];
             if (referencedItemIds && referencedItemIds.has(Number(child.id))) continue;
-            const isSub = child.type === 'folder' || child.type === 'collection' || Boolean(child.attributes?.is_folder);
+            const isSub = typeIsContainer(child.type) || child.type === 'folder' || child.type === 'collection' || Boolean(child.attributes?.is_folder);
             if (isSub) {
                 folders.push(child);
             } else {
@@ -1361,14 +1423,18 @@ function initializeGaiaLibrary() {
             case 'filename': return record.filename || filename(entryAbsolutePath(entry));
             case 'path': return entryPath(entry);
             case 'type': {
+                const profileId = record.attributes?.profile_id || entry.reference?.attributes?.profile_id || entry.content?.attributes?.profile_id;
                 const label = record.attributes?.profile_label || entry.reference?.attributes?.profile_label || entry.content?.attributes?.profile_label;
-                if (label) return label;
                 if (entry.type === 'project' || record.type === 'project') {
                     const kind = record.project_kind || 'audio';
                     const engine = record.editor_engine || (kind === 'video' ? 'simple_media' : 'sin');
                     if (kind === 'video') return 'Project · Video';
                     return engine === 'simple_media' ? 'Project · Audio (Simple)' : 'Project · Audio (SIN)';
                 }
+                if (entry.type === 'multitrack') return typeLabel('multitrack');
+                if (entry.type === 'zoom_h4') return label || typeLabel('zoom_h4');
+                if (profileId === 'sample_pack' || isSamplePackCollection(record)) return label || 'Sample pack';
+                if (label) return label;
                 if (record.attributes?.is_folder || entry.type === 'collection' || entry.type === 'folder') return 'Folder';
                 return typeLabel(entry.type);
             }
@@ -1530,7 +1596,7 @@ function initializeGaiaLibrary() {
         if (field === 'title') return true;
         const type = entry.type || entry.item?.type || '';
         if (field === 'type') {
-            return ['audio', 'sample', 'track'].includes(type);
+            return Boolean(switchableTypeOptions(entry));
         }
         if (field === 'bpm' || field === 'key') {
             return ['audio', 'sample', 'midi', 'multitrack', 'zoom_h4'].includes(type);
@@ -1543,7 +1609,7 @@ function initializeGaiaLibrary() {
 
     function entryValue(entry, field) {
         if (field === 'title') return entry.title;
-        if (field === 'type') return entry.type;
+        if (field === 'type') return effectiveEntryType(entry);
         if (field === 'bpm') return entryBpm(entry);
         if (field === 'key') return entryKey(entry);
         if (field === 'tags') {
@@ -1556,23 +1622,32 @@ function initializeGaiaLibrary() {
     }
 
     function updateEntryInState(entry, result) {
-        const itemId = Number(result.id || numericItemId(entry) || entry.itemId || entry.item?.id || entry.content?.child_id);
-        if (entry.title && result.title) entry.title = result.title;
-        if (entry.item) Object.assign(entry.item, result);
-        if (entry.content) Object.assign(entry.content, result);
-        if (entry.folderItem) Object.assign(entry.folderItem, result);
+        const itemId = Number(result.id || (entry.kind === 'subfolder' ? entryFolderItemId(entry) : numericItemId(entry)) || entry.itemId || entry.item?.id || entry.content?.child_id);
+        const normalizedResult = {
+            ...result,
+            ...(result.attributes && typeof result.attributes === 'object' ? { attributes: { ...result.attributes } } : {}),
+        };
+        if (entry.title && normalizedResult.title) entry.title = normalizedResult.title;
+        if (normalizedResult.type) entry.type = normalizedResult.type;
+        if (entry.item) Object.assign(entry.item, normalizedResult);
+        if (entry.content) Object.assign(entry.content, normalizedResult);
+        if (entry.folderItem) {
+            Object.assign(entry.folderItem, normalizedResult);
+            if (entry.folderItem.item) Object.assign(entry.folderItem.item, normalizedResult);
+            if (entry.folderItem.content) Object.assign(entry.folderItem.content, normalizedResult);
+        }
 
         if (Number.isFinite(itemId)) {
-            catalogStore.patchItemLocal(itemId, result);
+            catalogStore.patchItemLocal(itemId, normalizedResult);
             const index = state.items.findIndex(item => Number(item.id) === itemId);
-            if (index >= 0) state.items[index] = { ...state.items[index], ...result };
+            if (index >= 0) state.items[index] = { ...state.items[index], ...normalizedResult };
         }
 
         state.projectReferencedItems.forEach(records => {
             records.forEach(record => {
-                if (Number(record.item?.id) === itemId) record.item = { ...record.item, ...result };
+                if (Number(record.item?.id) === itemId) record.item = { ...record.item, ...normalizedResult };
                 (record.versions || []).forEach(version => {
-                    if (Number(version.item?.id) === itemId) version.item = { ...version.item, ...result };
+                    if (Number(version.item?.id) === itemId) version.item = { ...version.item, ...normalizedResult };
                 });
             });
         });
@@ -1580,12 +1655,14 @@ function initializeGaiaLibrary() {
         if (state.subfolderEntries) {
             state.subfolderEntries.forEach(sub => {
                 if (Number(entryFolderItemId(sub)) === itemId) {
-                    if (result.title) {
-                        sub.title = result.title;
-                        sub.name = result.title;
-                        if (sub.subfolder) sub.subfolder.name = result.title;
+                    if (normalizedResult.title) {
+                        sub.title = normalizedResult.title;
+                        sub.name = normalizedResult.title;
+                        if (sub.subfolder) sub.subfolder.name = normalizedResult.title;
                     }
-                    if (sub.item) Object.assign(sub.item, result);
+                    if (normalizedResult.type) sub.type = normalizedResult.type;
+                    if (sub.item) Object.assign(sub.item, normalizedResult);
+                    if (sub.content) Object.assign(sub.content, normalizedResult);
                 }
             });
         }
@@ -1634,7 +1711,9 @@ function initializeGaiaLibrary() {
         }
         if (field === 'title' && (typeIsProject(entry.type) || entry.type === 'project')) stopPlayback();
 
-        const itemId = numericItemId(entry) || entry.itemId || entry.item?.id || entry.content?.child_id;
+        const itemId = entry.kind === 'subfolder'
+            ? entryFolderItemId(entry)
+            : (numericItemId(entry) || entry.itemId || entry.item?.id || entry.content?.child_id);
         let url;
         if (itemId) {
             url = `/items/${itemId}`;
@@ -1652,9 +1731,33 @@ function initializeGaiaLibrary() {
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(apiErrorMessage(result, 'Could not update metadata'));
         updateEntryInState(entry, result);
+        if (field === 'type') {
+            await catalogStore.sync({ forceSnapshot: false }).catch(() => { });
+            state.items = catalogStore.getScopedRoots({
+                vaultId: state.selectedVaultId,
+                playlistId: state.selectedPlaylistId,
+                previewMode: 'quick',
+            });
+            state.catalogItems = state.items;
+        }
         invalidateFacetCache();
+        reconcileFilterSelection();
         renderFilterUI();
         renderAssets();
+        if (field === 'type') {
+            if (state.selectedEntryIds.has(entry.id)) {
+                const refreshed = entryById(entry.id) || entry;
+                window.dispatchEvent(new CustomEvent('gaia:selection', {
+                    detail: {
+                        entry: refreshed,
+                        playable: Boolean(refreshed && (canPreview(refreshed) || refreshed.isContainer || typeIsContainer(refreshed.type) || refreshed.type === 'collection')),
+                    },
+                }));
+            }
+            if (window.gaiaEditorHost?.isOpen?.()) {
+                window.gaiaEditorHost.refresh?.();
+            }
+        }
     }
 
     function formatSinProposalValue(proposal) {
@@ -1778,36 +1881,180 @@ function initializeGaiaLibrary() {
         if (editor.tagName === 'SELECT') editor.addEventListener('change', () => finish(true));
     }
 
+    let activeTypeSwitcher = null;
+
+    function closeTypeSwitcherMenu({ restoreFocus = false } = {}) {
+        if (!activeTypeSwitcher) return;
+        const { menu, trigger, cleanup } = activeTypeSwitcher;
+        activeTypeSwitcher = null;
+        cleanup();
+        menu.remove();
+        if (trigger?.isConnected) {
+            trigger.setAttribute('aria-expanded', 'false');
+            trigger.classList.remove('is-open');
+            if (restoreFocus) trigger.focus({ preventScroll: true });
+        }
+    }
+
+    function openTypeSwitcherMenu(trigger, entry) {
+        const options = switchableTypeOptions(entry);
+        if (!options || !trigger) return;
+
+        if (activeTypeSwitcher && activeTypeSwitcher.trigger === trigger) {
+            closeTypeSwitcherMenu();
+            return;
+        }
+        closeTypeSwitcherMenu();
+        closeContextMenu();
+        closeColumnMenu();
+
+        const currentType = effectiveEntryType(entry);
+        const menu = document.createElement('div');
+        menu.className = 'type-switcher-menu sin-menu-surface';
+        menu.setAttribute('role', 'listbox');
+        menu.setAttribute('aria-label', 'Switch item type');
+
+        const buttons = [];
+        options.forEach(opt => {
+            const isSelected = opt.value === currentType;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = `type-switcher-option sin-menu-item${isSelected ? ' is-selected' : ''}`;
+            btn.setAttribute('role', 'option');
+            btn.setAttribute('aria-selected', String(isSelected));
+            btn.dataset.typeValue = opt.value;
+            btn.innerHTML = `
+                <span class="type-switcher-check" aria-hidden="true">${isSelected ? '✓' : ''}</span>
+                <span class="type-switcher-copy">
+                    <span class="type-switcher-label">${escapeHtml(opt.label)}</span>
+                    ${opt.hint ? `<span class="type-switcher-hint">${escapeHtml(opt.hint)}</span>` : ''}
+                </span>
+            `;
+            btn.addEventListener('pointerdown', e => e.stopPropagation());
+            btn.addEventListener('click', async e => {
+                e.preventDefault();
+                e.stopPropagation();
+                closeTypeSwitcherMenu();
+                if (opt.value === currentType) return;
+                if (trigger.isConnected) {
+                    trigger.classList.add('is-switching');
+                    trigger.disabled = true;
+                }
+                try {
+                    await saveMetadata(entry, 'type', opt.value);
+                } catch (error) {
+                    window.alert(error.message || 'Could not switch type');
+                    renderAssets();
+                } finally {
+                    if (trigger.isConnected) {
+                        trigger.classList.remove('is-switching');
+                        trigger.disabled = false;
+                    }
+                }
+            });
+            menu.appendChild(btn);
+            buttons.push(btn);
+        });
+
+        document.body.appendChild(menu);
+        trigger.setAttribute('aria-expanded', 'true');
+        trigger.classList.add('is-open');
+
+        const rect = trigger.getBoundingClientRect();
+        const menuWidth = Math.max(196, menu.offsetWidth || 196);
+        const menuHeight = menu.offsetHeight || 140;
+        const spaceBelow = window.innerHeight - rect.bottom - 8;
+        const spaceAbove = rect.top - 8;
+        const openUp = spaceBelow < menuHeight && spaceAbove > spaceBelow;
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+        const top = openUp
+            ? Math.max(8, rect.top - menuHeight - 4)
+            : Math.min(window.innerHeight - menuHeight - 8, rect.bottom + 4);
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+
+        let highlighted = Math.max(0, buttons.findIndex(b => b.classList.contains('is-selected')));
+        const applyHighlight = nextIdx => {
+            buttons.forEach(b => b.classList.remove('is-highlighted'));
+            if (nextIdx >= 0 && nextIdx < buttons.length) {
+                highlighted = nextIdx;
+                buttons[highlighted].classList.add('is-highlighted');
+                buttons[highlighted].focus({ preventScroll: true });
+            }
+        };
+        applyHighlight(highlighted);
+
+        const onPointerDown = event => {
+            if (!menu.contains(event.target) && !trigger.contains(event.target)) {
+                closeTypeSwitcherMenu();
+            }
+        };
+        const onKeyDown = event => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                closeTypeSwitcherMenu({ restoreFocus: true });
+            } else if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                applyHighlight((highlighted + 1) % buttons.length);
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                applyHighlight((highlighted - 1 + buttons.length) % buttons.length);
+            } else if (event.key === 'Home') {
+                event.preventDefault();
+                applyHighlight(0);
+            } else if (event.key === 'End') {
+                event.preventDefault();
+                applyHighlight(buttons.length - 1);
+            } else if (event.key === 'Enter' || event.key === ' ') {
+                if (highlighted >= 0 && buttons[highlighted]) {
+                    event.preventDefault();
+                    buttons[highlighted].click();
+                }
+            }
+        };
+        const onViewportMove = () => closeTypeSwitcherMenu();
+
+        document.addEventListener('pointerdown', onPointerDown, true);
+        document.addEventListener('keydown', onKeyDown, true);
+        window.addEventListener('resize', onViewportMove);
+        assetList?.addEventListener('scroll', onViewportMove, { passive: true });
+
+        activeTypeSwitcher = {
+            menu,
+            trigger,
+            cleanup() {
+                document.removeEventListener('pointerdown', onPointerDown, true);
+                document.removeEventListener('keydown', onKeyDown, true);
+                window.removeEventListener('resize', onViewportMove);
+                assetList?.removeEventListener('scroll', onViewportMove);
+            },
+        };
+    }
+
     function beginCellEdit(cell, entry, field) {
         if (!canEdit(entry, field) || cell.querySelector('input, select')) return;
+        if (field === 'type') {
+            openTypeSwitcherMenu(cell, entry);
+            return;
+        }
         const initial = entryValue(entry, field) ?? '';
-        const editor = field === 'type' ? document.createElement('select') : document.createElement('input');
-        editor.className = field === 'type' ? 'cell-editor sin-select' : 'cell-editor';
+        const editor = document.createElement('input');
+        editor.className = 'cell-editor';
         const editorWidth = Math.max(72, Math.ceil(cell.getBoundingClientRect().width));
         editor.style.width = `${editorWidth}px`;
-        if (field === 'type') {
-            const options = ['audio', 'sample', 'track'];
-            options.forEach(type => {
-                const option = document.createElement('option');
-                option.value = type;
-                option.textContent = typeLabel(type);
-                option.selected = type === initial;
-                editor.appendChild(option);
-            });
-        } else {
-            const numericField = ['bpm', 'release_year', 'track_number', 'disc_number'].includes(field);
-            editor.type = numericField ? 'number' : 'text';
-            if (field === 'bpm') {
-                editor.min = '20';
-                editor.max = '400';
-            } else if (field === 'release_year') {
-                editor.min = '1';
-                editor.max = '9999';
-            } else if (field === 'track_number' || field === 'disc_number') {
-                editor.min = '1';
-            }
-            editor.value = initial;
+        const numericField = ['bpm', 'release_year', 'track_number', 'disc_number'].includes(field);
+        editor.type = numericField ? 'number' : 'text';
+        if (field === 'bpm') {
+            editor.min = '20';
+            editor.max = '400';
+        } else if (field === 'release_year') {
+            editor.min = '1';
+            editor.max = '9999';
+        } else if (field === 'track_number' || field === 'disc_number') {
+            editor.min = '1';
         }
+        editor.value = initial;
         cell.textContent = '';
         cell.appendChild(editor);
         rowEditing(editor, entry, field, initial);
@@ -1842,15 +2089,20 @@ function initializeGaiaLibrary() {
 
     function getCollectionIcon(entry) {
         const type = entry?.type || entry?.item?.type || '';
+        const record = entry?.item || entry?.content || entry;
         const sourceKind = entry?.item?.source_kind || entry?.content?.source_kind || '';
-        if (sourceKind === 'zip') {
-            return '<span class="collection-title-icon archive" aria-hidden="true" title="Archive"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v9.5h-11z"/><line x1="8" y1="3.5" x2="8" y2="13"/><line x1="6.5" y1="5.5" x2="9.5" y2="5.5"/><line x1="6.5" y1="7.5" x2="9.5" y2="7.5"/><line x1="6.5" y1="9.5" x2="9.5" y2="9.5"/></svg></span>';
-        }
         if (type === 'multitrack' || type === 'zoom_h4') {
-            return '<span class="collection-title-icon multitrack" aria-hidden="true" title="Stem collection"><svg viewBox="0 0 16 16"><line x1="2" y1="4.5" x2="14" y2="4.5"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="11.5" x2="14" y2="11.5"/><circle cx="5" cy="4.5" r="1.5" fill="currentColor"/><circle cx="11" cy="8" r="1.5" fill="currentColor"/><circle cx="7" cy="11.5" r="1.5" fill="currentColor"/></svg></span>';
+            const title = type === 'zoom_h4' ? 'Zoom H4' : 'Multitrack';
+            return `<span class="collection-title-icon multitrack" aria-hidden="true" title="${title}"><svg viewBox="0 0 16 16"><line x1="2" y1="4.5" x2="14" y2="4.5"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="11.5" x2="14" y2="11.5"/><circle cx="5" cy="4.5" r="1.5" fill="currentColor"/><circle cx="11" cy="8" r="1.5" fill="currentColor"/><circle cx="7" cy="11.5" r="1.5" fill="currentColor"/></svg></span>`;
         }
         if (type === 'project' || typeIsProject(type)) {
             return '<span class="collection-title-icon project" aria-hidden="true" title="Project"><svg viewBox="0 0 16 16"><rect x="2" y="5" width="12" height="8.5" rx="1.5"/><path d="M5.5 5V3.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V5M2 8.5h12"/></svg></span>';
+        }
+        if (isSamplePackCollection(record)) {
+            return '<span class="collection-title-icon sample-pack" aria-hidden="true" title="Sample pack"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9.5" rx="1.2"/><path d="M4 4V2.5h8V4"/><line x1="5" y1="8.75" x2="11" y2="8.75"/><line x1="8" y1="6.25" x2="8" y2="11.25"/></svg></span>';
+        }
+        if (sourceKind === 'zip') {
+            return '<span class="collection-title-icon archive" aria-hidden="true" title="Archive"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v9.5h-11z"/><line x1="8" y1="3.5" x2="8" y2="13"/><line x1="6.5" y1="5.5" x2="9.5" y2="5.5"/><line x1="6.5" y1="7.5" x2="9.5" y2="7.5"/><line x1="6.5" y1="9.5" x2="9.5" y2="9.5"/></svg></span>';
         }
         return '<span class="collection-title-icon folder" aria-hidden="true" title="Folder"><svg viewBox="0 0 16 16"><path d="M1.5 3.5h4l1.5 2h7.5v7h-13z"/></svg></span>';
     }
@@ -1924,6 +2176,11 @@ function initializeGaiaLibrary() {
             ${entry.kind === 'reference' && !fileVersionSelector && entry.versions?.length > 1 ? `<select class="reference-version-selector" title="Select file revision" aria-label="Select file revision">${entry.versions.map(version => `<option value="${escapeHtml(String(version.item.id))}" ${Number(version.item.id) === Number(entry.item.id) ? 'selected' : ''}>${escapeHtml(version.label)}</option>`).join('')}</select>` : ''}
         </div>`;
         const displayType = entryColumnValue(entry, 'type');
+        const effectiveType = effectiveEntryType(entry);
+        const typeSwitchable = canEdit(entry, 'type');
+        const typeCell = typeSwitchable
+            ? `<button type="button" class="type-badge type-badge--${escapeHtml(effectiveType)} editable-cell type-switchable" data-field="type" aria-haspopup="listbox" aria-expanded="false" title="Click to switch type"><span class="type-badge-label">${escapeHtml(displayType)}</span><span class="type-badge-caret" aria-hidden="true">▾</span></button>`
+            : `<span class="type-badge type-badge--${escapeHtml(effectiveType)}" data-field="type">${escapeHtml(displayType)}</span>`;
         const isFav = Boolean(entryColumnValue(entry, 'favourite'));
         const favCell = (isSubfolder && !entry.itemId)
             ? '<span></span>'
@@ -1933,7 +2190,7 @@ function initializeGaiaLibrary() {
             name: titleCell,
             filename: `<span class="metadata-text">${escapeHtml(entryColumnValue(entry, 'filename'))}</span>`,
             path: `<span class="path-text">${escapeHtml(entryPath(entry))}</span>`,
-            type: editableCell(entry, 'type', 'type-badge', displayType),
+            type: typeCell,
             author: editableCell(entry, 'author', 'metadata-text', entryColumnValue(entry, 'author')),
             album: editableCell(entry, 'album', 'metadata-text', entryColumnValue(entry, 'album')),
             album_artist: editableCell(entry, 'album_artist', 'metadata-text', entryColumnValue(entry, 'album_artist')),
@@ -2034,6 +2291,16 @@ function initializeGaiaLibrary() {
                 return;
             }
 
+            const typeTrigger = event.target.closest('.type-badge.type-switchable');
+            if (typeTrigger) {
+                event.stopPropagation();
+                event.preventDefault();
+                const row = typeTrigger.closest('.asset-row');
+                const entry = row ? entryById(row.dataset.entryId) : null;
+                if (entry) openTypeSwitcherMenu(typeTrigger, entry);
+                return;
+            }
+
             if (event.target.closest('.editable-cell, .reference-label, input, select, button')) return;
 
             const row = event.target.closest('.asset-row');
@@ -2071,6 +2338,13 @@ function initializeGaiaLibrary() {
                 if (entry && canEdit(entry, 'title')) {
                     beginCellEdit(titleText, entry, 'title');
                 }
+                return;
+            }
+
+            const typeTrigger = event.target.closest('.type-badge.type-switchable');
+            if (typeTrigger) {
+                event.preventDefault();
+                event.stopPropagation();
                 return;
             }
 
@@ -2190,6 +2464,7 @@ function initializeGaiaLibrary() {
                 refreshSelectionPresentation();
             }
             state.contextEntry = entry;
+            closeTypeSwitcherMenu();
             renderContextMenu();
             contextMenu.classList.remove('hidden');
             const width = contextMenu.offsetWidth || 180;
@@ -2209,6 +2484,10 @@ function initializeGaiaLibrary() {
                 : [entry];
             const itemIds = [...new Set(selectedEntries.map(numericItemId).filter(Boolean))];
             if (!itemIds.length) {
+                event.preventDefault();
+                return;
+            }
+            if (event.target.closest('.type-badge.type-switchable')) {
                 event.preventDefault();
                 return;
             }
@@ -3978,12 +4257,14 @@ function initializeGaiaLibrary() {
             selectionCollectVaultButton.classList.toggle('hidden', !canCollectAny);
         }
 
-        const singleDissolvableFolder = selectedCount === 1 && selectedEntries[0] && (
-            selectedEntries[0].type === 'folder'
-            || selectedEntries[0].type === 'collection'
-            || selectedEntries[0].kind === 'subfolder'
-            || Boolean(selectedEntries[0].item?.attributes?.is_folder || selectedEntries[0].content?.attributes?.is_folder)
-        ) && !typeIsProject(selectedEntries[0].type) && entryFolderItemId(selectedEntries[0]);
+        const singleEntry0 = selectedCount === 1 ? selectedEntries[0] : null;
+        const singleEntry0Eff = singleEntry0 ? effectiveEntryType(singleEntry0) : '';
+        const singleDissolvableFolder = Boolean(
+            singleEntry0
+            && singleEntry0Eff === 'folder'
+            && !typeIsProject(singleEntry0.type)
+            && entryFolderItemId(singleEntry0)
+        );
         if (selectionDissolveFolderButton) {
             selectionDissolveFolderButton.classList.toggle('hidden', !singleDissolvableFolder);
         }
@@ -4501,7 +4782,7 @@ function initializeGaiaLibrary() {
 
         const selectedEntries = getSelectedEntries();
         const targetEntry = state.contextEntry || (selectedEntries.length === 1 ? selectedEntries[0] : null);
-        const editorOpenableTypes = new Set(['project', 'audio', 'track', 'sample', 'video', 'multitrack', 'zoom_h4', 'folder']);
+        const editorOpenableTypes = new Set(['project', 'audio', 'track', 'sample', 'video', 'multitrack', 'zoom_h4', 'folder', 'collection']);
         const targetItemType = targetEntry?.item?.type || targetEntry?.type || '';
         const isOpenableEntry = Boolean(
             count === 1
@@ -4607,12 +4888,13 @@ function initializeGaiaLibrary() {
             }
         }
 
-        const canDissolveFolder = count === 1 && targetEntry && (
-            targetEntry.type === 'folder'
-            || targetEntry.type === 'collection'
-            || targetEntry.kind === 'subfolder'
-            || Boolean(targetEntry.item?.attributes?.is_folder || targetEntry.content?.attributes?.is_folder)
-        ) && !typeIsProject(targetEntry.type) && entryFolderItemId(targetEntry);
+        const canDissolveFolder = Boolean(
+            count === 1
+            && targetEntry
+            && effectiveEntryType(targetEntry) === 'folder'
+            && !typeIsProject(targetEntry.type)
+            && entryFolderItemId(targetEntry)
+        );
         if (contextDissolveFolderButton) {
             if (canDissolveFolder) {
                 contextDissolveFolderButton.classList.remove('hidden');

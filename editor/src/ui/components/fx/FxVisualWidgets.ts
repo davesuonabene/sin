@@ -120,6 +120,14 @@ function makeParamPill(
     let startNorm = 0;
     pill.addEventListener('pointerdown', (e) => {
         if (e.button !== 0 || pill.querySelector('input')) return;
+        if (e.altKey) {
+            e.preventDefault();
+            e.stopPropagation();
+            ctx.onParamChange(param.key, param.defaultValue);
+            sync();
+            onLocalUpdate();
+            return;
+        }
         dragging = true;
         startX = e.clientX;
         startNorm = toNorm(readChainParamValue(ctx.module, param));
@@ -803,12 +811,14 @@ function createParamEqVisual(ctx: FxVisualContext): FxVisualHandle {
 
     const draw = () => {
         if (destroyed) return;
-        const rectW = canvas.clientWidth || W;
-        const c = setupHiDpiCanvas(canvas, rectW, H);
+        const rectW = Math.max(120, canvas.clientWidth || W);
+        const rectH = Math.max(64, canvas.clientHeight || H);
+        const c = setupHiDpiCanvas(canvas, rectW, rectH);
         if (!c) return;
         const scaleX = rectW / W;
+        const scaleY = rectH / H;
         c.save();
-        c.scale(scaleX, 1);
+        c.scale(scaleX, scaleY);
 
         // Ableton dark slate-charcoal display
         c.fillStyle = '#14171c';
@@ -996,7 +1006,8 @@ function createParamEqVisual(ctx: FxVisualContext): FxVisualHandle {
     const toLocalCoords = (e: MouseEvent) => {
         const rect = canvas.getBoundingClientRect();
         const scaleX = W / Math.max(1, rect.width);
-        return { x: (e.clientX - rect.left) * scaleX, y: e.clientY - rect.top };
+        const scaleY = H / Math.max(1, rect.height);
+        return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
     };
 
     canvas.addEventListener('pointerdown', (e) => {
@@ -1296,8 +1307,8 @@ function createDynamicsScopeVisual(ctx: FxVisualContext, cfg: DynamicsScopeConfi
 
     const draw = () => {
         if (destroyed) return;
-        const W = canvas.clientWidth || 320;
-        const H = cfg.height;
+        const W = Math.max(120, canvas.clientWidth || 320);
+        const H = Math.max(64, canvas.clientHeight || cfg.height);
         const c = setupHiDpiCanvas(canvas, W, H);
         if (!c) return;
 
@@ -1528,9 +1539,10 @@ function createDynamicsScopeVisual(ctx: FxVisualContext, cfg: DynamicsScopeConfi
     let draggingThresh = false;
     const updateThreshFromPointer = (e: PointerEvent) => {
         const rect = canvas.getBoundingClientRect();
+        const effH = Math.max(64, rect.height || cfg.height);
         const padTop = 8;
         const padBottom = 6;
-        const plotH = Math.max(24, cfg.height - padTop - padBottom);
+        const plotH = Math.max(24, effH - padTop - padBottom);
         const bottomY = padTop + plotH;
         const localY = e.clientY - rect.top;
         const norm = (bottomY - localY) / plotH;
@@ -1725,5 +1737,19 @@ export const FX_VISUAL_REGISTRY: Record<string, FxVisualFactory> = {
 
 export function createFxVisualWidget(ctx: FxVisualContext): FxVisualHandle | null {
     const factory = FX_VISUAL_REGISTRY[ctx.def.type];
-    return factory ? factory(ctx) : null;
+    if (factory) return factory(ctx);
+    // Clean shared compact fallback for any processor without a custom scope canvas
+    if (ctx.def.params.length > 0) {
+        const root = document.createElement('div');
+        root.className = 'fx-visual-container fx-generic-container';
+        const row = makeMinimalControlRow(ctx, ctx.def.params.slice(0, 8), () => { });
+        root.appendChild(row.element);
+        return {
+            element: root,
+            syncFromParams() { row.sync(); },
+            updateMeter() { },
+            destroy() { },
+        };
+    }
+    return null;
 }

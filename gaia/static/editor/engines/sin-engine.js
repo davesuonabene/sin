@@ -1,6 +1,6 @@
 import { GraphView } from '/packages/graph-view/src/GraphView.js';
 import { RealtimeAudioClient } from '/packages/media-client/src/realtime-client.js';
-import { formatPreciseTime } from '../transport.js';
+import { formatPreciseTime } from '../transport.js?v=6';
 
 function escapeHtml(text) {
     return String(text ?? '')
@@ -38,6 +38,14 @@ export class SinEngine {
         this.overviewWaveforms = new Map(); // item_id -> waveform data
         this.detailWaveforms = new Map(); // item_id -> detailed waveform
         this.detailTimer = null;
+        this._detailAbort = null;
+        this._detailGen = 0;
+
+        // Cut-scoped bottom transport waveform state
+        this._transportWfAbort = null;
+        this._activeTransportWfKey = '';
+        this._transportCutWaveformCache = new Map(); // key -> { peaks, duration_sec }
+        this._cueTimelineSec = 0;
 
         // Real-time native libsin_dsp client (same-origin WS on :8001)
         this.realtime = null;
@@ -46,6 +54,10 @@ export class SinEngine {
         this.livePlaying = false;
         this.liveDurationSec = 0;
         this.liveBusPeaks = {};
+        this._planOriginSec = 0;
+        this._previewOriginSec = 0;
+        this._loadedMonitorSnapKey = null;
+        this._auditionStopSec = null;
         this._latestTelemetry = null;
         this._telemetryRaf = null;
         this._unsubRealtime = [];
@@ -60,7 +72,12 @@ export class SinEngine {
         this._pendingSeek = null;
         this._seekLockUntil = 0;
         this._seekLockSec = 0;
-        this._scrubCursorPos = null; // { x, y, sec } while dragging playhead
+        this._scrubCursorPos = null; // { x, y, sec } while dragging playhead or handle
+
+        // Smooth edge auto-scroll during zoomed drag
+        this._autoScrollRaf = null;
+        this._autoScrollClientX = 0;
+        this._autoScrollLastTs = 0;
 
         // 2-layer offscreen waveform cache (0.2ms blit per playhead frame!)
         this._waveBackingCanvas = null;
@@ -84,6 +101,8 @@ export class SinEngine {
         // Pointer interaction
         this.dragState = null;
         this.viewDragState = false;
+        this._viewDragInfo = null;
+        this._suppressNextContextMenu = false;
         this.dirty = false;
         this.abortController = null;
         this.loadDialogCleanup = null;
@@ -125,6 +144,18 @@ export class SinEngine {
             window.clearTimeout(this.detailTimer);
             this.detailTimer = null;
         }
+        if (this._detailAbort) {
+            this._detailAbort.abort();
+            this._detailAbort = null;
+        }
+        this._detailGen += 1;
+        if (this._transportWfAbort) {
+            this._transportWfAbort.abort();
+            this._transportWfAbort = null;
+        }
+        this._activeTransportWfKey = '';
+        this._transportCutWaveformCache.clear();
+        this._cueTimelineSec = 0;
         if (this._seekBreathTimer) {
             window.clearTimeout(this._seekBreathTimer);
             this._seekBreathTimer = null;
@@ -133,6 +164,7 @@ export class SinEngine {
             window.clearTimeout(this._scrubIdlePauseTimer);
             this._scrubIdlePauseTimer = null;
         }
+        this._stopEdgeAutoScroll();
         if (this._drawRaf !== null) {
             window.cancelAnimationFrame(this._drawRaf);
             this._drawRaf = null;
@@ -165,6 +197,12 @@ export class SinEngine {
         this._cachedCanvasH = 0;
         this._scrubCursorPos = null;
         this._pendingSeek = null;
+        this._planOriginSec = 0;
+        this._previewOriginSec = 0;
+        this._loadedMonitorSnapKey = null;
+        this._auditionStopSec = null;
+        this._viewDragInfo = null;
+        this._suppressNextContextMenu = false;
         if (this.realtime) {
             try {
                 this.realtime.setTransport({ playing: false });
@@ -201,6 +239,18 @@ export class SinEngine {
             this._syncAbort.abort();
             this._syncAbort = null;
         }
+        if (this._detailAbort) {
+            this._detailAbort.abort();
+            this._detailAbort = null;
+        }
+        this._detailGen += 1;
+        if (this._transportWfAbort) {
+            this._transportWfAbort.abort();
+            this._transportWfAbort = null;
+        }
+        this._activeTransportWfKey = '';
+        this._transportCutWaveformCache.clear();
+        this._cueTimelineSec = 0;
         if (this._seekBreathTimer) {
             window.clearTimeout(this._seekBreathTimer);
             this._seekBreathTimer = null;
@@ -209,12 +259,18 @@ export class SinEngine {
             window.clearTimeout(this._scrubIdlePauseTimer);
             this._scrubIdlePauseTimer = null;
         }
+        this._stopEdgeAutoScroll();
         if (this.realtime) {
             this.realtime.setTransport({ playing: false, seekSec: 0 });
         }
         this.liveLoaded = false;
         this.livePlaying = false;
         this.liveDurationSec = 0;
+        this._planOriginSec = 0;
+        this._previewOriginSec = 0;
+        this._loadedMonitorSnapKey = null;
+        this._auditionStopSec = null;
+        this._viewDragInfo = null;
         this.playheadSec = 0;
         this.masterPreview = null;
         this._waveDirty = true;
@@ -232,10 +288,329 @@ export class SinEngine {
         }
         this._unsubCue = window.gaiaTransport?.onCueChange?.(() => this.requestDraw(false)) || null;
         void this.loadLayerWaveforms();
-        void this.syncRealtimePlan();
+        void this.syncRealtimePlan(this.selectedSnapshot() || null, { force: true });
         if (this.activeViewMode !== 'timeline') {
             this.mountGraphView();
         }
+    }
+
+    _baseOriginSec() {
+        if (!this.layers.length) return 0;
+        let minStart = Infinity;
+        for (const layer of this.layers) {
+            const wf = this.overviewWaveforms.get(layer.item_id);
+            const dur = Number(layer.duration_seconds) || Number(wf?.duration_seconds) || 0;
+            if (dur <= 0) continue;
+            const s0 = clamp(Number(layer.crop_start ?? 0), 0, 1) * dur;
+            if (s0 < minStart) minStart = s0;
+        }
+        return Number.isFinite(minStart) ? minStart : 0;
+    }
+
+    engineToTimelineSec(engSec) {
+        const fullDur = this.maxTimelineDurationSec();
+        return clamp(this._planOriginSec + (Number(engSec) || 0), 0, fullDur);
+    }
+
+    timelineToEngineSec(tlSec) {
+        const fullDur = this.maxTimelineDurationSec();
+        const engDur = this.liveDurationSec > 0 ? this.liveDurationSec : Math.max(0, fullDur - this._planOriginSec);
+        return clamp((Number(tlSec) || 0) - this._planOriginSec, 0, Math.max(0, engDur));
+    }
+
+    getSnapshotRangeSec(snap = this.selectedSnapshot()) {
+        if (!snap?.overrides) return null;
+        const ov = snap.overrides;
+        const activeLayer = this.selectedLayer();
+        let targetLayer = null;
+        let entry = null;
+        if (activeLayer && ov[activeLayer.src_node_id] && (ov[activeLayer.src_node_id].crop_start != null || ov[activeLayer.src_node_id].crop_end != null)) {
+            targetLayer = activeLayer;
+            entry = ov[activeLayer.src_node_id];
+        } else {
+            for (const layer of this.layers) {
+                const candidate = ov[layer.src_node_id];
+                if (candidate && (candidate.crop_start != null || candidate.crop_end != null)) {
+                    targetLayer = layer;
+                    entry = candidate;
+                    break;
+                }
+            }
+        }
+        if (!targetLayer || !entry) return null;
+        const wf = this.overviewWaveforms.get(targetLayer.item_id);
+        const layerDur = Number(targetLayer.duration_seconds) || Number(wf?.duration_seconds) || this.realTimelineDurationSec();
+        if (!(layerDur > 0)) return null;
+        const c0 = clamp(Number(entry.crop_start ?? 0), 0, 1);
+        const c1 = clamp(Number(entry.crop_end ?? 1), c0, 1);
+        return {
+            layer: targetLayer,
+            layerDur,
+            cropStart: c0,
+            cropEnd: c1,
+            startSec: c0 * layerDur,
+            endSec: c1 * layerDur,
+        };
+    }
+
+    activeTransportWindow() {
+        const fullDur = this.realTimelineDurationSec() || (this.liveLoaded ? this.liveDurationSec : 0) || 0;
+        const activeSnap = this.selectedSnapshot();
+        const snapRange = activeSnap ? this.getSnapshotRangeSec(activeSnap) : null;
+        if (snapRange && snapRange.endSec > snapRange.startSec) {
+            return {
+                isCut: true,
+                snapshotId: activeSnap.id,
+                label: activeSnap.label || activeSnap.id,
+                layer: snapRange.layer,
+                startSec: snapRange.startSec,
+                endSec: snapRange.endSec,
+                durationSec: Math.max(0.01, snapRange.endSec - snapRange.startSec),
+                fullDurationSec: Math.max(fullDur, snapRange.endSec),
+            };
+        }
+        const selected = this.selectedLayer() || this.layers[0] || null;
+        return {
+            isCut: false,
+            snapshotId: null,
+            label: selected?.label || this.session?.title || 'SIN Live',
+            layer: selected,
+            startSec: 0,
+            endSec: fullDur,
+            durationSec: fullDur,
+            fullDurationSec: fullDur,
+        };
+    }
+
+    timelineToTransportSec(tlSec) {
+        const win = this.activeTransportWindow();
+        return clamp((Number(tlSec) || 0) - win.startSec, 0, Math.max(0, win.durationSec));
+    }
+
+    transportToTimelineSec(trSec) {
+        const win = this.activeTransportWindow();
+        const local = clamp(Number(trSec) || 0, 0, Math.max(0, win.durationSec));
+        return clamp(win.startSec + local, 0, this.maxTimelineDurationSec());
+    }
+
+    _sampleWaveformPeakAtSec(wf, sec, fallbackSr, layerDur) {
+        if (!wf?.peaks?.length) return null;
+        const sr = Number(wf.sample_rate || fallbackSr || 44100);
+        const startF = Number(wf.start_frame ?? 0);
+        const endF = Number(wf.end_frame ?? wf.frames ?? Math.round(layerDur * sr));
+        if (!(endF > startF)) return null;
+        const f = sec * sr;
+        if (f < startF || f >= endF) return null;
+        const peaks = wf.peaks;
+        const bucketSize = Number(wf.bucket_size || 0);
+        const pIdx = bucketSize > 0
+            ? Math.floor((f - startF) / bucketSize)
+            : Math.floor(((f - startF) / (endF - startF)) * peaks.length);
+        if (pIdx < 0 || pIdx >= peaks.length) return null;
+        return peaks[pIdx];
+    }
+
+    _sliceWaveformPeaks(wf, startSec, endSec, fallbackSr) {
+        if (!wf?.peaks?.length || !(endSec > startSec)) return [];
+        const sr = Number(wf.sample_rate || fallbackSr || 44100);
+        const wfStartF = Number(wf.start_frame ?? 0);
+        const wfEndF = Number(wf.end_frame ?? wf.frames ?? 0);
+        const wfSpanF = wfEndF - wfStartF;
+        if (!(wfSpanF > 0)) return wf.peaks;
+        const peaks = wf.peaks;
+        const bucketSize = Number(wf.bucket_size || 0);
+        const sFrame = clamp(Math.floor(startSec * sr), wfStartF, wfEndF);
+        const eFrame = clamp(Math.ceil(endSec * sr), sFrame + 1, wfEndF);
+        let idx0;
+        let idx1;
+        if (bucketSize > 0) {
+            idx0 = clamp(Math.floor((sFrame - wfStartF) / bucketSize), 0, peaks.length - 1);
+            idx1 = clamp(Math.ceil((eFrame - wfStartF) / bucketSize), idx0 + 1, peaks.length);
+        } else {
+            idx0 = clamp(Math.floor(((sFrame - wfStartF) / wfSpanF) * peaks.length), 0, peaks.length - 1);
+            idx1 = clamp(Math.ceil(((eFrame - wfStartF) / wfSpanF) * peaks.length), idx0 + 1, peaks.length);
+        }
+        return peaks.slice(idx0, idx1);
+    }
+
+    syncTransportWaveform({ fetchHiRes = true } = {}) {
+        const transport = window.gaiaTransport;
+        if (!transport) return;
+        const win = this.activeTransportWindow();
+        const layer = win.layer || this.selectedLayer() || this.layers[0];
+        if (!layer) return;
+
+        if (!win.isCut) {
+            if (this._transportWfAbort) {
+                this._transportWfAbort.abort();
+                this._transportWfAbort = null;
+            }
+            const fullKey = `full:${layer.item_id}`;
+            this._activeTransportWfKey = fullKey;
+            const wf = this.overviewWaveforms.get(layer.item_id);
+            const dur = win.durationSec || Number(wf?.duration_seconds) || Number(layer.duration_seconds) || 0;
+            if (wf?.peaks?.length) {
+                transport.setWaveformPeaks?.(wf.peaks, dur);
+            } else if (dur > 0) {
+                transport.setWaveformProgressOnly?.(dur, '');
+            }
+            return;
+        }
+
+        const sr = Number(layer.sample_rate || this.overviewWaveforms.get(layer.item_id)?.sample_rate || 44100);
+        const totalFrames = Number(layer.frames || this.overviewWaveforms.get(layer.item_id)?.frames || Math.round(win.fullDurationSec * sr));
+        const sFrame = totalFrames > 0 ? clamp(Math.floor(win.startSec * sr), 0, Math.max(0, totalFrames - 2)) : 0;
+        const eFrame = totalFrames > 0 ? clamp(Math.ceil(win.endSec * sr), sFrame + 1, totalFrames) : 0;
+        const cutKey = `cut:${layer.item_id}:${sFrame}:${eFrame}`;
+        const cached = this._transportCutWaveformCache.get(cutKey);
+
+        if (cached?.peaks?.length) {
+            if (this._transportWfAbort) {
+                this._transportWfAbort.abort();
+                this._transportWfAbort = null;
+            }
+            this._activeTransportWfKey = cutKey;
+            // Refresh LRU order
+            this._transportCutWaveformCache.delete(cutKey);
+            this._transportCutWaveformCache.set(cutKey, cached);
+            transport.setWaveformPeaks?.(cached.peaks, win.durationSec);
+            return;
+        }
+
+        // Instant 0ms cut-only slice from overview peaks so the transport updates immediately
+        const overviewWf = this.overviewWaveforms.get(layer.item_id);
+        const sliced = overviewWf ? this._sliceWaveformPeaks(overviewWf, win.startSec, win.endSec, sr) : [];
+        if (sliced.length > 0) {
+            transport.setWaveformPeaks?.(sliced, win.durationSec);
+        } else if (win.durationSec > 0) {
+            transport.setWaveformProgressOnly?.(win.durationSec, '');
+        }
+
+        if (!fetchHiRes || !layer.waveform_url || !(eFrame > sFrame)) {
+            this._activeTransportWfKey = cutKey;
+            return;
+        }
+        if (this._activeTransportWfKey === cutKey && this._transportWfAbort) {
+            return;
+        }
+        if (this._transportWfAbort) {
+            this._transportWfAbort.abort();
+        }
+        const ac = new AbortController();
+        this._transportWfAbort = ac;
+        this._activeTransportWfKey = cutKey;
+
+        void (async () => {
+            try {
+                const res = await fetch(`${layer.waveform_url}?resolution=600&start_frame=${sFrame}&end_frame=${eFrame}`, {
+                    signal: ac.signal,
+                });
+                if (!res.ok || ac.signal.aborted || this._activeTransportWfKey !== cutKey) return;
+                const data = await res.json();
+                if (ac.signal.aborted || this._activeTransportWfKey !== cutKey) return;
+                const peaks = Array.isArray(data?.peaks) ? data.peaks : [];
+                if (peaks.length > 0) {
+                    this._transportCutWaveformCache.set(cutKey, { peaks, duration_sec: win.durationSec });
+                    if (this._transportCutWaveformCache.size > 24) {
+                        const oldest = this._transportCutWaveformCache.keys().next().value;
+                        this._transportCutWaveformCache.delete(oldest);
+                    }
+                    window.gaiaTransport?.setWaveformPeaks?.(peaks, win.durationSec);
+                    window.gaiaTransport?.render?.();
+                }
+            } catch {
+                // Ignore abort / transient fetch errors; sliced overview remains visible
+            } finally {
+                if (this._transportWfAbort === ac) {
+                    this._transportWfAbort = null;
+                }
+            }
+        })();
+    }
+
+    _buildTimelineMonitorSnapshot(snap) {
+        // Keep full-timeline scrubbing unlocked by stripping src-* crop_start/crop_end from
+        // the live monitor snapshot while preserving any per-snapshot mixer / FX overrides.
+        if (!snap?.overrides || typeof snap.overrides !== 'object') return null;
+        const keptOverrides = {};
+        let hasAny = false;
+        for (const [nodeId, propMap] of Object.entries(snap.overrides)) {
+            if (!propMap || typeof propMap !== 'object') continue;
+            const filtered = {};
+            for (const [key, val] of Object.entries(propMap)) {
+                if (key === 'crop_start' || key === 'crop_end') continue;
+                filtered[key] = val;
+            }
+            if (Object.keys(filtered).length > 0) {
+                keptOverrides[nodeId] = filtered;
+                hasAny = true;
+            }
+        }
+        if (!hasAny) return null;
+        return {
+            ...snap,
+            overrides: keptOverrides,
+        };
+    }
+
+    maxZoomLevel() {
+        const total = this.realTimelineDurationSec() || 1;
+        return Math.max(64, Math.min(512, Math.ceil(total / 4)));
+    }
+
+    setZoomAt(nextZoom, anchorXFrac = 0.5) {
+        const maxZ = this.maxZoomLevel();
+        const clampedZoom = clamp(Number(nextZoom) || 1, 1, maxZ);
+        const total = this.maxTimelineDurationSec();
+        const curWin = this.visibleTimeWindow();
+        const curSpan = Math.max(0.001, curWin.endSec - curWin.startSec);
+        const anchorFrac = clamp(Number(anchorXFrac), 0, 1);
+        const anchorSec = curWin.startSec + anchorFrac * curSpan;
+        this.zoom = clampedZoom;
+        const nextSpan = total / clampedZoom;
+        const maxOffset = Math.max(0, 1 - nextSpan / total);
+        this.viewOffsetRatio = clamp((anchorSec - anchorFrac * nextSpan) / total, 0, maxOffset);
+        this.updateViewSlider();
+        this.requestDraw(true);
+        this.scheduleDetailWaveforms();
+    }
+
+    panByDeltaRatio(deltaRatio) {
+        if (this.zoom <= 1.001) return;
+        const maxOffset = Math.max(0, 1 - 1 / this.zoom);
+        const next = clamp(this.viewOffsetRatio + deltaRatio, 0, maxOffset);
+        if (Math.abs(next - this.viewOffsetRatio) < 1e-7) return;
+        this.viewOffsetRatio = next;
+        this.updateViewSlider();
+        this.requestDraw(true);
+        this.scheduleDetailWaveforms();
+    }
+
+    focusRange(startSec, endSec, { padFraction = 0.14, minPadSec = 10 } = {}) {
+        const total = this.realTimelineDurationSec();
+        if (!(total > 0) || !(endSec > startSec)) return;
+        const span = endSec - startSec;
+        const pad = Math.max(minPadSec, span * padFraction);
+        const v0 = clamp(startSec - pad, 0, total);
+        const v1 = clamp(endSec + pad, v0 + 1, total);
+        const viewSpan = Math.max(1, v1 - v0);
+        const nextZoom = clamp(total / viewSpan, 1, this.maxZoomLevel());
+        this.zoom = nextZoom;
+        const actualSpan = total / nextZoom;
+        const maxOffset = Math.max(0, 1 - actualSpan / total);
+        const center = (startSec + endSec) * 0.5;
+        this.viewOffsetRatio = clamp((center - actualSpan * 0.5) / total, 0, maxOffset);
+        this.updateViewSlider();
+        this.requestDraw(true);
+        this.scheduleDetailWaveforms();
+    }
+
+    _stopEdgeAutoScroll() {
+        if (this._autoScrollRaf !== null) {
+            window.cancelAnimationFrame(this._autoScrollRaf);
+            this._autoScrollRaf = null;
+        }
+        this._autoScrollLastTs = 0;
     }
 
     requestDraw(waveDirty = false) {
@@ -248,29 +623,36 @@ export class SinEngine {
         });
     }
 
-    _dispatchSeekTransport(sec, playing) {
-        const dur = this.liveDurationSec || this.maxTimelineDurationSec();
-        const maxSeek = playing && dur > 0.05 ? Math.max(0, dur - 0.02) : Math.max(0, dur);
-        const clamped = clamp(Number(sec) || 0, 0, maxSeek);
+    _dispatchSeekTransport(timelineSec, playing) {
+        const fullDur = this.maxTimelineDurationSec();
+        const engDur = (this.liveLoaded && this.liveDurationSec > 0)
+            ? this.liveDurationSec
+            : Math.max(0, fullDur - this._planOriginSec);
+        const requestedTl = clamp(Number(timelineSec) || 0, 0, fullDur);
+        const rawEng = requestedTl - this._planOriginSec;
+        const maxEng = playing && engDur > 0.05 ? Math.max(0, engDur - 0.02) : Math.max(0, engDur);
+        const clampedEng = clamp(rawEng, 0, maxEng);
+        const effectiveTl = clamp(this._planOriginSec + clampedEng, 0, fullDur);
         this._lastSeekSentAt = performance.now();
         this._pendingSeek = null;
         if (this._seekBreathTimer) {
             window.clearTimeout(this._seekBreathTimer);
             this._seekBreathTimer = null;
         }
-        this._seekLockSec = clamped;
-        this._seekLockUntil = performance.now() + 130;
-        this.playheadSec = clamped;
+        this._seekLockSec = effectiveTl;
+        this._seekLockUntil = performance.now() + 240;
+        this.playheadSec = effectiveTl;
         if (this.liveAvailable && this.realtime) {
             this.livePlaying = Boolean(playing);
             this.realtime.setTransport({
                 playing: Boolean(playing),
-                seekSec: clamped,
+                seekSec: clampedEng,
                 bpm: Number(this.session?.session_data?.graph?.settings?.bpm || 120),
                 loop: false,
             });
         } else if (this.previewAudio) {
-            this.previewAudio.currentTime = Math.min(this.previewAudio.duration || clamped, clamped);
+            const audioSec = clamp(requestedTl - this._previewOriginSec, 0, this.previewAudio.duration || Math.max(0, requestedTl));
+            this.previewAudio.currentTime = audioSec;
         }
     }
 
@@ -313,6 +695,7 @@ export class SinEngine {
                             const snap = this._latestTelemetry;
                             if (!snap) return;
                             this._latestTelemetry = null;
+                            if (!this.liveLoaded) return;
                             this._lastServerPlaying = Boolean(snap.is_playing);
                             const isScrubbing = Boolean(this.dragState && this.dragState.mode === 'seek');
                             const footerSeeking = Boolean(window.gaiaTransport?.isFooterSeeking?.());
@@ -326,11 +709,21 @@ export class SinEngine {
                             const allowPlayheadTrack = !holdingCursor
                                 || (isScrubbing && !this.dragState.moved && this.dragState.wasPlaying && snap.is_playing);
                             if (allowPlayheadTrack) {
-                                const incomingSec = Number(snap.playhead_sec) || 0;
-                                const withinLock = performance.now() < this._seekLockUntil
-                                    && Math.abs(incomingSec - this._seekLockSec) > 0.12;
+                                const incomingEngSec = Number(snap.playhead_sec) || 0;
+                                const incomingTlSec = this.engineToTimelineSec(incomingEngSec);
+                                const nowTs = performance.now();
+                                const matchesLock = Math.abs(incomingTlSec - this._seekLockSec) <= 0.12;
+                                if (matchesLock && nowTs < this._seekLockUntil) {
+                                    this._seekLockUntil = 0;
+                                }
+                                const withinLock = nowTs < this._seekLockUntil && !matchesLock;
                                 if (!withinLock) {
-                                    this.playheadSec = incomingSec;
+                                    this.playheadSec = incomingTlSec;
+                                    if (this.livePlaying && this._auditionStopSec !== null && incomingTlSec >= this._auditionStopSec - 0.02) {
+                                        const stopAt = this._auditionStopSec;
+                                        this._auditionStopSec = null;
+                                        this._dispatchSeekTransport(stopAt, false);
+                                    }
                                 }
                             }
                             this.liveBusPeaks = snap.bus_peaks || {};
@@ -346,7 +739,7 @@ export class SinEngine {
         this.liveAvailable = Boolean(ok);
         this.updateLiveEngineBadge();
         if (ok) {
-            await this.syncRealtimePlan();
+            await this.syncRealtimePlan(this.selectedSnapshot() || null, { force: true });
         }
     }
 
@@ -382,8 +775,14 @@ export class SinEngine {
         }
     }
 
-    async syncRealtimePlan(snapshotOverride = null) {
+    async syncRealtimePlan(snapshotOverride = null, { force = false } = {}) {
         if (!this.realtime || !this.liveAvailable || !this.session?.session_data?.graph) return false;
+        const monitorSnap = this._buildTimelineMonitorSnapshot(snapshotOverride);
+        const monitorKey = monitorSnap ? JSON.stringify(monitorSnap.overrides) : '__base__';
+        if (!force && this.liveLoaded && this._loadedMonitorSnapKey === monitorKey) {
+            this._planOriginSec = this._baseOriginSec();
+            return true;
+        }
         if (this._syncAbort) {
             this._syncAbort.abort();
         }
@@ -394,14 +793,16 @@ export class SinEngine {
         const res = await this.realtime.loadCanonical({
             graph,
             projectId: this.session.project_id ?? null,
-            snapshot: snapshotOverride,
-            workspace: snapshotOverride ? null : (sdata.workspace ?? null),
+            snapshot: monitorSnap,
+            workspace: monitorSnap ? null : (sdata.workspace ?? null),
             soloIds: Array.from(this.soloIds),
             signal: ac.signal,
         });
         if (ac.signal.aborted || res?.aborted) return false;
         if (res?.ok) {
             this.liveLoaded = true;
+            this._loadedMonitorSnapKey = monitorKey;
+            this._planOriginSec = this._baseOriginSec();
             if (Number.isFinite(res.duration_sec) && res.duration_sec > 0) {
                 this.liveDurationSec = Number(res.duration_sec);
             }
@@ -418,7 +819,9 @@ export class SinEngine {
             this.selectedLayerIdx = 0;
         }
         this.soloIds.clear();
-        this.playheadSec = 0;
+        const activeRange = this.getSnapshotRangeSec();
+        this.playheadSec = activeRange ? activeRange.startSec : 0;
+        this._cueTimelineSec = this.playheadSec;
         this.zoom = 1;
         this.viewOffsetRatio = 0;
     }
@@ -508,7 +911,7 @@ export class SinEngine {
 
     visibleTimeWindow() {
         const total = this.maxTimelineDurationSec();
-        const span = total / clamp(this.zoom, 1, 64);
+        const span = total / clamp(this.zoom, 1, this.maxZoomLevel());
         const maxOffset = Math.max(0, 1 - span / total);
         this.viewOffsetRatio = clamp(this.viewOffsetRatio, 0, maxOffset);
         const startSec = this.viewOffsetRatio * total;
@@ -595,43 +998,51 @@ export class SinEngine {
         const self = this;
         this.previewDriver = {
             getState() {
+                const win = self.activeTransportWindow();
+                const selected = self.selectedLayer();
                 if (self.liveAvailable && self.realtime) {
-                    const duration = self.liveDurationSec || self.realTimelineDurationSec();
-                    const selected = self.selectedLayer();
+                    const duration = win.durationSec;
+                    const currentTime = clamp(self.playheadSec - win.startSec, 0, Math.max(0, duration));
                     return {
                         hasPlayback: Boolean(self.layers.length || self.session?.has_workspace),
                         playing: Boolean(self.livePlaying),
-                        currentTime: self.playheadSec,
+                        currentTime,
                         duration,
-                        targetLabel: selected?.label || self.session?.title || 'SIN Live',
+                        targetLabel: win.label || selected?.label || self.session?.title || 'SIN Live',
+                        displayLabel: win.isCut ? win.label : null,
                         targets: self.session?.targets || [],
                         activeTargetId: selected ? `item:${selected.item_id}` : null,
                     };
                 }
                 const audio = self.previewAudio;
-                const duration = (audio && Number.isFinite(audio.duration) && audio.duration > 0)
-                    ? audio.duration
+                const fullDur = (audio && Number.isFinite(audio.duration) && audio.duration > 0)
+                    ? (self.realTimelineDurationSec() || audio.duration)
                     : (self.masterPreview?.duration_seconds || self.realTimelineDurationSec());
-                const currentTime = audio && Number.isFinite(audio.currentTime) ? audio.currentTime : self.playheadSec;
+                const rawTlTime = audio && Number.isFinite(audio.currentTime)
+                    ? clamp(self._previewOriginSec + audio.currentTime, 0, fullDur)
+                    : self.playheadSec;
+                const duration = win.isCut ? win.durationSec : fullDur;
+                const currentTime = clamp(rawTlTime - win.startSec, 0, Math.max(0, duration));
                 const playing = Boolean(audio && !audio.paused && !audio.ended);
-                const selected = self.selectedLayer();
                 return {
                     hasPlayback: Boolean(self.layers.length || self.session?.has_workspace || self.masterPreview),
                     playing,
                     currentTime,
                     duration,
-                    targetLabel: selected?.label || self.session?.title || 'SIN Preview',
+                    targetLabel: win.label || selected?.label || self.session?.title || 'SIN Preview',
+                    displayLabel: win.isCut ? win.label : null,
                     targets: self.session?.targets || [],
                     activeTargetId: selected ? `item:${selected.item_id}` : null,
                 };
             },
             async playPause() {
                 const cueOn = Boolean(window.gaiaTransport?.isCueEnabled?.());
-                const dur = self.liveDurationSec || self.maxTimelineDurationSec();
-                const cueSec = clamp(Number(window.gaiaTransport?.getCuePoint?.() || 0), 0, Math.max(0, dur));
+                const dur = self.maxTimelineDurationSec();
+                const win = self.activeTransportWindow();
+                const cueSec = clamp(Number(self._cueTimelineSec) || 0, 0, Math.max(0, dur));
                 if (self.liveAvailable && self.realtime) {
                     if (!self.liveLoaded) {
-                        const ok = await self.syncRealtimePlan();
+                        const ok = await self.syncRealtimePlan(self.selectedSnapshot() || null);
                         if (!ok) {
                             void self.renderAndPlaySinPreview(self.selectedSnapshot()?.id || null);
                             return;
@@ -639,13 +1050,23 @@ export class SinEngine {
                     }
                     const nextPlaying = !self.livePlaying;
                     if (nextPlaying) {
-                        const startPos = cueOn
+                        let startPos = cueOn
                             ? (dur > 0.05 ? Math.min(cueSec, dur - 0.02) : cueSec)
-                            : ((dur > 0 && self.playheadSec >= dur - 0.02) ? 0 : self.playheadSec);
+                            : ((dur > 0 && self.playheadSec >= dur - 0.02) ? (win.isCut ? win.startSec : self._planOriginSec) : self.playheadSec);
+                        if (win.isCut && startPos >= win.startSec - 0.05 && startPos <= win.endSec + 0.05) {
+                            if (startPos >= win.endSec - 0.05) {
+                                startPos = win.startSec;
+                            }
+                            self._auditionStopSec = win.endSec;
+                        } else {
+                            self._auditionStopSec = null;
+                        }
                         self._dispatchSeekTransport(startPos, true);
                     } else if (cueOn) {
+                        self._auditionStopSec = null;
                         self._dispatchSeekTransport(cueSec, false);
                     } else {
+                        self._auditionStopSec = null;
                         self.livePlaying = false;
                         self.realtime.setTransport({
                             playing: false,
@@ -661,15 +1082,17 @@ export class SinEngine {
                 if (self.previewAudio && self.masterPreview) {
                     if (self.previewAudio.paused || self.previewAudio.ended) {
                         if (cueOn) {
-                            self.previewAudio.currentTime = Math.min(self.previewAudio.duration || cueSec, cueSec);
-                            self.playheadSec = self.previewAudio.currentTime;
+                            const audioSec = clamp(cueSec - self._previewOriginSec, 0, self.previewAudio.duration || 0);
+                            self.previewAudio.currentTime = audioSec;
+                            self.playheadSec = self._previewOriginSec + self.previewAudio.currentTime;
                         }
                         self.previewAudio.play().catch(() => {});
                     } else {
                         self.previewAudio.pause();
                         if (cueOn) {
-                            self.previewAudio.currentTime = Math.min(self.previewAudio.duration || cueSec, cueSec);
-                            self.playheadSec = self.previewAudio.currentTime;
+                            const audioSec = clamp(cueSec - self._previewOriginSec, 0, self.previewAudio.duration || 0);
+                            self.previewAudio.currentTime = audioSec;
+                            self.playheadSec = self._previewOriginSec + self.previewAudio.currentTime;
                         }
                     }
                     self.requestDraw(false);
@@ -679,17 +1102,21 @@ export class SinEngine {
                 void self.renderAndPlaySinPreview(self.selectedSnapshot()?.id || null);
             },
             stop() {
+                self._auditionStopSec = null;
                 const cueOn = Boolean(window.gaiaTransport?.isCueEnabled?.());
-                const dur = self.liveDurationSec || self.maxTimelineDurationSec();
-                const cueSec = clamp(Number(window.gaiaTransport?.getCuePoint?.() || 0), 0, Math.max(0, dur));
-                let targetSec = 0;
+                const dur = self.maxTimelineDurationSec();
+                const win = self.activeTransportWindow();
+                const defaultStop = win.isCut ? win.startSec : self._planOriginSec;
+                const cueSec = clamp(Number(self._cueTimelineSec ?? defaultStop), 0, Math.max(0, dur));
+                let targetSec = defaultStop;
                 if (cueOn) {
                     const alreadyStoppedAtCue = !self.livePlaying
                         && !(self.previewAudio && !self.previewAudio.paused)
                         && Math.abs(self.playheadSec - cueSec) <= 0.05;
                     if (alreadyStoppedAtCue) {
-                        targetSec = 0;
-                        window.gaiaTransport?.setCuePoint?.(0);
+                        targetSec = defaultStop;
+                        self._cueTimelineSec = defaultStop;
+                        window.gaiaTransport?.setCuePoint?.(self.timelineToTransportSec(defaultStop));
                     } else {
                         targetSec = cueSec;
                     }
@@ -702,18 +1129,30 @@ export class SinEngine {
                 }
                 if (self.previewAudio) {
                     self.previewAudio.pause();
-                    self.previewAudio.currentTime = Math.min(self.previewAudio.duration || targetSec, targetSec);
+                    self.previewAudio.currentTime = clamp(targetSec - self._previewOriginSec, 0, self.previewAudio.duration || 0);
                 }
                 self.playheadSec = targetSec;
                 self.requestDraw(false);
                 window.gaiaTransport?.render?.();
             },
-            seek(seconds, opts = {}) {
-                const dur = self.liveDurationSec || self.maxTimelineDurationSec();
+            seek(transportSeconds, opts = {}) {
+                const win = self.activeTransportWindow();
+                const fullDur = self.maxTimelineDurationSec();
                 const keepPlaying = opts?.keepPlaying != null ? Boolean(opts.keepPlaying) : Boolean(self.livePlaying);
-                const maxSeek = keepPlaying && dur > 0.05 ? Math.max(0, dur - 0.02) : Math.max(0, dur);
-                const targetSec = clamp(Number(seconds) || 0, 0, maxSeek);
+                const maxLocal = keepPlaying && win.durationSec > 0.05
+                    ? Math.max(0, win.durationSec - 0.02)
+                    : Math.max(0, win.durationSec);
+                const localSec = clamp(Number(transportSeconds) || 0, 0, maxLocal);
+                const targetSec = clamp(win.startSec + localSec, 0, fullDur);
+                if (win.isCut) {
+                    self._auditionStopSec = win.endSec;
+                } else {
+                    self._auditionStopSec = null;
+                }
                 self.playheadSec = targetSec;
+                if (!opts?.scrubbing) {
+                    self._cueTimelineSec = targetSec;
+                }
                 self._scheduleSeekTransport(targetSec, keepPlaying, {
                     immediate: !opts?.scrubbing,
                     breathMs: 42,
@@ -808,14 +1247,7 @@ export class SinEngine {
         this.renderCuts();
         this.updateViewSlider();
         this.updateHostTrackInfo();
-        const activeLayer = this.selectedLayer() || this.layers[0];
-        const activeWf = activeLayer ? this.overviewWaveforms.get(activeLayer.item_id) : null;
-        if (activeLayer && activeWf?.peaks?.length) {
-            window.gaiaTransport?.setWaveformPeaks?.(
-                activeWf.peaks,
-                activeWf.duration_seconds || activeWf.duration_sec || activeLayer.duration_seconds || 0
-            );
-        }
+        this.syncTransportWaveform({ fetchHiRes: true });
         this.requestDraw(true);
         window.gaiaTransport?.render?.();
     }
@@ -968,41 +1400,61 @@ export class SinEngine {
         this.renderCuts();
         this.updateViewSlider();
         this.updateHostTrackInfo();
-        const activeLayer = this.selectedLayer() || this.layers[0];
-        const activeWf = activeLayer ? this.overviewWaveforms.get(activeLayer.item_id) : null;
-        if (activeLayer && activeWf?.peaks?.length) {
-            window.gaiaTransport?.setWaveformPeaks?.(
-                activeWf.peaks,
-                activeWf.duration_seconds || activeWf.duration_sec || activeLayer.duration_seconds || 0
-            );
-        }
+        this.syncTransportWaveform({ fetchHiRes: true });
         this.requestDraw(true);
         window.gaiaTransport?.render?.();
     }
 
     scheduleDetailWaveforms() {
         if (this.zoom <= 1.05 || !this.layers.length) {
+            if (this.detailTimer) {
+                window.clearTimeout(this.detailTimer);
+                this.detailTimer = null;
+            }
+            if (this._detailAbort) {
+                this._detailAbort.abort();
+                this._detailAbort = null;
+            }
+            this._detailGen += 1;
             this.detailWaveforms.clear();
             return;
         }
         if (this.detailTimer) window.clearTimeout(this.detailTimer);
+        const gen = ++this._detailGen;
         this.detailTimer = window.setTimeout(async () => {
+            this.detailTimer = null;
+            if (gen !== this._detailGen) return;
+            if (this._detailAbort) {
+                this._detailAbort.abort();
+            }
+            const ac = new AbortController();
+            this._detailAbort = ac;
             const { startSec, endSec } = this.visibleTimeWindow();
             await Promise.all(this.layers.map(async layer => {
                 if (!layer.waveform_url || !layer.frames || !layer.sample_rate) return;
                 const sFrame = clamp(Math.floor(startSec * layer.sample_rate), 0, Math.max(0, layer.frames - 2));
                 const eFrame = clamp(Math.ceil(endSec * layer.sample_rate), sFrame + 1, layer.frames);
                 try {
-                    const res = await fetch(`${layer.waveform_url}?resolution=1200&start_frame=${sFrame}&end_frame=${eFrame}`);
-                    if (res.ok) {
-                        this.detailWaveforms.set(layer.item_id, await res.json());
+                    const res = await fetch(`${layer.waveform_url}?resolution=1200&start_frame=${sFrame}&end_frame=${eFrame}`, {
+                        signal: ac.signal,
+                    });
+                    if (res.ok && !ac.signal.aborted && gen === this._detailGen) {
+                        const wf = await res.json();
+                        if (!ac.signal.aborted && gen === this._detailGen) {
+                            this.detailWaveforms.set(layer.item_id, wf);
+                        }
                     }
                 } catch {
-                    // Ignore
+                    // Ignore abort / transient errors; overview waveform seamlessly fills uncovered spans
                 }
             }));
-            this.requestDraw(true);
-        }, 90);
+            if (this._detailAbort === ac) {
+                this._detailAbort = null;
+            }
+            if (!ac.signal.aborted && gen === this._detailGen) {
+                this.requestDraw(true);
+            }
+        }, 70);
     }
 
     updateViewSlider() {
@@ -1011,8 +1463,12 @@ export class SinEngine {
         const zoomLbl = this.container?.querySelector('#sin-zoom-label');
         if (zoomLbl) zoomLbl.textContent = `${this.zoom.toFixed(1).replace(/\.0$/, '')}×`;
         if (!slider || !win) return;
-        const leftPct = clamp(this.viewOffsetRatio, 0, 1) * 100;
-        const widthPct = clamp(100 / Math.max(1, this.zoom), 4, 100);
+        const spanRatio = 1 / Math.max(1, this.zoom);
+        const maxOffset = Math.max(0, 1 - spanRatio);
+        const widthPct = clamp(spanRatio * 100, 4, 100);
+        const travelPct = Math.max(0, 100 - widthPct);
+        const leftPct = maxOffset > 1e-6 ? clamp(this.viewOffsetRatio / maxOffset, 0, 1) * travelPct : 0;
+        slider.classList.toggle('disabled', this.zoom <= 1.001);
         win.style.left = `${leftPct}%`;
         win.style.width = `${widthPct}%`;
     }
@@ -1078,7 +1534,7 @@ export class SinEngine {
             }
         }
         if (window.gaiaTransport?.isCueEnabled?.()) {
-            const cueSec = Number(window.gaiaTransport.getCuePoint?.() || 0);
+            const cueSec = Number(this._cueTimelineSec || 0);
             const cueX = clamp((cueSec / Math.max(0.01, dur)) * w, 0, w);
             this._drawCueMarker(ctx, cueX, h, dpr);
         }
@@ -1105,16 +1561,12 @@ export class SinEngine {
             rows.forEach(r => { r.style.height = `${targetCssHeight / nLanes}px`; });
         }
 
-        let cssW = this._cachedCanvasW;
-        let cssH = this._cachedCanvasH;
-        if (cssW <= 0 || cssH <= 0) {
-            const rect = canvas.getBoundingClientRect();
-            cssW = rect.width;
-            cssH = rect.height;
-            if (cssW <= 0 || cssH <= 0) return;
-            this._cachedCanvasW = cssW;
-            this._cachedCanvasH = cssH;
-        }
+        const rect = canvas.getBoundingClientRect();
+        const cssW = rect.width;
+        const cssH = rect.height;
+        if (cssW <= 0 || cssH <= 0) return;
+        this._cachedCanvasW = cssW;
+        this._cachedCanvasH = cssH;
 
         const dpr = Math.min(2, window.devicePixelRatio || 1);
         const w = Math.round(cssW * dpr);
@@ -1163,27 +1615,27 @@ export class SinEngine {
                 bCtx.lineTo(w, top + laneH);
                 bCtx.stroke();
 
-                const wf = (this.zoom > 1.05 && this.detailWaveforms.has(layer.item_id))
+                const overviewWf = this.overviewWaveforms.get(layer.item_id) || null;
+                const detailWf = (this.zoom > 1.05 && this.detailWaveforms.has(layer.item_id))
                     ? this.detailWaveforms.get(layer.item_id)
-                    : this.overviewWaveforms.get(layer.item_id);
-                const layerDur = Number(layer.duration_seconds) || Number(wf?.duration_seconds) || 0;
+                    : null;
+                const layerDur = Number(layer.duration_seconds)
+                    || Number(overviewWf?.duration_seconds)
+                    || Number(detailWf?.duration_seconds)
+                    || 0;
 
-                if (wf?.peaks?.length && layerDur > 0) {
-                    const sr = Number(wf.sample_rate || layer.sample_rate || 44100);
-                    const wfStartSec = Number(wf.start_frame ?? 0) / sr;
-                    const wfEndSec = Number(wf.end_frame ?? wf.frames ?? layerDur * sr) / sr;
-                    const wfSpan = Math.max(0.0001, wfEndSec - wfStartSec);
-                    const peaks = wf.peaks;
+                if ((overviewWf?.peaks?.length || detailWf?.peaks?.length) && layerDur > 0) {
+                    const fallbackSr = Number(layer.sample_rate || overviewWf?.sample_rate || detailWf?.sample_rate || 44100);
                     const linGain = Math.pow(10, Number(layer.pre_gain_db || 0) / 20) * Number(layer.volume ?? 1);
                     bCtx.fillStyle = muted ? 'rgba(148, 163, 184, 0.3)' : (selected ? '#6fc1ff' : '#4a8ec2');
                     const step = Math.max(1, Math.floor(dpr));
                     for (let x = 0; x < w; x += step) {
-                        const sec = startSec + (x / w) * spanSec;
-                        if (sec > layerDur) break;
-                        const ratio = (sec - wfStartSec) / wfSpan;
-                        if (ratio < 0 || ratio >= 1) continue;
-                        const pIdx = clamp(Math.floor(ratio * peaks.length), 0, peaks.length - 1);
-                        const pair = peaks[pIdx];
+                        const sec = startSec + ((x + 0.5 * step) / w) * spanSec;
+                        if (sec < 0 || sec > layerDur) continue;
+                        // Prefer zoomed detail peaks where they cover `sec`, seamlessly falling back to overview peaks
+                        const pair = (detailWf ? this._sampleWaveformPeakAtSec(detailWf, sec, fallbackSr, layerDur) : null)
+                            || (overviewWf ? this._sampleWaveformPeakAtSec(overviewWf, sec, fallbackSr, layerDur) : null);
+                        if (!pair) continue;
                         const minV = clamp(pair[0] * linGain, -1, 1);
                         const maxV = clamp(pair[1] * linGain, -1, 1);
                         const yTop = midY - maxV * (laneH * 0.42);
@@ -1207,14 +1659,29 @@ export class SinEngine {
                     }
                     const snapOv = activeSnap?.overrides?.[layer.src_node_id];
                     if (snapOv) {
-                        const sx0 = clamp(secToX(Number(snapOv.crop_start ?? 0) * layerDur), 0, w);
-                        const sx1 = clamp(secToX(Number(snapOv.crop_end ?? 1) * layerDur), 0, w);
+                        const rawSx0 = secToX(Number(snapOv.crop_start ?? 0) * layerDur);
+                        const rawSx1 = secToX(Number(snapOv.crop_end ?? 1) * layerDur);
+                        const sx0 = clamp(rawSx0, 0, w);
+                        const sx1 = clamp(rawSx1, 0, w);
                         if (sx1 > sx0) {
                             bCtx.fillStyle = 'rgba(247, 178, 59, 0.22)';
                             bCtx.fillRect(sx0, top, sx1 - sx0, laneH);
-                            bCtx.strokeStyle = '#f7b23b';
-                            bCtx.lineWidth = 1.5 * dpr;
-                            bCtx.strokeRect(sx0, top + 1, sx1 - sx0, laneH - 2);
+                            bCtx.strokeStyle = 'rgba(247, 178, 59, 0.78)';
+                            bCtx.lineWidth = 1.25 * dpr;
+                            bCtx.strokeRect(sx0, top + 0.5 * dpr, sx1 - sx0, laneH - dpr);
+                        }
+                        // Crisp draggable amber boundary handles when visible inside the viewport
+                        const handleW = 3 * dpr;
+                        const capH = 7 * dpr;
+                        const capW = 7 * dpr;
+                        bCtx.fillStyle = '#f7b23b';
+                        if (rawSx0 >= -handleW && rawSx0 <= w + handleW) {
+                            bCtx.fillRect(rawSx0 - handleW * 0.5, top, handleW, laneH);
+                            bCtx.fillRect(rawSx0 - 1 * dpr, top, capW, capH);
+                        }
+                        if (rawSx1 >= -handleW && rawSx1 <= w + handleW) {
+                            bCtx.fillRect(rawSx1 - handleW * 0.5, top, handleW, laneH);
+                            bCtx.fillRect(rawSx1 - capW + 1 * dpr, top, capW, capH);
                         }
                     }
                 }
@@ -1227,35 +1694,37 @@ export class SinEngine {
         ctx.drawImage(this._waveBackingCanvas, 0, 0);
 
         if (window.gaiaTransport?.isCueEnabled?.()) {
-            const cueSec = Number(window.gaiaTransport.getCuePoint?.() || 0);
+            const cueSec = Number(this._cueTimelineSec || 0);
             this._drawCueMarker(ctx, secToX(cueSec), h, dpr);
         }
 
         const playX = secToX(this.playheadSec);
         if (playX >= 0 && playX <= w) {
-            const isScrub = Boolean(this._scrubCursorPos);
+            const isScrub = Boolean(this._scrubCursorPos && this.dragState?.mode === 'seek');
             ctx.fillStyle = isScrub ? 'rgba(56, 211, 153, 0.95)' : '#ff5c5c';
             ctx.fillRect(playX - (isScrub ? 1.25 : 0.9) * dpr, 0, (isScrub ? 2.5 : 1.8) * dpr, h);
+        }
 
-            // Minimal translucent time pill right beside cursor while scrubbing
-            if (isScrub) {
-                const label = formatPreciseTime(this.playheadSec);
-                ctx.font = `600 ${Math.round(9.5 * dpr)}px ui-monospace, SFMono-Regular, Consolas, monospace`;
-                const tw = ctx.measureText(label).width;
-                const padX = 5 * dpr;
-                const boxW = tw + padX * 2;
-                const boxH = 16 * dpr;
-                const boxX = clamp(playX + 6 * dpr, 3 * dpr, Math.max(3 * dpr, w - boxW - 3 * dpr));
-                const boxY = 4 * dpr;
-                ctx.fillStyle = 'rgba(10, 14, 22, 0.84)';
-                ctx.fillRect(boxX, boxY, boxW, boxH);
-                ctx.strokeStyle = 'rgba(56, 211, 153, 0.55)';
-                ctx.lineWidth = dpr;
-                ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1);
-                ctx.fillStyle = '#e2f8ef';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(label, boxX + padX, boxY + boxH * 0.5 + 0.5);
-            }
+        // Minimal translucent time pill right beside cursor while scrubbing OR dragging a cut/crop handle
+        if (this._scrubCursorPos && Number.isFinite(this._scrubCursorPos.sec)) {
+            const isHandleDrag = this.dragState?.mode && this.dragState.mode !== 'seek';
+            const pillAnchorX = isHandleDrag ? secToX(this._scrubCursorPos.sec) : playX;
+            const label = formatPreciseTime(this._scrubCursorPos.sec);
+            ctx.font = `600 ${Math.round(9.5 * dpr)}px ui-monospace, SFMono-Regular, Consolas, monospace`;
+            const tw = ctx.measureText(label).width;
+            const padX = 5 * dpr;
+            const boxW = tw + padX * 2;
+            const boxH = 16 * dpr;
+            const boxX = clamp(pillAnchorX + 6 * dpr, 3 * dpr, Math.max(3 * dpr, w - boxW - 3 * dpr));
+            const boxY = 4 * dpr;
+            ctx.fillStyle = 'rgba(10, 14, 22, 0.88)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+            ctx.strokeStyle = isHandleDrag ? 'rgba(247, 178, 59, 0.75)' : 'rgba(56, 211, 153, 0.55)';
+            ctx.lineWidth = dpr;
+            ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1);
+            ctx.fillStyle = isHandleDrag ? '#fde68a' : '#e2f8ef';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, boxX + padX, boxY + boxH * 0.5 + 0.5);
         }
     }
 
@@ -1265,6 +1734,7 @@ export class SinEngine {
         this.syncMixerRowStates();
         this.renderCuts();
         this.updateHostTrackInfo();
+        this.syncTransportWaveform({ fetchHiRes: true });
         this.requestDraw(true);
         window.gaiaTransport?.render?.();
     }
@@ -1335,7 +1805,9 @@ export class SinEngine {
         this.markDirty();
         this.renderSnapshotsSelect();
         this.renderCuts();
+        this.syncTransportWaveform({ fetchHiRes: true });
         this.requestDraw(true);
+        window.gaiaTransport?.render?.();
     }
 
     splitLayerIntoCuts(count) {
@@ -1369,26 +1841,78 @@ export class SinEngine {
         this.markDirty();
         this.renderSnapshotsSelect();
         this.renderCuts();
+        this.syncTransportWaveform({ fetchHiRes: true });
         this.requestDraw(true);
+        window.gaiaTransport?.render?.();
+    }
+
+    async activateSnapshot(snapshotId, { autoPlay = false, focusView = true, markDirty = false } = {}) {
+        const sdata = this.session?.session_data;
+        if (!sdata) return;
+        const nextId = snapshotId || null;
+        sdata.active_snapshot_id = nextId;
+        this.renderSnapshotsSelect();
+        this.renderCuts();
+        if (markDirty) this.markDirty();
+
+        const snap = this.selectedSnapshot();
+        const range = this.getSnapshotRangeSec(snap);
+        this.syncTransportWaveform({ fetchHiRes: true });
+        if (range) {
+            this._cueTimelineSec = range.startSec;
+            window.gaiaTransport?.setCuePoint?.(0);
+        } else {
+            this._cueTimelineSec = clamp(this.playheadSec, 0, this.maxTimelineDurationSec());
+            window.gaiaTransport?.setCuePoint?.(this.timelineToTransportSec(this._cueTimelineSec));
+        }
+        if (focusView && range) {
+            this.focusRange(range.startSec, range.endSec);
+        } else if (!nextId) {
+            this.zoom = 1;
+            this.viewOffsetRatio = 0;
+            this.detailWaveforms.clear();
+            this.updateViewSlider();
+            this.requestDraw(true);
+        } else {
+            this.requestDraw(true);
+        }
+
+        if (this.liveAvailable && this.realtime) {
+            const ok = await this.syncRealtimePlan(snap || null);
+            if (!ok && autoPlay && snap) {
+                void this.renderAndPlaySinPreview(snap.id);
+                return;
+            }
+            if (range) {
+                this._auditionStopSec = autoPlay ? range.endSec : null;
+                this._dispatchSeekTransport(range.startSec, Boolean(autoPlay));
+                if (autoPlay) {
+                    this.host?.setStatus?.(`Playing "${snap.label || snap.id}" live on device audio`);
+                }
+            } else {
+                this._auditionStopSec = null;
+                if (autoPlay) {
+                    this._dispatchSeekTransport(this._planOriginSec, true);
+                }
+            }
+            this.requestDraw(false);
+            window.gaiaTransport?.render?.();
+            return;
+        }
+
+        if (range) {
+            this.playheadSec = range.startSec;
+            this.requestDraw(false);
+            window.gaiaTransport?.render?.();
+        }
+        if (autoPlay && snap) {
+            void this.renderAndPlaySinPreview(snap.id);
+        }
     }
 
     async auditionCutRealtime(snap) {
-        if (!this.realtime || !this.liveAvailable || !snap) return;
-        const ok = await this.syncRealtimePlan(snap);
-        if (!ok) {
-            void this.renderAndPlaySinPreview(snap.id);
-            return;
-        }
-        this.playheadSec = 0;
-        this.livePlaying = true;
-        this.realtime.setTransport({
-            playing: true,
-            seekSec: 0,
-            bpm: Number(this.session?.session_data?.graph?.settings?.bpm || 120),
-            loop: false,
-        });
-        this.host?.setStatus?.(`Playing "${snap.label || snap.id}" live on device audio`);
-        window.gaiaTransport?.render?.();
+        if (!snap) return;
+        await this.activateSnapshot(snap.id, { autoPlay: true, focusView: true });
     }
 
     async renderAndPlaySinPreview(snapshotId = null) {
@@ -1397,6 +1921,10 @@ export class SinEngine {
         this.renderingPreview = true;
         try {
             this.host?.setStatus?.('Rendering SIN graph preview…');
+            const snapObj = snapshotId
+                ? (this.session?.session_data?.snapshots || []).find(s => s && s.id === snapshotId) || null
+                : null;
+            const snapRange = snapObj ? this.getSnapshotRangeSec(snapObj) : null;
             const res = await fetch(`/items/${pid}/preview/render`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1409,12 +1937,13 @@ export class SinEngine {
             if (!res.ok) throw new Error(data.detail || 'Preview render failed');
 
             this.masterPreview = data;
+            this._previewOriginSec = snapRange ? snapRange.startSec : this._baseOriginSec();
             this.drawMasterStrip();
             this.stopPreviewAudio(false);
 
             const audio = new Audio(data.audio_url);
             audio.addEventListener('timeupdate', () => {
-                this.playheadSec = audio.currentTime || 0;
+                this.playheadSec = clamp(this._previewOriginSec + (audio.currentTime || 0), 0, this.maxTimelineDurationSec());
                 this.drawTimeline();
                 this.drawMasterStrip();
                 window.gaiaTransport?.render?.();
@@ -1600,7 +2129,8 @@ export class SinEngine {
             const dur = Number(this.masterPreview?.duration_seconds) || this.liveDurationSec || this.maxTimelineDurationSec();
             const ratio = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
             const targetSec = ratio * dur;
-            window.gaiaTransport?.setCuePoint?.(targetSec);
+            this._cueTimelineSec = targetSec;
+            window.gaiaTransport?.setCuePoint?.(this.timelineToTransportSec(targetSec));
             this._scheduleSeekTransport(targetSec, Boolean(this.livePlaying), { immediate: true });
             this.requestDraw(false);
             window.gaiaTransport?.render?.();
@@ -1623,56 +2153,85 @@ export class SinEngine {
 
         const snapSelect = this.container.querySelector('#sin-snapshot-select');
         snapSelect?.addEventListener('change', () => {
-            if (!this.session?.session_data) return;
-            this.session.session_data.active_snapshot_id = snapSelect.value || null;
-            this.renderCuts();
-            this.requestDraw(true);
-            this.markDirty();
-            if (this.liveAvailable && this.realtime) {
-                void this.syncRealtimePlan(this.selectedSnapshot() || null);
-            }
+            const sid = snapSelect.value || null;
+            void this.activateSnapshot(sid, {
+                autoPlay: false,
+                focusView: Boolean(sid),
+                markDirty: true,
+            });
         }, sig);
 
-        // Zoom buttons & wheel
-        const setZoom = nextZoom => {
-            this.zoom = clamp(nextZoom, 1, 64);
-            this.updateViewSlider();
-            this.requestDraw(true);
-            this.scheduleDetailWaveforms();
-        };
-        this.container.querySelector('#sin-zoom-in')?.addEventListener('click', () => setZoom(this.zoom * 2), sig);
-        this.container.querySelector('#sin-zoom-out')?.addEventListener('click', () => setZoom(this.zoom / 2), sig);
+        // Zoom buttons
+        this.container.querySelector('#sin-zoom-in')?.addEventListener('click', () => this.setZoomAt(this.zoom * 2, 0.5), sig);
+        this.container.querySelector('#sin-zoom-out')?.addEventListener('click', () => this.setZoomAt(this.zoom / 2, 0.5), sig);
         this.container.querySelector('#sin-zoom-fit')?.addEventListener('click', () => {
             this.viewOffsetRatio = 0;
-            setZoom(1);
+            this.setZoomAt(1, 0);
         }, sig);
 
-        // View overview pan
+        // View overview slider pan (preserves thumb grab offset & avoids high-zoom clamping bugs)
         const viewSlider = this.container.querySelector('#sin-view-slider');
-        const panFromPointer = event => {
-            if (!viewSlider) return;
-            const rect = viewSlider.getBoundingClientRect();
-            const ratio = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-            const winSpanRatio = 1 / Math.max(1, this.zoom);
-            this.viewOffsetRatio = clamp(ratio - winSpanRatio / 2, 0, Math.max(0, 1 - winSpanRatio));
+        const viewWin = this.container.querySelector('#sin-view-window');
+        const applyViewSliderOffset = nextOffset => {
+            const spanRatio = 1 / Math.max(1, this.zoom);
+            const maxOffset = Math.max(0, 1 - spanRatio);
+            this.viewOffsetRatio = clamp(nextOffset, 0, maxOffset);
             this.updateViewSlider();
             this.requestDraw(true);
             this.scheduleDetailWaveforms();
         };
         viewSlider?.addEventListener('pointerdown', event => {
+            if (event.button !== 0 || this.zoom <= 1.001) return;
+            event.preventDefault();
             viewSlider.setPointerCapture(event.pointerId);
             this.viewDragState = true;
-            panFromPointer(event);
+            viewSlider.classList.add('is-dragging');
+            const sliderRect = viewSlider.getBoundingClientRect();
+            const winRect = viewWin?.getBoundingClientRect();
+            const spanRatio = 1 / Math.max(1, this.zoom);
+            const maxOffset = Math.max(0, 1 - spanRatio);
+            const travelPx = Math.max(1, sliderRect.width - (winRect ? winRect.width : sliderRect.width * spanRatio));
+            if (winRect && event.clientX >= winRect.left && event.clientX <= winRect.right) {
+                this._viewDragInfo = {
+                    mode: 'thumb',
+                    anchorX: event.clientX,
+                    anchorOffset: this.viewOffsetRatio,
+                    travelPx,
+                    maxOffset,
+                };
+            } else {
+                const ratio = clamp((event.clientX - sliderRect.left) / Math.max(1, sliderRect.width), 0, 1);
+                const centered = clamp(ratio - spanRatio * 0.5, 0, maxOffset);
+                this._viewDragInfo = {
+                    mode: 'thumb',
+                    anchorX: event.clientX,
+                    anchorOffset: centered,
+                    travelPx,
+                    maxOffset,
+                };
+                applyViewSliderOffset(centered);
+            }
         }, sig);
         viewSlider?.addEventListener('pointermove', event => {
-            if (this.viewDragState) panFromPointer(event);
+            if (!this.viewDragState || !this._viewDragInfo) return;
+            const dx = event.clientX - this._viewDragInfo.anchorX;
+            const deltaOffset = (dx / this._viewDragInfo.travelPx) * this._viewDragInfo.maxOffset;
+            applyViewSliderOffset(this._viewDragInfo.anchorOffset + deltaOffset);
         }, sig);
-        viewSlider?.addEventListener('pointerup', () => {
+        const endViewSliderDrag = () => {
+            if (!this.viewDragState) return;
             this.viewDragState = false;
-        }, sig);
+            this._viewDragInfo = null;
+            viewSlider?.classList.remove('is-dragging');
+        };
+        viewSlider?.addEventListener('pointerup', endViewSliderDrag, sig);
+        viewSlider?.addEventListener('pointercancel', endViewSliderDrag, sig);
 
         // Multi-lane canvas pointer interaction:
-        // Click repositions cleanly; hold + move transparently scrubs through the pre-buffered C++ engine!
+        // - Left-click/drag: move playback & scrub smoothly anywhere on the timeline (or drag amber snapshot / green crop handles)
+        // - Middle-drag, Right-drag (when zoomed), or Shift/Alt+Left-drag: pan timeline left/right
+        // - Wheel: cursor-anchored zoom; Shift+Wheel or horizontal trackpad swipe: pan left/right
+        // - Edge auto-scroll: dragging playhead or handles near canvas edges while zoomed smoothly scrolls left/right
         const tlCanvas = this.container.querySelector('#sin-timeline-canvas');
         const hitTestCropHandle = (clientX, clientY, rect) => {
             const laneIdx = clamp(Math.floor(((clientY - rect.top) / Math.max(1, rect.height)) * this.layers.length), 0, this.layers.length - 1);
@@ -1683,18 +2242,205 @@ export class SinEngine {
             const layerDur = Number(layer.duration_seconds) || this.maxTimelineDurationSec();
             const secToCssX = s => ((s - startSec) / span) * rect.width;
             const x = clientX - rect.left;
-            if (layerDur > 0 && laneIdx === this.selectedLayerIdx) {
-                if (Math.abs(x - secToCssX(Number(layer.crop_start ?? 0) * layerDur)) <= 9) return { mode: 'crop-start', laneIdx };
-                if (Math.abs(x - secToCssX(Number(layer.crop_end ?? 1) * layerDur)) <= 9) return { mode: 'crop-end', laneIdx };
+            if (layerDur > 0) {
+                const activeSnap = this.selectedSnapshot();
+                const snapOv = activeSnap?.overrides?.[layer.src_node_id];
+                if (snapOv && (snapOv.crop_start != null || snapOv.crop_end != null)) {
+                    const sx0 = secToCssX(Number(snapOv.crop_start ?? 0) * layerDur);
+                    const sx1 = secToCssX(Number(snapOv.crop_end ?? 1) * layerDur);
+                    const snapTol = Math.min(10, Math.max(4, Math.floor(Math.abs(sx1 - sx0) * 0.22)));
+                    if (Math.abs(x - sx0) <= snapTol) return { mode: 'snap-start', laneIdx };
+                    if (Math.abs(x - sx1) <= snapTol) return { mode: 'snap-end', laneIdx };
+                }
+                if (laneIdx === this.selectedLayerIdx) {
+                    if (Math.abs(x - secToCssX(Number(layer.crop_start ?? 0) * layerDur)) <= 9) return { mode: 'crop-start', laneIdx };
+                    if (Math.abs(x - secToCssX(Number(layer.crop_end ?? 1) * layerDur)) <= 9) return { mode: 'crop-end', laneIdx };
+                }
             }
             return { mode: 'seek', laneIdx };
         };
 
+        const applyActiveDragAtClientX = clientX => {
+            if (!this.dragState || !tlCanvas) return;
+            const layer = this.layers[this.dragState.laneIdx];
+            if (!layer) return;
+            const rect = tlCanvas.getBoundingClientRect();
+            const { startSec, endSec } = this.visibleTimeWindow();
+            const span = Math.max(0.001, endSec - startSec);
+            const sec = clamp(startSec + ((clientX - rect.left) / Math.max(1, rect.width)) * span, 0, this.maxTimelineDurationSec());
+
+            if (this.dragState.mode === 'seek') {
+                if (!this.dragState.moved && Math.abs(clientX - this.dragState.startX) >= 4) {
+                    this.dragState.moved = true;
+                    this.dragState.monitoringScrub = true;
+                }
+                if (this.dragState.moved) {
+                    this.playheadSec = sec;
+                    this._scrubCursorPos = { x: clientX - rect.left, sec };
+                    const snapRange = this.getSnapshotRangeSec();
+                    if (snapRange && sec >= snapRange.startSec && sec < snapRange.endSec) {
+                        this._auditionStopSec = snapRange.endSec;
+                    } else {
+                        this._auditionStopSec = null;
+                    }
+                    // Transparent live position monitoring with a 45ms breath window (leverages C++ sliding window + 4ms overlap crossfade)
+                    this._scheduleSeekTransport(sec, true, { immediate: false, breathMs: 45 });
+                    if (this._scrubIdlePauseTimer) {
+                        window.clearTimeout(this._scrubIdlePauseTimer);
+                    }
+                    if (!this.dragState.wasPlaying) {
+                        this._scrubIdlePauseTimer = window.setTimeout(() => {
+                            this._scrubIdlePauseTimer = null;
+                            if (this.dragState?.mode === 'seek' && !this.dragState.wasPlaying) {
+                                this._dispatchSeekTransport(this.playheadSec, false);
+                            }
+                        }, 160);
+                    }
+                }
+                this.requestDraw(false);
+                window.gaiaTransport?.render?.();
+                return;
+            }
+
+            const layerDur = Math.max(0.01, Number(layer.duration_seconds) || this.maxTimelineDurationSec());
+            const ratio = clamp(sec / layerDur, 0, 1);
+
+            if (this.dragState.mode === 'snap-start' || this.dragState.mode === 'snap-end') {
+                const activeSnap = this.selectedSnapshot();
+                if (!activeSnap?.overrides) return;
+                const refOv = activeSnap.overrides[layer.src_node_id];
+                if (!refOv) return;
+                const minGap = Math.min(0.002, 0.25 / layerDur);
+                const nextStart = this.dragState.mode === 'snap-start'
+                    ? roundRatio(Math.min(ratio, Number(refOv.crop_end ?? 1) - minGap))
+                    : roundRatio(Number(refOv.crop_start ?? 0));
+                const nextEnd = this.dragState.mode === 'snap-end'
+                    ? roundRatio(Math.max(ratio, Number(refOv.crop_start ?? 0) + minGap))
+                    : roundRatio(Number(refOv.crop_end ?? 1));
+                for (const [nid, ov] of Object.entries(activeSnap.overrides)) {
+                    if (!ov || typeof ov !== 'object') continue;
+                    if (nid === layer.src_node_id || ov.crop_start != null || ov.crop_end != null) {
+                        ov.crop_start = nextStart;
+                        ov.crop_end = nextEnd;
+                    }
+                }
+                const startS = nextStart * layerDur;
+                const endS = nextEnd * layerDur;
+                activeSnap.meta = activeSnap.meta || { source_engine: 'sin_timeline' };
+                activeSnap.meta.start_sec = Math.round(startS * 1000) / 1000;
+                activeSnap.meta.end_sec = Math.round(endS * 1000) / 1000;
+                activeSnap.meta.duration_sec = Math.round((endS - startS) * 1000) / 1000;
+                if (layer.sample_rate) {
+                    activeSnap.meta.start_frame = Math.round(startS * layer.sample_rate);
+                    activeSnap.meta.end_frame = Math.round(endS * layer.sample_rate);
+                }
+                if (this._auditionStopSec !== null) {
+                    this._auditionStopSec = endS;
+                }
+                const rangeSpan = this.container?.querySelector(`[data-snap-id="${CSS.escape(activeSnap.id)}"] .media-cut-range`);
+                if (rangeSpan) {
+                    rangeSpan.textContent = `${formatPreciseTime(startS)}–${formatPreciseTime(endS)}`;
+                }
+                this._scrubCursorPos = { x: clientX - rect.left, sec: this.dragState.mode === 'snap-start' ? startS : endS };
+                this.markDirty();
+                this.syncTransportWaveform({ fetchHiRes: false });
+                this.requestDraw(true);
+                window.gaiaTransport?.render?.();
+                return;
+            }
+
+            if (this.dragState.mode === 'crop-start') {
+                layer.crop_start = Math.min(ratio, Number(layer.crop_end ?? 1) - 0.002);
+                this._planOriginSec = this._baseOriginSec();
+                this.realtime?.setParam(layer.ch_node_id || layer.src_node_id, 'crop_start', layer.crop_start, 0);
+                this._scrubCursorPos = { x: clientX - rect.left, sec: layer.crop_start * layerDur };
+            } else if (this.dragState.mode === 'crop-end') {
+                layer.crop_end = Math.max(ratio, Number(layer.crop_start ?? 0) + 0.002);
+                this.realtime?.setParam(layer.ch_node_id || layer.src_node_id, 'crop_end', layer.crop_end, 0);
+                this._scrubCursorPos = { x: clientX - rect.left, sec: layer.crop_end * layerDur };
+            }
+            this.applyLayerControlToGraph(layer);
+            this.markDirty();
+            this.requestDraw(true);
+        };
+
+        const tickEdgeAutoScroll = ts => {
+            this._autoScrollRaf = null;
+            if (!this.dragState || this.dragState.mode === 'pan' || this.zoom <= 1.001 || !tlCanvas) return;
+            const rect = tlCanvas.getBoundingClientRect();
+            const edgePx = 28;
+            const localX = this._autoScrollClientX - rect.left;
+            let dir = 0;
+            let strength = 0;
+            if (localX < edgePx) {
+                dir = -1;
+                strength = clamp((edgePx - localX) / edgePx, 0.15, 2.5);
+            } else if (localX > rect.width - edgePx) {
+                dir = 1;
+                strength = clamp((localX - (rect.width - edgePx)) / edgePx, 0.15, 2.5);
+            }
+            if (dir === 0) {
+                this._autoScrollLastTs = 0;
+                return;
+            }
+            const dt = this._autoScrollLastTs ? Math.min(0.05, (ts - this._autoScrollLastTs) / 1000) : 0.016;
+            this._autoScrollLastTs = ts;
+            const spanRatio = 1 / Math.max(1, this.zoom);
+            this.panByDeltaRatio(dir * strength * spanRatio * 0.65 * dt);
+            applyActiveDragAtClientX(this._autoScrollClientX);
+            this._autoScrollRaf = window.requestAnimationFrame(tickEdgeAutoScroll);
+        };
+
+        const ensureEdgeAutoScroll = (clientX, rect) => {
+            this._autoScrollClientX = clientX;
+            if (this.zoom <= 1.001) {
+                this._stopEdgeAutoScroll();
+                return;
+            }
+            const localX = clientX - rect.left;
+            if (localX < 28 || localX > rect.width - 28) {
+                if (this._autoScrollRaf === null) {
+                    this._autoScrollLastTs = 0;
+                    this._autoScrollRaf = window.requestAnimationFrame(tickEdgeAutoScroll);
+                }
+            } else {
+                this._stopEdgeAutoScroll();
+            }
+        };
+
+        tlCanvas?.addEventListener('contextmenu', event => {
+            if (this._suppressNextContextMenu) {
+                event.preventDefault();
+                this._suppressNextContextMenu = false;
+            }
+        }, sig);
+
         tlCanvas?.addEventListener('pointerdown', event => {
-            if (!this.layers.length || event.button !== 0) return;
+            if (!this.layers.length) return;
             const rect = tlCanvas.getBoundingClientRect();
             this._cachedCanvasW = rect.width;
             this._cachedCanvasH = rect.height;
+
+            // Middle-click, Right-drag (when zoomed), or Shift/Alt+Left-drag pans left/right directly on waveform
+            const wantsPan = event.button === 1
+                || (this.zoom > 1.001 && (event.button === 2 || (event.button === 0 && (event.shiftKey || event.altKey))));
+            if (wantsPan) {
+                event.preventDefault();
+                tlCanvas.setPointerCapture(event.pointerId);
+                this.dragState = {
+                    mode: 'pan',
+                    button: event.button,
+                    startX: event.clientX,
+                    anchorOffsetRatio: this.viewOffsetRatio,
+                    spanRatio: 1 / Math.max(1, this.zoom),
+                    rectWidth: Math.max(1, rect.width),
+                    moved: false,
+                };
+                tlCanvas.style.cursor = 'grabbing';
+                return;
+            }
+
+            if (event.button !== 0) return;
             const hit = hitTestCropHandle(event.clientX, event.clientY, rect);
             if (hit.laneIdx !== this.selectedLayerIdx) {
                 this.selectLayer(hit.laneIdx);
@@ -1716,9 +2462,16 @@ export class SinEngine {
                 monitoringScrub: false,
             };
             if (hit.mode === 'seek') {
+                const snapRange = this.getSnapshotRangeSec();
+                if (snapRange && sec >= snapRange.startSec && sec < snapRange.endSec) {
+                    this._auditionStopSec = snapRange.endSec;
+                } else {
+                    this._auditionStopSec = null;
+                }
                 this.playheadSec = sec;
-                window.gaiaTransport?.setCuePoint?.(sec);
-                // Click-jump immediately commits position (and pre-warms disk buffer even when paused!)
+                this._cueTimelineSec = sec;
+                window.gaiaTransport?.setCuePoint?.(this.timelineToTransportSec(sec));
+                // Click-jump immediately commits exact timeline position
                 this._scheduleSeekTransport(sec, wasPlaying, { immediate: true });
                 this.requestDraw(false);
                 window.gaiaTransport?.render?.();
@@ -1728,57 +2481,35 @@ export class SinEngine {
         tlCanvas?.addEventListener('pointermove', event => {
             if (!this.dragState) {
                 if (this.layers.length && tlCanvas) {
-                    const rect = tlCanvas.getBoundingClientRect();
-                    const hit = hitTestCropHandle(event.clientX, event.clientY, rect);
-                    tlCanvas.style.cursor = hit.mode === 'seek' ? 'col-resize' : 'ew-resize';
+                    if (this.zoom > 1.001 && (event.shiftKey || event.altKey)) {
+                        tlCanvas.style.cursor = 'grab';
+                    } else {
+                        const rect = tlCanvas.getBoundingClientRect();
+                        const hit = hitTestCropHandle(event.clientX, event.clientY, rect);
+                        tlCanvas.style.cursor = hit.mode === 'seek' ? 'col-resize' : 'ew-resize';
+                    }
                 }
                 return;
             }
-            const layer = this.layers[this.dragState.laneIdx];
-            if (!layer) return;
-            const rect = this.dragState.rect || tlCanvas.getBoundingClientRect();
-            const { startSec, endSec } = this.visibleTimeWindow();
-            const span = Math.max(0.001, endSec - startSec);
-            const sec = clamp(startSec + ((event.clientX - rect.left) / Math.max(1, rect.width)) * span, 0, this.maxTimelineDurationSec());
-            if (this.dragState.mode === 'seek') {
-                if (!this.dragState.moved && Math.abs(event.clientX - this.dragState.startX) >= 4) {
+            if (this.dragState.mode === 'pan') {
+                const dx = event.clientX - this.dragState.startX;
+                if (Math.abs(dx) >= 3) {
                     this.dragState.moved = true;
-                    this.dragState.monitoringScrub = true;
-                }
-                if (this.dragState.moved) {
-                    this.playheadSec = sec;
-                    this._scrubCursorPos = { x: event.clientX - rect.left, y: event.clientY - rect.top, sec };
-                    // Transparent live position monitoring with a 45ms breath window (leverages C++ sliding window + 4ms overlap crossfade)
-                    this._scheduleSeekTransport(sec, true, { immediate: false, breathMs: 45 });
-                    if (this._scrubIdlePauseTimer) {
-                        window.clearTimeout(this._scrubIdlePauseTimer);
-                    }
-                    if (!this.dragState.wasPlaying) {
-                        // When paused before drag, pause cleanly if pointer stays still for 160ms so audio stays locked to the cursor
-                        this._scrubIdlePauseTimer = window.setTimeout(() => {
-                            this._scrubIdlePauseTimer = null;
-                            if (this.dragState?.mode === 'seek' && !this.dragState.wasPlaying) {
-                                this._dispatchSeekTransport(this.playheadSec, false);
-                            }
-                        }, 160);
+                    if (this.dragState.button === 2) {
+                        this._suppressNextContextMenu = true;
                     }
                 }
-                this.requestDraw(false);
-                window.gaiaTransport?.render?.();
+                const deltaRatio = -(dx / this.dragState.rectWidth) * this.dragState.spanRatio;
+                const maxOffset = Math.max(0, 1 - this.dragState.spanRatio);
+                this.viewOffsetRatio = clamp(this.dragState.anchorOffsetRatio + deltaRatio, 0, maxOffset);
+                this.updateViewSlider();
+                this.requestDraw(true);
+                this.scheduleDetailWaveforms();
                 return;
             }
-            const layerDur = Math.max(0.01, Number(layer.duration_seconds) || this.maxTimelineDurationSec());
-            const ratio = clamp(sec / layerDur, 0, 1);
-            if (this.dragState.mode === 'crop-start') {
-                layer.crop_start = Math.min(ratio, Number(layer.crop_end ?? 1) - 0.002);
-                this.realtime?.setParam(layer.ch_node_id || layer.src_node_id, 'crop_start', layer.crop_start, 0);
-            } else if (this.dragState.mode === 'crop-end') {
-                layer.crop_end = Math.max(ratio, Number(layer.crop_start ?? 0) + 0.002);
-                this.realtime?.setParam(layer.ch_node_id || layer.src_node_id, 'crop_end', layer.crop_end, 0);
-            }
-            this.applyLayerControlToGraph(layer);
-            this.markDirty();
-            this.requestDraw(true);
+            const rect = tlCanvas.getBoundingClientRect();
+            applyActiveDragAtClientX(event.clientX);
+            ensureEdgeAutoScroll(event.clientX, rect);
         }, sig);
 
         const finishTimelineDrag = () => {
@@ -1786,29 +2517,56 @@ export class SinEngine {
             const st = this.dragState;
             this.dragState = null;
             this._scrubCursorPos = null;
+            this._stopEdgeAutoScroll();
             if (this._scrubIdlePauseTimer) {
                 window.clearTimeout(this._scrubIdlePauseTimer);
                 this._scrubIdlePauseTimer = null;
             }
+            if (st.mode === 'pan') {
+                if (tlCanvas) tlCanvas.style.cursor = 'col-resize';
+                return;
+            }
             if (st.mode === 'seek') {
                 const cueTarget = st.moved ? this.playheadSec : st.startSec;
-                window.gaiaTransport?.setCuePoint?.(cueTarget);
-                // If transport was playing and user simply clicked/held without dragging while engine is still running,
-                // let playback flow seamlessly without stuttering backward; otherwise commit exact final position & state.
-                if (!(st.wasPlaying && !st.moved && this._lastServerPlaying)) {
+                this._cueTimelineSec = cueTarget;
+                window.gaiaTransport?.setCuePoint?.(this.timelineToTransportSec(cueTarget));
+                if (st.moved || (st.wasPlaying && !this._lastServerPlaying)) {
                     this._dispatchSeekTransport(cueTarget, st.wasPlaying);
                 }
                 this.requestDraw(false);
                 window.gaiaTransport?.render?.();
+                return;
             }
+            if (st.mode === 'snap-start' || st.mode === 'snap-end') {
+                this.syncTransportWaveform({ fetchHiRes: true });
+                window.gaiaTransport?.render?.();
+            }
+            this.requestDraw(true);
         };
         tlCanvas?.addEventListener('pointerup', finishTimelineDrag, sig);
         tlCanvas?.addEventListener('pointercancel', finishTimelineDrag, sig);
 
         tlCanvas?.addEventListener('wheel', event => {
-            if (Math.abs(event.deltaY) < 1) return;
+            if (Math.abs(event.deltaY) < 0.5 && Math.abs(event.deltaX) < 0.5) return;
             event.preventDefault();
-            setZoom(this.zoom * (event.deltaY < 0 ? 1.25 : 0.8));
+            const rect = tlCanvas.getBoundingClientRect();
+            if (rect.width <= 0) return;
+
+            // Horizontal trackpad/wheel scroll OR Shift+wheel pans left/right when zoomed in
+            const horizontalPan = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
+            if (horizontalPan) {
+                if (this.zoom > 1.001) {
+                    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+                    const spanRatio = 1 / Math.max(1, this.zoom);
+                    this.panByDeltaRatio((delta / 360) * spanRatio);
+                }
+                return;
+            }
+
+            // Vertical wheel zooms anchored right under the mouse cursor
+            const xFrac = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+            const factor = event.deltaY < 0 ? 1.28 : (1 / 1.28);
+            this.setZoomAt(this.zoom * factor, xFrac);
         }, { signal: this.abortController.signal, passive: false });
 
         // Mixer rail delegation — real-time <5ms parameter push straight to libsin_dsp
@@ -1906,11 +2664,20 @@ export class SinEngine {
             const sid = card.dataset.snapId;
             const sdata = this.session.session_data;
             if (event.target.closest('[data-snap-delete]')) {
+                const wasActive = sdata.active_snapshot_id === sid;
                 sdata.snapshots = (sdata.snapshots || []).filter(s => s.id !== sid);
-                if (sdata.active_snapshot_id === sid) sdata.active_snapshot_id = null;
+                if (wasActive) {
+                    sdata.active_snapshot_id = null;
+                    this._auditionStopSec = null;
+                }
                 this.markDirty();
                 this.renderSnapshotsSelect();
                 this.renderCuts();
+                if (wasActive) {
+                    this.syncTransportWaveform({ fetchHiRes: true });
+                    window.gaiaTransport?.setCuePoint?.(this.timelineToTransportSec(this._cueTimelineSec));
+                    window.gaiaTransport?.render?.();
+                }
                 this.requestDraw(true);
                 return;
             }
@@ -1920,22 +2687,19 @@ export class SinEngine {
                     sdata.active_snapshot_id = sid;
                     this.renderSnapshotsSelect();
                     cutsList.querySelectorAll('[data-snap-id]').forEach(c => c.classList.toggle('active', c.dataset.snapId === sid));
+                    this.syncTransportWaveform({ fetchHiRes: true });
+                    const range = this.getSnapshotRangeSec();
+                    if (range) {
+                        this._cueTimelineSec = range.startSec;
+                        window.gaiaTransport?.setCuePoint?.(0);
+                    }
                     this.requestDraw(true);
+                    window.gaiaTransport?.render?.();
                 }
                 return;
             }
-            sdata.active_snapshot_id = sid;
-            this.renderSnapshotsSelect();
-            cutsList.querySelectorAll('[data-snap-id]').forEach(c => c.classList.toggle('active', c.dataset.snapId === sid));
-            this.requestDraw(true);
-            if (event.target.closest('[data-snap-play]')) {
-                const snap = (sdata.snapshots || []).find(s => s.id === sid);
-                if (this.liveAvailable && this.realtime && snap) {
-                    void this.auditionCutRealtime(snap);
-                } else {
-                    void this.renderAndPlaySinPreview(sid);
-                }
-            }
+            const autoPlay = Boolean(event.target.closest('[data-snap-play]'));
+            void this.activateSnapshot(sid, { autoPlay, focusView: true });
         }, sig);
 
         cutsList?.addEventListener('input', event => {
@@ -1947,6 +2711,9 @@ export class SinEngine {
             snap.label = lbl.value;
             this.markDirty();
             this.renderSnapshotsSelect();
+            if (this.session?.session_data?.active_snapshot_id === snap.id) {
+                window.gaiaTransport?.render?.();
+            }
         }, sig);
 
         // Drag-drop audio/multitrack items from GAIA table onto the editor

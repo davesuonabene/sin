@@ -594,6 +594,63 @@ def _cut_list_to_snapshots(
     return snapshots
 
 
+def _multitrack_cuts_to_snapshots(
+    stems: List[models.Item],
+    cuts: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    stem_info: List[Tuple[models.Item, Optional[int], Optional[float], int]] = []
+    for stem in stems:
+        try:
+            info = sf.info(str(Path(stem.absolute_path).resolve()))
+            stem_info.append((stem, int(info.frames), float(info.duration), int(info.samplerate)))
+        except Exception:
+            stem_info.append((stem, None, None, 44100))
+
+    common_sr = stem_info[0][3] if stem_info else 44100
+    valid_secs = [dur for _, _, dur, _ in stem_info if dur and dur > 0]
+    common_sec = min(valid_secs) if valid_secs else None
+
+    snapshots: List[Dict[str, Any]] = []
+    for idx, cut in enumerate(cuts, start=1):
+        if not isinstance(cut, dict):
+            continue
+        overrides: Dict[str, Dict[str, float]] = {}
+        if cut.get("crop_start") is not None and cut.get("crop_end") is not None:
+            c0 = max(0.0, min(1.0, float(cut["crop_start"])))
+            c1 = max(c0, min(1.0, float(cut["crop_end"])))
+            for stem, _, _, _ in stem_info:
+                overrides[f"src-{stem.id}"] = {"crop_start": round(c0, 6), "crop_end": round(c1, 6)}
+        else:
+            c_start_sec = cut.get("start_sec")
+            if c_start_sec is None and cut.get("start_frame") is not None and common_sr > 0:
+                c_start_sec = float(cut["start_frame"]) / float(common_sr)
+            c_end_sec = cut.get("end_sec")
+            if c_end_sec is None and cut.get("end_frame") is not None and common_sr > 0:
+                c_end_sec = float(cut["end_frame"]) / float(common_sr)
+            for stem, _, s_sec, _ in stem_info:
+                ref_sec = s_sec or common_sec
+                c0 = 0.0
+                c1 = 1.0
+                if ref_sec and ref_sec > 0:
+                    if c_start_sec is not None:
+                        c0 = max(0.0, min(1.0, float(c_start_sec) / ref_sec))
+                    if c_end_sec is not None:
+                        c1 = max(c0, min(1.0, float(c_end_sec) / ref_sec))
+                overrides[f"src-{stem.id}"] = {"crop_start": round(c0, 6), "crop_end": round(c1, 6)}
+
+        cut_id = str(cut.get("id") or f"cut-{idx}-{uuid.uuid4().hex[:6]}")
+        snapshots.append({
+            "format": "sin-snapshot",
+            "version": 1,
+            "id": cut_id,
+            "label": str(cut.get("label") or f"Cut {idx}"),
+            "root": "master",
+            "overrides": overrides,
+            "meta": {"source_engine": "simple_media"},
+        })
+    return snapshots
+
+
 def add_sample_to_project_graph(
     db: Session,
     project: models.ProjectItem,
@@ -605,6 +662,7 @@ def add_sample_to_project_graph(
     volume: float = 1.0,
     muted: bool = False,
     cuts: Optional[List[Dict[str, Any]]] = None,
+    layers: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Load an audio file or multitrack folder into a SIN project graph."""
     if not isinstance(sample_item, models.MultitrackItem) and sample_item.type not in media_editor.AUDIO_TYPES:
@@ -650,14 +708,42 @@ def add_sample_to_project_graph(
     else:
         master_node.setdefault("properties", {})["total_bars"] = "auto"
 
+    c0 = max(0.0, min(1.0, float(crop_start)))
+    c1 = max(c0, min(1.0, float(crop_end)))
+    pre_lin = 10.0 ** (float(pre_gain_db or 0.0) / 20.0)
+    vol = max(0.0, min(1.0, float(volume)))
+
+    mt_stems: List[models.Item] = []
     if isinstance(sample_item, models.MultitrackItem):
         stems = media_editor._multitrack_layers(sample_item)
         if not stems:
             raise ValueError(f"Multitrack '{_title(sample_item)}' contains no playable stems")
+        mt_stems = stems
         muted_ids = _default_muted_ids_for_multitrack(stems)
+        layer_by_id = {
+            int(l["item_id"]): l
+            for l in (layers or [])
+            if isinstance(l, dict) and l.get("item_id") is not None
+        }
+        any_solo = any(bool(l.get("solo")) for l in layer_by_id.values())
         use_group = len(stems) > 1
         grp_id = f"grp-{sample_item.id}" if use_group else "master"
         for stem in stems:
+            l_cfg = layer_by_id.get(stem.id)
+            l_pre_db = float(l_cfg.get("pre_gain_db") or 0.0) if l_cfg else 0.0
+            l_vol = max(
+                0.0,
+                min(1.0, float(l_cfg.get("volume", 1.0) if (l_cfg and l_cfg.get("volume") is not None) else 1.0)),
+            )
+            if any_solo:
+                l_muted = not bool(l_cfg and l_cfg.get("solo"))
+            elif l_cfg is not None and "muted" in l_cfg:
+                l_muted = bool(l_cfg["muted"])
+            else:
+                l_muted = stem.id in muted_ids
+            if not use_group:
+                l_pre_db += float(pre_gain_db or 0.0)
+                l_vol *= vol
             _append_audio_channel(
                 nodes,
                 connections,
@@ -665,24 +751,29 @@ def add_sample_to_project_graph(
                 project_root=project_root,
                 target_bus=grp_id,
                 default_bpm=default_bpm,
-                muted=stem.id in muted_ids,
+                crop_start=c0,
+                crop_end=c1,
+                pre_gain=10.0 ** (l_pre_db / 20.0),
+                volume=l_vol,
+                muted=l_muted,
             )
         if use_group and not any(n.get("id") == grp_id for n in nodes):
+            grp_chain = (
+                default_channel_chain(volume=vol, pre_gain=pre_lin, muted=bool(muted))
+                if (abs(float(pre_gain_db or 0.0)) > 1e-4 or abs(vol - 1.0) > 1e-4 or muted)
+                else []
+            )
             nodes.append({
                 "id": grp_id,
                 "type": "track",
                 "properties": {
                     "node_name": f"{_title(sample_item)} Group",
                     "total_bars": "auto",
-                    "chain": [],
+                    "chain": grp_chain,
                 },
             })
             connections.append({"from": grp_id, "to": "master", "type": "audio"})
     else:
-        c0 = max(0.0, min(1.0, float(crop_start)))
-        c1 = max(c0, min(1.0, float(crop_end)))
-        pre_lin = 10.0 ** (float(pre_gain_db or 0.0) / 20.0)
-        vol = max(0.0, min(1.0, float(volume)))
         _append_audio_channel(
             nodes,
             connections,
@@ -702,9 +793,14 @@ def add_sample_to_project_graph(
         or manifest_doc.get("snapshots")
         or []
     )
-    if cuts and not isinstance(sample_item, models.MultitrackItem):
+    if cuts:
         existing_ids = {s.get("id") for s in existing_snaps if isinstance(s, dict)}
-        for snap in _cut_list_to_snapshots(sample_item, cuts):
+        new_snaps = (
+            _multitrack_cuts_to_snapshots(mt_stems, cuts)
+            if isinstance(sample_item, models.MultitrackItem)
+            else _cut_list_to_snapshots(sample_item, cuts)
+        )
+        for snap in new_snaps:
             if snap["id"] not in existing_ids:
                 existing_snaps.append(snap)
                 existing_ids.add(snap["id"])

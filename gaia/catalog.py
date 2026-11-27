@@ -435,6 +435,10 @@ def _pack_item_rows(
             extra["folder"] = attrs["folder"]
         if attrs.get("profile_id"):
             extra["profile_id"] = attrs["profile_id"]
+        if attrs.get("profile_label"):
+            extra["profile_label"] = attrs["profile_label"]
+        if attrs.get("profile_bundle_id"):
+            extra["profile_bundle_id"] = attrs["profile_bundle_id"]
         if stems_json:
             try:
                 stems = json.loads(stems_json)
@@ -659,7 +663,7 @@ def get_direct_children_rows(db: Session, parent_id: int) -> dict[str, Any]:
     catalog_runtime.ensure_schema(raw_conn)
     rows = _pack_item_rows(
         raw_conn,
-        where_sql="WHERE i.parent_id = ? ORDER BY (i.type NOT IN ('folder', 'collection', 'project')), LOWER(i.absolute_path), i.id",
+        where_sql="WHERE i.parent_id = ? ORDER BY (i.type NOT IN ('folder', 'collection', 'multitrack', 'zoom_h4', 'project')), LOWER(i.absolute_path), i.id",
         params=(int(parent_id),),
     )
     tags_map = {str(r[0]): r[1] for r in raw_conn.execute("SELECT id, name FROM tags").fetchall()}
@@ -696,6 +700,10 @@ def _extract_fts_row_fields(row: tuple[Any, ...], tags_str: str) -> tuple[Any, .
         meta_parts.append(str(bpm_val))
     if attrs.get("folder"):
         meta_parts.append(str(attrs["folder"]))
+    if attrs.get("profile_label"):
+        meta_parts.append(str(attrs["profile_label"]))
+    if attrs.get("profile_id"):
+        meta_parts.append(str(attrs["profile_id"]))
     meta_text = " ".join(p for p in meta_parts if p)
     return (
         int(item_id),

@@ -660,6 +660,7 @@ class TiledWaveformOverlay:
         crop_start_sec: float = 0.0,
         playback_rate: float = 1.0,
         file_duration_sec: Optional[float] = None,
+        tile_time_scale: float = 1.0,
     ) -> None:
         self._lock = threading.RLock()
         self.base_pyramid = base_pyramid
@@ -668,9 +669,10 @@ class TiledWaveformOverlay:
         self.file_duration_sec = max(self.duration_sec, float(file_duration_sec or duration_sec))
         self.crop_start_sec = max(0.0, float(crop_start_sec))
         self.playback_rate = max(0.05, float(playback_rate or 1.0))
+        self.tile_time_scale = max(1e-4, float(tile_time_scale or 1.0))
         self.tile_sec = max(0.5, float(tile_sec))
         self.num_tiles = max(1, int(num_tiles))
-        # file tile_idx -> (tier_int, is_stale_bool, interleaved_peaks_f32)
+        # tile_idx -> (tier_int, is_stale_bool, interleaved_peaks_f32)
         self._tiles: Dict[int, Tuple[int, bool, Optional[np.ndarray]]] = {}
 
     def update_window(
@@ -679,11 +681,14 @@ class TiledWaveformOverlay:
         crop_start_sec: float,
         playback_rate: float,
         timeline_duration_sec: float,
+        tile_time_scale: Optional[float] = None,
     ) -> None:
         with self._lock:
             self.crop_start_sec = max(0.0, float(crop_start_sec))
             self.playback_rate = max(0.05, float(playback_rate or 1.0))
             self.duration_sec = max(0.0, float(timeline_duration_sec))
+            if tile_time_scale is not None:
+                self.tile_time_scale = max(1e-4, float(tile_time_scale))
             self.quick_raw_peaks = None
 
     def set_quick_raw_peaks(self, peaks: List[float]) -> None:
@@ -691,15 +696,19 @@ class TiledWaveformOverlay:
             self.quick_raw_peaks = list(peaks) if peaks else None
 
     def tile_to_timeline_span(self, tile_idx: int) -> Optional[Tuple[float, float]]:
-        """Map file tile `tile_idx` into clamped timeline `[tl_start, tl_end]`, or None if outside active timeline."""
+        """Map tile `tile_idx` into clamped timeline `[tl_start, tl_end]`, or None if outside active timeline."""
         with self._lock:
             dur = self.duration_sec
             if dur <= 0.0:
                 return None
-            file_s0 = float(tile_idx) * self.tile_sec
-            file_s1 = min(self.file_duration_sec, float(tile_idx + 1) * self.tile_sec)
-            tl_s0 = (file_s0 - self.crop_start_sec) / self.playback_rate
-            tl_s1 = (file_s1 - self.crop_start_sec) / self.playback_rate
+            scale = self.tile_time_scale
+            tile_total_dur = self.file_duration_sec * scale
+            tile_s0 = float(tile_idx) * self.tile_sec
+            tile_s1 = min(tile_total_dur, float(tile_idx + 1) * self.tile_sec)
+            crop_t = self.crop_start_sec * scale
+            rate_t = max(1e-4, self.playback_rate * scale)
+            tl_s0 = (tile_s0 - crop_t) / rate_t
+            tl_s1 = (tile_s1 - crop_t) / rate_t
             clamped_s0 = max(0.0, tl_s0)
             clamped_s1 = min(dur, tl_s1)
             if clamped_s1 <= clamped_s0 + 1e-4:
@@ -725,10 +734,13 @@ class TiledWaveformOverlay:
             fast = 0
             ml = 0
             stale = 0
-            # Count active timeline tiles
-            min_t = max(0, min(self.num_tiles - 1, int(math.floor(self.crop_start_sec / self.tile_sec))))
-            max_src = self.crop_start_sec + self.duration_sec * self.playback_rate
-            max_t = max(min_t, min(self.num_tiles - 1, int(math.floor(max(0.0, max_src - 1e-4) / self.tile_sec))))
+            # Count active timeline tiles in tile-space seconds
+            scale = self.tile_time_scale
+            crop_t = self.crop_start_sec * scale
+            rate_t = max(1e-4, self.playback_rate * scale)
+            min_t = max(0, min(self.num_tiles - 1, int(math.floor(crop_t / self.tile_sec))))
+            max_tile_t = crop_t + self.duration_sec * rate_t
+            max_t = max(min_t, min(self.num_tiles - 1, int(math.floor(max(0.0, max_tile_t - 1e-4) / self.tile_sec))))
             active_total = max(1, max_t - min_t + 1)
             for tidx, (tier, is_st, _) in self._tiles.items():
                 if tidx < min_t or tidx > max_t:
@@ -748,12 +760,13 @@ class TiledWaveformOverlay:
             }
 
     def query_viewport(self, start_sec: float, end_sec: float, columns: int) -> Tuple[List[float], List[int]]:
-        """Query `[start_sec..end_sec]` in TIMELINE seconds, mapping cleanly through `crop_start_sec` & `playback_rate`."""
+        """Query `[start_sec..end_sec]` in TIMELINE seconds, mapping cleanly through `crop_start_sec`, `playback_rate` & `tile_time_scale`."""
         cols = max(1, int(columns))
         with self._lock:
             dur = self.duration_sec
             crop_s = self.crop_start_sec
             rate = self.playback_rate
+            scale = self.tile_time_scale
             pyr = self.base_pyramid
             quick_raw = self.quick_raw_peaks
             file_dur = self.file_duration_sec
@@ -787,13 +800,16 @@ class TiledWaveformOverlay:
             raw_peaks = raw_peaks + [0.0] * (cols * 2 - len(raw_peaks))
 
         tiers = [TIER_RAW] * cols
-        src_span = max(1e-4, src_s1 - src_s0)
+        tile_s0 = src_s0 * scale
+        tile_s1 = src_s1 * scale
+        tile_span = max(1e-4, tile_s1 - tile_s0)
+        tile_total_dur = file_dur * scale
         with self._lock:
             if not self._tiles:
                 return raw_peaks[: cols * 2], tiers
             for col in range(cols):
-                c0 = src_s0 + (col / float(cols)) * src_span
-                c1 = src_s0 + ((col + 1) / float(cols)) * src_span
+                c0 = tile_s0 + (col / float(cols)) * tile_span
+                c1 = tile_s0 + ((col + 1) / float(cols)) * tile_span
                 t0 = max(0, min(self.num_tiles - 1, int(math.floor(c0 / self.tile_sec))))
                 t1 = max(t0, min(self.num_tiles - 1, int(math.floor(max(c0, c1 - 1e-6) / self.tile_sec))))
 
@@ -814,7 +830,7 @@ class TiledWaveformOverlay:
 
                     if t_peaks is not None and t_peaks.size >= 2:
                         tile_start = tidx * self.tile_sec
-                        tile_end = min(file_dur, (tidx + 1) * self.tile_sec)
+                        tile_end = min(tile_total_dur, (tidx + 1) * self.tile_sec)
                         tile_dur = max(1e-4, tile_end - tile_start)
                         n_pairs = int(t_peaks.size // 2)
                         u0 = max(0.0, min(1.0, (c0 - tile_start) / tile_dur))

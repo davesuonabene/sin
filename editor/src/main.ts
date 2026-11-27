@@ -2,7 +2,7 @@ import './style.css';
 import { DockviewComponent, type IDockviewPanel } from 'dockview-core';
 import { LGraph, LGraphCanvas, LiteGraph } from 'litegraph.js';
 import './nodes/TrackNode';
-import './nodes/SampleNode';
+import { SampleNode } from './nodes/SampleNode';
 import './nodes/SequenceNode';
 import './nodes/ArrangementNode';
 import './nodes/NullNode';
@@ -27,8 +27,6 @@ import {
     createAppShell,
     HEADER_LOCK_CLOSED_ICON_SVG,
     HEADER_LOCK_OPEN_ICON_SVG,
-    HEADER_PAUSE_ICON_SVG,
-    HEADER_PLAY_ICON_SVG,
     HEADER_REFRESH_ICON_SVG,
     mutedIcon,
     pauseIcon,
@@ -80,6 +78,9 @@ import {
     readChainParamValue,
 } from './dsp/processorRegistry';
 import { applySignalFlowColors } from './graphColorEngine';
+import { TimelineView } from './timeline/TimelineView';
+import { computeScopedAncestorPath } from './timeline/timelineModel';
+import { renderIcon } from '../../packages/ui/src/icons.js';
 
 const sinRealtime = new RealtimeAudioClient('/api/realtime/ws', { ownerId: 'sin-node-editor' });
 let sinRealtimeLoaded = false;
@@ -95,6 +96,48 @@ let sinRealtimeLastSeekSentAt = 0;
 let sinRealtimePendingSeekSec: number | null = null;
 let sinRealtimeSeekBreathTimer: number | null = null;
 const sinRealtimeScopeBuf = new Float32Array(128);
+type EditorViewMode = 'graph' | 'timeline';
+let editorViewMode: EditorViewMode = (typeof localStorage !== 'undefined' && localStorage.getItem('sin-editor-view-mode') === 'timeline')
+    ? 'timeline'
+    : 'graph';
+let timelineViewInstance: TimelineView | null = null;
+let graphViewPaneEl: HTMLDivElement | null = null;
+let timelineViewPaneEl: HTMLDivElement | null = null;
+let mainStageElementRef: HTMLDivElement | null = null;
+let syncGlobalBottomDrawer: (() => void) | null = null;
+let renderGlobalPathBar: ((preferredNodeId?: number | null) => void) | null = null;
+
+function setEditorViewMode(mode: EditorViewMode) {
+    editorViewMode = mode === 'timeline' ? 'timeline' : 'graph';
+    if (typeof localStorage !== 'undefined') {
+        try { localStorage.setItem('sin-editor-view-mode', editorViewMode); } catch { }
+    }
+    const isTimeline = editorViewMode === 'timeline';
+    if (viewModeToggleBtn) {
+        viewModeToggleBtn.dataset.mode = isTimeline ? 'timeline' : 'graph';
+        viewModeToggleBtn.classList.toggle('is-timeline', isTimeline);
+        viewModeToggleBtn.setAttribute('aria-pressed', String(isTimeline));
+        const nextLabel = isTimeline ? 'Switch to Graph View (Tab)' : 'Switch to Timeline View (Tab)';
+        viewModeToggleBtn.title = nextLabel;
+        viewModeToggleBtn.setAttribute('aria-label', nextLabel);
+    }
+    graphViewPaneEl?.classList.toggle('is-hidden', isTimeline);
+    timelineViewPaneEl?.classList.toggle('is-hidden', !isTimeline);
+    timelineViewInstance?.setActive(isTimeline);
+    syncGlobalBottomDrawer?.();
+    renderGlobalPathBar?.();
+    if (!isTimeline) {
+        const gc = (window as any).editorCanvas as LGraphCanvas | undefined;
+        if (gc && mainStageElementRef && mainStageElementRef.clientWidth > 0 && mainStageElementRef.clientHeight > 0) {
+            gc.resize(mainStageElementRef.clientWidth, mainStageElementRef.clientHeight);
+            gc.draw(true, true);
+        }
+    }
+    window.dispatchEvent(new CustomEvent('editor-view-mode-changed', { detail: { mode: editorViewMode } }));
+}
+(window as any).setEditorViewMode = setEditorViewMode;
+(window as any).getEditorViewMode = () => editorViewMode;
+
 function getRealtimeMonitorBusId(): string | null {
     if (!sinRealtime.available || !sinRealtimeLoaded) return null;
     return sinRealtimeTargetMode === 'file' ? 'preview' : '__monitor__';
@@ -120,18 +163,21 @@ const {
     topHeader,
     dockviewContainer,
     playbackFooter,
-    tempFilesSelect,
+    globalFooterLeft,
+    globalPathBar,
+    timelineToggleRowsBtn,
     masterPlayer,
     masterPlayBtn,
+    masterStopBtn,
     masterLoopBtn,
     masterMuteBtn,
     masterVolume,
     exportBtn,
-    globalPreviewBtn,
     previewRecalculateBtn,
     globalSeedInput,
     globalSeedLockBtn,
     globalFreezeBtn,
+    viewModeToggleBtn,
     toggleLibraryBtn,
     refreshLibraryBtn,
     toggleLibraryPreviewBtn,
@@ -298,12 +344,13 @@ function updatePlaybackControls() {
         || globalAudioScheduler.getIsPlaying()
         || (!masterPlayer.paused && !masterPlayer.ended);
     masterPlayBtn.innerHTML = isPlaying ? pauseIcon : playIcon;
-    masterPlayBtn.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
-    masterPlayBtn.title = isPlaying ? 'Pause' : 'Play';
+    masterPlayBtn.classList.toggle('is-playing', isPlaying);
+    masterPlayBtn.setAttribute('aria-pressed', String(isPlaying));
+    masterPlayBtn.setAttribute('aria-label', isPlaying ? 'Pause (Space)' : 'Play (Space)');
+    masterPlayBtn.title = isPlaying ? 'Pause (Space)' : 'Play (Space)';
 
-    globalPreviewBtn.innerHTML = isPlaying ? HEADER_PAUSE_ICON_SVG : HEADER_PLAY_ICON_SVG;
-    globalPreviewBtn.setAttribute('aria-label', isPlaying ? 'Pause transport (Space)' : 'Play transport (Space)');
-    globalPreviewBtn.title = isPlaying ? 'Pause transport (Space)' : 'Play transport (Space)';
+    const hasMedia = !masterPlayBtn.disabled || isPlaying || masterWaveform.duration > 0;
+    masterStopBtn.disabled = !hasMedia;
 
     const isLooping = loopEnabled;
     masterLoopBtn.disabled = masterPlayBtn.disabled;
@@ -311,7 +358,9 @@ function updatePlaybackControls() {
     masterLoopBtn.setAttribute('aria-pressed', String(isLooping));
     masterLoopBtn.setAttribute('aria-label', isLooping ? 'Loop on' : 'Loop off');
     masterLoopBtn.title = isLooping ? 'Loop on' : 'Loop off';
+
     const isMuted = masterPlayer.muted || masterPlayer.volume === 0;
+    masterMuteBtn.classList.toggle('is-muted', isMuted);
     masterMuteBtn.innerHTML = isMuted ? mutedIcon : volumeIcon;
     masterMuteBtn.setAttribute('aria-label', isMuted ? 'Unmute' : 'Mute');
     masterMuteBtn.title = isMuted ? 'Unmute' : 'Mute';
@@ -330,6 +379,10 @@ function flushRealtimeTelemetryFrame() {
 
     const wasPlaying = sinRealtimePlaying;
     sinRealtimePlaying = Boolean(tel.is_playing);
+    if (!tel.audition_active && !sinRealtimePlaying && (window as any).__sinActiveAuditionNodeId != null) {
+        (window as any).__sinActiveAuditionNodeId = null;
+        renderGlobalPathBar?.();
+    }
     if (Number.isFinite(tel.duration_sec) && tel.duration_sec > 0) {
         sinRealtimeDurationSec = Number(tel.duration_sec);
     }
@@ -383,6 +436,7 @@ function flushRealtimeTelemetryFrame() {
     }
     defaultTransportClock.setBpm(sinRealtimeBpm || globalParameters.bpm);
     defaultTransportClock.update(curTime, dur, sinRealtimePlaying);
+    timelineViewInstance?.onTelemetryFrame(curTime, dur, sinRealtimePlaying, tel.bus_rms, tel.bus_peaks);
     (window as any).editorCanvas?.setDirty?.(true, false);
     if (wasPlaying !== sinRealtimePlaying) {
         updatePlaybackControls();
@@ -498,6 +552,7 @@ sinRealtime.onMasterPeaks((res) => {
     if (mPeaks || bPeaks) {
         applyRealtimePeaksToGraph(mPeaks, bPeaks, dur, tiers ? { tiers } : undefined);
     }
+    timelineViewInstance?.onMasterPeaks(res);
 });
 
 function patchInterleavedPeaksRange(
@@ -539,6 +594,7 @@ function patchInterleavedPeaksRange(
 }
 
 sinRealtime.onTileUpdate((msg) => {
+    timelineViewInstance?.onTileUpdate(msg);
     if (msg?.clear_all) {
         masterWaveform.clearTileTiers();
         if (sinRealtime.available && sinRealtimeLoaded && sinRealtimeHasPyramid && sinRealtimeDurationSec > 0) {
@@ -586,11 +642,15 @@ sinRealtime.onTileUpdate((msg) => {
                 }
             }
             const graph = (window as any).editorGraph as LGraph | undefined;
+            const scopedBusIds = Array.isArray(msg.bus_node_ids) && msg.bus_node_ids.length > 0
+                ? new Set<string>(msg.bus_node_ids.map(String))
+                : null;
             if (graph) {
                 for (const node of (((graph as any)._nodes || []) as any[])) {
                     if (!node || !(node.realtimePeaks instanceof Float32Array)) continue;
                     const ntype = String(node.nodeType || node.properties?.node_type || '').toLowerCase();
                     if (ntype === 'sample') continue;
+                    if (scopedBusIds && !scopedBusIds.has(String(node.id))) continue;
                     if (patchInterleavedPeaksRange(node.realtimePeaks, dur, msg.start_sec, msg.end_sec, peaks)) {
                         node.setDirtyCanvas?.(true, false);
                         dirty = true;
@@ -647,6 +707,7 @@ sinRealtime.onProcessorStatus((msg) => {
             lastRenderDurationMs: typeof msg?.cook_ms === 'number' ? Math.round(msg.cook_ms) : undefined,
         });
     }
+    timelineViewInstance?.onProcessorStatusUpdated();
 });
 
 sinRealtime.onPlanHotSwapped((msg) => {
@@ -660,6 +721,8 @@ sinRealtime.onPlanHotSwapped((msg) => {
     if (mPeaks || bPeaks) {
         applyRealtimePeaksToGraph(mPeaks, bPeaks, dur);
     }
+    timelineViewInstance?.onMasterPeaks(msg);
+    timelineViewInstance?.onProcessorStatusUpdated();
     EngineSyncManager.getInstance().setState('idle_synced');
 });
 
@@ -723,10 +786,6 @@ window.addEventListener('sin-node-preview-refresh', () => {
     }
 });
 
-function updatePlaybackTrackPresentation() {
-    tempFilesSelect.classList.toggle('is-ram-preview', tempFilesSelect.value === 'RAM_PREVIEW');
-}
-
 let pendingMasterSeek: number | null = null;
 let loopEnabled = false;
 
@@ -747,13 +806,14 @@ function dispatchRealtimeSeek(sec: number) {
     });
 }
 
-const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
+function seekTransportToSeconds(targetSecRaw: number) {
     if (sinRealtime.available && sinRealtimeLoaded) {
         const dur = sinRealtimeDurationSec || masterWaveform.duration;
         if (dur <= 0) return;
         const maxSeek = (sinRealtimePlaying && dur > 0.05) ? Math.max(0, dur - 0.02) : dur;
-        const targetTime = Math.max(0, Math.min(maxSeek, progress * dur));
+        const targetTime = Math.max(0, Math.min(maxSeek, targetSecRaw));
         masterWaveform.setPlayback(targetTime, dur);
+        timelineViewInstance?.onTelemetryFrame(targetTime, dur, sinRealtimePlaying);
         const elapsed = performance.now() - sinRealtimeLastSeekSentAt;
         if (elapsed >= 42) {
             dispatchRealtimeSeek(targetTime);
@@ -780,9 +840,10 @@ const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
             : masterWaveform.duration);
     if (duration <= 0) return;
     const maxSeek = (isSchedPlaying && duration > 0.05) ? Math.max(0, duration - 0.02) : duration;
-    const targetTime = Math.max(0, Math.min(maxSeek, progress * duration));
+    const targetTime = Math.max(0, Math.min(maxSeek, targetSecRaw));
     pendingMasterSeek = targetTime;
     masterWaveform.setPlayback(targetTime, duration);
+    timelineViewInstance?.onTelemetryFrame(targetTime, duration, isSchedPlaying || (!masterPlayer.paused && !masterPlayer.ended));
     if (activeRamPreviewNodeId != null && globalAudioScheduler.getTotalDuration() > 0) {
         globalAudioScheduler.seek(targetTime);
         if (isSchedPlaying) return;
@@ -793,6 +854,18 @@ const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
         pendingMasterSeek = null;
         console.error('Seek failed', error);
     }
+}
+
+const masterWaveform = new MasterWaveform(masterWaveformElement, (progress) => {
+    const dur = (sinRealtime.available && sinRealtimeLoaded)
+        ? (sinRealtimeDurationSec || masterWaveform.duration)
+        : (globalAudioScheduler.getIsPlaying()
+            ? globalAudioScheduler.getTotalDuration()
+            : (Number.isFinite(masterPlayer.duration) && masterPlayer.duration > 0
+                ? masterPlayer.duration
+                : masterWaveform.duration));
+    if (dur <= 0) return;
+    seekTransportToSeconds(progress * dur);
 }, (startSec, endSec, columns) => {
     if (!sinRealtime.available || !sinRealtimeLoaded || !sinRealtimeHasPyramid) return;
     const reqToken = ++sinRealtimeViewportReqId;
@@ -812,67 +885,6 @@ function stopMasterFallbackAudio() {
     stopPlaybackTelemetry();
 }
 
-function setMasterPlayerSource(source: string, autoplay: boolean = false) {
-    pendingMasterSeek = null;
-    stopMasterFallbackAudio();
-    masterPlayer.loop = loopEnabled;
-    masterPlayer.pause();
-    masterPlayer.removeAttribute('aria-disabled');
-    // Render filenames and RAM-preview URLs are content-versioned by the
-    // backend. Preserving that URL lets the player and waveform request share
-    // the browser cache; a timestamp here forced two full transfers.
-    masterPlayer.src = source;
-    runtimeLog(`Audio stream assigned: ${source}`, 'debug');
-    masterPlayBtn.disabled = false;
-    masterLoopBtn.disabled = false;
-    masterPlayer.load();
-    void masterWaveform.load(source).then(buffer => {
-        if (buffer) {
-            (window as any).activeRamPreviewBuffer = buffer;
-            (window as any).editorCanvas?.setDirty?.(true, true);
-        }
-    }).catch(() => { });
-    updatePlaybackControls();
-    if (autoplay) {
-        masterPlayer.play().catch(error => console.error('Play failed', error));
-    }
-}
-
-async function activateExportedWavSource(url: string, filepath: string | undefined, autoplay: boolean) {
-    if (filepath && await sinRealtime.connect()) {
-        stopMasterFallbackAudio();
-        if (!masterPlayer.paused) masterPlayer.pause();
-        const pv = await sinRealtime.previewFile(filepath, {
-            play: autoplay,
-            computePeaks: true,
-            peakColumns: 512,
-        });
-        if (pv?.ok) {
-            sinRealtimeLoaded = true;
-            sinRealtimeTargetMode = 'file';
-            sinRealtimePlaying = Boolean(pv.is_playing);
-            sinRealtimeDurationSec = Number(pv.duration_sec || 0);
-            sinRealtimeSeekHoldUntil = 0;
-            if (Array.isArray(pv.master_peaks) && pv.master_peaks.length > 0) {
-                masterWaveform.setPeaks(pv.master_peaks, sinRealtimeDurationSec);
-            }
-            if (sinRealtimeDurationSec > 0) {
-                masterWaveform.setPlayback(0, sinRealtimeDurationSec);
-            }
-            if (masterPlayer.muted || masterPlayer.volume !== 1) {
-                sinRealtime.setParam('preview', 'volume', masterPlayer.volume, 0);
-                sinRealtime.setParam('preview', 'mute', masterPlayer.muted ? 1 : 0, 0);
-            }
-            masterPlayBtn.disabled = false;
-            masterLoopBtn.disabled = false;
-            updatePlaybackControls();
-            return;
-        }
-    }
-    sinRealtimeTargetMode = 'file';
-    setMasterPlayerSource(url, autoplay);
-}
-
 function setPreviewCalculatingState(isHotSwap: boolean = false) {
     if (isHotSwap) return;
     EngineSyncManager.getInstance().setState('dsp_rendering');
@@ -883,6 +895,7 @@ function setPreviewCalculatingState(isHotSwap: boolean = false) {
     }
     masterPlayer.setAttribute('aria-disabled', 'true');
     masterPlayBtn.disabled = true;
+    masterStopBtn.disabled = true;
     masterLoopBtn.disabled = true;
     masterWaveform.clear('Calculating preview...');
     updatePlaybackControls();
@@ -1039,6 +1052,7 @@ function tickPlaybackTelemetry() {
             : globalParameters.bpm
     );
     defaultTransportClock.update(curTime, dur, isPlaying);
+    timelineViewInstance?.onTelemetryFrame(curTime, dur, isPlaying);
     (window as any).editorCanvas?.setDirty?.(true, false);
 
     if (isPlaying) {
@@ -1066,6 +1080,7 @@ function stopPlaybackTelemetry() {
     defaultTransportClock.setRealtimeScopeData(null);
     defaultTransportClock.setMasterLevels(0, 0);
     defaultTransportClock.update(curTime, dur, false);
+    timelineViewInstance?.onTelemetryFrame(curTime, dur, false);
     (window as any).editorCanvas?.setDirty?.(true, true);
 }
 
@@ -1095,6 +1110,48 @@ masterPlayer.addEventListener('ended', () => {
     stopPlaybackTelemetry();
 });
 
+function stopTransportPlayback(): void {
+    const dur = sinRealtimeDurationSec || globalAudioScheduler.getTotalDuration() || masterWaveform.duration || 0;
+    if ((window as any).__sinActiveAuditionNodeId != null) {
+        (window as any).__sinActiveAuditionNodeId = null;
+        if (sinRealtime.available) {
+            sinRealtime.setAudition({ active: false });
+        }
+    }
+    if (previewWorker && activePreviewAutoplay) {
+        activePreviewAutoplay = false;
+        if (pendingPreviewRequest) {
+            pendingPreviewRequest.autoplay = false;
+        }
+    }
+    if (sinRealtime.available && sinRealtimeLoaded) {
+        sinRealtimePlaying = false;
+        sinRealtimeSeekHoldSec = 0;
+        sinRealtimeSeekHoldUntil = performance.now() + 260;
+        sinRealtime.setTransport({
+            playing: false,
+            seekSec: 0,
+            bpm: sinRealtimeBpm || globalParameters.bpm,
+            loop: loopEnabled,
+        });
+    }
+    if (globalAudioScheduler.getIsPlaying() || globalAudioScheduler.getCurrentTime() > 0) {
+        globalAudioScheduler.stop();
+    }
+    if (!masterPlayer.paused || masterPlayer.currentTime > 0) {
+        masterPlayer.pause();
+        try { masterPlayer.currentTime = 0; } catch { }
+    }
+    stopPlaybackTelemetry();
+    lastRealtimeUiPlayhead = 0;
+    lastRealtimeUiPlaying = false;
+    masterWaveform.setPlayback(0, dur);
+    timelineViewInstance?.onTelemetryFrame(0, dur, false);
+    (window as any).editorCanvas?.setDirty?.(true, true);
+    updatePlaybackControls();
+    renderGlobalPathBar?.();
+}
+
 async function toggleTransportPlayback(): Promise<void> {
     const isPlaying = isRealtimeAudioPlaying()
         || globalAudioScheduler.getIsPlaying()
@@ -1116,33 +1173,6 @@ async function toggleTransportPlayback(): Promise<void> {
         return;
     }
 
-    // Exported WAV selected in footer selector takes priority over graph preview
-    const isExportedWavSelected = Boolean(tempFilesSelect.value && tempFilesSelect.value !== 'RAM_PREVIEW');
-    if (isExportedWavSelected) {
-        if (sinRealtime.available && sinRealtimeLoaded && sinRealtimeTargetMode === 'file' && sinRealtimeDurationSec > 0) {
-            const cur = Number(sinRealtime.lastTelemetry.playhead_sec || 0);
-            const restart = cur >= sinRealtimeDurationSec - 0.02;
-            sinRealtimePlaying = true;
-            sinRealtime.setTransport({
-                playing: true,
-                seekSec: restart ? 0 : cur,
-                loop: loopEnabled,
-            });
-            updatePlaybackControls();
-            return;
-        }
-        const selectedOpt = tempFilesSelect.options[tempFilesSelect.selectedIndex];
-        if (sinRealtime.available && selectedOpt?.dataset?.filepath) {
-            await activateExportedWavSource(tempFilesSelect.value, selectedOpt.dataset.filepath, true);
-            return;
-        }
-        if (masterPlayer.src && masterPlayer.src !== window.location.href) {
-            masterPlayer.loop = loopEnabled;
-            masterPlayer.play().catch(error => console.error('Play failed', error));
-            return;
-        }
-    }
-
     // If a preview is currently buffering to auto-play and user toggles transport again, cancel auto-play
     if (previewWorker && activePreviewAutoplay) {
         activePreviewAutoplay = false;
@@ -1153,9 +1183,10 @@ async function toggleTransportPlayback(): Promise<void> {
         return;
     }
 
-    // Currently stopped / paused:
+    // Currently stopped / paused: keep playing the currently previewed ancestor (or fall back to main preview node)
     const graph = (window as any).editorGraph as LGraph;
-    const target = resolveMainPreviewNode(graph);
+    const activeNode = activeRamPreviewNodeId != null ? graph?.getNodeById?.(activeRamPreviewNodeId) : null;
+    const target = (activeNode && canBeMainPreview(activeNode)) ? activeNode : resolveMainPreviewNode(graph);
 
     if (target) {
         const hasPendingInvalidation = pendingGlobalParamInvalidation
@@ -1216,13 +1247,13 @@ async function toggleTransportPlayback(): Promise<void> {
             }
             setPreviewCalculatingState(false);
             try {
-                globalPreviewBtn.disabled = true;
+                masterPlayBtn.disabled = true;
                 await previewWorker;
             } catch (e) {
                 console.error('Playback generation error:', e);
             } finally {
-                globalPreviewBtn.disabled = false;
                 updateMainPreviewTarget(graph);
+                updatePlaybackControls();
             }
             return;
         }
@@ -1230,18 +1261,18 @@ async function toggleTransportPlayback(): Promise<void> {
         // 3. Otherwise (first play or graph was edited while stopped), wait for audio calculation
         // to complete before starting transport so visuals and audio begin together without silence or mid-play refresh.
         try {
-            globalPreviewBtn.disabled = true;
+            masterPlayBtn.disabled = true;
             await previewNode(target.id, true, false, false);
         } catch (e) {
             console.error('Playback generation error:', e);
         } finally {
-            globalPreviewBtn.disabled = false;
             updateMainPreviewTarget(graph);
+            updatePlaybackControls();
         }
         return;
     }
 
-    if (tempFilesSelect.value && tempFilesSelect.value !== 'RAM_PREVIEW' && masterPlayer.src && masterPlayer.src !== window.location.href) {
+    if (masterPlayer.src && masterPlayer.src !== window.location.href) {
         masterPlayer.loop = loopEnabled;
         masterPlayer.play().catch(error => console.error('Play failed', error));
     }
@@ -1249,6 +1280,10 @@ async function toggleTransportPlayback(): Promise<void> {
 
 masterPlayBtn.addEventListener('click', () => {
     void toggleTransportPlayback();
+});
+
+masterStopBtn.addEventListener('click', () => {
+    stopTransportPlayback();
 });
 
 masterLoopBtn.addEventListener('click', () => {
@@ -1442,8 +1477,10 @@ function rebuildTrackNodesFromGraph(graph: LGraph) {
             type,
             name: p.node_name || node.title || 'AudioNode',
             filepath: p.filepath || '',
+            repeat: p.repeat,
+            warp: p.warp,
             sample_type: p.sample_type,
-            original_bpm: p.sample_type === 'one_shot' ? (p.original_bpm || null) : (p.original_bpm || 120),
+            original_bpm: p.original_bpm ?? null,
             target_bpm: (type === 'sequence' || type === 'arrangement') ? 'global' : (p.target_bpm ?? p.bpm ?? 'global'),
             bpm: (type === 'sequence' || type === 'arrangement') ? 'global' : (p.bpm ?? p.target_bpm ?? 'global'),
             key: p.key || '',
@@ -1717,9 +1754,13 @@ async function preloadSubtreeAssets(graph: LGraph, rootNodeId?: number): Promise
         if (nodeKind === 'sample' || typeof (node as any).ensureAudioLoaded === 'function') {
             const filepath = String(node.properties?.filepath || '');
             if (filepath) {
+                const knownDur = Number(node.properties?.duration_seconds ?? 0);
                 if (typeof (node as any).ensureAudioLoaded === 'function') {
                     loadPromises.push((node as any).ensureAudioLoaded());
-                } else if (!node.audioBuffer || node.loadedFilepath !== filepath) {
+                } else if (
+                    !(Number.isFinite(knownDur) && knownDur > 45)
+                    && (!node.audioBuffer || node.loadedFilepath !== filepath)
+                ) {
                     loadPromises.push(
                         fetchAudioBuffer(filepath).then(buf => {
                             if (buf) {
@@ -2252,7 +2293,6 @@ async function batchRenderNodes(targetNodes: any[], label: string) {
         }
     }
     runtimeLog(`Batch render finished: ${completed} node(s) processed`, 'common');
-    await updateTempRendersList();
 }
 
 renderFlaggedBtn?.addEventListener('click', () => {
@@ -2433,12 +2473,17 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
     } else if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         togglePropertiesPanel();
+    } else if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && !isTyping && !hasOpenSinModal(activeEl)) {
+        e.preventDefault();
+        setEditorViewMode(editorViewMode === 'graph' ? 'timeline' : 'graph');
+    } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.altKey && !e.metaKey && !isTyping && editorViewMode === 'timeline') {
+        e.preventDefault();
+        timelineViewInstance?.fitTimeline();
     }
 }, true);
 
-globalPreviewBtn.addEventListener('click', () => {
-    if (globalPreviewBtn.disabled) return;
-    void toggleTransportPlayback();
+viewModeToggleBtn?.addEventListener('click', () => {
+    setEditorViewMode(editorViewMode === 'timeline' ? 'graph' : 'timeline');
 });
 
 async function applyGlobalSeedChange(graph: LGraph) {
@@ -2596,29 +2641,9 @@ previewRecalculateBtn.addEventListener('click', async () => {
     }
 });
 
-tempFilesSelect.addEventListener('change', (e) => {
-    const selectEl = e.target as HTMLSelectElement;
-    const val = selectEl.value;
-    updatePlaybackTrackPresentation();
-    if (val === 'RAM_PREVIEW') {
-        sinRealtimeTargetMode = 'graph';
-        if (sinRealtime.available && activeRamPreviewNodeId != null) {
-            void previewNode(activeRamPreviewNodeId, true, false, false);
-        } else if (activeRamPreviewSource) {
-            setMasterPlayerSource(activeRamPreviewSource, true);
-        } else {
-            masterPlayer.play().catch(error => console.error('Play failed', error));
-        }
-    } else if (val) {
-        const selectedOpt = selectEl.options[selectEl.selectedIndex];
-        void activateExportedWavSource(val, selectedOpt?.dataset?.filepath, true);
-    }
-});
-
 let activeRamPreviewNodeId: number | null = null;
 (window as any).activeRamPreviewNodeId = null;
 let activeRamPreviewPayload: any = null;
-let activeRamPreviewSource: string | null = null;
 let activeWorkspaceManifest: any = null;
 (window as any).activeWorkspaceManifest = null;
 
@@ -2648,7 +2673,6 @@ function clearActiveWorkspaceManifest() {
     activeRamPreviewNodeId = null;
     (window as any).activeRamPreviewNodeId = null;
     activeRamPreviewPayload = null;
-    activeRamPreviewSource = null;
     (window as any).activeRamPreviewBuffer = null;
     (window as any).activeRealtimeMasterPeaks = undefined;
     (window as any).activeRealtimeMasterDuration = 0;
@@ -2669,19 +2693,26 @@ function clearActiveWorkspaceManifest() {
         }
         updateMainPreviewTarget(graph);
     }
+    masterWaveform.clear('Ready to render');
     updatePlaybackControls();
+    renderGlobalPathBar?.();
 }
 
 exportBtn.addEventListener('click', async () => {
     fileMenu.open = false;
-    const selectedVal = tempFilesSelect.value;
-    if (selectedVal === 'RAM_PREVIEW' && activeRamPreviewNodeId != null) {
-        const keyName = `export_${activeRamPreviewNodeId}`;
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    const exportNodeId = activeRamPreviewNodeId ?? resolveMainPreviewNode(graph)?.id ?? null;
+    if (exportNodeId != null) {
+        const keyName = `export_${exportNodeId}`;
+        const payload = activeRamPreviewNodeId === exportNodeId && activeRamPreviewPayload
+            ? activeRamPreviewPayload
+            : (graph ? serializeNodeSubtree(graph, exportNodeId) : null);
+        if (!payload) return;
         try {
             const res = await fetch(`/api/preview/export/${encodeURIComponent(keyName)}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(activeRamPreviewPayload || {})
+                body: JSON.stringify(payload)
             });
             const data = await res.json();
             if (data.status === 'success' && data.file_url) {
@@ -2692,40 +2723,34 @@ exportBtn.addEventListener('click', async () => {
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-
-                await updateTempRendersList();
             } else {
-                alert("RAM Export failed: " + (data.detail || 'Unknown error'));
+                alert("Export failed: " + (data.detail || 'Unknown error'));
             }
         } catch (err) {
             console.error(err);
-            alert("RAM Export failed");
+            alert("Export failed");
         }
         return;
     }
 
-    const selectedOption = tempFilesSelect.options[tempFilesSelect.selectedIndex];
-    if (!selectedOption || !selectedOption.value) return;
-
-    const filename = selectedOption.textContent;
-    if (!filename) return;
-
     try {
+        const listRes = await fetch('/api/renders/temp');
+        const listData = await listRes.json();
+        const latest = listData?.files?.[0];
+        if (!latest?.filename) return;
         const res = await fetch('/api/renders/export', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename })
+            body: JSON.stringify({ filename: latest.filename })
         });
         const data = await res.json();
         if (data.status === 'success' && data.file_url) {
             const a = document.createElement('a');
             a.href = data.file_url;
-            a.download = filename;
+            a.download = latest.filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-
-            await updateTempRendersList();
         } else {
             alert("Export failed: " + (data.detail || 'Unknown error'));
         }
@@ -2735,74 +2760,6 @@ exportBtn.addEventListener('click', async () => {
     }
 });
 
-async function updateTempRendersList(selectFilename?: string) {
-    try {
-        const res = await fetch('/api/renders/temp');
-        const data = await res.json();
-
-        tempFilesSelect.innerHTML = ''; // clear options
-
-        if (data.files && data.files.length > 0) {
-            data.files.forEach((f: any) => {
-                const opt = document.createElement('option');
-                opt.value = f.url;
-                opt.textContent = f.filename;
-                if (f.filepath) opt.dataset.filepath = f.filepath;
-                tempFilesSelect.appendChild(opt);
-            });
-
-            if (selectFilename) {
-                let selectedIndex = 0;
-                for (let i = 0; i < tempFilesSelect.options.length; i++) {
-                    const optText = tempFilesSelect.options[i].textContent || '';
-                    if (optText === selectFilename || optText.includes(selectFilename) || selectFilename.includes(optText)) {
-                        selectedIndex = i;
-                        break;
-                    }
-                }
-                tempFilesSelect.selectedIndex = selectedIndex;
-                const selectedOpt = tempFilesSelect.options[selectedIndex];
-                if (selectedOpt && selectedOpt.value) {
-                    tempFilesSelect.value = selectedOpt.value;
-                    void activateExportedWavSource(selectedOpt.value, selectedOpt.dataset?.filepath, true);
-                }
-            } else if (activeRamPreviewNodeId != null) {
-                const ramOpt = Array.from(tempFilesSelect.options).find(o => o.value === 'RAM_PREVIEW');
-                if (ramOpt) {
-                    tempFilesSelect.value = 'RAM_PREVIEW';
-                }
-            } else {
-                const placeholder = document.createElement('option');
-                placeholder.value = '';
-                placeholder.textContent = 'Select render…';
-                placeholder.disabled = true;
-                placeholder.selected = true;
-                tempFilesSelect.insertBefore(placeholder, tempFilesSelect.firstChild);
-                tempFilesSelect.selectedIndex = 0;
-                tempFilesSelect.value = '';
-            }
-            updatePlaybackTrackPresentation();
-        } else {
-            // No files left
-            tempFilesSelect.innerHTML = '<option value="" disabled selected>No renders available</option>';
-            stopMasterFallbackAudio();
-            masterPlayer.loop = false;
-            masterPlayer.pause();
-            masterPlayer.removeAttribute('src');
-            masterPlayer.load();
-            masterPlayBtn.disabled = true;
-            masterLoopBtn.disabled = true;
-            masterWaveform.clear('Ready to render');
-            updatePlaybackControls();
-            updatePlaybackTrackPresentation();
-        }
-    } catch (err) {
-        console.error("Failed to update temp renders list", err);
-    }
-}
-
-// Initial fetch
-updateTempRendersList();
 // ------------------
 
 LiteGraph.NODE_TITLE_HEIGHT = 44;
@@ -2967,7 +2924,15 @@ const originalProcessKey = (LiteGraph as any).LGraphCanvas.prototype.processKey;
 let lastMouseDownPos: [number, number] | null = null;
 let lastMouseDownHitNode: any = null;
 let lastMouseDownWasEmptyBackground = false;
+let lastMouseDownMoved = false;
 let dragSelectAdditive = false;
+
+function clearLastMouseDownTracking() {
+    lastMouseDownPos = null;
+    lastMouseDownHitNode = null;
+    lastMouseDownWasEmptyBackground = false;
+    lastMouseDownMoved = false;
+}
 
 interface ActiveNodeResize {
     canvas: any;
@@ -3127,6 +3092,7 @@ function finishActiveMiddlePan() {
 const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.processMouseDown;
 (LiteGraph as any).LGraphCanvas.prototype.processMouseDown = function (e: MouseEvent) {
     if (e.button === 1) {
+        clearLastMouseDownTracking();
         startActiveMiddlePan(this, e);
         e.preventDefault();
         e.stopPropagation();
@@ -3143,6 +3109,7 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
     lastMouseDownPos = [e.clientX, e.clientY];
     lastMouseDownHitNode = hitNode;
     lastMouseDownWasEmptyBackground = Boolean(emptyCanvasDrag);
+    lastMouseDownMoved = false;
     (window as any).__sinFocusedSlot = null;
 
     // If clicking a node or background without shift/ctrl, deselect cables
@@ -3176,6 +3143,7 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
                     : (isSelected || !n.isVisualizationActive ? n.buttons : []);
                 for (const btn of activeButtons) {
                     if (btn.checkHit(localX, localY, n)) {
+                        clearLastMouseDownTracking();
                         console.log(`[CanvasButton] Clicked '${btn.label}' (${btn.tooltip || 'button'}) on node #${n.id}`);
                         btn.onClick(e);
                         this.dirty_canvas = true;
@@ -3190,6 +3158,7 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
             // Priority 1a: 8-way border & corner resize on resizable panel nodes
             const resizeEdge = detectNodeResizeEdge(n, localX, localY, zoomScale);
             if (resizeEdge) {
+                clearLastMouseDownTracking();
                 this.graph.beforeChange?.();
                 this.resizing_node = n;
                 activeNodeResize = {
@@ -3234,10 +3203,12 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
                 if (!parentOutput) {
                     // This port cannot fan out, but it must never unpatch by
                     // beginning LiteGraph's input-reconnect gesture.
+                    clearLastMouseDownTracking();
                     e.preventDefault();
                     return true;
                 }
 
+                clearLastMouseDownTracking();
                 this.connecting_node = node;
                 this.connecting_output = parentOutput;
                 this.connecting_output.slot_index = parentOutputSlot;
@@ -3279,6 +3250,11 @@ const originalProcessMouseDown = (LiteGraph as any).LGraphCanvas.prototype.proce
 
 const originalProcessMouseMove = (LiteGraph as any).LGraphCanvas.prototype.processMouseMove;
 (LiteGraph as any).LGraphCanvas.prototype.processMouseMove = function (e: MouseEvent) {
+    if (lastMouseDownPos && !lastMouseDownMoved) {
+        if (Math.hypot(e.clientX - lastMouseDownPos[0], e.clientY - lastMouseDownPos[1]) >= 6) {
+            lastMouseDownMoved = true;
+        }
+    }
     if (activeNodeResize && activeNodeResize.canvas === this) {
         applyActiveNodeResize(e);
         e.preventDefault();
@@ -3434,8 +3410,10 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
     const mouseDownPos = lastMouseDownPos;
     const mouseDownHitNode = lastMouseDownHitNode;
     const wasEmptyBg = lastMouseDownWasEmptyBackground;
+    const wasMouseMoved = lastMouseDownMoved;
+    clearLastMouseDownTracking();
     const isLeftButton = e.button === 0;
-    const isSimpleClick = Boolean(mouseDownPos && Math.hypot(e.clientX - mouseDownPos[0], e.clientY - mouseDownPos[1]) < 6);
+    const isSimpleClick = Boolean(mouseDownPos && !wasMouseMoved && Math.hypot(e.clientX - mouseDownPos[0], e.clientY - mouseDownPos[1]) < 6);
 
     const draggingRectW = this.dragging_rectangle ? Math.abs(this.dragging_rectangle[2]) : 0;
     const draggingRectH = this.dragging_rectangle ? Math.abs(this.dragging_rectangle[3]) : 0;
@@ -3443,7 +3421,7 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
     const wasDraggingCanvas = Boolean(this.dragging_canvas);
     const isBoxSelectRelease = Boolean(this.dragging_rectangle);
 
-    const suppressPanDeselect = isLeftButton && wasDraggingCanvas && !isSimpleClick;
+    const suppressPanDeselect = isLeftButton && !isSimpleClick && !isBoxSelectRelease;
     const originalDeselectAll = this.deselectAllNodes;
     if (suppressPanDeselect && typeof originalDeselectAll === 'function') {
         this.deselectAllNodes = () => { };
@@ -3509,6 +3487,10 @@ const originalProcessMouseUp = (LiteGraph as any).LGraphCanvas.prototype.process
                     n.selectedModifierBadge = null;
                     n.setDirtyCanvas?.(true, true);
                 }
+            }
+            if (dockedPropertyPanels().length > 0) {
+                (window as any)._currentlySelectedNode = null;
+                openTrackParamWindow();
             }
             this.setDirty(true, true);
         } else if (isSimpleClick && mouseDownHitNode) {
@@ -3704,8 +3686,10 @@ export interface TrackNodeData {
     type: "track" | "sample" | "sequence" | "item_pool" | "sample_pool" | "arrangement" | "null" | "preamp_denoise" | "voice_isolator" | "modulator" | "asset_filter" | "random" | "disabled";
     name: string;
     filepath: string;
+    repeat?: boolean;
+    warp?: boolean;
     sample_type?: string;
-    original_bpm: number;
+    original_bpm: number | null;
     target_bpm?: number | 'global';
     key?: string;
     start_beat: number;
@@ -3903,17 +3887,13 @@ function updateMainPreviewTarget(graph?: LGraph): any | null {
         node.properties.is_main_preview = node.id === target?.id;
         node.setDirtyCanvas?.(true, true);
     }
-    const state = getMainPreviewState(targetGraph);
-    const targetName = target?.properties?.node_name || target?.title || '';
-    globalPreviewBtn.disabled = !target;
-    previewRecalculateBtn.disabled = !target && activeRamPreviewNodeId == null;
-    const isPlaying = isRealtimeAudioPlaying()
-        || globalAudioScheduler.getIsPlaying()
-        || (!masterPlayer.paused && !masterPlayer.ended);
-    globalPreviewBtn.title = target
-        ? (isPlaying ? 'Pause transport (Space)' : `Play transport (Space) · ${targetName} (${state.mode === 'manual' ? 'manual' : 'automatic'})`)
-        : 'Add an audio node to enable main preview';
-    globalPreviewBtn.setAttribute('aria-label', globalPreviewBtn.title);
+    const hasPreviewTarget = Boolean(target || activeRamPreviewNodeId != null);
+    previewRecalculateBtn.disabled = !hasPreviewTarget;
+    masterPlayBtn.disabled = !hasPreviewTarget;
+    masterStopBtn.disabled = !hasPreviewTarget;
+    masterLoopBtn.disabled = !hasPreviewTarget;
+    updatePlaybackControls();
+    renderGlobalPathBar?.();
     return target;
 }
 
@@ -4066,7 +4046,8 @@ function syncLengthInheritance(graph?: LGraph) {
 
     for (const [nodeId, data] of trackNodes.entries()) {
         if (data.parentId == null) continue;
-        if (data.type !== 'arrangement' && data.type !== 'sequence' && !(data.type === 'sample' && data.sample_type === 'loop')) {
+        const isSampleRepeat = data.type === 'sample' && (data.repeat !== undefined ? Boolean(data.repeat) : data.sample_type === 'loop');
+        if (data.type !== 'arrangement' && data.type !== 'sequence' && !isSampleRepeat) {
             continue;
         }
 
@@ -4145,6 +4126,7 @@ function syncGraphHierarchy(graph?: LGraph) {
 
     syncBpmInheritance(targetGraph);
     syncArrangementLengthInheritance(targetGraph);
+    timelineViewInstance?.scheduleModelRefresh();
     updateMainPreviewTarget(targetGraph);
     syncAllModifierPositions(targetGraph);
     applySignalFlowColors(targetGraph);
@@ -5296,10 +5278,22 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
     }
 
     const metadata = extractMetadataFromPath(item.filepath);
-    const originalBpm = item.bpm || metadata.bpm || node.properties.original_bpm || 120;
-    const targetBpm = node.properties.target_bpm || originalBpm;
+    const rawOriginalBpm = item.bpm ?? latest?.bpm ?? metadata.bpm;
+    const originalBpm = (rawOriginalBpm != null && Number.isFinite(Number(rawOriginalBpm)) && Number(rawOriginalBpm) > 0)
+        ? Number(rawOriginalBpm)
+        : null;
+    const targetBpm = node.properties.target_bpm ?? 'global';
     const nodeName = item.name || item.filepath.split(/[\\/]/).pop() || "Sample";
-    const sampleType = item.itemType === "one_shot" ? "one_shot" : "loop";
+    const resolvedDurationSec = Number(latest?.duration_seconds ?? item.duration_seconds ?? 0);
+    const inferred = SampleNode.inferLoadDefaults({
+        is_loop: (latest as any)?.is_loop ?? (item as any)?.is_loop,
+        itemType: item.itemType,
+        tags: latest?.tags ?? (item as any)?.tags,
+        bpm: originalBpm,
+        duration_seconds: Number.isFinite(resolvedDurationSec) && resolvedDurationSec > 0 ? resolvedDurationSec : null,
+        filepath: item.filepath,
+    });
+    const sampleType = inferred.sample_type;
 
     const resolvedKey = latest ? String(latest.key ?? '') : (item.key || metadata.key || "");
     const resolvedItemId = isExternal
@@ -5321,7 +5315,10 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
 
     if (typeof node.updateProperty === 'function') {
         node.updateProperty('node_name', nodeName);
-        node.updateProperty('sample_type', sampleType);
+        node.updateProperty('repeat', inferred.repeat);
+        node.updateProperty('warp', inferred.warp);
+        node.updateProperty('sample_type', inferred.sample_type);
+        node.updateProperty('stretch_mode', inferred.stretch_mode);
         node.updateProperty('original_bpm', originalBpm);
         node.updateProperty('target_bpm', targetBpm);
         node.updateProperty('bpm', targetBpm);
@@ -5330,7 +5327,9 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
         if (resolvedItemId !== undefined) {
             node.updateProperty('library_item_id', resolvedItemId);
         }
-        if (item.duration_seconds !== undefined) {
+        if (Number.isFinite(resolvedDurationSec) && resolvedDurationSec > 0) {
+            node.updateProperty('duration_seconds', resolvedDurationSec);
+        } else if (item.duration_seconds !== undefined) {
             node.updateProperty('duration_seconds', item.duration_seconds);
         }
         node.updateProperty('filepath', item.filepath);
@@ -5345,12 +5344,15 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
             library_item_id: resolvedItemId,
             is_external: isExternal,
             pool_query: callName,
+            repeat: inferred.repeat,
+            warp: inferred.warp,
             sample_type: sampleType,
+            stretch_mode: inferred.stretch_mode,
             original_bpm: originalBpm,
             target_bpm: targetBpm,
             bpm: targetBpm,
             key: resolvedKey,
-            duration_seconds: item.duration_seconds ?? undefined
+            duration_seconds: (Number.isFinite(resolvedDurationSec) && resolvedDurationSec > 0) ? resolvedDurationSec : (item.duration_seconds ?? undefined)
         });
     }
     node.title = nodeName;
@@ -5361,12 +5363,15 @@ async function applyLibraryItemToSample(node: any, item: LibraryDragItem) {
             type: "sample",
             name: nodeName,
             filepath: item.filepath,
+            repeat: inferred.repeat,
+            warp: inferred.warp,
             sample_type: sampleType,
+            stretch_mode: inferred.stretch_mode,
             original_bpm: originalBpm,
             target_bpm: targetBpm,
             bpm: targetBpm,
             key: resolvedKey,
-            duration_seconds: item.duration_seconds ?? undefined,
+            duration_seconds: (Number.isFinite(resolvedDurationSec) && resolvedDurationSec > 0) ? resolvedDurationSec : (item.duration_seconds ?? undefined),
             selected_items: typeof node.getPoolItems === 'function' ? node.getPoolItems() : data.selected_items,
         });
     }
@@ -6030,10 +6035,34 @@ function installStageAutosave(graph: LGraph, canvas: HTMLCanvasElement) {
     canvas.addEventListener('mouseup', () => scheduleStageSave());
 }
 
-window.addEventListener('node-property-changed', () => scheduleStageSave());
-window.addEventListener('graph-connections-changed', () => scheduleStageSave());
-window.addEventListener('global-parameters-changed', () => scheduleStageSave());
-window.addEventListener('set-main-preview-node', () => scheduleStageSave());
+window.addEventListener('node-property-changed', (evt: Event) => {
+    scheduleStageSave();
+    const detail = (evt as CustomEvent)?.detail;
+    timelineViewInstance?.onNodePropertyUpdated(detail?.nodeId, detail?.key);
+    if (detail?.key === 'node_name' || detail?.key === 'name' || detail?.key === 'color') {
+        renderGlobalPathBar?.();
+    }
+});
+window.addEventListener('graph-connections-changed', () => {
+    scheduleStageSave();
+    timelineViewInstance?.scheduleModelRefresh();
+    renderGlobalPathBar?.();
+});
+window.addEventListener('global-parameters-changed', () => {
+    scheduleStageSave();
+    timelineViewInstance?.scheduleModelRefresh();
+    renderGlobalPathBar?.();
+});
+window.addEventListener('set-main-preview-node', () => {
+    scheduleStageSave();
+    timelineViewInstance?.scheduleModelRefresh();
+});
+window.addEventListener('node-properties-refreshed', () => {
+    timelineViewInstance?.scheduleModelRefresh();
+});
+window.addEventListener('modifier-assignment-changed', () => {
+    timelineViewInstance?.scheduleModelRefresh();
+});
 window.addEventListener('pagehide', () => {
     if (!stageReady || stageHydrating) return;
     const graph = (window as any).editorGraph as LGraph;
@@ -6077,6 +6106,12 @@ const dockview = new DockviewComponent(dockviewContainer, {
 
         switch (options.name) {
             case 'graph-editor': {
+                mainStageElementRef = element;
+
+                const graphPane = document.createElement('div');
+                graphPane.className = 'sin-graph-view-pane';
+                graphViewPaneEl = graphPane;
+
                 const canvas = document.createElement('canvas');
                 canvas.id = 'graph-canvas';
                 canvas.style.width = '100%';
@@ -6084,13 +6119,87 @@ const dockview = new DockviewComponent(dockviewContainer, {
                 canvas.style.display = 'block';
                 canvas.style.backgroundColor = '#ffffff';
                 canvas.setAttribute('tabindex', '0');
-                element.appendChild(canvas);
+                graphPane.appendChild(canvas);
                 nodeContextToolbar?.dispose();
                 nodeContextToolbar = new NodeContextToolbar();
-                element.appendChild(nodeContextToolbar.element);
+                graphPane.appendChild(nodeContextToolbar.element);
+
+                const timelinePane = document.createElement('div');
+                timelinePane.className = 'sin-timeline-view-pane is-hidden';
+                timelineViewPaneEl = timelinePane;
+
+                timelineViewInstance?.dispose();
+                timelineViewInstance = new TimelineView({
+                    getGraph: () => (window as any).editorGraph,
+                    getSelectedNodeIds: () => {
+                        const sel = (window as any).editorCanvas?.selected_nodes;
+                        const ids = new Set<number>();
+                        if (sel && typeof sel === 'object') {
+                            for (const node of Object.values(sel) as any[]) {
+                                if (node?.id != null) ids.add(Number(node.id));
+                            }
+                        }
+                        return ids;
+                    },
+                    selectNode: (nodeId, opts) => {
+                        const g = (window as any).editorGraph as LGraph | undefined;
+                        const gc = (window as any).editorCanvas as LGraphCanvas | undefined;
+                        const target = g?.getNodeById?.(nodeId);
+                        if (!target) return;
+                        gc?.selectNode?.(target);
+                        (window as any)._currentlySelectedNode = target;
+                        updateGraphNodeCollapsing();
+                        if (opts?.openInspector) {
+                            openParamWindow(target, { forceOpen: true, initialTab: opts.initialTab });
+                        } else if (dockedPropertyPanels().length > 0) {
+                            openParamWindow(target, { initialTab: opts?.initialTab });
+                        }
+                    },
+                    seekToSeconds: (sec) => {
+                        seekTransportToSeconds(sec);
+                    },
+                    queryTiledPeaks: async (startSec, endSec, columns) => {
+                        if (!sinRealtime.available || !sinRealtimeLoaded) return null;
+                        return sinRealtime.queryPeaks({ startSec, endSec, columns });
+                    },
+                    getLoopEnabled: () => loopEnabled,
+                    getMainPreviewNodeId: () => {
+                        const g = (window as any).editorGraph as LGraph | undefined;
+                        return resolveMainPreviewNode(g)?.id ?? null;
+                    },
+                    getGlobalParameters: () => ({ ...globalParameters }),
+                    openTrackParameters: () => openTrackParamWindow(),
+                    onGraphStructureChanged: () => {
+                        const g = (window as any).editorGraph as LGraph | undefined;
+                        const gc = (window as any).editorCanvas as LGraphCanvas | undefined;
+                        if (g) {
+                            syncGraphHierarchy(g);
+                            syncAllModifierPositions(g);
+                            updateGraphNodeCollapsing();
+                        }
+                        gc?.setDirty?.(true, true);
+                        window.dispatchEvent(new CustomEvent('graph-connections-changed'));
+                    },
+                    onPathNodeChanged: (nodeId) => {
+                        renderGlobalPathBar?.(nodeId);
+                    },
+                    onRowsMetaChanged: () => {
+                        syncGlobalBottomDrawer?.();
+                    },
+                });
+                timelinePane.appendChild(timelineViewInstance.element);
+
+                element.appendChild(graphPane);
+                element.appendChild(timelinePane);
+
                 disposeComponent = () => {
                     nodeContextToolbar?.dispose();
                     nodeContextToolbar = null;
+                    timelineViewInstance?.dispose();
+                    timelineViewInstance = null;
+                    graphViewPaneEl = null;
+                    timelineViewPaneEl = null;
+                    mainStageElementRef = null;
                 };
                 element.addEventListener('contextmenu', (e: MouseEvent) => {
                     e.preventDefault();
@@ -6328,6 +6437,7 @@ const dockview = new DockviewComponent(dockviewContainer, {
                             return;
                         }
                         if (e.button === 0 && hoveredLink) {
+                            clearLastMouseDownTracking();
                             canvas.focus?.();
                             const isMulti = e.shiftKey || e.ctrlKey;
                             if (isMulti) {
@@ -6457,9 +6567,12 @@ const dockview = new DockviewComponent(dockviewContainer, {
                     await restoreCurrentStage(graph, graphCanvas);
                     installStageAutosave(graph, canvas);
                     graph.start();
+                    setEditorViewMode(editorViewMode);
 
                     graphCanvas.onSelectionChange = function () {
                         updateGraphNodeCollapsing();
+                        timelineViewInstance?.onGraphSelectionChanged();
+                        renderGlobalPathBar?.();
                     };
 
                     graphCanvas.onNodeSelected = function (node: any) {
@@ -6468,6 +6581,8 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         if (dockedPropertyPanels().length > 0) {
                             openParamWindow(node);
                         }
+                        timelineViewInstance?.onGraphSelectionChanged();
+                        renderGlobalPathBar?.(node?.id != null ? Number(node.id) : null);
                     };
 
                     graphCanvas.onNodeDeselected = function () {
@@ -6476,14 +6591,9 @@ const dockview = new DockviewComponent(dockviewContainer, {
                         if (dockedPropertyPanels().length > 0) {
                             openTrackParamWindow();
                         }
+                        timelineViewInstance?.onGraphSelectionChanged();
+                        renderGlobalPathBar?.(null);
                     };
-
-                    canvas.addEventListener('click', () => {
-                        if (!graphCanvas.node_over && !hoveredLink && dockedPropertyPanels().length > 0) {
-                            (window as any)._currentlySelectedNode = null;
-                            openTrackParamWindow();
-                        }
-                    });
                 });
                 break;
             }
@@ -6581,45 +6691,225 @@ stageSaveStatus = document.createElement('div');
 stageSaveStatus.className = 'stage-save-status';
 stageSaveStatus.setAttribute('role', 'status');
 stageSaveStatus.setAttribute('aria-live', 'polite');
-dockviewContainer.appendChild(stageSaveStatus);
 setStageSaveState('loading');
 
 const transportToggle = document.createElement('button');
 transportToggle.id = 'transport-bar-toggle';
 transportToggle.className = 'transport-bar-toggle';
 transportToggle.type = 'button';
-transportToggle.setAttribute('aria-label', 'Toggle Transport Bar');
-
-const syncTransportBarState = (open: boolean) => {
-    transportToggle.classList.toggle('is-collapsed', !open);
-    transportToggle.setAttribute('aria-expanded', String(open));
-    transportToggle.title = open ? 'Hide Transport Bar' : 'Show Transport Bar';
-    playbackFooter.classList.toggle('is-collapsed', !open);
-    dockview.layout(dockviewContainer.clientWidth, dockviewContainer.clientHeight);
-};
-
-const storedTransportState = typeof localStorage !== 'undefined' ? localStorage.getItem('sin-transport-bar-open') : null;
-let isTransportOpen = storedTransportState !== null ? storedTransportState === 'true' : false;
-
+transportToggle.setAttribute('aria-label', 'Toggle Bottom Panel');
 transportToggle.innerHTML = `
     <svg class="transport-toggle-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <path class="transport-toggle-arrow" d="M3 6l5 5 5-5"/>
     </svg>
 `;
 
-transportToggle.addEventListener('click', () => {
-    isTransportOpen = !isTransportOpen;
-    if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('sin-transport-bar-open', String(isTransportOpen));
+const storedTransportState = typeof localStorage !== 'undefined' ? localStorage.getItem('sin-transport-bar-open') : null;
+let isTransportOpen = storedTransportState !== null ? storedTransportState === 'true' : false;
+const storedTimelineRackState = typeof localStorage !== 'undefined' ? localStorage.getItem('sin-timeline-rack-open') : null;
+let isTimelineRackOpen = storedTimelineRackState !== null ? storedTimelineRackState === 'true' : true;
+
+let dockLayoutRaf: number | null = null;
+const scheduleDockviewLayout = () => {
+    if (dockLayoutRaf !== null) return;
+    dockLayoutRaf = window.requestAnimationFrame(() => {
+        dockLayoutRaf = null;
+        if (dockviewContainer.clientWidth > 0 && dockviewContainer.clientHeight > 0) {
+            dockview.layout(dockviewContainer.clientWidth, dockviewContainer.clientHeight);
+        }
+    });
+};
+
+syncGlobalBottomDrawer = () => {
+    const isTimeline = editorViewMode === 'timeline';
+    if (isTimeline) {
+        // No transport bar in Timeline View: the toggle controls the Timeline Bottom Signal Rack!
+        playbackFooter.classList.add('is-collapsed');
+        timelineViewInstance?.setBottomRackOpen(isTimelineRackOpen);
+        transportToggle.classList.toggle('is-collapsed', !isTimelineRackOpen);
+        transportToggle.setAttribute('aria-expanded', String(isTimelineRackOpen));
+        transportToggle.title = isTimelineRackOpen ? 'Hide Signal Chain Rack' : 'Show Signal Chain Rack';
+        const rowsMeta = timelineViewInstance?.getBottomRackRowsMeta() ?? { rowCount: 0, allExpanded: false };
+        const showRowsBtn = isTimelineRackOpen && rowsMeta.rowCount > 1;
+        timelineToggleRowsBtn.classList.toggle('is-hidden', !showRowsBtn);
+        if (showRowsBtn) {
+            timelineToggleRowsBtn.textContent = rowsMeta.allExpanded ? 'Collapse Rows' : 'Expand Rows';
+        }
+    } else {
+        // Graph View: Transport Bar opens directly above the global footer line
+        playbackFooter.classList.toggle('is-collapsed', !isTransportOpen);
+        timelineToggleRowsBtn.classList.add('is-hidden');
+        transportToggle.classList.toggle('is-collapsed', !isTransportOpen);
+        transportToggle.setAttribute('aria-expanded', String(isTransportOpen));
+        transportToggle.title = isTransportOpen ? 'Hide Transport Bar' : 'Show Transport Bar';
     }
-    syncTransportBarState(isTransportOpen);
+    scheduleDockviewLayout();
+};
+
+transportToggle.addEventListener('click', () => {
+    if (editorViewMode === 'timeline') {
+        isTimelineRackOpen = !isTimelineRackOpen;
+        if (typeof localStorage !== 'undefined') {
+            try { localStorage.setItem('sin-timeline-rack-open', String(isTimelineRackOpen)); } catch { }
+        }
+    } else {
+        isTransportOpen = !isTransportOpen;
+        if (typeof localStorage !== 'undefined') {
+            try { localStorage.setItem('sin-transport-bar-open', String(isTransportOpen)); } catch { }
+        }
+    }
+    syncGlobalBottomDrawer?.();
 });
 
-dockviewContainer.appendChild(transportToggle);
-syncTransportBarState(isTransportOpen);
+timelineToggleRowsBtn.addEventListener('click', () => {
+    timelineViewInstance?.toggleAllBottomRackRows();
+    syncGlobalBottomDrawer?.();
+});
+
+// Shared Right-Aligned Active-Preview Ancestor Path Indicator + Waveform HUD Sync
+// Invariant: the leftmost crumb is ALWAYS the active preview ancestor displayed in the Transport Bar!
+renderGlobalPathBar = (preferredNodeId?: number | null) => {
+    globalPathBar.replaceChildren();
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    if (!graph) {
+        masterWaveform.setContext({ label: '' });
+        return;
+    }
+
+    const mainPreviewNode = resolveMainPreviewNode(graph);
+    const auditionIdRaw = (window as any).__sinActiveAuditionNodeId;
+    const auditionNode = auditionIdRaw != null ? graph.getNodeById?.(Number(auditionIdRaw)) : null;
+    const activePreviewNode = activeRamPreviewNodeId != null ? graph.getNodeById?.(activeRamPreviewNodeId) : null;
+
+    // Active preview ancestor shown in Transport Bar waveform & pinned as leftmost crumb of path
+    const previewAncestorNode = auditionNode || activePreviewNode || mainPreviewNode || null;
+    const previewAncestorId = previewAncestorNode?.id != null ? Number(previewAncestorNode.id) : null;
+
+    const isAuditioning = Boolean(auditionNode);
+    const isSoloPreview = Boolean(
+        !isAuditioning
+        && previewAncestorNode
+        && mainPreviewNode
+        && Number(previewAncestorNode.id) !== Number(mainPreviewNode.id)
+    );
+
+    if (previewAncestorNode) {
+        const ancestorTitle = String(previewAncestorNode.properties?.node_name || previewAncestorNode.title || `Node #${previewAncestorNode.id}`);
+        const ancestorColor = (previewAncestorNode as any).nodeColor || previewAncestorNode.properties?.color || previewAncestorNode.color || '#4f46e5';
+        const rawBars = previewAncestorNode.properties?.total_bars;
+        const barsVal = rawBars != null && rawBars !== '' && Number.isFinite(Number(rawBars))
+            ? Number(rawBars)
+            : (Number.isFinite(Number(globalParameters.total_bars)) ? Number(globalParameters.total_bars) : null);
+        masterWaveform.setContext({
+            label: ancestorTitle,
+            color: ancestorColor,
+            badge: isAuditioning ? 'Audition' : (isSoloPreview ? 'Solo' : ''),
+            bpm: sinRealtimeBpm || globalParameters.bpm,
+            totalBars: barsVal,
+        });
+    } else {
+        masterWaveform.setContext({
+            label: '',
+            bpm: globalParameters.bpm,
+            totalBars: Number.isFinite(Number(globalParameters.total_bars)) ? Number(globalParameters.total_bars) : null,
+        });
+    }
+
+    let selectedId: number | null = preferredNodeId != null ? Number(preferredNodeId) : null;
+    if (selectedId == null) {
+        const curSel = (window as any)._currentlySelectedNode;
+        if (curSel?.id != null) {
+            selectedId = Number(curSel.id);
+        } else {
+            const selObj = (window as any).editorCanvas?.selected_nodes;
+            const firstSel = selObj && typeof selObj === 'object' ? (Object.values(selObj)[0] as any) : null;
+            if (firstSel?.id != null) {
+                selectedId = Number(firstSel.id);
+            }
+        }
+    }
+
+    const path = computeScopedAncestorPath(graph, selectedId, previewAncestorId);
+    if (path.length === 0) return;
+
+    // When previewing a sub-node alone (or auditioning), show a lightweight 1-click return icon to Main ancestor
+    if ((isSoloPreview || isAuditioning) && mainPreviewNode?.id != null) {
+        const mainTitle = String(mainPreviewNode.properties?.node_name || mainPreviewNode.title || 'Main');
+        const resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.className = 'sin-rack-path-reset';
+        resetBtn.title = `Return preview to ${mainTitle}`;
+        resetBtn.setAttribute('aria-label', `Return preview to ${mainTitle}`);
+        resetBtn.innerHTML = renderIcon('undo');
+        resetBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if ((window as any).__sinActiveAuditionNodeId != null) {
+                (window as any).__sinActiveAuditionNodeId = null;
+                if (sinRealtime.available) sinRealtime.setAudition({ active: false });
+            }
+            const wasPlaying = isRealtimeAudioPlaying() || globalAudioScheduler.getIsPlaying();
+            void previewNode(Number(mainPreviewNode.id), wasPlaying, false, false);
+        });
+        globalPathBar.appendChild(resetBtn);
+    }
+
+    path.forEach((crumb, idx) => {
+        if (idx > 0) {
+            const sep = document.createElement('span');
+            sep.className = 'sin-rack-path-sep';
+            sep.textContent = '›';
+            globalPathBar.appendChild(sep);
+        }
+        const isAncestor = idx === 0;
+        const isCurrent = idx === path.length - 1;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = [
+            'sin-rack-path-crumb',
+            isAncestor ? 'is-ancestor' : '',
+            isCurrent ? 'is-current' : '',
+        ].filter(Boolean).join(' ');
+        btn.title = isAncestor ? `Active preview ancestor: ${crumb.title} (click to select)` : `Select ${crumb.title}`;
+        const dot = document.createElement('i');
+        dot.className = 'sin-rack-path-dot';
+        dot.style.background = crumb.color;
+        const label = document.createElement('span');
+        label.textContent = crumb.title;
+        btn.append(dot, label);
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (editorViewMode === 'timeline') {
+                timelineViewInstance?.navigateToPathNode(crumb.nodeId);
+            } else {
+                const g = (window as any).editorGraph as LGraph | undefined;
+                const gc = (window as any).editorCanvas as LGraphCanvas | undefined;
+                const target = g?.getNodeById?.(crumb.nodeId);
+                if (!target) return;
+                gc?.selectNode?.(target);
+                (window as any)._currentlySelectedNode = target;
+                updateGraphNodeCollapsing();
+                if (typeof (gc as any)?.centerOnNode === 'function') {
+                    (gc as any).centerOnNode(target);
+                }
+                if (dockedPropertyPanels().length > 0) {
+                    openParamWindow(target);
+                }
+                renderGlobalPathBar?.(crumb.nodeId);
+            }
+        });
+        globalPathBar.appendChild(btn);
+    });
+};
+
+// Dock all minimal footer controls inline inside the unified global footer bar (ZERO floating overlays!)
 const engineSync = EngineSyncManager.getInstance();
-engineSync.attachTo(dockviewContainer);
-new RuntimeLogPanel(dockviewContainer);
+globalFooterLeft.append(transportToggle, stageSaveStatus);
+engineSync.attachTo(globalFooterLeft);
+new RuntimeLogPanel(dockviewContainer, globalFooterLeft);
+globalFooterLeft.appendChild(timelineToggleRowsBtn);
+
+syncGlobalBottomDrawer();
+renderGlobalPathBar();
 
 dockview.onDidAddPanel(() => updatePanelToggleButtons());
 dockview.onDidRemovePanel((panel: any) => {
@@ -6644,9 +6934,11 @@ dockview.onDidMaximizedGroupChange((event: any) => {
 });
 
 dockview.layout(dockviewContainer.clientWidth, dockviewContainer.clientHeight);
-window.addEventListener('resize', () => {
-    dockview.layout(dockviewContainer.clientWidth, dockviewContainer.clientHeight);
-});
+if (typeof ResizeObserver !== 'undefined') {
+    const dockRo = new ResizeObserver(() => scheduleDockviewLayout());
+    dockRo.observe(dockviewContainer);
+}
+window.addEventListener('resize', () => scheduleDockviewLayout());
 
 const graphPanel = dockview.addPanel({
     id: 'graph_panel',
@@ -6955,6 +7247,7 @@ async function calculatePreview(
 
     activeRamPreviewNodeId = nodeId;
     (window as any).activeRamPreviewNodeId = nodeId;
+    renderGlobalPathBar?.();
     const targetNode = graph.getNodeById(nodeId);
     const nodeName = targetNode?.properties?.node_name || targetNode?.title || ('Node #' + nodeId);
     const engineSync = EngineSyncManager.getInstance();
@@ -6991,6 +7284,8 @@ async function calculatePreview(
     payload.filename = keyName;
 
     // Fast path: Native in-process C++ libsin_dsp real-time device audio (zero WAV streaming!)
+    let rtAttemptedAndFailed = false;
+    let rtFailureMessage = '';
     try {
         const rtAvailable = await sinRealtime.connect();
         if (rtAvailable) {
@@ -7023,10 +7318,10 @@ async function calculatePreview(
                 sinRealtimeTargetMode = 'graph';
                 sinRealtimeDurationSec = Number(rtRes.duration_sec || 0);
                 sinRealtimeBpm = Number(rtRes.bpm || payload.bpm || globalParameters.bpm || 120);
+                timelineViewInstance?.onPlanLoaded(rtRes);
                 activeRamPreviewNodeId = nodeId;
                 (window as any).activeRamPreviewNodeId = nodeId;
                 activeRamPreviewPayload = payload;
-                activeRamPreviewSource = `/api/preview/stream/${keyName}`;
 
                 // Keep master footer volume/mute targeted strictly at transparent __monitor__ bus
                 if (masterPlayer.muted || masterPlayer.volume !== 1) {
@@ -7064,6 +7359,7 @@ async function calculatePreview(
 
                 previewRecalculateBtn.disabled = false;
                 masterPlayBtn.disabled = false;
+                masterStopBtn.disabled = false;
                 masterLoopBtn.disabled = false;
 
                 const shouldStartPlayback = activePreviewAutoplay;
@@ -7079,21 +7375,8 @@ async function calculatePreview(
                 }
 
                 updatePlaybackControls();
+                renderGlobalPathBar?.();
                 (window as any).editorCanvas?.setDirty?.(true, true);
-
-                let ramOpt = Array.from(tempFilesSelect.options).find(o => o.value === 'RAM_PREVIEW');
-                if (!ramOpt) {
-                    ramOpt = document.createElement('option');
-                    ramOpt.value = 'RAM_PREVIEW';
-                    ramOpt.className = 'ram-preview-option';
-                    ramOpt.textContent = `LIVE · ${payload.node_name}`;
-                    tempFilesSelect.insertBefore(ramOpt, tempFilesSelect.firstChild);
-                } else {
-                    ramOpt.className = 'ram-preview-option';
-                    ramOpt.textContent = `LIVE · ${payload.node_name}`;
-                }
-                tempFilesSelect.value = 'RAM_PREVIEW';
-                updatePlaybackTrackPresentation();
 
                 const totalDurationMs = Math.round(performance.now() - previewStartedAt);
                 engineSync.setState('idle_synced', {
@@ -7110,12 +7393,20 @@ async function calculatePreview(
                 runtimeLog(`Live libsin_dsp ready for node ${nodeId} (${totalDurationMs} ms)`, 'common');
                 return;
             }
+            rtAttemptedAndFailed = true;
+            rtFailureMessage = String(rtRes?.error || 'Realtime engine failed to load preview plan');
         }
     } catch (rtErr) {
         console.warn('[SIN Realtime] Falling back to HTTP progressive preview:', rtErr);
     }
 
     try {
+        if (rtAttemptedAndFailed) {
+            // Native libsin_dsp engine is connected and already attempted to load this plan;
+            // do NOT spawn a duplicate legacy Python /api/preview/stream-progressive render
+            // (which would stall CPU/RAM on large files).
+            throw new Error(`Realtime engine preview failed: ${rtFailureMessage}`);
+        }
         const res = await loggedTask('Connect to progressive preview stream', () =>
             fetch('/api/preview/stream-progressive?format=binary', {
                 method: 'POST',
@@ -7187,7 +7478,6 @@ async function calculatePreview(
             activeRamPreviewNodeId = nodeId;
             (window as any).activeRamPreviewNodeId = nodeId;
             activeRamPreviewPayload = payload;
-            activeRamPreviewSource = data.audio_url;
 
             // 1. Atomically commit the full multi-bar session into the scheduler
             globalAudioScheduler.commitSession(sessionId);
@@ -7214,6 +7504,7 @@ async function calculatePreview(
 
             previewRecalculateBtn.disabled = false;
             masterPlayBtn.disabled = false;
+            masterStopBtn.disabled = false;
             masterLoopBtn.disabled = false;
 
             // 3. Start transport and visual telemetry together only after audio & stems are 100% ready
@@ -7227,22 +7518,9 @@ async function calculatePreview(
             }
 
             updatePlaybackControls();
+            renderGlobalPathBar?.();
             (window as any).editorCanvas?.setDirty?.(true, true);
 
-            // Add/select RAM preview entry in toolbar dropdown
-            let ramOpt = Array.from(tempFilesSelect.options).find(o => o.value === 'RAM_PREVIEW');
-            if (!ramOpt) {
-                ramOpt = document.createElement('option');
-                ramOpt.value = 'RAM_PREVIEW';
-                ramOpt.className = 'ram-preview-option';
-                ramOpt.textContent = `RAM · ${payload.node_name}`;
-                tempFilesSelect.insertBefore(ramOpt, tempFilesSelect.firstChild);
-            } else {
-                ramOpt.className = 'ram-preview-option';
-                ramOpt.textContent = `RAM · ${payload.node_name}`;
-            }
-            tempFilesSelect.value = 'RAM_PREVIEW';
-            updatePlaybackTrackPresentation();
             const totalDurationMs = Math.round(performance.now() - previewStartedAt);
             engineSync.setState('idle_synced', {
                 lastRenderDurationMs: finalData?.metrics?.render_ms ?? totalDurationMs,
@@ -7482,7 +7760,13 @@ export const NON_DSP_PROPERTIES = new Set([
     'key_proposal',
     'original_bpm_proposal',
     'key_is_local_override',
-    'original_bpm_is_local_override'
+    'original_bpm_is_local_override',
+    'field_units',
+    'field_static_values',
+    'field_dynamic_expressions',
+    'field_dynamic_enabled',
+    'waveform_info_open',
+    'waveform_snap_enabled'
 ]);
 
 let dspInvalidateTimer: any = null;
@@ -7538,8 +7822,10 @@ function scheduleSettledParameterUpdate(delayMs = 300) {
     }, delayMs);
 }
 
-window.addEventListener('pointerdown', () => {
-    isPointerManipulatingParam = true;
+window.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (e.button === 0) {
+        isPointerManipulatingParam = true;
+    }
 }, { passive: true, capture: true });
 
 const handlePointerFinish = () => {
@@ -7551,6 +7837,11 @@ const handlePointerFinish = () => {
 };
 window.addEventListener('pointerup', handlePointerFinish, { passive: true, capture: true });
 window.addEventListener('pointercancel', handlePointerFinish, { passive: true, capture: true });
+// Native HTML5 Drag-and-Drop swallows pointerup; always clear pointer manipulation state on drag/drop/blur!
+window.addEventListener('dragstart', handlePointerFinish, { passive: true, capture: true });
+window.addEventListener('dragend', handlePointerFinish, { passive: true, capture: true });
+window.addEventListener('drop', handlePointerFinish, { passive: true, capture: true });
+window.addEventListener('blur', handlePointerFinish, { passive: true });
 
 function tryPushRealtimeParam(graph: LGraph | null, nodeId: number, propertyKey?: string): boolean {
     if (!sinRealtime.available || !sinRealtimeLoaded || !graph || !propertyKey) return false;
@@ -7598,24 +7889,34 @@ function tryPushRealtimeParam(graph: LGraph | null, nodeId: number, propertyKey?
         sinRealtime.setParam(nid, 'crop_end', props.crop_end != null ? Number(props.crop_end) : 1, 0);
         return false;
     }
-    if (propertyKey === 'transpose' || propertyKey === 'cents' || propertyKey === 'stretch_factor' || propertyKey === 'original_bpm' || propertyKey === 'target_bpm' || propertyKey === 'sample_type' || propertyKey === 'sample_mode') {
+    if (propertyKey === 'warp' || propertyKey === 'repeat' || propertyKey === 'sample_type' || propertyKey === 'sample_mode') {
+        return false; // structural mode switch -> repack plan cleanly
+    }
+    if (
+        propertyKey === 'transpose'
+        || propertyKey === 'cents'
+        || propertyKey === 'stretch_factor'
+        || propertyKey === 'original_bpm'
+        || propertyKey === 'target_bpm'
+        || propertyKey === 'key_match_mode'
+        || propertyKey === 'key_match_algorithm'
+        || propertyKey === 'key'
+    ) {
         const mode = String(props.stretch_mode || '').toLowerCase();
-        if (mode === 'pitch_shift' || mode === 'repitch' || mode === 'varispeed') {
-            const semis = (Number(props.transpose) || 0) + (Number(props.cents) || 0) / 100;
+        const isWarp = props.warp !== undefined
+            ? Boolean(props.warp)
+            : (mode !== 'pitch_shift' && mode !== 'repitch' && mode !== 'varispeed' && mode !== 'off');
+        if (!isWarp) {
+            // In Warp OFF (Tape mode), Target BPM / Original BPM do not affect DSP
+            if (propertyKey === 'original_bpm' || propertyKey === 'target_bpm') {
+                return true;
+            }
+            const keyMatchShift = props.key_match_mode === 'follow' ? (Number(props.key_match_transpose) || 0) : 0;
+            const semis = (Number(props.transpose) || 0) + keyMatchShift + (Number(props.cents) || 0) / 100;
             const pitchRate = Math.pow(2, semis / 12);
             const rawFactor = Number(props.stretch_factor);
             const factor = (Number.isFinite(rawFactor) && rawFactor > 0) ? rawFactor : 1;
-            let bpmRate = 1;
-            const sampleType = String(props.sample_type || props.sample_mode || 'one_shot').toLowerCase();
-            const origBpm = Number(props.original_bpm);
-            const rawTarget = props.target_bpm;
-            const targetBpm = (rawTarget != null && String(rawTarget).toLowerCase() !== 'global' && Number(rawTarget) > 0)
-                ? Number(rawTarget)
-                : Number(globalParameters.bpm || 120);
-            if (sampleType !== 'one_shot' && sampleType !== 'oneshot' && Number.isFinite(origBpm) && origBpm > 0 && targetBpm > 0) {
-                bpmRate = targetBpm / origBpm;
-            }
-            const rate = Math.max(0.05, pitchRate * factor * bpmRate);
+            const rate = Math.max(0.05, pitchRate * factor);
             sinRealtime.setParam(nid, 'playback_rate', rate, 5);
             return true;
         }
@@ -7624,6 +7925,7 @@ function tryPushRealtimeParam(graph: LGraph | null, nodeId: number, propertyKey?
 }
 
 const HEAVY_OFFLINE_COOK_PROPERTIES = new Set([
+    'warp',
     'cents',
     'transpose',
     'stretch_factor',
@@ -7634,6 +7936,124 @@ const HEAVY_OFFLINE_COOK_PROPERTIES = new Set([
     'key_match_mode',
     'key_match_algorithm',
 ]);
+
+window.addEventListener('sin-sample-audition', (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    const nodeId = detail?.nodeId;
+    if (nodeId == null) return;
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    const node = graph?.getNodeById?.(nodeId) as any;
+    if (!node) return;
+
+    const nid = String(nodeId);
+    const isCurrentlyAuditioning = (window as any).__sinActiveAuditionNodeId === nodeId;
+    const isDirectActivePreview = activeRamPreviewNodeId === nodeId && (isRealtimeAudioPlaying() || globalAudioScheduler.getIsPlaying());
+
+    if (isCurrentlyAuditioning) {
+        (window as any).__sinActiveAuditionNodeId = null;
+        if (sinRealtime.available) {
+            sinRealtime.setAudition({ active: false });
+            sinRealtime.setTransport({ playing: false });
+        }
+        sinRealtimePlaying = false;
+        updatePlaybackControls();
+        renderGlobalPathBar?.();
+        return;
+    }
+    if (isDirectActivePreview) {
+        if (sinRealtime.available && sinRealtimeLoaded) {
+            sinRealtimePlaying = false;
+            sinRealtime.setTransport({ playing: false });
+        }
+        if (globalAudioScheduler.getIsPlaying()) {
+            globalAudioScheduler.pause();
+        }
+        updatePlaybackControls();
+        return;
+    }
+
+    // Contextual solo-in-place via native libsin_dsp when this sample belongs to the loaded realtime mix
+    if (
+        sinRealtime.available
+        && sinRealtimeLoaded
+        && sinRealtimeTargetMode === 'graph'
+        && sinRealtimeBusIds.has(nid)
+        && activeRamPreviewNodeId !== nodeId
+    ) {
+        const props = node.properties || {};
+        const cropStart = Number(props.crop_start ?? 0);
+        const cropEnd = Number(props.crop_end ?? 1);
+        const rawDur = Number(props.duration_seconds)
+            || node.audioBuffer?.duration
+            || (typeof node.getActivePeakDuration === 'function' ? node.getActivePeakDuration() : 0)
+            || 0;
+        const rate = typeof node.getEffectivePlaybackRate === 'function' ? node.getEffectivePlaybackRate() : 1;
+        const activeSpanSec = rawDur > 0
+            ? Math.max(0.05, ((cropEnd - cropStart) * rawDur) / Math.max(0.05, rate))
+            : sinRealtimeDurationSec;
+        const startBeat = Number(props.start_beat || 0);
+        const bpmVal = Math.max(1, sinRealtimeBpm || globalParameters.bpm || 120);
+        const startSec = Math.max(0, startBeat * (60 / bpmVal));
+        const endSec = sinRealtimeDurationSec > 0
+            ? Math.min(sinRealtimeDurationSec, startSec + activeSpanSec)
+            : (startSec + activeSpanSec);
+        (window as any).__sinActiveAuditionNodeId = nodeId;
+        sinRealtimePlaying = true;
+        sinRealtime.setAudition({
+            active: true,
+            nodeId: nid,
+            startSec,
+            endSec: endSec > startSec ? endSec : 0,
+        });
+        updatePlaybackControls();
+        renderGlobalPathBar?.();
+        return;
+    }
+
+    // Disconnected or standalone preview -> exact cropped duration, zero-RAM disk streaming via libsin_dsp
+    (window as any).__sinActiveAuditionNodeId = null;
+    void previewNode(nodeId, true, false, false);
+});
+
+window.addEventListener('sin-sample-scrub', (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    const nodeId = detail?.nodeId;
+    const normPos = Number(detail?.normPos);
+    if (nodeId == null || !Number.isFinite(normPos)) return;
+    const graph = (window as any).editorGraph as LGraph | undefined;
+    const node = graph?.getNodeById?.(nodeId) as any;
+    if (!node) return;
+
+    const props = node.properties || {};
+    const cropStart = Number(props.crop_start ?? 0);
+    const cropEnd = Number(props.crop_end ?? 1);
+    const clampedNorm = Math.max(cropStart, Math.min(cropEnd, normPos));
+    const rawDur = Number(props.duration_seconds)
+        || node.audioBuffer?.duration
+        || (typeof node.getActivePeakDuration === 'function' ? node.getActivePeakDuration() : 0)
+        || 0;
+    if (rawDur <= 0) return;
+    const rate = typeof node.getEffectivePlaybackRate === 'function' ? node.getEffectivePlaybackRate() : 1;
+    const localSec = Math.max(0, ((clampedNorm - cropStart) * rawDur) / Math.max(0.05, rate));
+    const nid = String(nodeId);
+
+    if (activeRamPreviewNodeId === nodeId) {
+        seekTransportToSeconds(localSec);
+        return;
+    }
+    if (sinRealtime.available && sinRealtimeLoaded && sinRealtimeTargetMode === 'graph' && sinRealtimeBusIds.has(nid)) {
+        const startBeat = Number(props.start_beat || 0);
+        const bpmVal = Math.max(1, sinRealtimeBpm || globalParameters.bpm || 120);
+        const startSec = Math.max(0, startBeat * (60 / bpmVal));
+        seekTransportToSeconds(startSec + localSec);
+        return;
+    }
+    void previewNode(nodeId, false, false, false).then(() => {
+        if (activeRamPreviewNodeId === nodeId) {
+            seekTransportToSeconds(localSec);
+        }
+    });
+});
 
 window.addEventListener('node-property-changed', (e: any) => {
     if (isGraphEvaluating()) return;

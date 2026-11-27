@@ -129,16 +129,16 @@ export class WaveformScrubCanvas {
 
     this._resizeObserver = typeof ResizeObserver !== 'undefined'
       ? new ResizeObserver((entries) => {
-          const entry = entries[entries.length - 1];
-          if (entry && entry.contentRect.width > 0 && entry.contentRect.height > 0) {
-            this.cachedCssWidth = entry.contentRect.width;
-            this.cachedCssHeight = entry.contentRect.height;
-          } else {
-            this.cachedCssWidth = 0;
-            this.cachedCssHeight = 0;
-          }
-          this.draw();
-        })
+        const entry = entries[entries.length - 1];
+        if (entry && entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+          this.cachedCssWidth = entry.contentRect.width;
+          this.cachedCssHeight = entry.contentRect.height;
+        } else {
+          this.cachedCssWidth = 0;
+          this.cachedCssHeight = 0;
+        }
+        this.draw();
+      })
       : null;
     this._resizeObserver?.observe(this.container);
 
@@ -152,7 +152,7 @@ export class WaveformScrubCanvas {
       if (event.button === 0 && isZoomed && localY >= rect.height - 7) {
         event.preventDefault();
         this.isScrollbarDragging = true;
-        try { this.canvas.setPointerCapture(event.pointerId); } catch {}
+        try { this.canvas.setPointerCapture(event.pointerId); } catch { }
         this._panViewportToScrollbarX(event.clientX - rect.left, rect.width);
         return;
       }
@@ -163,7 +163,7 @@ export class WaveformScrubCanvas {
         this.isPanning = true;
         this.panAnchorX = event.clientX;
         this.panAnchorStartSec = this.viewStartSec;
-        try { this.canvas.setPointerCapture(event.pointerId); } catch {}
+        try { this.canvas.setPointerCapture(event.pointerId); } catch { }
         return;
       }
 
@@ -171,7 +171,7 @@ export class WaveformScrubCanvas {
       event.preventDefault();
       this.isSeeking = true;
       this.canvas.focus({ preventScroll: true });
-      try { this.canvas.setPointerCapture(event.pointerId); } catch {}
+      try { this.canvas.setPointerCapture(event.pointerId); } catch { }
       const p = this._progressFromPointer(event);
       this.onSeekStart?.(p);
       this._applySeekPointer(p, true);
@@ -201,13 +201,13 @@ export class WaveformScrubCanvas {
     this._onPointerUp = (event) => {
       if (this.isScrollbarDragging) {
         this.isScrollbarDragging = false;
-        try { this.canvas.releasePointerCapture(event.pointerId); } catch {}
+        try { this.canvas.releasePointerCapture(event.pointerId); } catch { }
         this._scheduleViewportNotify(true);
         return;
       }
       if (this.isPanning) {
         this.isPanning = false;
-        try { this.canvas.releasePointerCapture(event.pointerId); } catch {}
+        try { this.canvas.releasePointerCapture(event.pointerId); } catch { }
         this._scheduleViewportNotify(true);
         return;
       }
@@ -215,7 +215,7 @@ export class WaveformScrubCanvas {
       const p = this._progressFromPointer(event);
       this._applySeekPointer(p, false);
       this.isSeeking = false;
-      try { this.canvas.releasePointerCapture(event.pointerId); } catch {}
+      try { this.canvas.releasePointerCapture(event.pointerId); } catch { }
       this.onSeekEnd?.(p);
       this.draw();
     };

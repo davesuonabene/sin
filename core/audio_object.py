@@ -55,6 +55,8 @@ class AudioObject(BaseObject):
         crop_start: float = 0.0,
         crop_end: float = 1.0,
         sample_type: str = "loop",
+        repeat: Optional[bool] = None,
+        warp: Optional[bool] = None,
         total_bars: Optional[float] = None,
         transpose: float = 0.0,
         cents: float = 0.0,
@@ -90,7 +92,13 @@ class AudioObject(BaseObject):
         self.is_dynamic = False
         self.crop_start: float = max(0.0, min(1.0, float(crop_start)))
         self.crop_end: float = max(0.0, min(1.0, float(crop_end)))
-        self.sample_type: str = str(sample_type)
+        self.repeat: Optional[bool] = bool(repeat) if repeat is not None else None
+        self.warp: Optional[bool] = bool(warp) if warp is not None else None
+        self.sample_type: str = (
+            ("loop" if self.repeat else "one_shot")
+            if self.repeat is not None
+            else str(sample_type)
+        )
         self.total_bars: Optional[float] = (
             max(0.0, float(total_bars)) if total_bars is not None else None
         )
@@ -148,13 +156,29 @@ class AudioObject(BaseObject):
     def pan(self, value: float) -> None:
         self._pan = float(value)
 
+    @property
+    def is_repeat_enabled(self) -> bool:
+        if self.repeat is not None:
+            return bool(self.repeat)
+        return str(self.sample_type or "loop").lower() == "loop"
+
+    @property
+    def is_warp_enabled(self) -> bool:
+        if self.warp is not None:
+            return bool(self.warp)
+        return str(self.stretch_mode or "time_stretch").lower() not in (
+            "pitch_shift", "repitch", "varispeed", "off"
+        )
+
     def detect_and_set_bpm(self, sample_rate: int = 44100) -> Optional[float]:
         """
         Attempts to calculate original_bpm:
         1. First try BPMAnalyzer.from_filename(filepath).
         2. If None, get duration from audio_data and use BPMAnalyzer.from_duration(duration_seconds).
         """
-        if self.sample_type in ("one_shot", "oneshot"):
+        if self.warp is False:
+            return None
+        if self.warp is None and self.sample_type in ("one_shot", "oneshot"):
             return None
 
         if self.filepath:
@@ -163,7 +187,7 @@ class AudioObject(BaseObject):
                 self._original_bpm = bpm
                 return bpm
 
-        if self.audio_data is not None and self.audio_data.shape[-1] > 0:
+        if self.warp is None and self.audio_data is not None and self.audio_data.shape[-1] > 0:
             duration_seconds = float(self.audio_data.shape[-1]) / float(sample_rate)
             bpm = BPMAnalyzer.from_duration(duration_seconds)
             if bpm is not None:
@@ -261,7 +285,7 @@ class AudioObject(BaseObject):
     def _tile_loop_to_bars(self, data_to_render: np.ndarray, system: Optional[System] = None, **kwargs: Any) -> np.ndarray:
         loop_sample = kwargs.get("loop", True)
         eff_bars = self.total_bars if (self.total_bars is not None and self.total_bars > 0) else kwargs.get("parent_total_bars")
-        if loop_sample and self.sample_type == "loop" and eff_bars is not None and eff_bars > 0 and system is not None:
+        if loop_sample and self.is_repeat_enabled and eff_bars is not None and eff_bars > 0 and system is not None:
             target_samples = system.beat_to_samples(eff_bars * 4.0)
             if data_to_render.shape[-1] > 0 and data_to_render.shape[-1] < target_samples:
                 reps = int(np.ceil(target_samples / data_to_render.shape[-1]))
@@ -286,14 +310,15 @@ class AudioObject(BaseObject):
         # Leaf node case: Raw sample data exists and no children
         if self.audio_data is not None and len(self.children) == 0:
             sr = system.sample_rate if system is not None else 44100
-            if self._original_bpm is None and self.sample_type not in ("one_shot", "oneshot"):
+            should_bpm_sync = (self.warp is True) or (self.warp is None and self.sample_type not in ("one_shot", "oneshot"))
+            if self._original_bpm is None and should_bpm_sync:
                 self.detect_and_set_bpm(sample_rate=sr)
 
             target_bpm = self.target_bpm if self.target_bpm is not None else (system.bpm if system is not None else 120.0)
             data_to_render = process_sample_transform(
                 audio_data=self.audio_data,
                 sr=sr,
-                original_bpm=self._original_bpm if self.sample_type not in ("one_shot", "oneshot") else None,
+                original_bpm=self._original_bpm if should_bpm_sync else None,
                 target_bpm=target_bpm,
                 transpose=self.transpose,
                 cents=self.cents,
@@ -304,6 +329,7 @@ class AudioObject(BaseObject):
                 fast_preview=system is not None and system.render_mode == "preview",
                 key_match_mode=self.key_match_mode,
                 key_match_algorithm=self.key_match_algorithm,
+                warp=self.warp,
             )
 
             data_to_render = self._tile_loop_to_bars(data_to_render, system, **kwargs)
@@ -385,7 +411,7 @@ class AudioObject(BaseObject):
                             "iteration": outer_wrapper_idx * wrapped_cycle_count + w_idx,
                             "parent_id": self.node_id
                         })
-                elif getattr(child, "sample_type", None) == "loop" and nat_dur > 0 and child_dur > nat_dur:
+                elif getattr(child, "is_repeat_enabled", getattr(child, "sample_type", None) == "loop") and nat_dur > 0 and child_dur > nat_dur:
                     reps = max(1, int(round(child_dur / nat_dur)))
                     for r in range(reps):
                         system.record_node_event(child.node_id, {
@@ -683,6 +709,8 @@ class SampleObject(AudioObject):
         crop_start: float = 0.0,
         crop_end: float = 1.0,
         sample_type: str = "loop",
+        repeat: Optional[bool] = None,
+        warp: Optional[bool] = None,
         transpose: float = 0.0,
         cents: float = 0.0,
         stretch_mode: str = "time_stretch",
@@ -716,6 +744,8 @@ class SampleObject(AudioObject):
             crop_start=crop_start,
             crop_end=crop_end,
             sample_type=sample_type,
+            repeat=repeat,
+            warp=warp,
             transpose=transpose,
             cents=cents,
             stretch_mode=stretch_mode,
@@ -947,9 +977,10 @@ class SampleObject(AudioObject):
             return np.zeros(0, dtype=np.float32)
 
         slot_bpm = slot_cfg.get("original_bpm") if slot_cfg.get("original_bpm") is not None else self._original_bpm
-        if slot_bpm is None and self.sample_type not in ("one_shot", "oneshot"):
+        should_bpm_sync = (self.warp is True) or (self.warp is None and self.sample_type not in ("one_shot", "oneshot"))
+        if slot_bpm is None and should_bpm_sync:
             slot_bpm = BPMAnalyzer.from_filename(slot_filepath_str)
-            if slot_bpm is None and audio_array.shape[-1] > 0:
+            if slot_bpm is None and self.warp is None and audio_array.shape[-1] > 0:
                 slot_bpm = BPMAnalyzer.from_duration(float(audio_array.shape[-1]) / float(sr))
             if eff_slot == 0 and slot_bpm is not None:
                 self._original_bpm = slot_bpm
@@ -962,11 +993,13 @@ class SampleObject(AudioObject):
             sr,
             slot_bpm,
             target_bpm,
-            round(slot_crop_start, 4),
-            round(slot_crop_end, 4),
+            round(slot_crop_start, 6),
+            round(slot_crop_end, 6),
             round(slot_transpose, 4),
             round(slot_cents, 4),
             self.stretch_mode,
+            self.warp,
+            self.repeat,
             round(slot_stretch_factor, 4),
             self.stretch_algorithm,
             self.sample_type,
@@ -993,6 +1026,7 @@ class SampleObject(AudioObject):
                     fast_preview=fast_preview,
                     key_match_mode=self.key_match_mode,
                     key_match_algorithm=self.key_match_algorithm,
+                    warp=self.warp,
                 )
                 self._transform_cache[transform_cache_key] = data_to_render
                 set_runtime_cache(transform_cache_key, data_to_render)
@@ -1087,6 +1121,8 @@ class SequenceObject(AudioObject):
         chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None,
         sample_type: str = "loop",
+        repeat: Optional[bool] = None,
+        warp: Optional[bool] = None,
         crop_start: float = 0.0,
         crop_end: float = 1.0,
         transpose: float = 0.0,
@@ -1121,6 +1157,8 @@ class SequenceObject(AudioObject):
             chain=chain,
             data=data,
             sample_type=sample_type,
+            repeat=repeat,
+            warp=warp,
             crop_start=crop_start,
             crop_end=crop_end,
             transpose=transpose,
@@ -1729,6 +1767,8 @@ class ItemPoolObject(AudioObject):
         chain: Optional[List[Dict[str, Any]]] = None,
         data: Optional[Any] = None,
         sample_type: str = "loop",
+        repeat: Optional[bool] = None,
+        warp: Optional[bool] = None,
         crop_start: float = 0.0,
         crop_end: float = 1.0,
         transpose: float = 0.0,
@@ -1751,6 +1791,8 @@ class ItemPoolObject(AudioObject):
             chain=chain,
             data=data,
             sample_type=sample_type,
+            repeat=repeat,
+            warp=warp,
             crop_start=crop_start,
             crop_end=crop_end,
             transpose=transpose,

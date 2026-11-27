@@ -29,6 +29,8 @@ export interface RealtimePlanLoadedResult {
     bus_waveforms?: Record<string, number[]>;
     processor_statuses?: Record<string, any>;
     tiled?: boolean;
+    tiled_bus_node_ids?: string[];
+    tiled_stage_node_ids?: string[];
     has_peak_pyramid?: boolean;
     pack_ms?: number;
 }
@@ -38,6 +40,8 @@ export interface RealtimeMasterPeaks {
     master_peaks: number[];
     bus_peaks?: Record<string, number[]>;
     peak_tiers?: number[];
+    tiled_bus_node_ids?: string[];
+    tiled_stage_node_ids?: string[];
     has_peak_pyramid?: boolean;
     coverage?: {
         num_tiles: number;
@@ -60,6 +64,8 @@ export interface RealtimeTileUpdate {
     stale_all?: boolean;
     clear_all?: boolean;
     peaks?: number[];
+    bus_node_ids?: string[];
+    stage_node_ids?: string[];
     coverage?: {
         num_tiles: number;
         tile_sec: number;
@@ -76,6 +82,7 @@ export interface RealtimePeaksViewport {
     duration_sec?: number;
     peaks?: number[];
     tiers?: number[];
+    tiled_bus_node_ids?: string[];
     coverage?: RealtimeTileUpdate['coverage'] | null;
 }
 

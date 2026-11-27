@@ -74,6 +74,10 @@ export class TrackNode extends BaseNode {
     static tabs = ["TRACK", "CHAIN", "COMMON"];
     static override defaultVisualizationType: VisualizationTypeId = 'loop';
     static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['loop', 'realtime', 'spectrum'];
+    static override compactCardSpec = {
+        visualizer: 'bus_meter' as const,
+        paramKeys: ['mix_mode', 'total_bars'] as const,
+    };
 
     constructor() {
         super();

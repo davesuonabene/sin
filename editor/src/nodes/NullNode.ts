@@ -76,6 +76,10 @@ export class NullNode extends BaseNode {
     static tabs = ["CHAIN", "EXPORT", "COMMON"];
     static override defaultVisualizationType: VisualizationTypeId = 'loop';
     static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['loop', 'realtime', 'spectrum'];
+    static override compactCardSpec = {
+        visualizer: 'bus_meter' as const,
+        paramKeys: [] as const,
+    };
 
     constructor() {
         super();

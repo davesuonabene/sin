@@ -38,6 +38,8 @@ class NodeSlotModel(BaseModel):
     crop_end: Optional[float] = None
     pitch_shift: Optional[float] = None
     time_stretch: Optional[float] = None
+    repeat: Optional[bool] = None
+    warp: Optional[bool] = None
     sequence: Optional[List[int]] = None
     step_parameters: Optional[List[Dict[str, Any]]] = None
     sample_slot: Optional[str] = None
@@ -58,6 +60,8 @@ class AudioNodeModel(BaseModel):
     node_id: Optional[int] = None
     node_name: str
     node_type: str = "track"
+    repeat: Optional[bool] = None
+    warp: Optional[bool] = None
     sample_type: Optional[str] = "loop"
     filepath: Optional[str] = None
     original_bpm: Optional[float] = None
@@ -66,6 +70,9 @@ class AudioNodeModel(BaseModel):
     start_beat: float = 0.0
     mix_mode: Optional[str] = "sum"
     gain: Optional[float] = None
+    muted: bool = False
+    solo: bool = False
+    pan: float = 0.0
     bpm: float = 120.0
     filename: Optional[str] = None
     project_name: Optional[str] = None

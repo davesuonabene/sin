@@ -60,7 +60,7 @@ ASSET_TYPES = (
     ),
     AssetTypeDefinition(
         "multitrack",
-        "Stem collection",
+        "Multitrack",
         "folder",
         container=True,
         importable=True,

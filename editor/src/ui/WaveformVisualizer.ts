@@ -1,10 +1,75 @@
 import { fetchAudioBuffer, fetchAudioPeaks, getCachedAudioBufferSync, getSharedAudioContext } from '../audioBufferCache.ts';
 
+export interface WaveformRulerOptions {
+    mode?: 'time';
+    snapEnabled?: boolean;
+}
+
+export function formatDynamicRulerTime(
+    sec: number,
+    stepSec: number,
+    maxVisibleSec: number,
+    viewSpanSec: number
+): string {
+    const safeSec = Math.max(0, Number.isFinite(sec) ? sec : 0);
+
+    // Hours scale (>= 1 hour visible)
+    if (maxVisibleSec >= 3600) {
+        if (stepSec < 1) {
+            const hrs = Math.floor(safeSec / 3600);
+            const mins = Math.floor((safeSec % 3600) / 60);
+            const rem = safeSec % 60;
+            const decimals = stepSec < 0.1 ? 2 : 1;
+            const secStr = rem.toFixed(decimals).padStart(decimals + 3, '0');
+            return `${hrs}:${String(mins).padStart(2, '0')}:${secStr}`;
+        }
+        const totalSec = Math.round(safeSec);
+        const hrs = Math.floor(totalSec / 3600);
+        const mins = Math.floor((totalSec % 3600) / 60);
+        const remSec = totalSec % 60;
+        if (stepSec >= 3600 && mins === 0 && remSec === 0) {
+            return `${hrs}h`;
+        }
+        return `${hrs}:${String(mins).padStart(2, '0')}:${String(remSec).padStart(2, '0')}`;
+    }
+
+    // Minutes scale (>= 60s visible)
+    if (maxVisibleSec >= 60) {
+        if (stepSec < 1) {
+            const mins = Math.floor(safeSec / 60);
+            const rem = safeSec % 60;
+            const decimals = stepSec < 0.1 ? 2 : 1;
+            const secStr = rem.toFixed(decimals).padStart(decimals + 3, '0');
+            return `${mins}:${secStr}`;
+        }
+        const totalSec = Math.round(safeSec);
+        const mins = Math.floor(totalSec / 60);
+        const remSec = totalSec % 60;
+        return `${mins}:${String(remSec).padStart(2, '0')}`;
+    }
+
+    // Milliseconds scale (sub-second clips or deeply zoomed in)
+    if (maxVisibleSec < 1 || (viewSpanSec < 0.5 && stepSec < 0.1)) {
+        return `${Math.round(safeSec * 1000)}ms`;
+    }
+
+    // Seconds scale (< 60s)
+    if (stepSec < 0.1) {
+        return `${safeSec.toFixed(2)}s`;
+    }
+    if (stepSec < 1) {
+        return `${safeSec.toFixed(1)}s`;
+    }
+    return `${Math.round(safeSec)}s`;
+}
+
 export interface WaveformVisualizerOptions {
     container?: HTMLElement;
     cropStart?: number;
     cropEnd?: number;
     onCropChange?: (start: number, end: number) => void;
+    onScrub?: (normPos: number) => void;
+    ruler?: WaveformRulerOptions;
     waveformColor?: string;
     backgroundColor?: string;
     overlayColor?: string;
@@ -78,11 +143,19 @@ export class WaveformVisualizer {
     private cropStart: number = 0.0;
     private cropEnd: number = 1.0;
     private onCropChange?: (start: number, end: number) => void;
+    private onScrub?: (normPos: number) => void;
+    private externalPlayheadNorm: number | null = null;
+    private rulerOptions: WaveformRulerOptions = {
+        mode: 'time',
+        snapEnabled: false,
+    };
+    private hoverRulerNorm: number | null = null;
 
     // Viewport Zoom & Pan state
     private viewStart: number = 0.0;
     private viewEnd: number = 1.0;
     private static readonly MIN_VIEW_WIDTH = 0.0005;
+    private static readonly RULER_HEIGHT = 20;
 
     // Visual configuration
     private waveformColor: string = "#059669";
@@ -100,14 +173,34 @@ export class WaveformVisualizer {
         this.draw();
     }
 
+    public setRulerOptions(opts: Partial<WaveformRulerOptions>): void {
+        this.rulerOptions = {
+            ...this.rulerOptions,
+            ...opts,
+        };
+        this.draw();
+    }
+
+    public setExternalPlayhead(normPos: number | null): void {
+        const next = (typeof normPos === 'number' && Number.isFinite(normPos))
+            ? Math.max(0, Math.min(1, normPos))
+            : null;
+        if (next === this.externalPlayheadNorm) return;
+        if (next !== null && this.externalPlayheadNorm !== null && Math.abs(next - this.externalPlayheadNorm) < 1e-5) {
+            return;
+        }
+        this.externalPlayheadNorm = next;
+        this.draw();
+    }
+
     // Drag state
-    private activeDrag: 'start' | 'end' | 'scroll' | 'box-zoom' | null = null;
+    private activeDrag: 'start' | 'end' | 'scroll' | 'box-zoom' | 'scrub' | null = null;
     private dragStartX: number = 0;
     private dragStartViewS: number = 0;
     private dragStartViewE: number = 0;
     private boxZoomStartX: number = 0;
     private boxZoomCurrentX: number = 0;
-    private hoverState: 'start' | 'end' | 'scroll' | null = null;
+    private hoverState: 'start' | 'end' | 'scroll' | 'scrub' | null = null;
 
     private resizeObserver: ResizeObserver | null = null;
 
@@ -115,6 +208,10 @@ export class WaveformVisualizer {
         this.cropStart = options.cropStart !== undefined ? Math.max(0, Math.min(1, options.cropStart)) : 0.0;
         this.cropEnd = options.cropEnd !== undefined ? Math.max(0, Math.min(1, options.cropEnd)) : 1.0;
         this.onCropChange = options.onCropChange;
+        this.onScrub = options.onScrub;
+        if (options.ruler) {
+            this.rulerOptions = { ...this.rulerOptions, ...options.ruler };
+        }
 
         if (options.waveformColor) this.waveformColor = options.waveformColor;
         if (options.backgroundColor) this.backgroundColor = options.backgroundColor;
@@ -351,7 +448,7 @@ export class WaveformVisualizer {
                                 this.tintFingerprint = '';
                                 this.draw();
                             }
-                        }).catch(() => {});
+                        }).catch(() => { });
                     }
                     return;
                 }
@@ -382,13 +479,14 @@ export class WaveformVisualizer {
     }
 
     public setCrop(start: number, end: number, silent: boolean = false) {
+        const minSpan = 1e-4;
         let s = Math.max(0, Math.min(1, start));
         let e = Math.max(0, Math.min(1, end));
-        if (s >= e) {
-            if (s >= 0.99) {
-                s = e - 0.01;
+        if (s >= e - minSpan * 0.5) {
+            if (s >= 1 - minSpan) {
+                s = Math.max(0, e - minSpan);
             } else {
-                e = s + 0.01;
+                e = Math.min(1, s + minSpan);
             }
         }
         this.cropStart = Math.max(0, s);
@@ -399,6 +497,25 @@ export class WaveformVisualizer {
         if (!silent && this.onCropChange) {
             this.onCropChange(this.cropStart, this.cropEnd);
         }
+    }
+
+    private chooseTimeRulerStep(visibleSpanSec: number, canvasWidth: number): number {
+        const candidates = [
+            0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
+            1, 2, 5, 10, 15, 30,
+            60, 120, 300, 600, 900, 1800,
+            3600, 7200,
+        ];
+        const targetTicks = Math.max(3, Math.floor(Math.max(120, canvasWidth) / 60));
+        const ideal = visibleSpanSec / targetTicks;
+        for (const step of candidates) {
+            if (step >= ideal) return step;
+        }
+        return candidates[candidates.length - 1];
+    }
+
+    private snapNormIfEnabled(norm: number, _bypassSnap: boolean): number {
+        return Math.max(0, Math.min(1, norm));
     }
 
     public getCrop(): { start: number; end: number } {
@@ -446,7 +563,7 @@ export class WaveformVisualizer {
             try {
                 this.previewSource.stop();
                 this.previewSource.disconnect();
-            } catch (_) {}
+            } catch (_) { }
             this.previewSource = null;
         }
         this.isPlayingPreview = false;
@@ -544,24 +661,97 @@ export class WaveformVisualizer {
         this.ctx.fillStyle = this.backgroundColor;
         this.ctx.fillRect(0, 0, width, height);
 
-        const topMargin = 18;
+        const topMargin = WaveformVisualizer.RULER_HEIGHT;
         const bottomMargin = 6;
         const mainH = Math.max(10, height - topMargin - bottomMargin);
         const centerY = topMargin + mainH / 2;
 
-        // 2. Grid lines & Center horizontal line
-        const gridCols = 8;
-        this.ctx.strokeStyle = "rgba(148, 163, 184, 0.25)";
+        // 2. Top Transport Scrub Ruler Strip + Dynamic Time Grid (ms / s / min / hr)
+        this.ctx.fillStyle = this.hoverState === 'scrub' || this.activeDrag === 'scrub'
+            ? "rgba(224, 242, 254, 0.65)"
+            : "rgba(226, 232, 240, 0.55)";
+        this.ctx.fillRect(0, 0, width, topMargin);
+        this.ctx.strokeStyle = "rgba(148, 163, 184, 0.35)";
         this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, topMargin);
+        this.ctx.lineTo(width, topMargin);
+        this.ctx.stroke();
 
-        for (let i = 1; i < gridCols; i++) {
-            const gx = Math.floor((width / gridCols) * i);
-            this.ctx.beginPath();
-            this.ctx.moveTo(gx, topMargin);
-            this.ctx.lineTo(gx, height - bottomMargin);
-            this.ctx.stroke();
+        const durSec = this.getDuration();
+        if (durSec > 0) {
+            const viewStartSec = this.viewStart * durSec;
+            const viewEndSec = this.viewEnd * durSec;
+            const viewSpanSec = Math.max(1e-4, viewEndSec - viewStartSec);
+            const stepSec = this.chooseTimeRulerStep(viewSpanSec, width);
+            const firstTick = Math.ceil(viewStartSec / stepSec) * stepSec;
+
+            this.ctx.font = "500 8.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+            this.ctx.textAlign = "left";
+            this.ctx.textBaseline = "middle";
+            for (let sec = firstTick, guard = 0; sec <= viewEndSec + 1e-6 && guard < 120; sec += stepSec, guard++) {
+                const norm = sec / durSec;
+                const gx = Math.floor(this.normToCanvas(norm)) + 0.5;
+                if (gx >= -2 && gx <= width + 2) {
+                    this.ctx.strokeStyle = "rgba(100, 116, 139, 0.22)";
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(gx, topMargin);
+                    this.ctx.lineTo(gx, height - bottomMargin);
+                    this.ctx.stroke();
+
+                    this.ctx.strokeStyle = "rgba(100, 116, 139, 0.48)";
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(gx, topMargin - 5);
+                    this.ctx.lineTo(gx, topMargin);
+                    this.ctx.stroke();
+
+                    const label = formatDynamicRulerTime(sec, stepSec, viewEndSec, viewSpanSec);
+                    if (gx < width - 32) {
+                        this.ctx.fillStyle = "#64748b";
+                        this.ctx.fillText(label, gx + 3, topMargin * 0.5);
+                    }
+                }
+
+                // Subtle halfway minor tick on ruler
+                const midSec = sec + stepSec * 0.5;
+                if (midSec < viewEndSec) {
+                    const mx = Math.floor(this.normToCanvas(midSec / durSec)) + 0.5;
+                    if (mx > 0 && mx < width) {
+                        this.ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(mx, topMargin - 3);
+                        this.ctx.lineTo(mx, topMargin);
+                        this.ctx.stroke();
+                    }
+                }
+            }
+
+            // Subtle hover scrub guide in ruler
+            if (this.hoverState === 'scrub' && this.hoverRulerNorm !== null && this.activeDrag !== 'scrub') {
+                const hx = this.normToCanvas(this.hoverRulerNorm);
+                if (hx >= 0 && hx <= width) {
+                    this.ctx.strokeStyle = "rgba(2, 132, 199, 0.45)";
+                    this.ctx.lineWidth = 1;
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(hx, topMargin);
+                    this.ctx.lineTo(hx, height - bottomMargin);
+                    this.ctx.stroke();
+                }
+            }
+        } else {
+            const gridCols = 8;
+            this.ctx.strokeStyle = "rgba(148, 163, 184, 0.22)";
+            this.ctx.lineWidth = 1;
+            for (let i = 1; i < gridCols; i++) {
+                const gx = Math.floor((width / gridCols) * i) + 0.5;
+                this.ctx.beginPath();
+                this.ctx.moveTo(gx, topMargin);
+                this.ctx.lineTo(gx, height - bottomMargin);
+                this.ctx.stroke();
+            }
         }
 
+        this.ctx.strokeStyle = "rgba(148, 163, 184, 0.25)";
         this.ctx.beginPath();
         this.ctx.moveTo(0, centerY);
         this.ctx.lineTo(width, centerY);
@@ -710,17 +900,19 @@ export class WaveformVisualizer {
             this.drawHandle(cropX2, height, 'End', this.hoverState === 'end' || this.activeDrag === 'end');
         }
 
-        // 6. Playhead
+        // 6. Playhead (live global/native transport sync OR local preview fallback)
         const playheadCtx = getSharedAudioContext();
-        if (this.isPlayingPreview && playheadCtx && this.audioBuffer) {
+        let activePlayheadNorm: number | null = this.externalPlayheadNorm;
+        if (activePlayheadNorm === null && this.isPlayingPreview && playheadCtx && this.audioBuffer) {
             const elapsed = playheadCtx.currentTime - this.previewStartTime;
             const progressRatio = Math.min(1, Math.max(0, elapsed / this.previewDuration));
-            const playheadNorm = this.cropStart + progressRatio * (this.cropEnd - this.cropStart);
-            const playheadX = this.normToCanvas(playheadNorm);
-
-            if (playheadX >= 0 && playheadX <= width) {
+            activePlayheadNorm = this.cropStart + progressRatio * (this.cropEnd - this.cropStart);
+        }
+        if (activePlayheadNorm !== null) {
+            const playheadX = this.normToCanvas(activePlayheadNorm);
+            if (playheadX >= -2 && playheadX <= width + 2) {
                 this.ctx.strokeStyle = "#f43f5e";
-                this.ctx.lineWidth = 2;
+                this.ctx.lineWidth = 1.75;
                 this.ctx.beginPath();
                 this.ctx.moveTo(playheadX, topMargin);
                 this.ctx.lineTo(playheadX, height - bottomMargin);
@@ -728,7 +920,10 @@ export class WaveformVisualizer {
 
                 this.ctx.fillStyle = "#f43f5e";
                 this.ctx.beginPath();
-                this.ctx.arc(playheadX, topMargin / 2, 4, 0, Math.PI * 2);
+                this.ctx.moveTo(playheadX - 4, topMargin - 7);
+                this.ctx.lineTo(playheadX + 4, topMargin - 7);
+                this.ctx.lineTo(playheadX, topMargin);
+                this.ctx.closePath();
                 this.ctx.fill();
             }
         }
@@ -798,13 +993,14 @@ export class WaveformVisualizer {
             };
         };
 
-        const detectTarget = (x: number): 'start' | 'end' | 'scroll' => {
+        const detectTarget = (x: number, y: number): 'start' | 'end' | 'scrub' | 'scroll' => {
             const cropX1 = this.normToCanvas(this.cropStart);
             const cropX2 = this.normToCanvas(this.cropEnd);
-            const threshold = 10;
+            const threshold = 9;
 
             if (Math.abs(x - cropX1) <= threshold) return 'start';
             if (Math.abs(x - cropX2) <= threshold) return 'end';
+            if (y <= WaveformVisualizer.RULER_HEIGHT && this.onScrub) return 'scrub';
             return 'scroll';
         };
 
@@ -827,14 +1023,18 @@ export class WaveformVisualizer {
             const pos = getCanvasPos(e);
 
             if (!this.activeDrag) {
-                const target = detectTarget(pos.x);
-                if (target !== this.hoverState) {
+                const target = detectTarget(pos.x, pos.y);
+                const nextHoverNorm = target === 'scrub' ? this.canvasToNorm(pos.x) : null;
+                if (target !== this.hoverState || nextHoverNorm !== this.hoverRulerNorm) {
                     this.hoverState = target;
+                    this.hoverRulerNorm = nextHoverNorm;
                     this.draw();
                 }
 
                 if (target === 'start' || target === 'end') {
                     this.canvas.style.cursor = 'col-resize';
+                } else if (target === 'scrub') {
+                    this.canvas.style.cursor = 'pointer';
                 } else {
                     this.canvas.style.cursor = e.shiftKey ? 'crosshair' : 'grab';
                 }
@@ -849,16 +1049,24 @@ export class WaveformVisualizer {
                     if (newS < 0) { newS = 0; newE = viewW; }
                     if (newE > 1) { newE = 1; newS = 1 - viewW; }
                     this.setViewRange(newS, newE);
+                } else if (this.activeDrag === 'scrub') {
+                    const rawNorm = this.canvasToNorm(pos.x);
+                    const snapped = this.snapNormIfEnabled(rawNorm, e.altKey);
+                    this.externalPlayheadNorm = snapped;
+                    this.draw();
+                    this.onScrub?.(snapped);
                 } else if (this.activeDrag === 'box-zoom') {
                     this.boxZoomCurrentX = pos.x;
                     this.draw();
                 } else if (this.activeDrag === 'start') {
-                    const normX = this.canvasToNorm(pos.x);
-                    const newStart = Math.min(normX, this.cropEnd - 0.001);
+                    const rawNorm = this.canvasToNorm(pos.x);
+                    const snapped = this.snapNormIfEnabled(rawNorm, e.altKey);
+                    const newStart = Math.min(snapped, this.cropEnd - 1e-4);
                     this.setCrop(newStart, this.cropEnd);
                 } else if (this.activeDrag === 'end') {
-                    const normX = this.canvasToNorm(pos.x);
-                    const newEnd = Math.max(normX, this.cropStart + 0.001);
+                    const rawNorm = this.canvasToNorm(pos.x);
+                    const snapped = this.snapNormIfEnabled(rawNorm, e.altKey);
+                    const newEnd = Math.max(snapped, this.cropStart + 1e-4);
                     this.setCrop(this.cropStart, newEnd);
                 }
             }
@@ -867,7 +1075,7 @@ export class WaveformVisualizer {
         this.canvas.addEventListener('pointerdown', (e: PointerEvent) => {
             if (e.button !== 0 && e.button !== 2) return;
             const pos = getCanvasPos(e);
-            const target = detectTarget(pos.x);
+            const target = detectTarget(pos.x, pos.y);
 
             this.dragStartX = e.clientX;
             this.dragStartViewS = this.viewStart;
@@ -879,12 +1087,18 @@ export class WaveformVisualizer {
                 this.boxZoomCurrentX = pos.x;
             } else if (target === 'start' || target === 'end') {
                 this.activeDrag = target;
+            } else if (target === 'scrub') {
+                this.activeDrag = 'scrub';
+                const rawNorm = this.canvasToNorm(pos.x);
+                const snapped = this.snapNormIfEnabled(rawNorm, e.altKey);
+                this.externalPlayheadNorm = snapped;
+                this.onScrub?.(snapped);
             } else {
                 this.activeDrag = 'scroll';
                 this.canvas.style.cursor = 'grabbing';
             }
 
-            try { this.canvas.setPointerCapture(e.pointerId); } catch (_) {}
+            try { this.canvas.setPointerCapture(e.pointerId); } catch (_) { }
             this.draw();
             e.preventDefault();
         });
@@ -902,7 +1116,7 @@ export class WaveformVisualizer {
                 }
 
                 this.activeDrag = null;
-                try { this.canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+                try { this.canvas.releasePointerCapture(e.pointerId); } catch (_) { }
                 this.draw();
             }
         };
@@ -912,6 +1126,7 @@ export class WaveformVisualizer {
         this.canvas.addEventListener('mouseleave', () => {
             if (!this.activeDrag) {
                 this.hoverState = null;
+                this.hoverRulerNorm = null;
                 this.draw();
             }
         });

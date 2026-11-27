@@ -227,24 +227,22 @@ export class WaveformRenderer extends BaseSignalRenderer {
                 ctx.stroke();
             }
 
-            // Sample crop boundaries (only when crop is active on SampleNode)
-            if (!isPlaying) {
-                if (cropStartNorm > 0.001) {
-                    ctx.strokeStyle = 'rgba(17, 17, 17, 0.75)';
-                    ctx.lineWidth = 1.25;
-                    ctx.beginPath();
-                    ctx.moveTo(cropStartX, y);
-                    ctx.lineTo(cropStartX, y + height);
-                    ctx.stroke();
-                }
-                if (cropEndNorm < 0.999) {
-                    ctx.strokeStyle = 'rgba(17, 17, 17, 0.75)';
-                    ctx.lineWidth = 1.25;
-                    ctx.beginPath();
-                    ctx.moveTo(cropEndX, y);
-                    ctx.lineTo(cropEndX, y + height);
-                    ctx.stroke();
-                }
+            // Sample crop boundaries (persistent during both idle and playback)
+            if (cropStartNorm > 0.001) {
+                ctx.strokeStyle = 'rgba(17, 17, 17, 0.72)';
+                ctx.lineWidth = 1.25;
+                ctx.beginPath();
+                ctx.moveTo(cropStartX, y);
+                ctx.lineTo(cropStartX, y + height);
+                ctx.stroke();
+            }
+            if (cropEndNorm < 0.999) {
+                ctx.strokeStyle = 'rgba(17, 17, 17, 0.72)';
+                ctx.lineWidth = 1.25;
+                ctx.beginPath();
+                ctx.moveTo(cropEndX, y);
+                ctx.lineTo(cropEndX, y + height);
+                ctx.stroke();
             }
         } else if (!signal?.isLoading) {
             ctx.strokeStyle = isDimmed ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.22)';

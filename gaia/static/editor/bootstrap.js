@@ -1,9 +1,9 @@
 import { fetchRegistry } from './engine-registry.js';
-import { createTransportController } from './transport.js';
-import { createExportModal } from './export-modal.js';
-import { createEditorHost } from './editor-host.js';
-import { SinEngine } from './engines/sin-engine.js';
-import { SimpleMediaEngine } from './engines/simple-media-engine.js';
+import { createTransportController } from './transport.js?v=6';
+import { createExportModal } from './export-modal.js?v=2';
+import { createEditorHost } from './editor-host.js?v=2';
+import { SinEngine } from './engines/sin-engine.js?v=6';
+import { SimpleMediaEngine } from './engines/simple-media-engine.js?v=7';
 import {
     enhanceSelect,
     enhanceAllSelects,

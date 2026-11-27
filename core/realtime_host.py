@@ -172,6 +172,7 @@ class RealtimeAudioHost:
         overlay = self._tile_scheduler.overlay
         if overlay is not None:
             peaks, tiers = overlay.query_viewport(start_sec, end_sec, cols)
+            sess = self._tile_scheduler.active_session
             return {
                 "ok": True,
                 "start_sec": float(start_sec),
@@ -180,6 +181,7 @@ class RealtimeAudioHost:
                 "peaks": peaks,
                 "tiers": tiers,
                 "coverage": overlay.coverage_summary(),
+                "tiled_bus_node_ids": list(sess.bus_node_ids) if sess is not None else [],
             }
         pyr = self._active_base_pyramid
         if pyr is not None:
@@ -523,20 +525,33 @@ class RealtimeAudioHost:
                     if ma_dur > 0.0:
                         tiled_spec.file_sample_rate = ma_sr
                         tiled_spec.duration_sec = ma_dur
+                        eff_tile_dur = ma_dur * tiled_spec.tile_time_scale
                         tiled_spec.total_frames = min(
                             tiled_spec.total_frames,
-                            max(1, int(round(ma_dur * tiled_spec.sample_rate))),
+                            max(1, int(round(eff_tile_dur * tiled_spec.sample_rate))),
                         )
             except Exception:
                 pass
             if duration_sec > 0.0:
                 tiled_spec.timeline_duration_sec = duration_sec
-            # Include all non-monitor node keys in bus_node_ids so IRIDE canvas nodes get waveforms too!
-            all_bus_keys = list(tiled_spec.bus_node_ids)
-            for k in plan.bus_id_map.keys():
-                if k != "__monitor__" and k not in all_bus_keys:
-                    all_bus_keys.append(k)
-            tiled_spec.bus_node_ids = all_bus_keys
+            # Scope bus_node_ids strictly to the tiled chain + its downstream ancestor buses up to root
+            bus_by_id = {b.bus_id: b for b in plan.buses}
+            scoped_keys: list[str] = []
+            for k in tiled_spec.bus_node_ids:
+                if k != "__monitor__" and k not in scoped_keys:
+                    scoped_keys.append(k)
+            head_key = tiled_spec.bus_node_ids[0] if tiled_spec.bus_node_ids else None
+            cur_bid = plan.bus_id_map.get(head_key) if head_key else None
+            visited_bids: set[int] = set()
+            while cur_bid is not None and cur_bid not in visited_bids:
+                visited_bids.add(cur_bid)
+                b_spec = bus_by_id.get(cur_bid)
+                if b_spec is None:
+                    break
+                if b_spec.node_key != "__monitor__" and b_spec.node_key not in scoped_keys:
+                    scoped_keys.append(b_spec.node_key)
+                cur_bid = b_spec.parent_bus_id if b_spec.parent_bus_id and b_spec.parent_bus_id != 0 else None
+            tiled_spec.bus_node_ids = scoped_keys
             self._active_peak_filepath = tiled_spec.base_filepath
             self._active_peak_window = (
                 tiled_spec.crop_start_sec,
@@ -560,6 +575,7 @@ class RealtimeAudioHost:
         if compute_peaks and not has_tiled and 0.0 < duration_sec <= 60.0:
             master_peaks, bus_peaks = self._compute_plan_peaks(plan, sr, peak_columns)
 
+        active_tiled = self._tile_scheduler.active_session
         elapsed_ms = round((perf_counter() - t0) * 1000.0, 2)
         return {
             "ok": True,
@@ -572,6 +588,8 @@ class RealtimeAudioHost:
             "master_peaks": master_peaks,
             "bus_peaks": bus_peaks,
             "tiled": has_tiled,
+            "tiled_bus_node_ids": list(active_tiled.bus_node_ids) if active_tiled is not None else [],
+            "tiled_stage_node_ids": [st.node_id for st in active_tiled.stages] if active_tiled is not None else [],
             "has_peak_pyramid": bool(self._active_peak_filepath and (has_tiled or duration_sec > 60.0)),
             "pack_ms": elapsed_ms,
             "_plan": plan,
@@ -976,6 +994,8 @@ class RealtimeAudioHost:
                                 "peak_tiers": vp.get("tiers"),
                                 "has_peak_pyramid": True,
                                 "coverage": vp.get("coverage"),
+                                "tiled_bus_node_ids": list(sess.bus_node_ids) if sess is not None else [],
+                                "tiled_stage_node_ids": [s.node_id for s in sess.stages] if sess is not None else [],
                             })
                         return
                     peaks, bus_peaks = await asyncio.to_thread(self._compute_plan_peaks, plan_snap, sr, peak_cols)
@@ -1231,6 +1251,8 @@ class RealtimeAudioHost:
                                             "peak_tiers": out_tiers,
                                             "has_peak_pyramid": True,
                                             "coverage": out_cov,
+                                            "tiled_bus_node_ids": list(sess.bus_node_ids) if sess is not None else [],
+                                            "tiled_stage_node_ids": [s.node_id for s in sess.stages] if sess is not None else [],
                                         })
 
                                     # Stage 2: Build/load full sequential multi-res pyramid in background for razor-sharp zoom
@@ -1254,6 +1276,8 @@ class RealtimeAudioHost:
                                             "peak_tiers": vp2["tiers"],
                                             "has_peak_pyramid": True,
                                             "coverage": vp2.get("coverage"),
+                                            "tiled_bus_node_ids": list(sess.bus_node_ids) if sess is not None else [],
+                                            "tiled_stage_node_ids": [s.node_id for s in sess.stages] if sess is not None else [],
                                         })
 
                                 active_peaks_task = asyncio.create_task(_run_pyramid_peaks())

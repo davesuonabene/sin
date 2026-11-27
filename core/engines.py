@@ -136,6 +136,8 @@ def build_node_object(node_data: Any) -> AudioObject:
         name=node_name,
         original_bpm=original_bpm,
         chain=chain_list,
+        repeat=_get_val(node_data, "repeat", None),
+        warp=_get_val(node_data, "warp", None),
         sample_type=sample_type,
         transpose=_get_val(node_data, "transpose", 0.0),
         cents=_get_val(node_data, "cents", 0.0),
@@ -289,6 +291,12 @@ def build_node_object(node_data: Any) -> AudioObject:
     if node_id is not None:
         obj.node_id = int(node_id)
     obj.node_type = str(node_type or "track")
+    obj.muted = bool(_get_val(node_data, "muted", False))
+    obj.solo = bool(_get_val(node_data, "solo", False))
+    try:
+        obj.pan = max(-1.0, min(1.0, float(_get_val(node_data, "pan", 0.0) or 0.0)))
+    except (TypeError, ValueError):
+        obj.pan = 0.0
     resolved_wrapper_bars = _get_val(node_data, "wrapper_bars", None)
     if resolved_wrapper_bars is None:
         resolved_wrapper_bars = _get_val(node_data, "global_bars", None)

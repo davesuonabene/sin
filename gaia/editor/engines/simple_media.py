@@ -1,9 +1,10 @@
-"""Simple Media Editor engine backend (1-channel audio & video trimming/cutting/export)."""
+"""Simple Media Editor engine backend (audio, multitrack sum, and video trimming/cutting/export)."""
 
 from __future__ import annotations
 
 import copy
 from concurrent.futures import ThreadPoolExecutor
+import math
 from pathlib import Path
 import re
 import shutil
@@ -12,12 +13,14 @@ import threading
 from typing import Any
 import uuid
 
+import numpy as np
 import soundfile as sf
 from sqlalchemy.orm import Session
 
 from ... import (
     collection_importer,
     crud,
+    graph_builder,
     integrity,
     media_editor,
     models,
@@ -67,7 +70,7 @@ def _is_derived_child(project: models.ProjectItem, child: models.Item) -> bool:
         return False
 
 
-def _expand_item_to_single_targets(
+def _expand_item_to_targets(
     item: models.Item,
     *,
     role: str,
@@ -76,10 +79,13 @@ def _expand_item_to_single_targets(
 ) -> list[tuple[str, models.Item]]:
     out: list[tuple[str, models.Item]] = []
     if isinstance(item, models.MultitrackItem):
-        for child in sorted(item.children or [], key=lambda value: value.absolute_path.casefold()):
-            if child.type in allowed_types and child.id not in seen:
-                seen.add(child.id)
-                out.append((role, child))
+        if AUDIO_TYPES & allowed_types:
+            stems = media_editor._multitrack_layers(item)
+            if stems and item.id not in seen:
+                seen.add(item.id)
+                for stem in stems:
+                    seen.add(stem.id)
+                out.append((role, item))
         return out
     if item.type in allowed_types and item.id not in seen:
         seen.add(item.id)
@@ -93,7 +99,7 @@ def _collect_targets(
     *,
     project_kind: str | None = None,
 ) -> list[tuple[str, models.Item]]:
-    """Collect single-channel playable targets (audio stems or video files)."""
+    """Collect playable targets (audio files, summed multitracks, or video files)."""
     seen: set[int] = set()
     targets: list[tuple[str, models.Item]] = []
 
@@ -106,17 +112,17 @@ def _collect_targets(
                 continue
             role = "derived" if reference.relation_kind == "derived" else "source"
             targets.extend(
-                _expand_item_to_single_targets(item, role=role, allowed_types=allowed_types, seen=seen)
+                _expand_item_to_targets(item, role=role, allowed_types=allowed_types, seen=seen)
             )
         for child in sorted(root.children or [], key=lambda value: value.absolute_path.casefold()):
             role = "derived" if _is_derived_child(root, child) else "source"
             targets.extend(
-                _expand_item_to_single_targets(child, role=role, allowed_types=allowed_types, seen=seen)
+                _expand_item_to_targets(child, role=role, allowed_types=allowed_types, seen=seen)
             )
         return targets
 
     if isinstance(root, models.MultitrackItem):
-        return _expand_item_to_single_targets(root, role="source", allowed_types=AUDIO_TYPES, seen=seen)
+        return _expand_item_to_targets(root, role="source", allowed_types=AUDIO_TYPES, seen=seen)
 
     if root.type in SINGLE_MEDIA_TYPES:
         return [("source", root)]
@@ -125,14 +131,113 @@ def _collect_targets(
         allowed_types = VIDEO_TYPES if project_kind == "video" else SINGLE_MEDIA_TYPES
         for child in sorted(root.children or [], key=lambda value: value.absolute_path.casefold()):
             targets.extend(
-                _expand_item_to_single_targets(child, role="source", allowed_types=allowed_types, seen=seen)
+                _expand_item_to_targets(child, role="source", allowed_types=allowed_types, seen=seen)
             )
         return targets
 
     return []
 
 
+def _describe_multitrack_target(item: models.MultitrackItem, role: str = "source") -> dict[str, Any]:
+    path = Path(item.absolute_path).resolve()
+    stems = media_editor._multitrack_layers(item)
+    active_ids = set(media_editor._default_active_layer_ids(stems))
+
+    layers: list[dict[str, Any]] = []
+    common_sr: int | None = None
+    max_channels = 2
+    durations: list[float] = []
+    raw_frames_same_sr: list[int] = []
+    same_sr = True
+
+    for stem in stems:
+        stem_path = Path(stem.absolute_path).resolve()
+        stem_dur = None
+        stem_sr = None
+        stem_ch = None
+        stem_frames = None
+        if stem_path.is_file():
+            try:
+                info = sf.info(str(stem_path))
+                stem_dur = float(info.duration)
+                stem_sr = int(info.samplerate)
+                stem_ch = int(info.channels)
+                stem_frames = int(info.frames)
+            except Exception:
+                pass
+        if stem_sr is not None:
+            if common_sr is None:
+                common_sr = stem_sr
+            elif common_sr != stem_sr:
+                same_sr = False
+        if stem_ch is not None:
+            max_channels = max(max_channels, stem_ch)
+        if stem_dur is not None and stem_dur > 0:
+            durations.append(stem_dur)
+        if stem_frames is not None and stem_frames > 0:
+            raw_frames_same_sr.append(stem_frames)
+
+        is_mixdown = (stem.attributes or {}).get("profile_role") == "mixdown"
+        default_muted = stem.id not in active_ids
+        layers.append({
+            "item_id": stem.id,
+            "label": _title(stem),
+            "filename": stem_path.name,
+            "filepath": str(stem_path),
+            "type": stem.type,
+            "waveform_url": f"/items/{stem.id}/waveform",
+            "stream_url": f"/items/{stem.id}/stream",
+            "duration_seconds": stem_dur,
+            "sample_rate": stem_sr,
+            "channels": stem_ch,
+            "frames": stem_frames,
+            "is_mixdown": is_mixdown,
+            "default_muted": default_muted,
+            "pre_gain_db": 0.0,
+            "volume": 1.0,
+            "muted": default_muted,
+            "solo": False,
+        })
+
+    sr = common_sr or 44100
+    if same_sr and raw_frames_same_sr:
+        common_frames = min(raw_frames_same_sr)
+        common_duration = common_frames / float(sr)
+    elif durations:
+        common_duration = min(durations)
+        common_frames = int(round(common_duration * sr))
+    else:
+        common_frames = None
+        common_duration = None
+
+    realtime_graph = graph_builder._build_graph_from_items(stems, multitrack=item) if stems else None
+
+    return {
+        "id": _target_id(item),
+        "item_id": item.id,
+        "label": _title(item),
+        "filename": path.name,
+        "type": item.type,
+        "media_kind": "audio",
+        "role": role,
+        "storage_mode": getattr(item, "storage_mode", "managed"),
+        "is_multitrack": True,
+        "layer_count": len(layers),
+        "layers": layers,
+        "realtime_graph": realtime_graph,
+        "stream_url": None,
+        "waveform_url": None,
+        "duration_seconds": common_duration,
+        "sample_rate": sr if common_sr is not None else None,
+        "channels": max_channels,
+        "frames": common_frames,
+    }
+
+
 def _describe_target(item: models.Item, role: str = "source") -> dict[str, Any]:
+    if isinstance(item, models.MultitrackItem):
+        return _describe_multitrack_target(item, role=role)
+
     kind = _media_kind(item)
     path = Path(item.absolute_path).resolve()
     base: dict[str, Any] = {
@@ -144,6 +249,9 @@ def _describe_target(item: models.Item, role: str = "source") -> dict[str, Any]:
         "media_kind": kind,
         "role": role,
         "storage_mode": getattr(item, "storage_mode", "managed"),
+        "is_multitrack": False,
+        "layer_count": 0,
+        "layers": [],
         "stream_url": f"/items/{item.id}/stream",
     }
     if kind == "video":
@@ -233,8 +341,14 @@ def _normalize_target_state(
     if media_kind == "audio":
         if total_frames <= 0:
             raise ValueError(f"Target '{descriptor['label']}' has no readable audio frames")
-        start_f = 0 if main_start_frame is None else int(main_start_frame)
-        end_f = total_frames if main_end_frame is None else int(main_end_frame)
+        if main_start_frame is None:
+            start_f = int(round(float(main_start_sec) * sample_rate)) if main_start_sec is not None else 0
+        else:
+            start_f = int(main_start_frame)
+        if main_end_frame is None:
+            end_f = int(round(float(main_end_sec) * sample_rate)) if main_end_sec is not None else total_frames
+        else:
+            end_f = int(main_end_frame)
         if start_f < 0 or end_f <= start_f or end_f > total_frames:
             raise ValueError("Main range is outside the available audio")
         main_start_frame = start_f
@@ -315,9 +429,38 @@ def _normalize_target_state(
     if selected_cut_id is not None and selected_cut_id not in seen_cut_ids:
         selected_cut_id = None
 
-    return {
+    normalized_layers: list[dict[str, Any]] = []
+    if descriptor.get("is_multitrack"):
+        incoming_layers_map: dict[int, dict[str, Any]] = {}
+        raw_layers = raw_state.get("layers")
+        if isinstance(raw_layers, list):
+            for layer_entry in raw_layers:
+                if isinstance(layer_entry, dict) and layer_entry.get("item_id") is not None:
+                    incoming_layers_map[int(layer_entry["item_id"])] = layer_entry
+        for desc_layer in descriptor.get("layers") or []:
+            lid = int(desc_layer["item_id"])
+            inc = incoming_layers_map.get(lid) or {}
+            l_pre_gain = float(inc.get("pre_gain_db", desc_layer.get("pre_gain_db", 0.0)) or 0.0)
+            if not _MIN_GAIN_DB <= l_pre_gain <= _MAX_PRE_GAIN_DB:
+                raise ValueError("Track gain must be between -60 and +48 dB")
+            l_vol_raw = inc.get("volume", desc_layer.get("volume", 1.0))
+            l_vol = float(1.0 if l_vol_raw is None else l_vol_raw)
+            if not 0.0 <= l_vol <= 1.0:
+                raise ValueError("Track volume must be between 0 and 1")
+            l_muted = bool(inc["muted"]) if "muted" in inc else bool(desc_layer.get("default_muted", False))
+            l_solo = bool(inc.get("solo", False))
+            normalized_layers.append({
+                "item_id": lid,
+                "pre_gain_db": l_pre_gain,
+                "volume": l_vol,
+                "muted": l_muted,
+                "solo": l_solo,
+            })
+
+    result = {
         "item_id": descriptor["item_id"],
         "target_id": target_id,
+        "is_multitrack": bool(descriptor.get("is_multitrack")),
         "main_start_frame": main_start_frame,
         "main_end_frame": main_end_frame,
         "main_start_sec": main_start_sec,
@@ -334,6 +477,26 @@ def _normalize_target_state(
             "selected_cut_id": selected_cut_id,
         },
     }
+    if descriptor.get("is_multitrack"):
+        result["layers"] = normalized_layers
+    return result
+
+
+def _resolve_descriptor_target_id(
+    target_id: str | None,
+    by_id: dict[str, dict[str, Any]],
+) -> str | None:
+    if not target_id:
+        return None
+    parsed = _parse_target_item_id(target_id)
+    candidate_tid = f"item:{parsed}" if parsed is not None else str(target_id)
+    if candidate_tid in by_id:
+        return candidate_tid
+    if parsed is not None:
+        for tid, desc in by_id.items():
+            if desc.get("is_multitrack") and any(int(layer["item_id"]) == parsed for layer in (desc.get("layers") or [])):
+                return tid
+    return None
 
 
 class SimpleMediaEditorEngine(EditorEngine):
@@ -382,11 +545,10 @@ class SimpleMediaEditorEngine(EditorEngine):
 
         requested_tid = None
         if target_id:
-            parsed = _parse_target_item_id(target_id)
-            candidate_tid = f"item:{parsed}" if parsed is not None else str(target_id)
-            if candidate_tid not in by_id:
+            resolved_tid = _resolve_descriptor_target_id(target_id, by_id)
+            if not resolved_tid:
                 raise ValueError("Editor target is not part of this project")
-            requested_tid = candidate_tid
+            requested_tid = resolved_tid
         elif data.get("active_target_id") in by_id:
             requested_tid = str(data["active_target_id"])
         else:
@@ -400,6 +562,7 @@ class SimpleMediaEditorEngine(EditorEngine):
             "targets": descriptors,
             "current_target": current,
             "is_empty": False,
+            "is_multitrack": bool(current.get("is_multitrack")),
             "capabilities": {
                 "cut": True,
                 "volume": current["media_kind"] == "audio" or bool(current.get("has_audio")),
@@ -424,11 +587,10 @@ class SimpleMediaEditorEngine(EditorEngine):
 
         requested_tid = None
         if target_id:
-            parsed = _parse_target_item_id(target_id)
-            candidate_tid = f"item:{parsed}" if parsed is not None else str(target_id)
-            if candidate_tid not in by_id:
+            resolved_tid = _resolve_descriptor_target_id(target_id, by_id)
+            if not resolved_tid:
                 raise ValueError("Editor target is not part of this item")
-            requested_tid = candidate_tid
+            requested_tid = resolved_tid
         else:
             requested_tid = descriptors[0]["id"]
 
@@ -441,6 +603,7 @@ class SimpleMediaEditorEngine(EditorEngine):
             "targets": descriptors,
             "current_target": current,
             "is_empty": False,
+            "is_multitrack": bool(current.get("is_multitrack")),
             "capabilities": {
                 "cut": True,
                 "volume": current["media_kind"] == "audio" or bool(current.get("has_audio")),
@@ -468,8 +631,8 @@ class SimpleMediaEditorEngine(EditorEngine):
         incoming_targets = incoming_data.get("targets")
         if isinstance(incoming_targets, dict):
             for tid, raw_state in incoming_targets.items():
-                norm_tid = f"item:{_parse_target_item_id(str(tid))}" if _parse_target_item_id(str(tid)) is not None else str(tid)
-                if norm_tid not in descriptors:
+                norm_tid = _resolve_descriptor_target_id(str(tid), descriptors)
+                if not norm_tid:
                     raise ValueError(f"Target '{tid}' is not part of this project")
                 merged_targets[norm_tid] = _normalize_target_state(norm_tid, raw_state, descriptors[norm_tid])
 
@@ -478,19 +641,17 @@ class SimpleMediaEditorEngine(EditorEngine):
             incoming_data.get("target_id") is not None or incoming_data.get("item_id") is not None
         ):
             raw_tid = incoming_data.get("target_id") or f"item:{incoming_data.get('item_id')}"
-            parsed_id = _parse_target_item_id(str(raw_tid))
-            norm_tid = f"item:{parsed_id}" if parsed_id is not None else str(raw_tid)
-            if norm_tid not in descriptors:
+            norm_tid = _resolve_descriptor_target_id(str(raw_tid), descriptors)
+            if not norm_tid:
                 raise ValueError(f"Target '{raw_tid}' is not part of this project")
             merged_targets[norm_tid] = _normalize_target_state(norm_tid, incoming_data, descriptors[norm_tid])
 
         active_target_id = incoming_data.get("active_target_id", existing_data.get("active_target_id"))
         if active_target_id is not None:
-            parsed_active = _parse_target_item_id(str(active_target_id))
-            norm_active = f"item:{parsed_active}" if parsed_active is not None else str(active_target_id)
-            if descriptors and norm_active not in descriptors:
+            norm_active = _resolve_descriptor_target_id(str(active_target_id), descriptors)
+            if descriptors and not norm_active:
                 raise ValueError("Active target is not part of this project")
-            active_target_id = norm_active
+            active_target_id = norm_active or str(active_target_id)
 
         return {
             "active_target_id": active_target_id,
@@ -504,18 +665,27 @@ def _resolve_export_source(db: Session, request: schemas.MediaExportRequest) -> 
         raise ValueError("Source item not found")
     if isinstance(source, models.MultitrackItem):
         parsed = _parse_target_item_id(request.target_id)
-        if parsed is None:
-            raise ValueError("Choose one audio stem to export")
-        stem = crud.get_item(db, parsed)
-        if not stem or stem.parent_id != source.id or stem.type not in AUDIO_TYPES:
-            raise ValueError("Selected stem is not part of this multitrack")
-        source = stem
+        if parsed is not None and parsed != source.id:
+            stem = crud.get_item(db, parsed)
+            if not stem or stem.parent_id != source.id or stem.type not in AUDIO_TYPES:
+                raise ValueError("Selected stem is not part of this multitrack")
+            source = stem
+        else:
+            descriptor = _describe_target(source)
+            if not descriptor.get("layers") or not descriptor.get("frames"):
+                raise ValueError(f"Multitrack '{_title(source)}' has no playable audio stems on disk")
+            return source, descriptor
     elif isinstance(source, models.FolderItem) and request.target_id:
         parsed = _parse_target_item_id(request.target_id)
         if parsed is not None:
             candidate = crud.get_item(db, parsed)
-            if candidate and candidate.type in SINGLE_MEDIA_TYPES:
+            if candidate and (candidate.type in SINGLE_MEDIA_TYPES or isinstance(candidate, models.MultitrackItem)):
                 source = candidate
+                if isinstance(source, models.MultitrackItem):
+                    descriptor = _describe_target(source)
+                    if not descriptor.get("layers") or not descriptor.get("frames"):
+                        raise ValueError(f"Multitrack '{_title(source)}' has no playable audio stems on disk")
+                    return source, descriptor
     if source.type not in SINGLE_MEDIA_TYPES:
         raise ValueError("Choose one playable audio or video file to export")
     source_path = Path(source.absolute_path).resolve()
@@ -679,6 +849,8 @@ def _plan_export_outputs(
         raise ValueError("Normalization target must be between -60 and 0 dB")
     if request.destination.bitrate_kbps < 32 or request.destination.bitrate_kbps > 512:
         raise ValueError("MP3 bitrate must be between 32 and 512 kbps")
+    if descriptor.get("is_multitrack"):
+        _resolve_multitrack_export_layers(descriptor, request)
 
     segments = _export_segments_for_request(request, descriptor)
     output_dir, vault, parent_id, project = _resolve_export_destination_dir(db, source, request.destination)
@@ -826,6 +998,99 @@ def _render_video_segment(
         tmp_path.unlink(missing_ok=True)
 
 
+def _render_resampled_multitrack_wav(
+    layers: list[dict[str, Any]],
+    segment: dict[str, Any],
+    output: Path,
+    sample_rate: int,
+    global_gain_db: float,
+    normalize: bool,
+    target_peak_db: float,
+) -> None:
+    """Fallback summed render when stems have mismatched sample rates."""
+    start_sec = float(segment["start_frame"]) / float(sample_rate)
+    end_sec = float(segment["end_frame"]) / float(sample_rate)
+    frame_count = max(1, int(segment["end_frame"]) - int(segment["start_frame"]))
+    mix = np.zeros((frame_count, 2), dtype=np.float32)
+    global_gain = 10.0 ** (global_gain_db / 20.0)
+
+    for layer in layers:
+        if layer["muted"]:
+            continue
+        with sf.SoundFile(str(layer["path"]), "r") as reader:
+            src_sr = int(reader.samplerate)
+            src_start = max(0, min(len(reader), int(round(start_sec * src_sr))))
+            src_end = max(src_start, min(len(reader), int(round(end_sec * src_sr))))
+            reader.seek(src_start)
+            data = reader.read(max(0, src_end - src_start), dtype="float32", always_2d=True)
+        stereo = media_editor._to_stereo(data)
+        if len(stereo) == 0:
+            continue
+        if len(stereo) != frame_count:
+            x_old = np.linspace(0.0, 1.0, num=len(stereo), dtype=np.float64)
+            x_new = np.linspace(0.0, 1.0, num=frame_count, dtype=np.float64)
+            stereo = np.column_stack((
+                np.interp(x_new, x_old, stereo[:, 0]),
+                np.interp(x_new, x_old, stereo[:, 1]),
+            )).astype(np.float32)
+        gain = float(layer.get("pre_gain_linear", 1.0)) * float(layer.get("volume", 1.0))
+        mix += stereo * gain
+
+    mix *= global_gain
+    peak = float(np.max(np.abs(mix))) if mix.size else 0.0
+    if normalize and peak > 0.0:
+        mix *= (10.0 ** (target_peak_db / 20.0)) / peak
+    sf.write(str(output), np.clip(mix, -1.0, 1.0), sample_rate, subtype="FLOAT")
+
+
+def _resolve_multitrack_export_layers(
+    descriptor: dict[str, Any],
+    request: schemas.MediaExportRequest,
+) -> list[dict[str, Any]]:
+    req_by_id = {int(layer.item_id): layer for layer in (request.layers or [])}
+    merged: list[dict[str, Any]] = []
+    for desc_layer in descriptor.get("layers") or []:
+        lid = int(desc_layer["item_id"])
+        stem_path = Path(str(desc_layer.get("filepath") or "")).resolve()
+        if not stem_path.is_file():
+            continue
+        req_layer = req_by_id.get(lid)
+        pre_gain_db = float(req_layer.pre_gain_db if req_layer is not None else desc_layer.get("pre_gain_db", 0.0))
+        if not _MIN_GAIN_DB <= pre_gain_db <= _MAX_PRE_GAIN_DB:
+            raise ValueError("Track gain must be between -60 and +48 dB")
+        if req_layer is not None and req_layer.volume is not None:
+            volume = float(req_layer.volume)
+        else:
+            volume = float(desc_layer.get("volume", 1.0))
+        if not 0.0 <= volume <= 1.0:
+            raise ValueError("Track volume must be between 0 and 1")
+        muted = bool(req_layer.muted) if req_layer is not None else bool(desc_layer.get("default_muted", False))
+        solo = bool(getattr(req_layer, "solo", False)) if req_layer is not None else False
+        merged.append({
+            "item_id": lid,
+            "path": stem_path,
+            "pre_gain_db": pre_gain_db,
+            "pre_gain_linear": 10.0 ** (pre_gain_db / 20.0),
+            "volume": volume,
+            "gain_db": 0.0,
+            "muted": muted,
+            "solo": solo,
+            "sample_rate": int(desc_layer.get("sample_rate") or descriptor.get("sample_rate") or 44100),
+            "channels": int(desc_layer.get("channels") or 2),
+            "frames": int(desc_layer.get("frames") or 0),
+        })
+
+    if not merged:
+        raise ValueError("Multitrack has no playable audio files on disk")
+    any_solo = any(layer["solo"] for layer in merged)
+    if any_solo:
+        for layer in merged:
+            layer["muted"] = not layer["solo"]
+    if all(layer["muted"] for layer in merged):
+        raise ValueError("Unmute or solo at least one track before exporting")
+    return merged
+
+
 def _render_single_channel_output(
     source: models.Item,
     descriptor: dict[str, Any],
@@ -846,31 +1111,59 @@ def _render_single_channel_output(
         )
 
     sample_rate = int(descriptor.get("sample_rate") or 44100)
-    layer = {
-        "item": source,
-        "path": source_path,
-        "pre_gain_db": float(request.pre_gain_db),
-        "pre_gain_linear": 10.0 ** (float(request.pre_gain_db) / 20.0),
-        "volume": float(request.volume),
-        "gain_db": 0.0,
-        "muted": False,
-        "channels": int(descriptor.get("channels") or 2),
-        "frames": int(descriptor.get("frames") or 0),
-    }
     output_format = str(request.output_format).lower()
     final_path.parent.mkdir(parents=True, exist_ok=True)
     wav_path = final_path.parent / f".{final_path.stem}.{uuid.uuid4().hex}.wav"
     converted_path = final_path.parent / f".{final_path.stem}.{uuid.uuid4().hex}.{output_format}"
     try:
-        media_editor._render_mix_wav(
-            [layer],
-            segment,
-            wav_path,
-            sample_rate,
-            0.0,
-            bool(request.normalize),
-            float(request.target_peak_db),
-        )
+        if descriptor.get("is_multitrack"):
+            resolved_layers = _resolve_multitrack_export_layers(descriptor, request)
+            global_vol = max(0.0, min(1.0, float(request.volume)))
+            global_gain_db = float(request.pre_gain_db) + (20.0 * math.log10(global_vol) if global_vol > 1e-6 else -120.0)
+            active_layers = [l for l in resolved_layers if not l["muted"]]
+            same_sr = all(l["sample_rate"] == sample_rate for l in active_layers)
+            all_long_enough = all(l["frames"] >= int(segment["end_frame"]) for l in active_layers)
+            if same_sr and all_long_enough:
+                media_editor._render_mix_wav(
+                    resolved_layers,
+                    segment,
+                    wav_path,
+                    sample_rate,
+                    global_gain_db,
+                    bool(request.normalize),
+                    float(request.target_peak_db),
+                )
+            else:
+                _render_resampled_multitrack_wav(
+                    resolved_layers,
+                    segment,
+                    wav_path,
+                    sample_rate,
+                    global_gain_db,
+                    bool(request.normalize),
+                    float(request.target_peak_db),
+                )
+        else:
+            layer = {
+                "item": source,
+                "path": source_path,
+                "pre_gain_db": float(request.pre_gain_db),
+                "pre_gain_linear": 10.0 ** (float(request.pre_gain_db) / 20.0),
+                "volume": float(request.volume),
+                "gain_db": 0.0,
+                "muted": False,
+                "channels": int(descriptor.get("channels") or 2),
+                "frames": int(descriptor.get("frames") or 0),
+            }
+            media_editor._render_mix_wav(
+                [layer],
+                segment,
+                wav_path,
+                sample_rate,
+                0.0,
+                bool(request.normalize),
+                float(request.target_peak_db),
+            )
         if output_format == "mp3":
             media_editor._convert_mp3(wav_path, converted_path, int(request.destination.bitrate_kbps))
             converted_path.replace(final_path)

@@ -8,7 +8,9 @@ const HORIZONTAL_LOCK_THRESHOLD = 6;
 const PIXELS_PER_STEP = 10;
 
 export interface ParameterWheelAdapter {
-    isInteger?: boolean;
+    isInteger?: boolean | (() => boolean);
+    getSteps?: () => readonly number[];
+    getDefaultStep?: () => number;
     getValue?: () => number;
     setValue?: (nextValue: number) => void;
     formatValue?: (value: number) => string;
@@ -58,7 +60,9 @@ function isControlEditable(control: HTMLElement | null): control is HTMLElement 
 
 function isIntegerControl(control: HTMLElement): boolean {
     const adapter = controlAdapters.get(control);
-    if (adapter?.isInteger !== undefined) return adapter.isInteger;
+    if (adapter?.isInteger !== undefined) {
+        return typeof adapter.isInteger === 'function' ? adapter.isInteger() : adapter.isInteger;
+    }
     return control.dataset.parameterWheelInt === 'true';
 }
 
@@ -151,10 +155,15 @@ function openLadder(control: HTMLElement, x: number, y: number): void {
     if (!isControlEditable(control) || ladderIsOpen) return;
 
     activeControl = control;
+    const adapter = controlAdapters.get(control);
     const isInt = isIntegerControl(control);
-    activeSteps = isInt ? INT_LADDER_STEPS : FLOAT_LADDER_STEPS;
-    const defaultStep = isInt ? DEFAULT_INT_STEP : DEFAULT_FLOAT_STEP;
-    initialRungIndex = Math.max(0, activeSteps.indexOf(defaultStep as never));
+    const customSteps = adapter?.getSteps?.();
+    activeSteps = (customSteps && customSteps.length > 0)
+        ? customSteps
+        : (isInt ? INT_LADDER_STEPS : FLOAT_LADDER_STEPS);
+    const defaultStep = adapter?.getDefaultStep?.() ?? (isInt ? DEFAULT_INT_STEP : DEFAULT_FLOAT_STEP);
+    const exactIdx = activeSteps.indexOf(defaultStep as never);
+    initialRungIndex = exactIdx >= 0 ? exactIdx : Math.min(2, Math.max(0, activeSteps.length - 1));
     activeRungIndex = initialRungIndex;
     isScrubbing = false;
 
@@ -374,7 +383,7 @@ export function registerParameterWheelControl(
 ): void {
     control.dataset.parameterWheelControl = 'true';
     if (adapter) {
-        if (adapter.isInteger) {
+        if (adapter.isInteger === true) {
             control.dataset.parameterWheelInt = 'true';
         }
         controlAdapters.set(control, adapter);

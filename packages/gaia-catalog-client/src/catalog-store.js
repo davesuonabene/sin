@@ -11,7 +11,18 @@
 const IDB_NAME = 'gaia_catalog_cache_v1';
 const IDB_STORE = 'snapshots';
 const SCHEMA_VERSION = 'gaia-catalog-v1';
-const CONTAINER_TYPES = new Set(['folder', 'collection', 'project']);
+const CACHE_FORMAT_VERSION = 2;
+const CONTAINER_TYPES = new Set(['folder', 'collection', 'multitrack', 'zoom_h4', 'project']);
+
+function effectiveCatalogType(item) {
+    if (!item) return 'item';
+    const raw = item.type || 'item';
+    if ((raw === 'folder' || raw === 'collection') && item.attributes?.profile_id === 'sample_pack') {
+        return 'sample_pack';
+    }
+    if (raw === 'collection') return 'folder';
+    return raw;
+}
 
 function openCacheDb() {
     if (typeof indexedDB === 'undefined') return Promise.resolve(null);
@@ -135,6 +146,8 @@ function unpackRow(row, tagsMap) {
     if (extra?.is_folder) attributes.is_folder = true;
     if (extra?.folder) attributes.folder = extra.folder;
     if (extra?.profile_id) attributes.profile_id = extra.profile_id;
+    if (extra?.profile_label) attributes.profile_label = extra.profile_label;
+    if (extra?.profile_bundle_id) attributes.profile_bundle_id = extra.profile_bundle_id;
     if (audioMeta) attributes.audio_metadata = audioMeta;
     if (bpm !== null || key !== null || isLoop !== null || durationSeconds !== null) {
         attributes.analysis = {
@@ -198,6 +211,8 @@ function buildSearchBlob(item) {
         item.filename,
         item.absolute_path,
         item.type,
+        item.attributes?.profile_label,
+        item.attributes?.profile_id,
         item.key,
         item.bpm != null ? String(item.bpm) : '',
         item.author,
@@ -255,7 +270,7 @@ export class GaiaCatalogStore {
     async boot({ connectEvents = true } = {}) {
         // 1. Instant warm hydrate from IndexedDB (< 20ms)
         const cached = await idbGet(this.cacheKey);
-        if (cached && cached.schema === SCHEMA_VERSION && Array.isArray(cached.rows)) {
+        if (cached && cached.schema === SCHEMA_VERSION && cached.cacheFormat === CACHE_FORMAT_VERSION && Array.isArray(cached.rows)) {
             this._loadSnapshotData(cached, { persist: false });
             this._emit({ source: 'idb', rev: this.rev, changedProjectIds: [] });
         }
@@ -468,7 +483,12 @@ export class GaiaCatalogStore {
         const id = Number(itemId);
         const item = this.itemsById.get(id);
         if (!item || !updates) return;
+        const prevType = item.type;
+        const prevProfile = item.attributes?.profile_id || null;
         Object.assign(item, updates);
+        if (updates.attributes && typeof updates.attributes === 'object') {
+            item.attributes = { ...updates.attributes };
+        }
         if (updates.title) item.name = updates.title;
         if (updates.favourite !== undefined) {
             item.favourite = Boolean(updates.favourite);
@@ -478,10 +498,18 @@ export class GaiaCatalogStore {
         if (Array.isArray(updates.tags)) {
             item.tags = updates.tags.map((t) => (typeof t === 'string' ? t : t?.name)).filter(Boolean);
         }
+        if (updates.type !== undefined) {
+            item.streamable = item.type === 'audio' || item.type === 'track' || item.type === 'sample' || item.type === 'video';
+            if (item.type !== 'multitrack' && item.type !== 'zoom_h4') {
+                item.stems = undefined;
+                item.is_valid_length = undefined;
+                item.length_variance = undefined;
+            }
+        }
         item._search = buildSearchBlob(item);
-        // Refresh ancestor facets cheaply if tags/type changed
-        if (updates.tags !== undefined || updates.type !== undefined) {
-            this._computeDescendantFacets();
+        const nextProfile = item.attributes?.profile_id || null;
+        if (updates.tags !== undefined || item.type !== prevType || nextProfile !== prevProfile) {
+            this._rebuildIndexes();
         }
     }
 
@@ -552,15 +580,19 @@ export class GaiaCatalogStore {
             const kids = this.childrenByParent.get(folderId) || [];
             for (let i = 0; i < kids.length; i++) {
                 const child = kids[i];
-                const isSubFolder = child.type === 'folder' || child.type === 'collection' || Boolean(child.attributes?.is_folder);
+                const isSubFolder = CONTAINER_TYPES.has(child.type) || Boolean(child.attributes?.is_folder);
+                const childEffectiveType = effectiveCatalogType(child);
                 if (isSubFolder) {
+                    if (childEffectiveType && childEffectiveType !== 'folder' && childEffectiveType !== 'collection') {
+                        types.add(childEffectiveType);
+                    }
                     const sub = visit(child.id);
                     for (const t of sub.types) types.add(t);
                     for (const [k, v] of sub.tags) if (!tags.has(k)) tags.set(k, v);
                     leafCount += sub.leafCount;
                 } else {
                     leafCount += 1;
-                    if (child.type) types.add(child.type);
+                    if (childEffectiveType) types.add(childEffectiveType);
                 }
                 if (child.tags?.length) {
                     for (let j = 0; j < child.tags.length; j++) {
@@ -596,6 +628,7 @@ export class GaiaCatalogStore {
             this._persistTimer = null;
             const snapshot = {
                 schema: SCHEMA_VERSION,
+                cacheFormat: CACHE_FORMAT_VERSION,
                 rev: this.rev,
                 columns: this.columns,
                 tags: this.tagsMap,
@@ -657,7 +690,7 @@ export class GaiaCatalogStore {
         let idx = 0;
         while (stack.length) {
             const child = stack.pop();
-            const isSub = child.type === 'folder' || child.type === 'collection' || Boolean(child.attributes?.is_folder);
+            const isSub = CONTAINER_TYPES.has(child.type) || Boolean(child.attributes?.is_folder);
             if (isSub) {
                 const grandKids = this.childrenByParent.get(child.id) || [];
                 // Push folder itself so empty folders & real FolderItem rows stay addressable
@@ -709,7 +742,14 @@ export class GaiaCatalogStore {
 
         const matchesSelf = (item) => {
             if (onlyFavourites && !item.favourite) return false;
-            if (hasTypes && !selectedTypes.has(item.type)) return false;
+            if (hasTypes) {
+                const effType = effectiveCatalogType(item);
+                if (effType === 'sample_pack') {
+                    if (!selectedTypes.has('sample_pack')) return false;
+                } else if (!selectedTypes.has(effType) && !selectedTypes.has(item.type)) {
+                    return false;
+                }
+            }
             if (normTags) {
                 const itemTags = item.tags || [];
                 if (!itemTags.length) return false;

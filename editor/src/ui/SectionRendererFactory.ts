@@ -127,8 +127,11 @@ export class SectionRendererFactory {
                     }
                     if ((key === 'crop_start' || key === 'crop_end') && typeof windowContext?.updateCropFromFields === 'function') {
                         const cs = Math.max(0, Math.min(1, Number(node.properties.crop_start) || 0));
-                        const ce = Math.max(0, Math.min(1, Number(node.properties.crop_end) ?? 1));
+                        const ce = Math.max(cs + 1e-6, Math.min(1, node.properties.crop_end != null ? Number(node.properties.crop_end) : 1));
                         windowContext.updateCropFromFields(cs, ce);
+                    }
+                    if (key === 'pool_query' && typeof windowContext?.syncWaveformAsset === 'function') {
+                        windowContext.syncWaveformAsset();
                     }
                     if (field.type === 'filepath' && windowContext.currentWaveformVisualizer) {
                         await windowContext.renderTabContent();
@@ -159,6 +162,8 @@ export class SectionRendererFactory {
         inputs.forEach(input => {
             if (!disabled && hasActiveGlobalToggle && input instanceof HTMLInputElement && input.classList.contains('td-param-input')) {
                 input.disabled = true;
+            } else if (!disabled && input instanceof HTMLInputElement && input.classList.contains('td-dynamic-input')) {
+                input.disabled = input.dataset.dynamicActive !== 'true';
             } else {
                 input.disabled = disabled;
             }
@@ -168,11 +173,17 @@ export class SectionRendererFactory {
     public static updateNodeFieldStates(container: HTMLElement, node: BaseNode) {
         if (!container || !node) return;
         if (node.nodeType === 'sample' || node.type === 'Audio/Sample') {
-            const isOneShot = node.properties?.sample_type === 'one_shot';
-            const origBpmRow = container.querySelector<HTMLElement>('[data-field-key="original_bpm"]');
+            const sampleAny = node as any;
+            const isWarpEnabled = typeof sampleAny.isWarpEnabled === 'function'
+                ? Boolean(sampleAny.isWarpEnabled())
+                : (node.properties?.warp !== undefined
+                    ? Boolean(node.properties.warp)
+                    : (node.properties?.sample_type !== 'one_shot' && node.properties?.stretch_mode !== 'pitch_shift'));
+
             const targetBpmRow = container.querySelector<HTMLElement>('[data-field-key="target_bpm"]');
-            this.setRowDisabled(origBpmRow, isOneShot);
-            this.setRowDisabled(targetBpmRow, isOneShot);
+            const stretchAlgoRow = container.querySelector<HTMLElement>('[data-field-key="stretch_algorithm"]');
+            this.setRowDisabled(targetBpmRow, !isWarpEnabled);
+            this.setRowDisabled(stretchAlgoRow, !isWarpEnabled);
 
             const isKeyMatchOff = !node.properties?.key_match_mode || node.properties?.key_match_mode === 'off';
             const keyAlgoRow = container.querySelector<HTMLElement>('[data-field-key="key_match_algorithm"]');

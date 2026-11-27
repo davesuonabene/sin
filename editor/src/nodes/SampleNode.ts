@@ -10,7 +10,8 @@ import {
     type WaveformSignal,
     type VisualizationTypeId
 } from '../../../packages/iride/src/index.ts';
-import { fetchAudioBuffer, getCachedAudioBufferSync } from '../audioBufferCache.ts';
+import { fetchAudioBuffer, fetchAudioPeaks, getCachedAudioBufferSync } from '../audioBufferCache.ts';
+import { AUDIO_POSITION_UNITS } from '../fields/UnitConverter.ts';
 import { getNodeGainMultiplier, applyGainToBuffer } from '../audioCompositor.ts';
 import { getUserFxStages } from '../dsp/processorRegistry.ts';
 import { globalAudioScheduler } from '../audioScheduler.ts';
@@ -44,6 +45,8 @@ export class SampleNode extends BaseNode {
         'library_item_id',
         'is_external',
         'duration_seconds',
+        'repeat',
+        'warp',
         'sample_type',
         'start_beat',
         'original_bpm',
@@ -58,17 +61,82 @@ export class SampleNode extends BaseNode {
         'stretch_factor',
         'crop_start',
         'crop_end',
+        'field_units',
     ] as const;
 
     public audioBuffer: AudioBuffer | null = null;
     public slotBuffers: Map<number, AudioBuffer> = new Map();
     private slotLoadedPaths: Map<number, string> = new Map();
+    public audioPeaks: Float32Array | null = null;
+    public slotPeaks: Map<number, Float32Array> = new Map();
+    private slotPeakPaths: Map<number, string> = new Map();
+    private slotPeakDurations: Map<number, number> = new Map();
     public activeSlotIndex = 0;
     public selectedSlotIndices: number[] = [0];
     public loadedFilepath = '';
+    public loadedPeaksFilepath = '';
     public isLoadingAudio = false;
+    public isLoadingPeaks = false;
     private loadingAudioPromise: Promise<AudioBuffer | null> | null = null;
+    private loadingPeaksPromise: Promise<Float32Array | null> | null = null;
     private failedAudioFilepath: string | null = null;
+    private failedPeaksFilepath: string | null = null;
+
+    public getActivePeakDuration(): number {
+        return this.slotPeakDurations.get(this.activeSlotIndex) || 0;
+    }
+
+    public static inferLoadDefaults(item: {
+        is_loop?: boolean | null;
+        itemType?: string;
+        sample_type?: string;
+        tags?: string[];
+        bpm?: number | null;
+        duration_seconds?: number | null;
+        filepath?: string;
+    }): { repeat: boolean; warp: boolean; sample_type: 'loop' | 'one_shot'; stretch_mode: 'time_stretch' | 'pitch_shift' } {
+        const tags = Array.isArray(item.tags) ? item.tags : [];
+        const isExplicitLoop = item.is_loop === true
+            || item.itemType === 'loop'
+            || item.sample_type === 'loop'
+            || tags.includes('Loop');
+        if (isExplicitLoop) {
+            return { repeat: true, warp: true, sample_type: 'loop', stretch_mode: 'time_stretch' };
+        }
+        const isExplicitOneShot = item.is_loop === false
+            || item.itemType === 'one_shot'
+            || item.sample_type === 'one_shot'
+            || tags.includes('One shot');
+        const durSec = Number(item.duration_seconds ?? 0);
+        if (isExplicitOneShot || (Number.isFinite(durSec) && durSec > 30)) {
+            return { repeat: false, warp: false, sample_type: 'one_shot', stretch_mode: 'pitch_shift' };
+        }
+        const rawBpm = Number(item.bpm);
+        const hasBpm = (Number.isFinite(rawBpm) && rawBpm >= 20 && rawBpm <= 400)
+            || Boolean(item.filepath && parseBpmFromFilename(item.filepath) != null);
+        if (hasBpm && (!Number.isFinite(durSec) || durSec <= 30)) {
+            return { repeat: false, warp: true, sample_type: 'one_shot', stretch_mode: 'time_stretch' };
+        }
+        return { repeat: false, warp: false, sample_type: 'one_shot', stretch_mode: 'pitch_shift' };
+    }
+
+    public isRepeatEnabled(slot?: NodeSlot): boolean {
+        if (slot && slot.repeat !== undefined) return Boolean(slot.repeat);
+        if (this.properties && this.properties.repeat !== undefined) return Boolean(this.properties.repeat);
+        const st = String(slot?.sample_type ?? this.properties?.sample_type ?? 'one_shot').toLowerCase();
+        return st === 'loop';
+    }
+
+    public isWarpEnabled(slot?: NodeSlot): boolean {
+        if (slot && slot.warp !== undefined) return Boolean(slot.warp);
+        if (this.properties && this.properties.warp !== undefined) return Boolean(this.properties.warp);
+        const mode = String(slot?.stretch_mode ?? this.properties?.stretch_mode ?? '').toLowerCase();
+        if (mode === 'pitch_shift' || mode === 'repitch' || mode === 'varispeed' || mode === 'off') {
+            return false;
+        }
+        const st = String(slot?.sample_type ?? this.properties?.sample_type ?? 'one_shot').toLowerCase();
+        return st !== 'one_shot' && st !== 'oneshot';
+    }
 
     public getSelectedSlotIndices(): number[] {
         const slots = this.getSlots();
@@ -87,6 +155,12 @@ export class SampleNode extends BaseNode {
         const cropEnd = Number(this.properties?.crop_end ?? base?.crop_end ?? base?.sample_end ?? 1);
         const transpose = Number(this.properties?.transpose ?? base?.transpose ?? base?.pitch_shift ?? 0);
         const stretchFactor = Number(this.properties?.stretch_factor ?? base?.stretch_factor ?? base?.time_stretch ?? 1);
+        const repeat = this.properties?.repeat !== undefined
+            ? Boolean(this.properties.repeat)
+            : (base?.repeat !== undefined ? Boolean(base.repeat) : (String(this.properties?.sample_type ?? base?.sample_type ?? 'one_shot').toLowerCase() === 'loop'));
+        const warp = this.properties?.warp !== undefined
+            ? Boolean(this.properties.warp)
+            : (base?.warp !== undefined ? Boolean(base.warp) : this.isWarpEnabled(base));
         return {
             ...(base || {}),
             slot: slotIndex,
@@ -98,9 +172,11 @@ export class SampleNode extends BaseNode {
                 ? Boolean(this.properties.is_external)
                 : Boolean(base?.is_external || String(this.properties?.library_item_id ?? base?.library_item_id ?? '').startsWith('ext:')),
             duration_seconds: this.properties?.duration_seconds ?? base?.duration_seconds,
-            sample_type: this.properties?.sample_type ?? base?.sample_type ?? 'loop',
+            repeat,
+            warp,
+            sample_type: repeat ? 'loop' : 'one_shot',
             start_beat: Number(this.properties?.start_beat ?? base?.start_beat ?? 0),
-            original_bpm: this.properties?.original_bpm ?? base?.original_bpm ?? 120,
+            original_bpm: this.properties?.original_bpm ?? base?.original_bpm ?? null,
             target_bpm: this.properties?.target_bpm ?? base?.target_bpm ?? 'global',
             key: String(this.properties?.key ?? base?.key ?? ''),
             key_match_mode: this.properties?.key_match_mode ?? base?.key_match_mode ?? 'off',
@@ -108,7 +184,7 @@ export class SampleNode extends BaseNode {
             transpose,
             pitch_shift: transpose,
             cents: Number(this.properties?.cents ?? base?.cents ?? 0),
-            stretch_mode: this.properties?.stretch_mode ?? base?.stretch_mode ?? 'time_stretch',
+            stretch_mode: warp ? 'time_stretch' : 'pitch_shift',
             stretch_algorithm: this.properties?.stretch_algorithm ?? base?.stretch_algorithm ?? 'rubberband',
             stretch_factor: stretchFactor,
             time_stretch: stretchFactor,
@@ -116,14 +192,32 @@ export class SampleNode extends BaseNode {
             crop_end: cropEnd,
             sample_start: cropStart,
             sample_end: cropEnd,
+            field_units: this.properties?.field_units && typeof this.properties.field_units === 'object'
+                ? { ...this.properties.field_units }
+                : (base?.field_units ? { ...base.field_units } : {}),
             field_operators: this.properties?.field_operators && typeof this.properties.field_operators === 'object'
                 ? { ...this.properties.field_operators }
                 : (base?.field_operators ? { ...base.field_operators } : {}),
+            field_static_values: this.properties?.field_static_values && typeof this.properties.field_static_values === 'object'
+                ? { ...this.properties.field_static_values }
+                : (base?.field_static_values ? { ...base.field_static_values } : {}),
+            field_dynamic_expressions: this.properties?.field_dynamic_expressions && typeof this.properties.field_dynamic_expressions === 'object'
+                ? { ...this.properties.field_dynamic_expressions }
+                : (base?.field_dynamic_expressions ? { ...base.field_dynamic_expressions } : {}),
+            field_dynamic_enabled: this.properties?.field_dynamic_enabled && typeof this.properties.field_dynamic_enabled === 'object'
+                ? { ...this.properties.field_dynamic_enabled }
+                : (base?.field_dynamic_enabled ? { ...base.field_dynamic_enabled } : {}),
         };
     }
 
     private getSlotPropertyValue(slot: NodeSlot | undefined, key: string): any {
         if (!slot) return undefined;
+        if (key === 'repeat') {
+            return slot.repeat !== undefined ? Boolean(slot.repeat) : (String(slot.sample_type ?? 'one_shot').toLowerCase() === 'loop');
+        }
+        if (key === 'warp') {
+            return this.isWarpEnabled(slot);
+        }
         if (key === 'transpose' || key === 'pitch_shift') {
             return slot.transpose ?? slot.pitch_shift ?? 0;
         }
@@ -149,7 +243,23 @@ export class SampleNode extends BaseNode {
     private applyPropertyToSlot(slot: NodeSlot, key: string, value: any): void {
         if (!slot) return;
         slot[key] = value;
-        if (key === 'transpose' || key === 'pitch_shift') {
+        if (key === 'repeat') {
+            const b = Boolean(value);
+            slot.repeat = b;
+            slot.sample_type = b ? 'loop' : 'one_shot';
+        } else if (key === 'sample_type') {
+            const b = String(value).toLowerCase() === 'loop';
+            slot.sample_type = b ? 'loop' : 'one_shot';
+            slot.repeat = b;
+        } else if (key === 'warp') {
+            const b = Boolean(value);
+            slot.warp = b;
+            slot.stretch_mode = b ? 'time_stretch' : 'pitch_shift';
+        } else if (key === 'stretch_mode') {
+            const s = String(value || '').toLowerCase();
+            slot.stretch_mode = s;
+            slot.warp = s === 'time_stretch';
+        } else if (key === 'transpose' || key === 'pitch_shift') {
             const num = Number(value ?? 0);
             slot.transpose = num;
             slot.pitch_shift = num;
@@ -177,6 +287,9 @@ export class SampleNode extends BaseNode {
                 if (key === 'filepath') {
                     this.slotBuffers.delete(idx);
                     this.slotLoadedPaths.delete(idx);
+                    this.slotPeaks.delete(idx);
+                    this.slotPeakPaths.delete(idx);
+                    this.slotPeakDurations.delete(idx);
                 }
             }
         }
@@ -225,7 +338,16 @@ export class SampleNode extends BaseNode {
         if (slot.library_item_id !== undefined) this.properties.library_item_id = slot.library_item_id;
         this.properties.is_external = Boolean(slot.is_external || String(slot.library_item_id ?? '').startsWith('ext:'));
         if (slot.duration_seconds !== undefined) this.properties.duration_seconds = slot.duration_seconds;
-        if (slot.sample_type !== undefined) this.properties.sample_type = slot.sample_type;
+        const repeat = slot.repeat !== undefined
+            ? Boolean(slot.repeat)
+            : (slot.sample_type !== undefined ? String(slot.sample_type).toLowerCase() === 'loop' : this.isRepeatEnabled());
+        const warp = slot.warp !== undefined
+            ? Boolean(slot.warp)
+            : this.isWarpEnabled(slot);
+        this.properties.repeat = repeat;
+        this.properties.warp = warp;
+        this.properties.sample_type = repeat ? 'loop' : 'one_shot';
+        this.properties.stretch_mode = warp ? 'time_stretch' : 'pitch_shift';
         if (slot.start_beat !== undefined) this.properties.start_beat = Number(slot.start_beat);
         if (slot.original_bpm !== undefined) this.properties.original_bpm = slot.original_bpm;
         if (slot.target_bpm !== undefined) this.properties.target_bpm = slot.target_bpm;
@@ -233,7 +355,6 @@ export class SampleNode extends BaseNode {
         if (slot.key_match_mode !== undefined) this.properties.key_match_mode = slot.key_match_mode;
         if (slot.key_match_algorithm !== undefined) this.properties.key_match_algorithm = slot.key_match_algorithm;
         if (slot.cents !== undefined) this.properties.cents = Number(slot.cents);
-        if (slot.stretch_mode !== undefined) this.properties.stretch_mode = slot.stretch_mode;
         if (slot.stretch_algorithm !== undefined) this.properties.stretch_algorithm = slot.stretch_algorithm;
         const cropStart = slot.crop_start ?? slot.sample_start;
         const cropEnd = slot.crop_end ?? slot.sample_end;
@@ -243,8 +364,20 @@ export class SampleNode extends BaseNode {
         const stretchFactor = slot.stretch_factor ?? slot.time_stretch;
         if (transpose !== undefined) this.properties.transpose = Number(transpose);
         if (stretchFactor !== undefined) this.properties.stretch_factor = Number(stretchFactor);
+        if (slot.field_units && typeof slot.field_units === 'object') {
+            this.properties.field_units = { ...slot.field_units };
+        }
         this.properties.field_operators = slot.field_operators && typeof slot.field_operators === 'object'
             ? { ...slot.field_operators }
+            : {};
+        this.properties.field_static_values = slot.field_static_values && typeof slot.field_static_values === 'object'
+            ? { ...slot.field_static_values }
+            : {};
+        this.properties.field_dynamic_expressions = slot.field_dynamic_expressions && typeof slot.field_dynamic_expressions === 'object'
+            ? { ...slot.field_dynamic_expressions }
+            : {};
+        this.properties.field_dynamic_enabled = slot.field_dynamic_enabled && typeof slot.field_dynamic_enabled === 'object'
+            ? { ...slot.field_dynamic_enabled }
             : {};
 
         delete (this as any).manifestStemBuffer;
@@ -257,15 +390,29 @@ export class SampleNode extends BaseNode {
             if (this.properties.key !== undefined) trackData.key = this.properties.key;
             trackData.crop_start = this.properties.crop_start;
             trackData.crop_end = this.properties.crop_end;
+            trackData.repeat = this.properties.repeat;
+            trackData.warp = this.properties.warp;
+            trackData.sample_type = this.properties.sample_type;
+            trackData.stretch_mode = this.properties.stretch_mode;
             trackData.active_slot = this.activeSlotIndex;
         }
 
         const cachedBuf = this.slotBuffers.get(this.activeSlotIndex);
         const cachedPath = this.slotLoadedPaths.get(this.activeSlotIndex);
+        const cachedPeaks = this.slotPeaks.get(this.activeSlotIndex);
+        const cachedPeakPath = this.slotPeakPaths.get(this.activeSlotIndex);
+        if (cachedPeaks && this.properties.filepath && cachedPeakPath === this.properties.filepath) {
+            this.audioPeaks = cachedPeaks;
+            this.loadedPeaksFilepath = this.properties.filepath;
+        } else {
+            this.audioPeaks = null;
+            this.loadedPeaksFilepath = '';
+        }
         if (cachedBuf && this.properties.filepath && cachedPath === this.properties.filepath) {
             this.audioBuffer = cachedBuf;
             this.loadedFilepath = this.properties.filepath;
         } else {
+            this.audioBuffer = null;
             void this.ensureAudioLoaded();
         }
         this.setDirtyCanvas(true, true);
@@ -314,12 +461,59 @@ export class SampleNode extends BaseNode {
         return true;
     }
 
+    override setStaticFieldValue(key: string, value: any): void {
+        super.setStaticFieldValue(key, value);
+        const slots = this.getSlots();
+        const selected = this.getSelectedSlotIndices();
+        for (const idx of selected) {
+            const slot = slots[idx];
+            if (!slot) continue;
+            if (!slot.field_static_values || typeof slot.field_static_values !== 'object') {
+                slot.field_static_values = {};
+            }
+            if (value === undefined) delete slot.field_static_values[key];
+            else slot.field_static_values[key] = value;
+        }
+    }
+
+    override setSavedDynamicExpression(key: string, expr: string): void {
+        super.setSavedDynamicExpression(key, expr);
+        const slots = this.getSlots();
+        const selected = this.getSelectedSlotIndices();
+        const trimmed = String(expr ?? '').trim();
+        for (const idx of selected) {
+            const slot = slots[idx];
+            if (!slot) continue;
+            if (!slot.field_dynamic_expressions || typeof slot.field_dynamic_expressions !== 'object') {
+                slot.field_dynamic_expressions = {};
+            }
+            if (trimmed) slot.field_dynamic_expressions[key] = trimmed;
+            else delete slot.field_dynamic_expressions[key];
+        }
+    }
+
+    override setFieldDynamicActive(key: string, active: boolean): void {
+        super.setFieldDynamicActive(key, active);
+        const slots = this.getSlots();
+        const selected = this.getSelectedSlotIndices();
+        for (const idx of selected) {
+            const slot = slots[idx];
+            if (!slot) continue;
+            if (!slot.field_dynamic_enabled || typeof slot.field_dynamic_enabled !== 'object') {
+                slot.field_dynamic_enabled = {};
+            }
+            slot.field_dynamic_enabled[key] = Boolean(active);
+        }
+    }
+
     override setFieldOperator(key: string, expr: string): void {
         super.setFieldOperator(key, expr);
         const slots = this.getSlots();
         const selected = this.getSelectedSlotIndices();
         const trimmed = String(expr ?? '').trim();
-        const isOp = isFieldOperatorExpression(trimmed);
+        const isOp = key === 'pool_query'
+            ? isCalculatedPoolQuery(trimmed, this.getPoolItems())
+            : isFieldOperatorExpression(trimmed);
         for (const idx of selected) {
             const slot = slots[idx];
             if (!slot) continue;
@@ -528,24 +722,50 @@ export class SampleNode extends BaseNode {
             const bpm = Number.isFinite(Number(regItem.bpm ?? rawItem.bpm))
                 ? Number(regItem.bpm ?? rawItem.bpm)
                 : parseBpmFromFilename(filepath);
+            const durSec = Number(regItem.duration_seconds ?? rawItem.duration_seconds ?? 0);
+            const inferred = SampleNode.inferLoadDefaults({
+                is_loop: regItem.is_loop ?? rawItem.is_loop,
+                itemType: rawItem.itemType,
+                sample_type: regItem.sample_type ?? rawItem.sample_type,
+                tags: regItem.tags ?? rawItem.tags,
+                bpm,
+                duration_seconds: durSec > 0 ? durSec : null,
+                filepath,
+            });
+            const prevSlotStatic = (slots[slotIdx]?.field_static_values && typeof slots[slotIdx].field_static_values === 'object')
+                ? { ...slots[slotIdx].field_static_values }
+                : {};
+            prevSlotStatic.pool_query = callName;
+            const prevSlotDynEnabled = (slots[slotIdx]?.field_dynamic_enabled && typeof slots[slotIdx].field_dynamic_enabled === 'object')
+                ? { ...slots[slotIdx].field_dynamic_enabled }
+                : {};
+            prevSlotDynEnabled.pool_query = false;
             slots[slotIdx] = {
                 ...(slots[slotIdx] || {}),
                 slot: slotIdx,
                 index: slotIdx,
                 pool_query: callName,
+                field_static_values: prevSlotStatic,
+                field_dynamic_enabled: prevSlotDynEnabled,
                 filepath,
                 library_item_id: regItem.id ?? slots[slotIdx]?.library_item_id,
                 is_external: isExternalPoolItem(regItem),
                 source: isExternalPoolItem(regItem) ? 'external' : 'gaia',
-                sample_type: rawItem.itemType === 'one_shot' ? 'one_shot' : 'loop',
-                original_bpm: bpm ?? slots[slotIdx]?.original_bpm ?? 120,
-                key: regItem.key ? String(regItem.key) : (slots[slotIdx]?.key || ''),
+                repeat: inferred.repeat,
+                warp: inferred.warp,
+                sample_type: inferred.sample_type,
+                stretch_mode: inferred.stretch_mode,
+                original_bpm: bpm ?? null,
+                key: regItem.key ? String(regItem.key) : '',
                 ...(Number.isFinite(Number(regItem.duration_seconds)) && Number(regItem.duration_seconds) > 0
                     ? { duration_seconds: Number(regItem.duration_seconds) }
                     : {}),
             };
             this.slotBuffers.delete(slotIdx);
             this.slotLoadedPaths.delete(slotIdx);
+            this.slotPeaks.delete(slotIdx);
+            this.slotPeakPaths.delete(slotIdx);
+            this.slotPeakDurations.delete(slotIdx);
         }
 
         this.activeSlotIndex = baseIdx;
@@ -630,24 +850,50 @@ export class SampleNode extends BaseNode {
             const bpm = Number.isFinite(Number(regItem.bpm ?? rawItem.bpm))
                 ? Number(regItem.bpm ?? rawItem.bpm)
                 : parseBpmFromFilename(filepath);
+            const durSec = Number(regItem.duration_seconds ?? rawItem.duration_seconds ?? 0);
+            const inferred = SampleNode.inferLoadDefaults({
+                is_loop: regItem.is_loop ?? rawItem.is_loop,
+                itemType: rawItem.itemType,
+                sample_type: regItem.sample_type ?? rawItem.sample_type,
+                tags: regItem.tags ?? rawItem.tags,
+                bpm,
+                duration_seconds: durSec > 0 ? durSec : null,
+                filepath,
+            });
+            const prevSlotStatic = (slots[slotIdx]?.field_static_values && typeof slots[slotIdx].field_static_values === 'object')
+                ? { ...slots[slotIdx].field_static_values }
+                : {};
+            prevSlotStatic.pool_query = callName;
+            const prevSlotDynEnabled = (slots[slotIdx]?.field_dynamic_enabled && typeof slots[slotIdx].field_dynamic_enabled === 'object')
+                ? { ...slots[slotIdx].field_dynamic_enabled }
+                : {};
+            prevSlotDynEnabled.pool_query = false;
             slots[slotIdx] = {
                 ...(slots[slotIdx] || {}),
                 slot: slotIdx,
                 index: slotIdx,
                 pool_query: callName,
+                field_static_values: prevSlotStatic,
+                field_dynamic_enabled: prevSlotDynEnabled,
                 filepath,
                 library_item_id: regItem.id ?? slots[slotIdx]?.library_item_id,
                 is_external: isExternalPoolItem(regItem),
                 source: isExternalPoolItem(regItem) ? 'external' : 'gaia',
-                sample_type: rawItem.itemType === 'one_shot' ? 'one_shot' : 'loop',
-                original_bpm: bpm ?? slots[slotIdx]?.original_bpm ?? 120,
-                key: regItem.key ? String(regItem.key) : (slots[slotIdx]?.key || ''),
+                repeat: inferred.repeat,
+                warp: inferred.warp,
+                sample_type: inferred.sample_type,
+                stretch_mode: inferred.stretch_mode,
+                original_bpm: bpm ?? null,
+                key: regItem.key ? String(regItem.key) : '',
                 ...(Number.isFinite(Number(regItem.duration_seconds)) && Number(regItem.duration_seconds) > 0
                     ? { duration_seconds: Number(regItem.duration_seconds) }
                     : {}),
             };
             this.slotBuffers.delete(slotIdx);
             this.slotLoadedPaths.delete(slotIdx);
+            this.slotPeaks.delete(slotIdx);
+            this.slotPeakPaths.delete(slotIdx);
+            this.slotPeakDurations.delete(slotIdx);
         }
 
         this.activeSlotIndex = baseIdx;
@@ -671,11 +917,40 @@ export class SampleNode extends BaseNode {
         void this.preloadAllSlotBuffers();
     }
 
-    public applyPoolQuery(rawQuery: string, advanceSaltOnRand: boolean = true): boolean {
+    public applyPoolQuery(
+        rawQuery: string,
+        advanceSaltOnRand: boolean = true,
+        options?: { forceStatic?: boolean; forceDynamic?: boolean }
+    ): boolean {
         const query = String(rawQuery ?? '').trim();
+        const rawItems = this.getPoolItems();
+        const prevQuery = String(this.properties?.pool_query ?? '').trim();
+        const curFp = String(this.properties?.filepath ?? '').trim();
+        const curBase = (curFp.split(/[\\/]/).pop() || '').toLowerCase();
+        const curBaseStem = curBase.replace(/\.[^.]+$/, '');
+        const matchesCurrentFile = Boolean(
+            query && curFp && (
+                query.toLowerCase() === curBase
+                || query.toLowerCase() === curBaseStem
+                || query.toLowerCase() === curFp.toLowerCase()
+            )
+        );
+        const nextIsCalc = options?.forceStatic
+            ? false
+            : (options?.forceDynamic ? true : (!matchesCurrentFile && isCalculatedPoolQuery(query, rawItems)));
+        const prevIsCalc = this.isFieldDynamicActive('pool_query');
+        if (nextIsCalc) {
+            if (!prevIsCalc && prevQuery) {
+                this.setStaticFieldValue('pool_query', prevQuery);
+            }
+            this.setSavedDynamicExpression('pool_query', query);
+            this.setFieldDynamicActive('pool_query', true);
+        } else {
+            this.setStaticFieldValue('pool_query', query);
+            this.setFieldDynamicActive('pool_query', false);
+        }
         this.updateProperty('pool_query', query);
         const modNode = this.getAttachedPoolNode();
-        const rawItems = this.getPoolItems();
         const items = rawItems.filter((item: any) => Boolean(item?.absolute_path || item?.filepath));
         if (items.length === 0) return false;
 
@@ -839,6 +1114,9 @@ export class SampleNode extends BaseNode {
         });
         this.slotBuffers.clear();
         this.slotLoadedPaths.clear();
+        this.slotPeaks.clear();
+        this.slotPeakPaths.clear();
+        this.slotPeakDurations.clear();
         this.activeSlotIndex = Math.min(this.activeSlotIndex, slots.length - 1);
         this.selectedSlotIndices = [this.activeSlotIndex];
         this.applySlotToProperties(slots[this.activeSlotIndex]);
@@ -851,6 +1129,89 @@ export class SampleNode extends BaseNode {
         void this.preloadAllSlotBuffers();
     }
 
+    public async ensurePeaksLoaded(filepathOverride?: string, slotIdx?: number): Promise<Float32Array | null> {
+        const filepath = String(filepathOverride ?? this.properties?.filepath ?? '');
+        const targetSlot = slotIdx !== undefined ? slotIdx : this.activeSlotIndex;
+        if (!filepath) {
+            if (targetSlot === this.activeSlotIndex) {
+                this.audioPeaks = null;
+                this.loadedPeaksFilepath = '';
+            }
+            return null;
+        }
+        const cachedSlotPeaks = this.slotPeaks.get(targetSlot);
+        if (cachedSlotPeaks && this.slotPeakPaths.get(targetSlot) === filepath) {
+            if (targetSlot === this.activeSlotIndex) {
+                this.audioPeaks = cachedSlotPeaks;
+                this.loadedPeaksFilepath = filepath;
+            }
+            return cachedSlotPeaks;
+        }
+        if (targetSlot === this.activeSlotIndex && this.loadingPeaksPromise && this.loadedPeaksFilepath === filepath) {
+            return this.loadingPeaksPromise;
+        }
+
+        const isActive = targetSlot === this.activeSlotIndex;
+        if (isActive) {
+            this.isLoadingPeaks = true;
+            this.loadedPeaksFilepath = filepath;
+        }
+        const promise = (async () => {
+            try {
+                const res = await fetchAudioPeaks(filepath, { columns: 512 });
+                if (res && res.peaks.length >= 2) {
+                    this.slotPeaks.set(targetSlot, res.peaks);
+                    this.slotPeakPaths.set(targetSlot, filepath);
+                    if (res.durationSeconds > 0) {
+                        this.slotPeakDurations.set(targetSlot, res.durationSeconds);
+                        const slots = this.getSlots();
+                        if (slots[targetSlot]) {
+                            const prevSlotDur = Number(slots[targetSlot].duration_seconds || 0);
+                            if (!Number.isFinite(prevSlotDur) || prevSlotDur <= 0 || Math.abs(prevSlotDur - res.durationSeconds) > 0.05) {
+                                slots[targetSlot].duration_seconds = res.durationSeconds;
+                            }
+                        }
+                    }
+                    if (targetSlot === this.activeSlotIndex && String(this.properties?.filepath || '') === filepath) {
+                        this.audioPeaks = res.peaks;
+                        this.loadedPeaksFilepath = filepath;
+                        this.failedPeaksFilepath = null;
+                        const curDur = Number(this.properties?.duration_seconds || 0);
+                        let durationUpdated = false;
+                        if (res.durationSeconds > 0 && (!Number.isFinite(curDur) || curDur <= 0 || Math.abs(curDur - res.durationSeconds) > 0.05)) {
+                            this.properties.duration_seconds = res.durationSeconds;
+                            durationUpdated = true;
+                        }
+                        this.setDirtyCanvas(true, true);
+                        if (typeof window !== 'undefined') {
+                            (window as any).editorCanvas?.setDirty?.(true, false);
+                            if (durationUpdated && this.id != null) {
+                                window.dispatchEvent(new CustomEvent('node-properties-refreshed', { detail: { nodeId: this.id } }));
+                            }
+                        }
+                    }
+                    return res.peaks;
+                }
+                if (isActive) this.failedPeaksFilepath = filepath;
+                return null;
+            } catch (err) {
+                if (isActive) this.failedPeaksFilepath = filepath;
+                console.warn(`Failed to preload waveform peaks for SampleNode #${this.id}:`, err);
+                return null;
+            } finally {
+                if (isActive) {
+                    this.isLoadingPeaks = false;
+                    this.loadingPeaksPromise = null;
+                    this.setDirtyCanvas(true, true);
+                }
+            }
+        })();
+        if (isActive) {
+            this.loadingPeaksPromise = promise;
+        }
+        return promise;
+    }
+
     public async preloadAllSlotBuffers(): Promise<void> {
         const slots = this.getSlots();
         await Promise.all(slots.map(async (s, idx) => {
@@ -858,9 +1219,20 @@ export class SampleNode extends BaseNode {
             if (!fp) {
                 this.slotBuffers.delete(idx);
                 this.slotLoadedPaths.delete(idx);
+                this.slotPeaks.delete(idx);
+                this.slotPeakPaths.delete(idx);
+                this.slotPeakDurations.delete(idx);
+                return;
+            }
+            const slotDur = Number(s?.duration_seconds ?? 0);
+            if (Number.isFinite(slotDur) && slotDur > 45) {
+                await this.ensurePeaksLoaded(fp, idx);
                 return;
             }
             if (this.slotBuffers.has(idx) && this.slotLoadedPaths.get(idx) === fp) {
+                return;
+            }
+            if (typeof window === 'undefined') {
                 return;
             }
             try {
@@ -872,9 +1244,11 @@ export class SampleNode extends BaseNode {
                         this.audioBuffer = buf;
                         this.loadedFilepath = fp;
                     }
+                } else {
+                    await this.ensurePeaksLoaded(fp, idx);
                 }
             } catch {
-                // Ignore individual slot load error
+                await this.ensurePeaksLoaded(fp, idx);
             }
         }));
         const poolItems = this.getPoolItems();
@@ -940,8 +1314,21 @@ export class SampleNode extends BaseNode {
         const filepath = String(this.properties?.filepath || '');
         if (!filepath) {
             this.audioBuffer = null;
+            this.audioPeaks = null;
             this.loadedFilepath = '';
+            this.loadedPeaksFilepath = '';
             this.sharedWaveformRenderer.setSignal(null);
+            return null;
+        }
+        const knownDur = Number(this.properties?.duration_seconds ?? 0);
+        if (Number.isFinite(knownDur) && knownDur > 45) {
+            // Long recordings (> 45s) stream natively in libsin_dsp & use zero-RAM server-side peak pyramids.
+            this.audioBuffer = null;
+            this.loadedFilepath = filepath;
+            void this.ensurePeaksLoaded(filepath, this.activeSlotIndex);
+            if (this.getSlots().length > 1) {
+                void this.preloadAllSlotBuffers();
+            }
             return null;
         }
         if (this.audioBuffer && this.loadedFilepath === filepath) {
@@ -965,15 +1352,23 @@ export class SampleNode extends BaseNode {
                     if (buffer.duration) {
                         this.properties.duration_seconds = buffer.duration;
                     }
+                    this.failedAudioFilepath = null;
+                } else {
+                    // File exceeded client decode budget (>12 MB WAV) or could not decode in browser:
+                    // fall back cleanly to zero-RAM server-side peak overview when running in a browser runtime!
+                    this.failedAudioFilepath = filepath;
+                    if (typeof window !== 'undefined' && (window.AudioContext || (window as any).webkitAudioContext)) {
+                        void this.ensurePeaksLoaded(filepath, this.activeSlotIndex);
+                    }
                 }
                 if (this.getSlots().length > 1) {
                     void this.preloadAllSlotBuffers();
                 }
-                this.failedAudioFilepath = null;
                 this.setDirtyCanvas(true, true);
                 return buffer;
             } catch (err) {
                 this.failedAudioFilepath = filepath;
+                void this.ensurePeaksLoaded(filepath, this.activeSlotIndex);
                 console.warn(`Failed to preload audio for SampleNode #${this.id}:`, err);
                 return null;
             } finally {
@@ -991,11 +1386,10 @@ export class SampleNode extends BaseNode {
                 label: 'Sample',
                 sections: [
                     { type: 'waveform_crop', filepathKey: 'filepath', cropStartKey: 'crop_start', cropEndKey: 'crop_end' },
-                    { type: 'fields', layout: 'inline', fields: ['crop_start', 'crop_end'] },
-                    { type: 'fields', fields: ['sample_type'] },
-                    { type: 'fields', fields: ['start_beat', 'original_bpm', 'target_bpm'] },
-                    { type: 'fields', fields: ['key', 'key_match_mode', 'key_match_algorithm', 'transpose', 'cents'] },
-                    { type: 'fields', fields: ['stretch_mode', 'stretch_algorithm'] }
+                    { type: 'fields', fields: ['pool_query', 'crop', 'repeat', 'warp'] },
+                    { type: 'fields', fields: ['transpose', 'cents'] },
+                    { type: 'fields', fields: ['key_match_mode', 'key_match_algorithm'] },
+                    { type: 'fields', fields: ['target_bpm', 'stretch_algorithm'] }
                 ]
             },
             {
@@ -1027,18 +1421,64 @@ export class SampleNode extends BaseNode {
     static fields: FieldSchema[] = [
         { key: 'node_name', label: 'Name', type: 'string', default: 'New Sample', tab: 'COMMON' },
         { key: 'filepath', label: 'Asset File', type: 'filepath', default: '', tab: 'SAMPLE' },
-        { key: 'sample_type', label: 'Type', type: 'radio', default: 'loop', options: [{ value: 'loop', label: 'Loop' }, { value: 'one_shot', label: 'One Shot' }], tab: 'SAMPLE' },
-        { key: 'start_beat', label: 'Start Beat', type: 'float', default: 0, min: 0, tab: 'SAMPLE' },
+        {
+            key: 'pool_query',
+            label: 'Asset',
+            type: 'asset_call',
+            default: '',
+            tab: 'SAMPLE',
+            placeholder: 'Drop sample or select from Pool',
+            description: 'Asset call (name, pool run index, or dynamic pseudolang expression). Drop audio here to load.'
+        },
+        {
+            key: 'crop',
+            label: 'Crop',
+            type: 'tuple',
+            default: null,
+            tab: 'SAMPLE',
+            subFields: ['crop_start', 'crop_end'],
+            unitConfig: {
+                family: 'audio_position',
+                canonical: 'fraction',
+                units: AUDIO_POSITION_UNITS,
+                unitGroup: 'crop',
+            },
+            description: 'Trim Start and End points inside the source audio.'
+        },
+        {
+            key: 'repeat',
+            label: 'Repeat',
+            type: 'radio',
+            default: false,
+            options: [
+                { value: false, label: 'Once' },
+                { value: true, label: 'Repeat' }
+            ],
+            tab: 'SAMPLE',
+            description: 'Once plays the cropped span a single time. Repeat tiles the sample across a parent Track or Arrangement (Transport Loop independently controls playback wrap).'
+        },
+        {
+            key: 'warp',
+            label: 'Warp',
+            type: 'radio',
+            default: false,
+            options: [
+                { value: false, label: 'Off (Tape)' },
+                { value: true, label: 'On (Rubber Band)' }
+            ],
+            tab: 'SAMPLE',
+            description: 'Off plays at native speed where Transpose/Key Match act as zero-RAM tape repitch. On enables Rubber Band time-stretching, BPM sync, and independent pitch.'
+        },
         {
             key: 'original_bpm',
             label: 'Source BPM',
             type: 'float',
-            default: 120,
+            default: null,
             min: 20,
             max: 300,
             unit: 'BPM',
             tab: 'SAMPLE',
-            description: 'Used locally now and staged as a proposal for GAIA to review before changing the library asset.'
+            description: 'Derived from the asset. Editing overrides locally and stages a proposal for GAIA review.'
         },
         { key: 'target_bpm', label: 'Target BPM', type: 'global_float', default: 'global', min: 20, max: 300, unit: 'BPM', tab: 'SAMPLE' },
         {
@@ -1047,11 +1487,11 @@ export class SampleNode extends BaseNode {
             type: 'string',
             default: '',
             tab: 'SAMPLE',
-            description: 'Used locally now and staged as a proposal for GAIA to review before changing the library asset.'
+            description: 'Derived from the asset. Editing overrides locally and stages a proposal for GAIA review.'
         },
         {
             key: 'key_match_mode',
-            label: 'Key Matching',
+            label: 'Key Match',
             type: 'radio',
             default: 'off',
             options: [
@@ -1060,50 +1500,82 @@ export class SampleNode extends BaseNode {
                 { value: 'lead', label: 'Lead' }
             ],
             tab: 'SAMPLE',
-            description: 'Follow matches the global key; Lead makes this sample control the global key.'
+            description: 'Follow matches the global key (via Rubber Band when Warp is On, or tape repitch when Warp is Off); Lead makes this sample control the global key.'
         },
         {
             key: 'key_match_algorithm',
-            label: 'Matching Algorithm',
+            label: 'Match Direction',
             type: 'radio',
             default: 'nearest',
             options: [
-                { value: 'nearest', label: 'Shift Nearest' },
-                { value: 'higher', label: 'Shift Higher' },
-                { value: 'lower', label: 'Shift Lower' }
+                { value: 'nearest', label: 'Nearest' },
+                { value: 'higher', label: 'Higher' },
+                { value: 'lower', label: 'Lower' }
             ],
             tab: 'SAMPLE',
-            description: 'Choose whether Follow shifts to the closest compatible key, only upward, or only downward.'
+            description: 'Choose whether Follow shifts to the closest compatible key, upward, or downward.'
         },
         { key: 'transpose', label: 'Transpose', type: 'int', default: 0, min: -24, max: 24, step: 1, unit: 'st', tab: 'SAMPLE' },
         { key: 'cents', label: 'Fine Tune', type: 'int', default: 0, min: -100, max: 100, step: 1, unit: 'ct', tab: 'SAMPLE' },
         {
-            key: 'stretch_mode',
-            label: 'Stretch Mode',
-            type: 'radio',
-            default: 'time_stretch',
-            options: [
-                { value: 'time_stretch', label: 'Time Stretch (Independent Pitch)' },
-                { value: 'pitch_shift', label: 'Repitch (Speed + Pitch)' }
-            ],
-            tab: 'SAMPLE',
-            description: 'Time Stretch keeps key shifts independent from timing. Repitch links the key shift to playback speed, like tape or vinyl.'
-        },
-        {
             key: 'stretch_algorithm',
-            label: 'Stretch Algorithm',
+            label: 'Warp Algo',
             type: 'radio',
             default: 'rubberband',
             options: [
-                { value: 'rubberband', label: 'General / Tonal — R3 Finer' },
-                { value: 'rubberband_vocal', label: 'Vocals / Speech — R3 Formant' },
-                { value: 'rubberband_percussive', label: 'Drums / Percussion — R2 Crisp' }
+                { value: 'rubberband', label: 'General (R3)' },
+                { value: 'rubberband_vocal', label: 'Vocal (Formant)' },
+                { value: 'rubberband_percussive', label: 'Drums (Crisp)' }
             ],
             tab: 'SAMPLE',
-            description: 'General is best for most musical samples and manual pitch-down. Vocals preserves formants. Percussion favours drum transients. Repitch always uses tape-style resampling.'
+            description: 'Rubber Band preset used when Warp is On. General suits tonal/polyphonic audio, Vocal preserves formants, Drums favors crisp transients.'
         },
-        { key: 'crop_start', label: 'Start Point', type: 'float', default: 0.0, min: 0, max: 1, step: 0.1, tab: 'SAMPLE' },
-        { key: 'crop_end', label: 'End Point', type: 'float', default: 1.0, min: 0, max: 1, step: 0.1, tab: 'SAMPLE' }
+        {
+            key: 'crop_start',
+            label: 'Start',
+            type: 'unit_float',
+            default: 0.0,
+            min: 0,
+            max: 1,
+            step: 0.001,
+            tab: 'SAMPLE',
+            unitConfig: {
+                family: 'audio_position',
+                canonical: 'fraction',
+                units: AUDIO_POSITION_UNITS,
+                unitGroup: 'crop',
+            },
+            setValue: (node: any, val: number) => {
+                const curEnd = Number(node.properties?.crop_end ?? 1.0);
+                const clamped = Math.max(0, Math.min(Math.max(0, curEnd - 1e-4), Number(val) || 0));
+                node.updateProperty('crop_start', clamped);
+                return clamped;
+            },
+            description: 'Trim start point inside the source audio.'
+        },
+        {
+            key: 'crop_end',
+            label: 'End',
+            type: 'unit_float',
+            default: 1.0,
+            min: 0,
+            max: 1,
+            step: 0.001,
+            tab: 'SAMPLE',
+            unitConfig: {
+                family: 'audio_position',
+                canonical: 'fraction',
+                units: AUDIO_POSITION_UNITS,
+                unitGroup: 'crop',
+            },
+            setValue: (node: any, val: number) => {
+                const curStart = Number(node.properties?.crop_start ?? 0.0);
+                const clamped = Math.max(Math.min(1, curStart + 1e-4), Math.min(1, Number(val)));
+                node.updateProperty('crop_end', clamped);
+                return clamped;
+            },
+            description: 'Trim end point inside the source audio.'
+        }
     ];
 
     static defaultColor = "#10b981";
@@ -1114,6 +1586,10 @@ export class SampleNode extends BaseNode {
     static tabs = ["SAMPLE", "POOL", "CHAIN", "COMMON"];
     static override defaultVisualizationType: VisualizationTypeId = 'sample';
     static override supportedVisualizationTypes: readonly VisualizationTypeId[] = ['sample', 'realtime', 'spectrum'];
+    static override compactCardSpec = {
+        visualizer: 'waveform_crop' as const,
+        paramKeys: ['repeat', 'warp', 'original_bpm', 'transpose'] as const,
+    };
 
     constructor() {
         super();
@@ -1129,9 +1605,11 @@ export class SampleNode extends BaseNode {
             ...this.properties,
             node_name: "New Sample",
             filepath: "",
-            sample_type: "loop",
+            repeat: false,
+            warp: false,
+            sample_type: "one_shot",
             start_beat: 0,
-            original_bpm: 120,
+            original_bpm: null,
             target_bpm: "global",
             bpm: "global",
             key: "",
@@ -1142,9 +1620,10 @@ export class SampleNode extends BaseNode {
             crop_end: 1.0,
             transpose: 0.0,
             cents: 0.0,
-            stretch_mode: "time_stretch",
+            stretch_mode: "pitch_shift",
             stretch_factor: 1.0,
             stretch_algorithm: "rubberband",
+            field_units: {},
             chain: getDefaultFxChain(DEFAULT_SAMPLE_INPUT_GAIN_DB),
             scope_mode: "full",
             scope_window: 0.0,
@@ -1163,6 +1642,29 @@ export class SampleNode extends BaseNode {
     }
 
     override updateProperty(key: string, value: any): void {
+        if (key === 'repeat') {
+            const b = value === true || String(value).toLowerCase() === 'true';
+            value = b;
+            if (this.properties) {
+                this.properties.sample_type = b ? 'loop' : 'one_shot';
+            }
+        } else if (key === 'sample_type') {
+            const b = String(value || '').toLowerCase() === 'loop';
+            if (this.properties) {
+                this.properties.repeat = b;
+            }
+        } else if (key === 'warp') {
+            const b = value === true || String(value).toLowerCase() === 'true';
+            value = b;
+            if (this.properties) {
+                this.properties.stretch_mode = b ? 'time_stretch' : 'pitch_shift';
+            }
+        } else if (key === 'stretch_mode') {
+            const s = String(value || '').toLowerCase();
+            if (this.properties) {
+                this.properties.warp = s === 'time_stretch';
+            }
+        }
         super.updateProperty(key, value);
         if ((SampleNode.slotPropertyKeys as readonly string[]).includes(key)) {
             this.syncActiveSlotFromProperties();
@@ -1189,9 +1691,13 @@ export class SampleNode extends BaseNode {
                     }]);
                 }
             }
-            if (pathStr !== this.loadedFilepath || !this.audioBuffer) {
+            if (pathStr !== this.loadedFilepath || (!this.audioBuffer && !this.audioPeaks)) {
                 this.loadedFilepath = pathStr;
+                this.loadedPeaksFilepath = '';
                 this.audioBuffer = null;
+                this.audioPeaks = null;
+                this.failedAudioFilepath = null;
+                this.failedPeaksFilepath = null;
                 delete (this as any).manifestStemBuffer;
                 this.sharedWaveformRenderer.setSignal(null);
                 if (pathStr) {
@@ -1222,6 +1728,30 @@ export class SampleNode extends BaseNode {
         super.onConfigure?.(data);
         if (this.properties && (this.properties.target_bpm === undefined || this.properties.target_bpm === null)) {
             this.properties.target_bpm = 'global';
+        }
+        // Backward-compatible migration of legacy sample_type / stretch_mode into orthogonal repeat / warp
+        if (this.properties) {
+            const savedProps = (data && typeof data === 'object' && data.properties && typeof data.properties === 'object')
+                ? data.properties
+                : {};
+            if (savedProps.repeat === undefined && savedProps.sample_type !== undefined) {
+                this.properties.repeat = String(savedProps.sample_type).toLowerCase() === 'loop';
+            } else if (this.properties.repeat === undefined) {
+                this.properties.repeat = String(this.properties.sample_type ?? 'one_shot').toLowerCase() === 'loop';
+            }
+            if (savedProps.warp === undefined && (savedProps.stretch_mode !== undefined || savedProps.sample_type !== undefined)) {
+                const legacyMode = String(savedProps.stretch_mode ?? this.properties.stretch_mode ?? '').toLowerCase();
+                if (legacyMode === 'pitch_shift' || legacyMode === 'repitch' || legacyMode === 'varispeed' || legacyMode === 'off') {
+                    this.properties.warp = false;
+                } else {
+                    const legacySt = String(savedProps.sample_type ?? this.properties.sample_type ?? 'one_shot').toLowerCase();
+                    this.properties.warp = legacySt !== 'one_shot' && legacySt !== 'oneshot';
+                }
+            } else if (this.properties.warp === undefined) {
+                this.properties.warp = false;
+            }
+            this.properties.sample_type = this.properties.repeat ? 'loop' : 'one_shot';
+            this.properties.stretch_mode = this.properties.warp ? 'time_stretch' : 'pitch_shift';
         }
         if (this.properties && Array.isArray(this.properties.slots)) {
             this.properties.slots = this.properties.slots.map((s: any, idx: number) => ({
@@ -1316,21 +1846,25 @@ export class SampleNode extends BaseNode {
         );
         if (!libraryFile) return null;
 
+        const inferred = SampleNode.inferLoadDefaults({
+            is_loop: libraryFile.is_loop,
+            sample_type: libraryFile.sample_type ?? undefined,
+            tags: libraryFile.tags,
+            bpm: Number.isFinite(Number(libraryFile.bpm)) ? Number(libraryFile.bpm) : null,
+            duration_seconds: Number.isFinite(Number(libraryFile.duration_seconds)) ? Number(libraryFile.duration_seconds) : null,
+            filepath: libraryFile.absolute_path || filepath,
+        });
         const isExplicitOneShot = libraryFile.is_loop === false
             || libraryFile.sample_type === 'one_shot'
             || (Array.isArray(libraryFile.tags) && libraryFile.tags.includes('One shot'));
-        const isExplicitLoop = libraryFile.is_loop === true
-            || libraryFile.sample_type === 'loop'
-            || (Array.isArray(libraryFile.tags) && libraryFile.tags.includes('Loop'));
 
-        if (isExplicitOneShot) {
-            if (this.properties.sample_type !== 'one_shot') {
-                this.updateProperty('sample_type', 'one_shot');
+        if (this.properties.repeat !== inferred.repeat) {
+            this.updateProperty('repeat', inferred.repeat);
+            if (this.properties.warp !== inferred.warp) {
+                this.updateProperty('warp', inferred.warp);
             }
-        } else if (isExplicitLoop) {
-            if (this.properties.sample_type !== 'loop') {
-                this.updateProperty('sample_type', 'loop');
-            }
+        } else if (this.properties.warp === undefined) {
+            this.updateProperty('warp', inferred.warp);
         }
 
         const bpm = Number(libraryFile?.bpm);
@@ -1462,7 +1996,16 @@ export class SampleNode extends BaseNode {
             ? Number(this.properties?.key_match_transpose) || 0
             : 0;
 
-        const isOneShot = (this.properties?.sample_type || model.sample_type) === 'one_shot';
+        const isRepeat = this.isRepeatEnabled();
+        const isWarp = this.isWarpEnabled();
+        const rawOrigBpm = model.original_bpm ?? this.properties?.original_bpm;
+        const resolvedOrigBpm = (
+            !isWarp
+            && !this.properties?.original_bpm_is_local_override
+            && !model.original_bpm_is_local_override
+            && (rawOrigBpm === 120 || !rawOrigBpm)
+        ) ? null : rawOrigBpm;
+
         return {
             ...model,
             active_slot: this.activeSlotIndex,
@@ -1474,10 +2017,11 @@ export class SampleNode extends BaseNode {
                     crop_start: s.crop_start ?? s.sample_start ?? 0,
                     crop_end: s.crop_end ?? s.sample_end ?? 1,
                 })),
-            sample_type: isOneShot ? 'one_shot' : (model.sample_type || 'loop'),
-            original_bpm: isOneShot && !this.properties?.original_bpm_is_local_override && !model.original_bpm_is_local_override && (model.original_bpm === 120 || !model.original_bpm)
-                ? null
-                : model.original_bpm,
+            repeat: isRepeat,
+            warp: isWarp,
+            sample_type: isRepeat ? 'loop' : 'one_shot',
+            stretch_mode: isWarp ? 'time_stretch' : 'pitch_shift',
+            original_bpm: resolvedOrigBpm,
             key: matchTranspose !== 0 ? (this.properties?.key_match_target || model.key) : model.key,
             transpose: (Number(model.transpose) || 0) + matchTranspose,
             key_match_mode: this.properties?.key_match_mode || 'off',
@@ -1609,18 +2153,54 @@ export class SampleNode extends BaseNode {
         return `${pitchNames[pitchClass]}${suffix}`;
     }
 
+    public getEffectivePlaybackRate(): number {
+        const win = (typeof window !== 'undefined') ? (window as any) : undefined;
+        const isWarp = this.isWarpEnabled();
+        const stretchFactor = Math.max(0.05, Number(this.properties?.stretch_factor || 1.0) || 1.0);
+        if (!isWarp) {
+            const matchTranspose = this.properties?.key_match_mode === 'follow'
+                ? (Number(this.properties?.key_match_transpose) || 0)
+                : 0;
+            const totalSemis = (Number(this.properties?.transpose || 0) + matchTranspose)
+                + (Number(this.properties?.cents || 0) / 100);
+            const pitchRate = Math.pow(2, totalSemis / 12);
+            return Math.max(0.05, pitchRate * stretchFactor);
+        }
+        const rawTargetBpm = Number(this.properties?.target_bpm);
+        const targetBpm = (Number.isFinite(rawTargetBpm) && rawTargetBpm > 0)
+            ? rawTargetBpm
+            : (Number(win?.activeWorkspaceManifest?.bpm || win?.getGlobalParameter?.('bpm')) || 120);
+        const originalBpm = Number(this.properties?.original_bpm || 0);
+        const bpmRatio = (originalBpm > 0 && targetBpm > 0) ? (targetBpm / originalBpm) : 1.0;
+        const rate = bpmRatio * stretchFactor;
+        return Number.isFinite(rate) && rate > 0.05 ? rate : 1.0;
+    }
+
+    public getPlayheadNorm(telemetry?: SignalTelemetry): { progress: number | null; isTriggered: boolean } {
+        const sig = this.resolveVisualizationSignal(telemetry);
+        return {
+            progress: typeof sig.playbackProgress === 'number' ? sig.playbackProgress : null,
+            isTriggered: Boolean(sig.isTriggered),
+        };
+    }
+
     override resolveVisualizationSignal(telemetry?: SignalTelemetry): WaveformSignal {
         const filepath = String(this.properties?.filepath || '');
         if (filepath !== this.loadedFilepath) {
             this.loadedFilepath = filepath;
+            this.loadedPeaksFilepath = '';
             this.failedAudioFilepath = null;
+            this.failedPeaksFilepath = null;
             this.audioBuffer = null;
+            this.audioPeaks = null;
             delete (this as any).manifestStemBuffer;
             this.sharedWaveformRenderer.setSignal(null);
         }
 
         if (filepath && !this.audioBuffer && !this.isLoadingAudio && this.failedAudioFilepath !== filepath) {
             void this.ensureAudioLoaded();
+        } else if (filepath && !this.audioBuffer && !this.audioPeaks && !this.isLoadingPeaks && this.failedPeaksFilepath !== filepath) {
+            void this.ensurePeaksLoaded(filepath, this.activeSlotIndex);
         }
 
         const win = (typeof window !== 'undefined') ? (window as any) : undefined;
@@ -1638,29 +2218,27 @@ export class SampleNode extends BaseNode {
             }
         }
         let displayBuffer = this.applySampleNodeGain(baseBuffer) || schedulerBuf;
+        const cachedSlotPeaks = (this.slotPeakPaths.get(this.activeSlotIndex) === filepath)
+            ? this.slotPeaks.get(this.activeSlotIndex)
+            : undefined;
+        let displayPeaks: Float32Array | undefined = (this.audioPeaks && this.loadedPeaksFilepath === filepath)
+            ? this.audioPeaks
+            : cachedSlotPeaks;
 
-        const sampleDur = displayBuffer?.duration || Number(this.properties?.duration_seconds) || 0;
-        const cropStart = Number(this.properties?.crop_start ?? 0);
-        const cropEnd = Number(this.properties?.crop_end ?? 1);
-        const activeSpan = Math.max(0.01, cropEnd - cropStart);
+        const peakDur = this.getActivePeakDuration();
+        const sampleDur = displayBuffer?.duration || peakDur || Number(this.properties?.duration_seconds) || 0;
+        const cropStart = Math.max(0, Math.min(1, Number(this.properties?.crop_start ?? 0)));
+        const cropEnd = Math.max(cropStart + 1e-4, Math.min(1, this.properties?.crop_end != null ? Number(this.properties.crop_end) : 1));
+        const activeSpan = Math.max(1e-4, cropEnd - cropStart);
         const sampleActiveDuration = sampleDur > 0 ? sampleDur * activeSpan : 2.0;
 
-        const stretchMode = String(this.properties?.stretch_mode || 'time_stretch');
-        const pitchMultiplier = Math.pow(2, Number(this.properties?.transpose || 0) / 12);
         const rawTargetBpm = Number(this.properties?.target_bpm);
         const targetBpm = (Number.isFinite(rawTargetBpm) && rawTargetBpm > 0)
             ? rawTargetBpm
             : (Number(win?.activeWorkspaceManifest?.bpm || win?.getGlobalParameter?.('bpm')) || 120);
-        const originalBpm = Number(this.properties?.original_bpm || 0);
-        const stretchFactor = Number(this.properties?.stretch_factor || 1.0) || 1.0;
-        let effectivePitchRate = 1.0;
-        if (stretchMode === 'repitch' || stretchMode === 'varispeed') {
-            effectivePitchRate = pitchMultiplier > 0 ? pitchMultiplier : 1.0;
-        } else if (stretchMode !== 'off' && stretchMode !== 'none') {
-            const bpmRatio = (originalBpm > 0 && targetBpm > 0) ? (targetBpm / originalBpm) : 1.0;
-            effectivePitchRate = (bpmRatio / Math.max(0.05, stretchFactor));
-            if (!(effectivePitchRate > 0)) effectivePitchRate = 1.0;
-        }
+        const effectivePitchRate = this.getEffectivePlaybackRate();
+        const isRepeat = this.isRepeatEnabled();
+        const timelineActiveDur = sampleActiveDuration / Math.max(0.05, effectivePitchRate);
 
         let playbackProgress: number | undefined;
         let isTriggered: boolean | undefined;
@@ -1670,10 +2248,13 @@ export class SampleNode extends BaseNode {
 
         if (isPlaying && telemetry) {
             if (isPreviewTarget) {
-                const dur = telemetry.duration > 0 ? telemetry.duration : sampleActiveDuration;
+                const dur = telemetry.duration > 0 ? telemetry.duration : timelineActiveDur;
                 const curTime = dur > 0 ? ((telemetry.time % dur) + dur) % dur : 0;
                 const sampleTime = curTime * effectivePitchRate;
-                const progress = sampleActiveDuration > 0 ? Math.max(0, Math.min(1, sampleTime / sampleActiveDuration)) : 0;
+                const wrappedTime = (isRepeat && sampleActiveDuration > 0 && dur > timelineActiveDur + 0.05)
+                    ? ((sampleTime % sampleActiveDuration) + sampleActiveDuration) % sampleActiveDuration
+                    : sampleTime;
+                const progress = sampleActiveDuration > 0 ? Math.max(0, Math.min(1, wrappedTime / sampleActiveDuration)) : 0;
                 playbackProgress = cropStart + progress * activeSpan;
                 isTriggered = true;
             } else {
@@ -1681,18 +2262,22 @@ export class SampleNode extends BaseNode {
                     || (win?.activeWorkspaceManifest?.nodes?.[String(this.id)]?.events as Array<{ time: number; duration: number; slot?: number; filepath?: string; iteration?: number }> | undefined);
                 const totalTrackDur = telemetry.duration > 0
                     ? telemetry.duration
-                    : (Number(win?.activeWorkspaceManifest?.total_duration) || (manifestEvents?.length ? manifestEvents[manifestEvents.length - 1].time + manifestEvents[manifestEvents.length - 1].duration : sampleActiveDuration));
+                    : (Number(win?.activeWorkspaceManifest?.total_duration) || (manifestEvents?.length ? manifestEvents[manifestEvents.length - 1].time + manifestEvents[manifestEvents.length - 1].duration : timelineActiveDur));
                 const curTime = totalTrackDur > 0 ? ((telemetry.time % totalTrackDur) + totalTrackDur) % totalTrackDur : telemetry.time;
 
                 if (manifestEvents && manifestEvents.length > 0) {
-                    let activeEvent = manifestEvents.find(e => curTime >= e.time && curTime < (e.time + Math.max(0.02, e.duration)));
+                    let activeEvent = manifestEvents.find(e => {
+                        const evtDur = e.duration > 0 ? Math.max(0.02, e.duration) : Math.max(0.02, timelineActiveDur);
+                        return curTime >= e.time && curTime < (e.time + evtDur);
+                    });
                     let triggerTime = curTime;
                     if (!activeEvent && totalTrackDur > 0) {
                         let lastEventEnd = (manifestEvents as any).__maxEnd as number | undefined;
                         if (lastEventEnd === undefined) {
                             lastEventEnd = 0;
                             for (let i = 0; i < manifestEvents.length; i++) {
-                                const end = manifestEvents[i].time + Math.max(0.02, manifestEvents[i].duration);
+                                const evtDur = manifestEvents[i].duration > 0 ? Math.max(0.02, manifestEvents[i].duration) : Math.max(0.02, timelineActiveDur);
+                                const end = manifestEvents[i].time + evtDur;
                                 if (end > lastEventEnd) lastEventEnd = end;
                             }
                             (manifestEvents as any).__maxEnd = lastEventEnd;
@@ -1702,7 +2287,10 @@ export class SampleNode extends BaseNode {
                             const patternBars = Math.max(1, Math.round(lastEventEnd / barSec));
                             const patternDur = Math.max(0.05, patternBars * barSec);
                             const timeInPattern = ((curTime % patternDur) + patternDur) % patternDur;
-                            const loopedEvent = manifestEvents.find(e => timeInPattern >= e.time && timeInPattern < (e.time + Math.max(0.02, e.duration)));
+                            const loopedEvent = manifestEvents.find(e => {
+                                const evtDur = e.duration > 0 ? Math.max(0.02, e.duration) : Math.max(0.02, timelineActiveDur);
+                                return timeInPattern >= e.time && timeInPattern < (e.time + evtDur);
+                            });
                             if (loopedEvent) {
                                 activeEvent = loopedEvent;
                                 triggerTime = timeInPattern;
@@ -1736,7 +2324,12 @@ export class SampleNode extends BaseNode {
                             if (cachedEvtBuf) {
                                 displayBuffer = this.applySampleNodeGain(cachedEvtBuf) || displayBuffer;
                             } else {
-                                void fetchAudioBuffer(evtFp);
+                                const slotPk = this.slotPeaks.get(irideActiveSlot);
+                                if (slotPk && this.slotPeakPaths.get(irideActiveSlot) === evtFp) {
+                                    displayPeaks = slotPk;
+                                } else {
+                                    void this.ensurePeaksLoaded(evtFp, irideActiveSlot);
+                                }
                             }
                         }
                     }
@@ -1790,9 +2383,9 @@ export class SampleNode extends BaseNode {
                         const eventStartNorm = typeof (activeEvent as any).sample_start === 'number' ? (activeEvent as any).sample_start : 0;
                         const isEventLoop = (activeEvent as any).loop !== undefined
                             ? Boolean((activeEvent as any).loop)
-                            : (this.properties?.sample_type === 'loop');
+                            : isRepeat;
                         const progressInCrop = isEventLoop
-                            ? ((eventStartNorm + sampleProgress) % 1.0)
+                            ? (((eventStartNorm + sampleProgress) % 1.0) + 1.0) % 1.0
                             : Math.max(0, Math.min(1, eventStartNorm + sampleProgress));
                         playbackProgress = cropStart + progressInCrop * activeSpan;
                         isTriggered = true;
@@ -1802,9 +2395,8 @@ export class SampleNode extends BaseNode {
                 } else {
                     const startBeat = Number(this.properties?.start_beat ?? 0);
                     const startSec = startBeat * (60 / targetBpm);
-                    const isLoop = this.properties?.sample_type === 'loop';
 
-                    if (isLoop && sampleActiveDuration > 0) {
+                    if (isRepeat && sampleActiveDuration > 0) {
                         const offsetFromStart = curTime - startSec;
                         if (offsetFromStart >= 0) {
                             const loopCycle = (offsetFromStart * effectivePitchRate) % sampleActiveDuration;
@@ -1815,7 +2407,7 @@ export class SampleNode extends BaseNode {
                             isTriggered = false;
                         }
                     } else {
-                        const endSec = startSec + (sampleActiveDuration / effectivePitchRate);
+                        const endSec = startSec + timelineActiveDur;
                         if (curTime >= startSec && curTime <= endSec) {
                             const elapsed = curTime - startSec;
                             const progress = Math.max(0, Math.min(1, (elapsed * effectivePitchRate) / sampleActiveDuration));
@@ -1832,10 +2424,19 @@ export class SampleNode extends BaseNode {
         const hasUserFx = getUserFxStages(this.properties?.chain).length > 0;
         const nodeRealtimePeaks = (this as any).realtimePeaks as Float32Array | undefined;
         const usePostFxPeaks = Boolean(win?.__sinRealtimeLoaded && nodeRealtimePeaks && hasUserFx);
+        const resolvedPeaks = usePostFxPeaks
+            ? nodeRealtimePeaks
+            : (!displayBuffer ? (displayPeaks || (filepath && sampleDur > 45 ? nodeRealtimePeaks : undefined)) : undefined);
+        const isLoading = Boolean(
+            filepath
+            && !displayBuffer
+            && !resolvedPeaks
+            && (this.isLoadingAudio || this.isLoadingPeaks)
+        );
 
         return {
             buffer: usePostFxPeaks ? undefined : displayBuffer,
-            peaks: usePostFxPeaks ? nodeRealtimePeaks : undefined,
+            peaks: resolvedPeaks,
             duration: sampleActiveDuration,
             cropStart,
             cropEnd,
@@ -1844,6 +2445,8 @@ export class SampleNode extends BaseNode {
             isTriggered,
             bufferedProgress: 1.0,
             isInvalidated: false,
+            isLoading,
+            loadingLabel: isLoading ? 'Loading…' : undefined,
             slotCount: slots.length,
             activeSlot: irideActiveSlot
         };
@@ -2034,15 +2637,26 @@ export class SampleNode extends BaseNode {
                     : undefined
             },
             {
-                kind: 'segmented',
-                id: 'sample_type',
-                value: String(this.properties?.sample_type || 'loop'),
-                options: [
-                    { value: 'loop', label: 'Loop', title: 'Loop mode' },
-                    { value: 'one_shot', label: '1-Shot', title: 'One-Shot mode' }
-                ],
-                onChange: (val) => {
-                    this.updateProperty('sample_type', val);
+                kind: 'toggle',
+                id: 'repeat',
+                label: 'Repeat',
+                title: 'Repeat (tile) sample across parent Track / Arrangement',
+                active: this.isRepeatEnabled(),
+                tone: 'emerald',
+                onToggle: () => {
+                    this.updateProperty('repeat', !this.isRepeatEnabled());
+                    notifyRefresh();
+                }
+            },
+            {
+                kind: 'toggle',
+                id: 'warp',
+                label: 'Warp',
+                title: 'Warp (Rubber Band BPM sync & independent pitch; Off = Tape Repitch)',
+                active: this.isWarpEnabled(),
+                tone: 'amber',
+                onToggle: () => {
+                    this.updateProperty('warp', !this.isWarpEnabled());
                     notifyRefresh();
                 }
             },

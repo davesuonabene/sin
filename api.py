@@ -1589,6 +1589,10 @@ def get_library(vault_id: Optional[int] = None):
                     attrs["folder"] = extra["folder"]
                 if extra.get("is_folder"):
                     attrs["is_folder"] = True
+                if extra.get("profile_id"):
+                    attrs["profile_id"] = extra["profile_id"]
+                if extra.get("profile_label"):
+                    attrs["profile_label"] = extra["profile_label"]
                 rec = {
                     "id": iid,
                     "child_id": iid,

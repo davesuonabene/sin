@@ -978,11 +978,11 @@ def dissolve_folder(db: Session, folder_id: int) -> dict:
     folder = db.query(models.FolderItem).filter(models.FolderItem.id == folder_id).first()
     if not folder:
         raise ValueError("Folder not found")
-    if isinstance(folder, (models.ProjectItem, models.MultitrackItem, models.ZoomH4Item)) or folder.type in {
-        "project",
-        "multitrack",
-        "zoom_h4",
-    }:
+    if (
+        isinstance(folder, (models.ProjectItem, models.MultitrackItem, models.ZoomH4Item))
+        or folder.type in {"project", "multitrack", "zoom_h4"}
+        or (getattr(folder, "attributes", None) or {}).get("profile_id") == "sample_pack"
+    ):
         raise ValueError("Only standard folders can be dissolved")
 
     vault = vaults.get_vault(db, folder.vault_id)

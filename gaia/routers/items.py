@@ -488,10 +488,16 @@ def _apply_item_update(db_item, req: schemas.ItemUpdate, db: Session, *, commit:
             return project_service.rename_project(db, db_item.id, req.title or "")
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    requested_type = req.type if "type" in fields else db_item.type
-    if requested_type and requested_type != db_item.type:
+    requested_type = req.type if "type" in fields else None
+    current_effective_type = crud.effective_item_type(db_item)
+    if requested_type and (requested_type != db_item.type or requested_type != current_effective_type):
         if db_item.type in {"audio", "sample", "track"} and requested_type in {"audio", "sample", "track"}:
             db_item = crud.reclassify_audio(db, db_item.id, requested_type)
+        elif db_item.type in crud.CONTAINER_RECLASSIFY_TYPES and requested_type in crud.CONTAINER_TARGET_TYPES:
+            try:
+                db_item = crud.reclassify_container(db, db_item.id, requested_type)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             raise HTTPException(status_code=400, detail="This asset cannot be changed to the selected type")
 

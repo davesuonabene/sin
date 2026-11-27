@@ -43,6 +43,9 @@ export const ICONS = {
   pencil: `${SVG_OPEN}<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>${SVG_CLOSE}`,
   undo: `${SVG_OPEN}<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>${SVG_CLOSE}`,
   arrowLeft: `${SVG_OPEN}<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>${SVG_CLOSE}`,
+  arrowRight: `${SVG_OPEN}<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>${SVG_CLOSE}`,
+  copy: `${SVG_OPEN}<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>${SVG_CLOSE}`,
+  clipboard: `${SVG_OPEN}<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/>${SVG_CLOSE}`,
   palette: `${SVG_OPEN}<circle cx="12" cy="12" r="9"/><circle cx="8.5" cy="10.5" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10.5" r="1" fill="currentColor" stroke="none"/>${SVG_CLOSE}`,
   activity: `${SVG_OPEN}<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>${SVG_CLOSE}`,
   fit: `${SVG_OPEN}<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>${SVG_CLOSE}`,
@@ -50,6 +53,9 @@ export const ICONS = {
   check: `${SVG_OPEN}<polyline points="20 6 9 17 4 12"/>${SVG_CLOSE}`,
   layers: `${SVG_OPEN}<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>${SVG_CLOSE}`,
   more: `${SVG_OPEN}<circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="5" cy="12" r="1.2" fill="currentColor" stroke="none"/>${SVG_CLOSE}`,
+  graphView: `${SVG_OPEN}<rect x="2.5" y="4" width="6" height="5" rx="1"/><rect x="2.5" y="15" width="6" height="5" rx="1"/><rect x="15.5" y="9.5" width="6" height="5" rx="1"/><path d="M8.5 6.5h3.5v5.5h3.5M8.5 17.5h3.5V12"/>${SVG_CLOSE}`,
+  timelineView: `${SVG_OPEN}<line x1="3" y1="5" x2="21" y2="5"/><rect x="3" y="8.5" width="11" height="3.2" rx="0.8"/><rect x="7" y="13.5" width="13" height="3.2" rx="0.8"/><rect x="3" y="18.5" width="8" height="2.8" rx="0.8"/>${SVG_CLOSE}`,
+  magnet: `${SVG_OPEN}<path d="M6 4v7a6 6 0 0 0 12 0V4"/><line x1="6" y1="8" x2="9.5" y2="8"/><line x1="14.5" y1="8" x2="18" y2="8"/>${SVG_CLOSE}`,
 };
 
 export function renderIcon(name, className = '') {

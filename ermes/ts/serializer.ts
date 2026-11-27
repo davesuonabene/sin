@@ -185,13 +185,21 @@ export function serializeNodeSubtree(
             || Boolean(nodeObj?.properties?.length_inherited);
         const parentWrapperBars = parentTotalBars ?? findParentWrapperBars(nodeId);
         const fallbackBars = parentWrapperBars ?? workspaceBars;
-        const isSampleLoop = (nodeObj?.properties?.sample_type ?? data?.sample_type ?? 'loop') === 'loop';
+        const rawRepeat = data?.repeat ?? nodeObj?.properties?.repeat;
+        const rawSampleType = data?.sample_type ?? nodeObj?.properties?.sample_type;
+        const repeat = rawRepeat !== undefined
+            ? Boolean(rawRepeat)
+            : (rawSampleType !== undefined ? String(rawSampleType).toLowerCase() === 'loop' : true);
+        const sample_type = repeat ? 'loop' : 'one_shot';
+        const isSampleLoop = repeat;
         let total_bars: number | undefined;
         if (isAutoExplicit) {
             total_bars = undefined;
         } else if (isGlobalOrInherited) {
             if (nodeType === 'sample') {
-                total_bars = (isSampleLoop && (parentNodeType === undefined || parentNodeType === 'track' || parentNodeType === 'null')) ? fallbackBars : undefined;
+                // Standalone SampleNode preview (parentNodeType === undefined) always uses
+                // its exact cropped active duration rather than inheriting global total_bars.
+                total_bars = (isSampleLoop && (parentNodeType === 'track' || parentNodeType === 'null')) ? fallbackBars : undefined;
             } else if (nodeType === 'track') {
                 total_bars = fallbackBars;
             } else if (nodeType === 'null') {
@@ -338,12 +346,20 @@ export function serializeNodeSubtree(
             });
         }
 
-        const sample_type = data?.sample_type || nodeObj?.properties?.sample_type || "loop";
         const crop_start = data?.crop_start ?? nodeObj?.properties?.crop_start ?? 0.0;
         const crop_end = data?.crop_end ?? nodeObj?.properties?.crop_end ?? 1.0;
         const transpose = data?.transpose ?? nodeObj?.properties?.transpose ?? 0.0;
         const cents = data?.cents ?? nodeObj?.properties?.cents ?? 0.0;
-        const stretch_mode = data?.stretch_mode || nodeObj?.properties?.stretch_mode || "time_stretch";
+        const rawWarp = data?.warp ?? nodeObj?.properties?.warp;
+        const rawStretchMode = data?.stretch_mode ?? nodeObj?.properties?.stretch_mode;
+        const warp: boolean | undefined = rawWarp !== undefined
+            ? Boolean(rawWarp)
+            : (rawStretchMode != null
+                ? !['pitch_shift', 'repitch', 'varispeed', 'off'].includes(String(rawStretchMode).toLowerCase())
+                : undefined);
+        const stretch_mode = warp !== undefined
+            ? (warp ? 'time_stretch' : (String(rawStretchMode || '').toLowerCase() === 'off' ? 'off' : 'pitch_shift'))
+            : (rawStretchMode || 'time_stretch');
         const stretch_factor = data?.stretch_factor ?? nodeObj?.properties?.stretch_factor ?? 1.0;
         const stretch_algorithm = data?.stretch_algorithm || nodeObj?.properties?.stretch_algorithm || "rubberband";
         const key_match_mode = data?.key_match_mode || nodeObj?.properties?.key_match_mode || "off";
@@ -378,6 +394,8 @@ export function serializeNodeSubtree(
                     crop_end: s?.crop_end ?? s?.sample_end ?? crop_end,
                     pitch_shift: s?.pitch_shift ?? (idx === activeIdx ? transpose : undefined),
                     time_stretch: s?.time_stretch ?? (idx === activeIdx ? stretch_factor : undefined),
+                    repeat: s?.repeat ?? (idx === activeIdx ? repeat : undefined),
+                    warp: s?.warp ?? (idx === activeIdx ? warp : undefined),
                     field_operators: s?.field_operators,
                 }));
             } else {
@@ -392,6 +410,8 @@ export function serializeNodeSubtree(
                     crop_end: crop_end,
                     pitch_shift: transpose,
                     time_stretch: stretch_factor,
+                    repeat: repeat,
+                    warp: warp,
                     field_operators: nodeObj?.properties?.field_operators ?? data?.field_operators,
                 }];
             }
@@ -512,6 +532,8 @@ export function serializeNodeSubtree(
             node_name: name,
             node_type: nodeType,
             active_slot: activeIdx,
+            repeat: rawRepeat !== undefined ? repeat : undefined,
+            warp: warp,
             sample_type: sample_type,
             filepath: filepath,
             original_bpm: original_bpm,
@@ -520,6 +542,9 @@ export function serializeNodeSubtree(
             bpm: bpm,
             start_beat: start_beat,
             mix_mode: mix_mode,
+            muted: Boolean(nodeObj?.properties?.muted ?? data?.muted ?? false),
+            solo: Boolean(nodeObj?.properties?.solo ?? data?.solo ?? false),
+            pan: Number(nodeObj?.properties?.pan ?? data?.pan ?? 0) || 0,
             project_name: nodeObj?.properties?.project_name ?? data?.project_name ?? projectName,
             export_directory: nodeObj?.properties?.export_directory ?? data?.export_directory,
             export_pattern: nodeObj?.properties?.export_pattern ?? data?.export_pattern,

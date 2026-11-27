@@ -47,6 +47,7 @@ class GraphAddItemRequest(BaseModel):
     volume: float = 1.0
     muted: bool = False
     cuts: list[dict] | None = None
+    layers: list[dict] | None = None
 
 
 router = APIRouter(tags=["editor"])
@@ -168,6 +169,7 @@ def add_item_to_project_graph(
             volume=req.volume,
             muted=req.muted,
             cuts=req.cuts,
+            layers=req.layers,
         )
         return session_service.open_session(db, project_id)
     except ValueError as exc:
@@ -298,6 +300,8 @@ def list_vault_export_folders(vault_id: int, db: Session = Depends(database.get_
     items = []
     for folder in folders:
         if project_service._find_owning_project(db, folder) is not None:
+            continue
+        if (getattr(folder, "attributes", None) or {}).get("profile_id") == "sample_pack":
             continue
         folder_path = Path(folder.absolute_path).resolve()
         try:

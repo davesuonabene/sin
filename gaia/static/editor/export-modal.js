@@ -174,7 +174,7 @@ export function createExportModal() {
             bitrate_kbps: 192,
         };
 
-        return {
+        const payload = {
             source_item_id: target.item_id,
             target_id: target.id,
             main_start_frame: stateSnap.main_start_frame ?? null,
@@ -194,6 +194,16 @@ export function createExportModal() {
             output_format: formatSelect?.value || (target.media_kind === 'video' ? 'mp4' : 'wav'),
             destination,
         };
+        if (target.is_multitrack && Array.isArray(stateSnap.layers)) {
+            payload.layers = stateSnap.layers.map(layer => ({
+                item_id: Number(layer.item_id),
+                pre_gain_db: Number(layer.pre_gain_db ?? 0),
+                volume: Math.max(0, Math.min(1, Number(layer.volume ?? 1))),
+                muted: Boolean(layer.muted),
+                solo: Boolean(layer.solo),
+            }));
+        }
+        return payload;
     }
 
     async function pollMediaJob(jobId) {
@@ -291,7 +301,9 @@ export function createExportModal() {
         if (newVersionCheckbox) newVersionCheckbox.checked = false;
 
         if (eyebrow) {
-            eyebrow.textContent = target.media_kind === 'video' ? 'Non-destructive Video Export' : 'Non-destructive Audio Export';
+            eyebrow.textContent = target.media_kind === 'video'
+                ? 'Non-destructive Video Export'
+                : (target.is_multitrack ? 'Non-destructive Multitrack Sum Export' : 'Non-destructive Audio Export');
         }
         if (title) {
             title.textContent = segments.length === 1

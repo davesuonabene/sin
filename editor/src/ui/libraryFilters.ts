@@ -17,6 +17,9 @@ export function normalizeFacetValue(value: unknown): string {
 
 export function getAssetType(item: any): string {
     const declaredType = normalizeFacetValue(item?.type);
+    if ((declaredType === 'folder' || declaredType === 'collection') && normalizeFacetValue(item?.attributes?.profile_id) === 'sample_pack') {
+        return 'sample_pack';
+    }
     if (declaredType && declaredType !== 'item') return declaredType;
 
     const source = normalizeFacetValue(item?.name || item?.absolute_path || item?.filepath);

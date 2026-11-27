@@ -49,6 +49,19 @@ export const VISUALIZATION_TYPE_LABELS: Record<VisualizationTypeId, string> = {
 /** Default attenuation applied before processing newly-created sample nodes. */
 export const DEFAULT_SAMPLE_INPUT_GAIN_DB = -6;
 
+export type CompactCardVisualizerKind =
+    | 'waveform_crop'
+    | 'sequence_grid'
+    | 'arrangement'
+    | 'preamp'
+    | 'voice_isolator'
+    | 'bus_meter';
+
+export interface CompactCardSpec {
+    visualizer: CompactCardVisualizerKind;
+    paramKeys: readonly string[];
+}
+
 export type NodeToolbarControl =
     | {
         kind: 'toggle';
@@ -193,6 +206,15 @@ export abstract class BaseNode extends LGraphNode {
     static tabs = ["TRACK", "CHAIN", "EXPORT", "COMMON"];
     static defaultVisualizationType: VisualizationTypeId = 'loop';
     static supportedVisualizationTypes: readonly VisualizationTypeId[] = ['loop', 'realtime', 'spectrum'];
+    static compactCardSpec: CompactCardSpec = {
+        visualizer: 'bus_meter',
+        paramKeys: [],
+    };
+
+    getCompactCardSpec(): CompactCardSpec {
+        const ctor = this.constructor as typeof BaseNode;
+        return ctor.compactCardSpec || BaseNode.compactCardSpec;
+    }
 
     private _sharedWaveformRenderer?: WaveformRenderer;
     private _sharedOscilloscopeRenderer?: OscilloscopeRenderer;
@@ -856,14 +878,21 @@ export abstract class BaseNode extends LGraphNode {
     }
 
     getFieldOperator(key: string): string {
+        if (this.properties?.field_dynamic_enabled?.[key] === false) {
+            return '';
+        }
         const ops = this.properties?.field_operators;
         if (ops && typeof ops === 'object') {
             const expr = String(ops[key] ?? '').trim();
-            if (isFieldOperatorExpression(expr)) return expr;
+            if (key === 'pool_query') {
+                if (isCalculatedPoolQuery(expr, this.getPoolItems())) return expr;
+            } else if (isFieldOperatorExpression(expr)) {
+                return expr;
+            }
         }
         if (key === 'pool_query') {
             const raw = String(this.properties?.pool_query ?? '').trim();
-            return isFieldOperatorExpression(raw, this.getPoolItems()) ? raw : '';
+            return isCalculatedPoolQuery(raw, this.getPoolItems()) ? raw : '';
         }
         if (key === 'sample_slot' || key === 'seed') {
             const raw = String(this.properties?.[key] ?? '').trim();
@@ -876,21 +905,136 @@ export abstract class BaseNode extends LGraphNode {
         return Boolean(this.getFieldOperator(key));
     }
 
+    getStaticFieldValue(key: string): any {
+        return this.properties?.field_static_values?.[key];
+    }
+
+    hasStaticFieldValue(key: string): boolean {
+        const map = this.properties?.field_static_values;
+        return Boolean(map && typeof map === 'object' && Object.prototype.hasOwnProperty.call(map, key) && map[key] !== undefined);
+    }
+
+    setStaticFieldValue(key: string, value: any): void {
+        if (!this.properties) this.properties = {};
+        if (!this.properties.field_static_values || typeof this.properties.field_static_values !== 'object') {
+            this.properties.field_static_values = {};
+        }
+        if (value === undefined) {
+            delete this.properties.field_static_values[key];
+        } else {
+            this.properties.field_static_values[key] = value;
+        }
+    }
+
+    getSavedDynamicExpression(key: string): string {
+        const activeOp = this.getFieldOperator(key);
+        if (activeOp) return activeOp;
+        const saved = this.properties?.field_dynamic_expressions?.[key];
+        return typeof saved === 'string' ? saved : '';
+    }
+
+    setSavedDynamicExpression(key: string, expr: string): void {
+        if (!this.properties) this.properties = {};
+        if (!this.properties.field_dynamic_expressions || typeof this.properties.field_dynamic_expressions !== 'object') {
+            this.properties.field_dynamic_expressions = {};
+        }
+        const trimmed = String(expr ?? '').trim();
+        if (trimmed) {
+            this.properties.field_dynamic_expressions[key] = trimmed;
+        } else {
+            delete this.properties.field_dynamic_expressions[key];
+        }
+    }
+
+    isFieldDynamicActive(key: string): boolean {
+        const explicit = this.properties?.field_dynamic_enabled?.[key];
+        if (explicit === true) return true;
+        if (explicit === false) return false;
+        if (key === 'pool_query') {
+            const raw = String(this.properties?.pool_query ?? '').trim();
+            if (!raw) return false;
+            const fp = String(this.properties?.filepath ?? '').trim();
+            if (fp) {
+                const base = (fp.split(/[\\/]/).pop() || '').toLowerCase();
+                const baseStem = base.replace(/\.[^.]+$/, '');
+                const rawLower = raw.toLowerCase();
+                if (rawLower === base || rawLower === baseStem || rawLower === fp.toLowerCase()) {
+                    return false;
+                }
+            }
+            return isCalculatedPoolQuery(raw, this.getPoolItems());
+        }
+        return this.hasFieldOperator(key);
+    }
+
+    setFieldDynamicActive(key: string, active: boolean): void {
+        if (!this.properties) this.properties = {};
+        if (!this.properties.field_dynamic_enabled || typeof this.properties.field_dynamic_enabled !== 'object') {
+            this.properties.field_dynamic_enabled = {};
+        }
+        this.properties.field_dynamic_enabled[key] = Boolean(active);
+    }
+
     setFieldOperator(key: string, expr: string): void {
         if (!this.properties) this.properties = {};
         if (!this.properties.field_operators || typeof this.properties.field_operators !== 'object') {
             this.properties.field_operators = {};
         }
         const trimmed = String(expr ?? '').trim();
-        if (isFieldOperatorExpression(trimmed)) {
+        const isOp = key === 'pool_query'
+            ? isCalculatedPoolQuery(trimmed, this.getPoolItems())
+            : isFieldOperatorExpression(trimmed);
+        if (isOp) {
             this.properties.field_operators[key] = trimmed;
+            this.setSavedDynamicExpression(key, trimmed);
+            this.setFieldDynamicActive(key, true);
         } else {
             delete this.properties.field_operators[key];
+            this.setFieldDynamicActive(key, false);
         }
     }
 
     clearFieldOperator(key: string): void {
         this.setFieldOperator(key, '');
+    }
+
+    private readFieldCurrentValue(key: string, field?: FieldSchema): any {
+        if (typeof field?.getValue === 'function') {
+            return field.getValue(this);
+        }
+        const chainKey = parseChainParamFieldKey(key);
+        if (chainKey) {
+            const found = findChainModuleParam(this, key);
+            if (found) {
+                const raw = found.module.params?.[chainKey.paramKey];
+                if (raw !== undefined && raw !== null) {
+                    if (field?.type === 'boolean') return typeof raw === 'boolean' ? raw : Number(raw) >= 0.5;
+                    return raw;
+                }
+            }
+        }
+        const val = this.properties?.[key];
+        return val !== undefined ? val : field?.default;
+    }
+
+    private writeFieldDirectValue(key: string, value: any, field?: FieldSchema): any {
+        if (typeof field?.setValue === 'function') {
+            return field.setValue(this, value);
+        }
+        const chainKey = parseChainParamFieldKey(key);
+        if (chainKey && Array.isArray(this.properties?.chain)) {
+            const nextChain = this.properties.chain.map((m: any) =>
+                m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m
+            );
+            const mod = nextChain.find((m: any) => m && String(m.id) === chainKey.moduleId);
+            if (mod) {
+                mod.params[chainKey.paramKey] = typeof value === 'boolean' ? (value ? 1 : 0) : Number(value);
+                this.updateProperty('chain', nextChain);
+            }
+            return value;
+        }
+        this.updateProperty(key, value);
+        return value;
     }
 
     evaluateFieldOperatorForKey(key: string, expr: string, field?: FieldSchema, triggerOverride?: number): any {
@@ -919,13 +1063,38 @@ export abstract class BaseNode extends LGraphNode {
             return wrapSlotIndex(rawSlot, upstreamSlots);
         }
 
+        if (schema?.type === 'boolean') {
+            const res = evaluateSelectFieldOperator(
+                expr,
+                [
+                    { value: false, label: 'off' },
+                    { value: true, label: 'on' },
+                ],
+                {
+                    triggerCount,
+                    seed,
+                    salt,
+                    fallback: Boolean(schema.default),
+                }
+            );
+            return res === true || String(res).toLowerCase() === 'true' || String(res) === '1' || String(res).toLowerCase() === 'on';
+        }
+
         if (schema?.type === 'select' || schema?.type === 'radio') {
-            return evaluateSelectFieldOperator(expr, schema.options || [], {
+            const res = evaluateSelectFieldOperator(expr, schema.options || [], {
                 triggerCount,
                 seed,
                 salt,
                 fallback: schema.default,
             });
+            if (typeof schema.default === 'boolean') {
+                return res === true || String(res).toLowerCase() === 'true';
+            }
+            if (typeof schema.default === 'number') {
+                const asNum = Number(res);
+                return Number.isFinite(asNum) ? asNum : schema.default;
+            }
+            return res;
         }
 
         const isDb = schema?.type === 'db' || key === 'gain';
@@ -943,30 +1112,137 @@ export abstract class BaseNode extends LGraphNode {
 
     applyFieldOperator(key: string, expr: string, field?: FieldSchema): any {
         const trimmed = String(expr ?? '').trim();
-        if (!isFieldOperatorExpression(trimmed)) {
+        const isOp = key === 'pool_query'
+            ? isCalculatedPoolQuery(trimmed, this.getPoolItems())
+            : isFieldOperatorExpression(trimmed);
+        if (!isOp) {
             this.clearFieldOperator(key);
             return undefined;
         }
-        this.setFieldOperator(key, trimmed);
-        const resolved = this.evaluateFieldOperatorForKey(key, trimmed, field);
-        const chainKey = parseChainParamFieldKey(key);
-        if (chainKey && Array.isArray(this.properties?.chain)) {
-            const nextChain = this.properties.chain.map((m: any) =>
-                m && typeof m === 'object' ? { ...m, params: { ...(m.params || {}) } } : m
-            );
-            const mod = nextChain.find((m: any) => m && String(m.id) === chainKey.moduleId);
-            if (mod) {
-                mod.params[chainKey.paramKey] = typeof resolved === 'boolean' ? (resolved ? 1 : 0) : Number(resolved);
-                this.updateProperty('chain', nextChain);
+        if (!this.isFieldDynamicActive(key) && !this.hasStaticFieldValue(key)) {
+            const cur = this.readFieldCurrentValue(key, field);
+            if (cur !== undefined) {
+                this.setStaticFieldValue(key, cur);
             }
-            return resolved;
         }
+        this.setFieldOperator(key, trimmed);
+        const resolved = key === 'pool_query' ? trimmed : this.evaluateFieldOperatorForKey(key, trimmed, field);
         if (key === 'sample_slot' || key === 'pool_query' || key === 'seed') {
             this.updateProperty(key, trimmed);
         } else {
-            this.updateProperty(key, resolved);
+            this.writeFieldDirectValue(key, resolved, field);
         }
         return resolved;
+    }
+
+    toggleFieldDynamic(
+        key: string,
+        enabled: boolean,
+        field?: FieldSchema,
+        options?: { currentStaticFallback?: any; currentResolvedValue?: any }
+    ): { active: boolean; value: any; expression: string; changed: boolean } {
+        const schema = field || findChainModuleParam(this, key)?.schema || this.getFields().find(f => f.key === key);
+        const currentVal = options?.currentResolvedValue !== undefined
+            ? options.currentResolvedValue
+            : this.readFieldCurrentValue(key, schema);
+
+        if (enabled) {
+            if (!this.isFieldDynamicActive(key)) {
+                const staticSnapshot = options?.currentStaticFallback !== undefined
+                    ? options.currentStaticFallback
+                    : currentVal;
+                if (staticSnapshot !== undefined) {
+                    this.setStaticFieldValue(key, staticSnapshot);
+                }
+            }
+            this.setFieldDynamicActive(key, true);
+            const savedExpr = this.getSavedDynamicExpression(key);
+            if (!savedExpr) {
+                return { active: true, value: currentVal, expression: '', changed: false };
+            }
+            if (key === 'pool_query') {
+                const sampleAny = this as any;
+                if (typeof sampleAny.applyPoolQuery === 'function' && this.getPoolItems().length > 0) {
+                    if (isFieldOperatorExpression(savedExpr, this.getPoolItems())) {
+                        this.resetTriggerCount?.();
+                    }
+                    sampleAny.applyPoolQuery(savedExpr, false, { forceDynamic: true });
+                } else {
+                    this.updateProperty('pool_query', savedExpr);
+                }
+                this.setSavedDynamicExpression('pool_query', savedExpr);
+                this.setFieldDynamicActive('pool_query', true);
+                return { active: true, value: savedExpr, expression: savedExpr, changed: true };
+            }
+            if (isFieldOperatorExpression(savedExpr)) {
+                this.resetTriggerCount?.();
+                const resolved = this.applyFieldOperator(key, savedExpr, schema);
+                const nextVal = (key === 'sample_slot' || key === 'seed') ? savedExpr : resolved;
+                return { active: true, value: nextVal, expression: savedExpr, changed: !Object.is(nextVal, currentVal) };
+            }
+            // Non-operator literal stored in dynamic expression box
+            const resolved = (key === 'sample_slot' || key === 'seed')
+                ? savedExpr
+                : this.evaluateFieldOperatorForKey(key, savedExpr, schema);
+            this.writeFieldDirectValue(key, resolved, schema);
+            this.setSavedDynamicExpression(key, savedExpr);
+            this.setFieldDynamicActive(key, true);
+            return { active: true, value: resolved, expression: savedExpr, changed: !Object.is(resolved, currentVal) };
+        }
+
+        // Turning Dynamic OFF -> preserve expression, fall back to saved static (or inherit last dynamic / blank)
+        const currentOp = this.getFieldOperator(key);
+        if (currentOp) {
+            this.setSavedDynamicExpression(key, currentOp);
+        }
+
+        let inheritedStatic = currentVal;
+        if (key === 'sample_slot' && currentOp) {
+            inheritedStatic = String(this.evaluateFieldOperatorForKey('sample_slot', currentOp, schema));
+        } else if (key === 'seed' && currentOp) {
+            inheritedStatic = this.evaluateFieldOperatorForKey('seed', currentOp, schema);
+        }
+
+        this.clearFieldOperator(key);
+
+        let fallbackVal: any;
+        if (this.hasStaticFieldValue(key)) {
+            fallbackVal = this.getStaticFieldValue(key);
+        } else {
+            if (key === 'pool_query') {
+                fallbackVal = typeof inheritedStatic === 'string' ? inheritedStatic : '';
+            } else if (inheritedStatic !== undefined) {
+                fallbackVal = inheritedStatic;
+            } else {
+                fallbackVal = schema?.default ?? '';
+            }
+            this.setStaticFieldValue(key, fallbackVal);
+        }
+
+        if (key === 'pool_query') {
+            const fallbackStr = String(fallbackVal ?? '').trim();
+            const sampleAny = this as any;
+            if (fallbackStr && typeof sampleAny.applyPoolQuery === 'function' && this.getPoolItems().length > 0) {
+                sampleAny.applyPoolQuery(fallbackStr, false, { forceStatic: true });
+            } else {
+                this.updateProperty('pool_query', fallbackStr);
+            }
+            this.setFieldDynamicActive('pool_query', false);
+            return {
+                active: false,
+                value: fallbackStr,
+                expression: this.getSavedDynamicExpression('pool_query'),
+                changed: true,
+            };
+        }
+
+        const written = this.writeFieldDirectValue(key, fallbackVal, schema);
+        return {
+            active: false,
+            value: written,
+            expression: this.getSavedDynamicExpression(key),
+            changed: !Object.is(written, currentVal),
+        };
     }
 
     evaluateAllFieldOperators(triggerOverride?: number): void {

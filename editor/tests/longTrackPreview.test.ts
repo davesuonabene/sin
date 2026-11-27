@@ -5,6 +5,8 @@ import { formatTransportTime, WaveformScrubCanvas } from '../../packages/ui/src/
 import { WaveformRenderer } from '../../packages/iride/src/renderers/WaveformRenderer.ts';
 import { PreampDenoiseNode } from '../src/nodes/PreampDenoiseNode.ts';
 import { VoiceIsolatorNode } from '../src/nodes/VoiceIsolatorNode.ts';
+import { SampleNode } from '../src/nodes/SampleNode.ts';
+import { serializeNodeSubtree } from '../../ermes/ts/serializer.ts';
 
 test('formatTransportTime formats hours cleanly for 1h+ timelines while keeping M:SS under 1h', () => {
     assert.equal(formatTransportTime(0), '0:00');
@@ -240,4 +242,85 @@ test('WaveformRenderer downsamples 1h+ waveforms cleanly and draws loading/cooki
     voice.applyProcessorStatus({ state: 'cooking_bypassed', progress: 0.2 });
     voice.properties.bypass = true;
     assert.equal(voice.resolveVisualizationSignal().isLoading, false);
+});
+
+test('WaveformRenderer keeps crop boundary lines visible during active playback', () => {
+    const strokeLines: Array<{ x1: number; y1: number; x2: number; y2: number; style: string }> = [];
+    let curX = 0;
+    let curY = 0;
+    const ctx: any = {
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1,
+        lineCap: 'butt',
+        font: '',
+        textAlign: '',
+        textBaseline: '',
+        save() {},
+        restore() {},
+        beginPath() {},
+        moveTo(x: number, y: number) { curX = x; curY = y; },
+        lineTo(x: number, y: number) { strokeLines.push({ x1: curX, y1: curY, x2: x, y2: y, style: String(this.strokeStyle) }); },
+        quadraticCurveTo() {},
+        closePath() {},
+        clip() {},
+        stroke() {},
+        fill() {},
+        fillRect() {},
+        arc() {},
+        fillText() {},
+        measureText: () => ({ width: 20 }),
+    };
+
+    const renderer = new WaveformRenderer();
+    const peaks = new Float32Array([-0.4, 0.4, -0.5, 0.5, -0.3, 0.3, -0.4, 0.4]);
+    renderer.setSignal({
+        peaks,
+        duration: 120,
+        cropStart: 0.25,
+        cropEnd: 0.75,
+        playbackProgress: 0.5,
+        isTriggered: true,
+    });
+    renderer.render(ctx, { x: 0, y: 0, width: 200, height: 50 }, { time: 30, duration: 120, beat: 0, bar: 0, step: 0, isPlaying: true });
+
+    // Crop boundaries at x=50 (0.25*200) and x=150 (0.75*200) MUST still be drawn while playing!
+    assert.ok(strokeLines.some(l => Math.abs(l.x1 - 50) < 1 && Math.abs(l.x2 - 50) < 1), 'cropStart boundary line must stay visible during playback');
+    assert.ok(strokeLines.some(l => Math.abs(l.x1 - 150) < 1 && Math.abs(l.x2 - 150) < 1), 'cropEnd boundary line must stay visible during playback');
+});
+
+test('Standalone SampleNode serialization never clamps to Global 4 bars, while Track-hosted Repeat sample inherits Track bars', () => {
+    const sample = new SampleNode();
+    sample.id = 10;
+    sample.updateProperty('filepath', '/vault/long_loop.wav');
+    sample.updateProperty('repeat', true);
+    sample.updateProperty('warp', true);
+
+    const track: any = {
+        id: 20,
+        type: 'Audio/Track',
+        title: 'Track 1',
+        properties: { node_type: 'track', total_bars: 8 },
+        inputs: [{ link: 1 }],
+    };
+    const fakeGraph: any = {
+        extra: { global_parameters: { bpm: 120, total_bars: 4, key: 'C' } },
+        links: { 1: { origin_id: 10, target_id: 20 } },
+        getNodeById: (id: number) => (id === 10 ? sample : id === 20 ? track : null),
+    };
+    const trackNodes = new Map<number, any>([
+        [10, { id: 10, type: 'sample', name: 'Sample', repeat: true, sample_type: 'loop', parentId: 20 }],
+        [20, { id: 20, type: 'track', name: 'Track 1', total_bars: 8, children: [10], parentId: null }],
+    ]);
+
+    // 1. Standalone SampleNode preview -> total_bars MUST be undefined (exact cropped duration!)
+    const standaloneModel = serializeNodeSubtree(fakeGraph, 10, trackNodes);
+    assert.equal(standaloneModel.repeat, true);
+    assert.equal(standaloneModel.warp, true);
+    assert.equal(standaloneModel.total_bars, undefined);
+
+    // 2. Track-hosted Repeat sample -> inherits Track's 8 bars so it tiles cleanly inside Track
+    const trackModel = serializeNodeSubtree(fakeGraph, 20, trackNodes);
+    assert.equal(trackModel.total_bars, 8);
+    assert.equal(trackModel.children[0].total_bars, 8);
 });

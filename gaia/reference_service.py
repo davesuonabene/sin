@@ -545,10 +545,17 @@ def _profile_component_suggestions(
 
 def _profile_preview_item(db: Session, folder: models.FolderItem) -> models.Item | None:
     profile_id = folder.attributes.get("profile_id")
+    if not profile_id and folder.type == "zoom_h4":
+        profile_id = "zoom_h4"
     if not profile_id:
         return None
     profile = profiles.get_profile(profile_id)
+    if not profile and profiles.TEMPLATE_DIRECTORY.is_dir():
+        profile = profiles.get_profile(profile_id, profiles_dir=profiles.TEMPLATE_DIRECTORY)
     if not profile:
+        for child in sorted(folder.children, key=lambda value: value.absolute_path.casefold()):
+            if (getattr(child, "attributes", None) or {}).get("profile_role") == "mixdown":
+                return child
         return None
     root = Path(folder.absolute_path)
     child_by_relative: dict[str, models.Item] = {}

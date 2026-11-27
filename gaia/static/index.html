@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/packages/ui/src/controls.css">
     <link rel="stylesheet" href="/packages/ui/src/menu.css">
     <link rel="stylesheet" href="/packages/ui/src/transport.css">
-    <link rel="stylesheet" href="/static/styles.css?v=67">
+    <link rel="stylesheet" href="/static/styles.css?v=69">
     <link rel="stylesheet" href="/static/menu-system.css?v=2">
 </head>
 
@@ -131,7 +131,8 @@
 
                     <div id="header-toolbar-row" class="header-toolbar-row">
                         <div class="header-toolbar-left">
-                            <button id="sidebar-toggle" class="ui-btn ui-btn--icon ui-btn--bordered toolbar-icon-button squared-btn sidebar-toggle-btn"
+                            <button id="sidebar-toggle"
+                                class="ui-btn ui-btn--icon ui-btn--bordered toolbar-icon-button squared-btn sidebar-toggle-btn"
                                 type="button" title="Toggle playlists &amp; vaults panel"
                                 aria-label="Toggle playlists and vaults panel" aria-expanded="false"
                                 aria-controls="library-sidebar">
@@ -164,29 +165,33 @@
                                 <span id="vault-sync-pill-text">synced</span>
                             </span>
                             <div class="quick-toolbar-buttons">
-                                <button id="create-project" class="ui-btn ui-btn--icon ui-btn--primary primary toolbar-icon-button squared-btn"
+                                <button id="create-project"
+                                    class="ui-btn ui-btn--icon ui-btn--primary primary toolbar-icon-button squared-btn"
                                     type="button" title="Create project" aria-label="Create project">
                                     <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
                                         <line x1="12" y1="5" x2="12" y2="19"></line>
                                         <line x1="5" y1="12" x2="19" y2="12"></line>
                                     </svg>
                                 </button>
-                                <button id="open-import" class="ui-btn ui-btn--icon ui-btn--bordered secondary toolbar-icon-button squared-btn" type="button"
-                                    title="Import assets" aria-label="Import assets">
+                                <button id="open-import"
+                                    class="ui-btn ui-btn--icon ui-btn--bordered secondary toolbar-icon-button squared-btn"
+                                    type="button" title="Import assets" aria-label="Import assets">
                                     <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
                                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                                         <polyline points="7 10 12 15 17 10"></polyline>
                                         <line x1="12" y1="15" x2="12" y2="3"></line>
                                     </svg>
                                 </button>
-                                <button id="review-sin-proposals" class="ui-btn ui-btn--icon ui-btn--bordered secondary toolbar-icon-button squared-btn"
+                                <button id="review-sin-proposals"
+                                    class="ui-btn ui-btn--icon ui-btn--bordered secondary toolbar-icon-button squared-btn"
                                     type="button" title="Review SIN proposals" aria-label="Review SIN proposals">
                                     <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
                                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                                     </svg>
                                 </button>
-                                <button id="refresh" class="ui-btn ui-btn--icon ui-btn--bordered secondary toolbar-icon-button squared-btn" type="button"
-                                    title="Refresh library" aria-label="Refresh library">
+                                <button id="refresh"
+                                    class="ui-btn ui-btn--icon ui-btn--bordered secondary toolbar-icon-button squared-btn"
+                                    type="button" title="Refresh library" aria-label="Refresh library">
                                     <svg class="toolbar-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
                                         <polyline points="23 4 23 10 17 10"></polyline>
                                         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
@@ -344,23 +349,37 @@
                             aria-label="Project checkpoints">
                             <option value="">Checkpoints…</option>
                         </select>
-                        <button id="editor-checkpoint-save" class="ui-btn ui-btn--bordered secondary micro-btn" type="button"
-                            title="Save checkpoint snapshot">+ CP</button>
-                        <button id="editor-checkpoint-restore" class="ui-btn ui-btn--icon ui-btn--bordered secondary micro-btn hidden" type="button" disabled
-                            title="Restore selected checkpoint" aria-label="Restore selected checkpoint">
-                            <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                        <button id="editor-checkpoint-save" class="ui-btn ui-btn--bordered secondary micro-btn"
+                            type="button" title="Save checkpoint snapshot">+ CP</button>
+                        <button id="editor-checkpoint-restore"
+                            class="ui-btn ui-btn--icon ui-btn--bordered secondary micro-btn hidden" type="button"
+                            disabled title="Restore selected checkpoint" aria-label="Restore selected checkpoint">
+                            <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <polyline points="1 4 1 10 7 10" />
+                                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                            </svg>
                         </button>
-                        <button id="editor-checkpoint-delete" class="ui-btn ui-btn--icon ui-btn--bordered ui-btn--danger secondary micro-btn hidden" type="button" disabled
-                            title="Delete selected checkpoint" aria-label="Delete selected checkpoint">
-                            <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        <button id="editor-checkpoint-delete"
+                            class="ui-btn ui-btn--icon ui-btn--bordered ui-btn--danger secondary micro-btn hidden"
+                            type="button" disabled title="Delete selected checkpoint"
+                            aria-label="Delete selected checkpoint">
+                            <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path
+                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            </svg>
                         </button>
                     </div>
-                    <button id="editor-save-btn" class="ui-btn ui-btn--primary primary micro-btn hidden" type="button" disabled>Save</button>
-                    <button id="editor-save-as-project-btn" class="ui-btn ui-btn--bordered primary micro-btn hidden" type="button"
-                        title="Save scratch edits as a GAIA Project">+ Project</button>
-                    <button id="media-editor-close" class="ui-btn ui-btn--icon ui-btn--bordered secondary icon-button" type="button"
-                        aria-label="Close editor" title="Close editor">
-                        <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    <button id="editor-save-btn" class="ui-btn ui-btn--primary primary micro-btn hidden" type="button"
+                        disabled>Save</button>
+                    <button id="editor-save-as-project-btn" class="ui-btn ui-btn--bordered primary micro-btn hidden"
+                        type="button" title="Save scratch edits as a GAIA Project">+ Project</button>
+                    <button id="media-editor-close" class="ui-btn ui-btn--icon ui-btn--bordered secondary icon-button"
+                        type="button" aria-label="Close editor" title="Close editor">
+                        <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
                     </button>
                 </div>
             </div>
@@ -385,21 +404,28 @@
                     aria-label="Editor targets"></div>
             </div>
             <div class="ui-transport-controls">
-                <button id="media-transport-play" class="ui-btn ui-btn--icon ui-btn--bordered media-transport-button" type="button" aria-label="Play"
-                    title="Play / Pause (Space)" disabled>
-                    <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><polygon points="7 5 19 12 7 19 7 5" fill="currentColor" stroke="none"/></svg>
+                <button id="media-transport-play" class="ui-btn ui-btn--icon ui-btn--bordered media-transport-button"
+                    type="button" aria-label="Play" title="Play / Pause (Space)" disabled>
+                    <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <polygon points="7 5 19 12 7 19 7 5" fill="currentColor" stroke="none" />
+                    </svg>
                 </button>
-                <button id="media-transport-stop" class="ui-btn ui-btn--icon ui-btn--bordered media-transport-button" type="button" aria-label="Stop"
-                    title="Stop" disabled>
-                    <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" stroke="none"/></svg>
+                <button id="media-transport-stop" class="ui-btn ui-btn--icon ui-btn--bordered media-transport-button"
+                    type="button" aria-label="Stop" title="Stop" disabled>
+                    <svg class="ui-svg-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" stroke="none" />
+                    </svg>
                 </button>
-                <button id="media-transport-cue" class="ui-btn ui-btn--bordered ui-transport-cue-btn media-transport-cue-btn hidden" type="button" aria-pressed="false"
-                    title="Cue mode: return to clicked start point on Stop &amp; Play">Cue</button>
+                <button id="media-transport-cue"
+                    class="ui-btn ui-btn--bordered ui-transport-cue-btn media-transport-cue-btn hidden" type="button"
+                    aria-pressed="false" title="Cue mode: return to clicked start point on Stop &amp; Play">Cue</button>
             </div>
             <span id="media-transport-time" class="media-transport-time ui-transport-time">0:00 / 0:00</span>
-            <div id="media-transport-waveform" class="media-transport-waveform ui-transport-timeline" title="Click or drag to scrub"></div>
+            <div id="media-transport-waveform" class="media-transport-waveform ui-transport-timeline"
+                title="Click or drag to scrub"></div>
             <div class="ui-transport-right">
-                <button id="media-editor-toggle" class="ui-btn ui-btn--bordered secondary micro-btn media-editor-toggle-button" type="button"
+                <button id="media-editor-toggle"
+                    class="ui-btn ui-btn--bordered secondary micro-btn media-editor-toggle-button" type="button"
                     disabled>Editor</button>
             </div>
         </footer>
@@ -987,13 +1013,13 @@
         </div>
     </dialog>
 
-    <script type="module" src="/packages/gaia-catalog-client/src/catalog-store.js?v=1"></script>
+    <script type="module" src="/packages/gaia-catalog-client/src/catalog-store.js?v=2"></script>
     <script type="module" src="/static/audio-preview.js?v=4"></script>
-    <script type="module" src="/static/editor/bootstrap.js?v=5"></script>
+    <script type="module" src="/static/editor/bootstrap.js?v=8"></script>
     <script src="/static/virtual-list.js?v=2"></script>
     <script src="/static/vault-reconciler.js?v=4"></script>
     <script src="/static/import-wizard.js?v=6"></script>
-    <script src="/static/app.js?v=96"></script>
+    <script src="/static/app.js?v=97"></script>
 </body>
 
 </html>

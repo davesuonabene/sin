@@ -327,6 +327,255 @@ class TestLongTrackTiling(unittest.TestCase):
         self.assertAlmostEqual(res["duration_seconds"], 24.0, places=2)
         self.assertGreater(max(abs(v) for v in res["peaks"]), 0.25)
 
+    def test_bus_mute_solo_pan_preserved_through_packer(self) -> None:
+        from core.plan_packer import pack_audio_node_model
+        from ermes.py.schemas import AudioNodeModel
+
+        model = AudioNodeModel(
+            node_id=10,
+            node_name="Master",
+            node_type="track",
+            total_bars=2.0,
+            children=[
+                AudioNodeModel(
+                    node_id=11,
+                    node_name="Drums",
+                    node_type="track",
+                    muted=True,
+                    solo=False,
+                    pan=-0.35,
+                ),
+                AudioNodeModel(
+                    node_id=12,
+                    node_name="Vocals",
+                    node_type="track",
+                    muted=False,
+                    solo=True,
+                    pan=0.25,
+                ),
+            ],
+        )
+        plan = pack_audio_node_model(model, System(bpm=120.0, sample_rate=48000, render_mode="preview"))
+        bus_by_key = {b.node_key: b for b in plan.buses}
+        self.assertIn("11", bus_by_key)
+        self.assertIn("12", bus_by_key)
+        self.assertTrue(bus_by_key["11"].muted)
+        self.assertFalse(bus_by_key["11"].solo)
+        self.assertAlmostEqual(bus_by_key["11"].pan, -0.35, places=3)
+        self.assertFalse(bus_by_key["12"].muted)
+        self.assertTrue(bus_by_key["12"].solo)
+        self.assertAlmostEqual(bus_by_key["12"].pan, 0.25, places=3)
+
+    def test_tile_visual_emits_bus_and_stage_node_ids(self) -> None:
+        wav = _write_test_wav(self.tmp_dir / "scoped_24s.wav", dur_sec=24.0, sr=8000)
+        cache = HybridTileCache(cache_dir=self.tmp_dir / "scoped_cache", ram_budget_mb=32)
+        visual_events: list[dict] = []
+        sched = TiledCookScheduler(
+            tile_cache=cache,
+            on_tile_visual=lambda ev: visual_events.append(ev),
+        )
+        try:
+            spec = TiledTrackSessionSpec(
+                source_id=77,
+                base_filepath=str(wav),
+                sample_rate=8000,
+                file_sample_rate=8000,
+                total_frames=192000,
+                duration_sec=24.0,
+                tile_sec=8.0,
+                tile_frames=64000,
+                num_tiles=3,
+                bus_node_ids=["2", "3", "5"],
+                stages=[
+                    TiledStageSpec(
+                        node_id="2",
+                        node_type="preamp_denoise",
+                        node_name="Preamp",
+                        processor_params={"stft_mode": "fast_single_res"},
+                    )
+                ],
+            )
+            sched.start_session(spec, playhead_sec=0.0)
+            self.assertTrue(sched.wait_for_playhead_tile(0.0, timeout_sec=5.0))
+            tile_ev = next((e for e in visual_events if e.get("tile_index") == 0), None)
+            self.assertIsNotNone(tile_ev)
+            self.assertEqual(tile_ev.get("bus_node_ids"), ["2", "3", "5"])
+            self.assertEqual(tile_ev.get("stage_node_ids"), ["2"])
+        finally:
+            sched.shutdown()
+
+    def test_long_sample_bypasses_offline_stretch_and_streams_from_disk(self) -> None:
+        from core.plan_packer import pack_audio_node_model
+        from ermes.py.schemas import AudioNodeModel
+
+        wav = _write_test_wav(self.tmp_dir / "long_recording_65s.wav", dur_sec=65.0, sr=8000)
+
+        # 1. Direct long Sample with loop/120bpm defaults at global 121 BPM must NOT run offline Rubber Band
+        direct_model = AudioNodeModel(
+            node_id=3,
+            node_name="Master Track",
+            node_type="track",
+            bpm=121.0,
+            total_bars=-1.0,
+            children=[
+                AudioNodeModel(
+                    node_id=1,
+                    node_name="Live Rec",
+                    node_type="sample",
+                    filepath=str(wav),
+                    sample_type="loop",
+                    original_bpm=120.0,
+                    bpm=121.0,
+                    stretch_mode="time_stretch",
+                    stretch_algorithm="rubberband",
+                )
+            ],
+        )
+        direct_sys = System(bpm=121.0, sample_rate=44100, render_mode="preview", allow_async_cook=True)
+        direct_plan = pack_audio_node_model(direct_model, direct_sys)
+        self.assertEqual(len(direct_plan.sources), 1)
+        self.assertIsNone(direct_plan.sources[0].pcm)
+        self.assertEqual(direct_plan.sources[0].filepath, str(wav))
+        self.assertFalse(direct_plan.sources[0].force_ram)
+        self.assertEqual(len(direct_plan.clips), 1)
+
+        # 2. Long Sample feeding an RX processor at 121 BPM must still engage zero-RAM tiled cooking
+        rx_model = AudioNodeModel(
+            node_id=3,
+            node_name="Master Track",
+            node_type="track",
+            bpm=121.0,
+            total_bars=-1.0,
+            children=[
+                AudioNodeModel(
+                    node_id=2,
+                    node_name="Preamp De-Noise",
+                    node_type="preamp_denoise",
+                    processor_params={"stft_mode": "fast_single_res"},
+                    children=[
+                        AudioNodeModel(
+                            node_id=1,
+                            node_name="Live Rec",
+                            node_type="sample",
+                            filepath=str(wav),
+                            sample_type="loop",
+                            original_bpm=120.0,
+                            bpm=121.0,
+                            stretch_mode="time_stretch",
+                            stretch_algorithm="rubberband",
+                        )
+                    ],
+                )
+            ],
+        )
+        rx_sys = System(bpm=121.0, sample_rate=44100, render_mode="preview", allow_async_cook=True)
+        rx_plan = pack_audio_node_model(rx_model, rx_sys)
+        self.assertEqual(len(rx_sys.pending_tiled_cooks), 1)
+        self.assertIsNone(rx_plan.sources[0].pcm)
+        self.assertEqual(rx_plan.sources[0].filepath, str(wav))
+
+    def test_crop_aware_single_pass_and_tiled_rubberband_with_orthogonal_repeat_warp(self) -> None:
+        from core.plan_packer import pack_audio_node_model
+        from core.render_plan import SIN_CLIP_LOOP_SOURCE, SIN_CLIP_TILE_TIME_STRETCHED
+        from ermes.py.schemas import AudioNodeModel
+
+        wav = _write_test_wav(self.tmp_dir / "long_warp_40s.wav", dur_sec=40.0, sr=8000)
+
+        # 1. Long 40s file cropped to a 4s slice (0.20..0.30) with Warp ON & Repeat OFF:
+        #    MUST cook ONLY the 4s slice in a single pass (~2.67s at 1.5x), NOT all 40s!
+        cropped_model = AudioNodeModel(
+            node_id=10,
+            node_name="CroppedWarp",
+            node_type="sample",
+            filepath=str(wav),
+            repeat=False,
+            warp=True,
+            crop_start=0.20,
+            crop_end=0.30,
+            stretch_factor=1.5,
+            stretch_algorithm="librosa",  # deterministic in CI even without rubberband.exe
+        )
+        crop_sys = System(bpm=120.0, sample_rate=8000, render_mode="preview", allow_async_cook=True)
+        crop_plan = pack_audio_node_model(cropped_model, crop_sys)
+        self.assertEqual(len(crop_plan.sources), 1)
+        self.assertIsNotNone(crop_plan.sources[0].pcm)
+        self.assertEqual(len(crop_sys.pending_tiled_cooks), 0)
+        cooked_dur = crop_plan.sources[0].num_frames / 8000.0
+        self.assertAlmostEqual(cooked_dur, 4.0 / 1.5, delta=0.15)
+        self.assertEqual(crop_plan.clips[0].source_start_ratio, 0.0)
+        self.assertEqual(crop_plan.clips[0].source_end_ratio, 1.0)
+        self.assertEqual(crop_plan.clips[0].flags & SIN_CLIP_LOOP_SOURCE, 0)
+
+        # 2. Long 40s file (uncropped >16s) with Warp ON -> zero-RAM Tiled Rubber Band over LayeredTileStore!
+        tiled_model = AudioNodeModel(
+            node_id=11,
+            node_name="LongWarp",
+            node_type="sample",
+            filepath=str(wav),
+            repeat=False,
+            warp=True,
+            original_bpm=100.0,
+            target_bpm=125.0,
+            bpm=125.0,
+            stretch_algorithm="librosa",
+        )
+        tiled_sys = System(bpm=125.0, sample_rate=8000, render_mode="preview", allow_async_cook=True)
+        tiled_plan = pack_audio_node_model(tiled_model, tiled_sys)
+        self.assertEqual(len(tiled_plan.sources), 1)
+        self.assertIsNone(tiled_plan.sources[0].pcm)
+        self.assertGreater(tiled_plan.sources[0].layered_tile_frames, 0)
+        self.assertNotEqual(tiled_plan.clips[0].flags & SIN_CLIP_TILE_TIME_STRETCHED, 0)
+        self.assertEqual(len(tiled_sys.pending_tiled_cooks), 1)
+        spec = tiled_sys.pending_tiled_cooks[0]
+        self.assertTrue(spec.tile_time_stretched)
+        self.assertAlmostEqual(spec.stretch_tempo_rate, 1.25, places=3)
+        self.assertEqual(spec.stages[0].node_type, "rubberband_stretch")
+        # 40s / 1.25 = 32s stretched output -> 4 tiles @ 8s
+        self.assertEqual(spec.num_tiles, 4)
+
+        # Execute tile 0 through TiledCookScheduler and verify core tile length + timeline mapping
+        cache = HybridTileCache(cache_dir=self.tmp_dir / "rb_tile_cache", ram_budget_mb=32)
+        cooked_tiles: dict[int, np.ndarray] = {}
+        vis_events: list[dict] = []
+        sched = TiledCookScheduler(
+            tile_cache=cache,
+            on_tile_publish=lambda sid, tidx, pcm, gen: cooked_tiles.__setitem__(tidx, pcm) if pcm is not None else None,
+            on_tile_visual=lambda ev: vis_events.append(ev),
+        )
+        try:
+            sched.start_session(spec, playhead_sec=0.0)
+            self.assertTrue(sched.wait_for_playhead_tile(0.0, timeout_sec=8.0))
+            self.assertIn(0, cooked_tiles)
+            self.assertEqual(cooked_tiles[0].shape, (2, spec.tile_frames))
+            ev0 = next((e for e in vis_events if e.get("tile_index") == 0), None)
+            self.assertIsNotNone(ev0)
+            self.assertAlmostEqual(ev0["start_sec"], 0.0, places=3)
+            self.assertAlmostEqual(ev0["end_sec"], 8.0, places=3)
+            self.assertAlmostEqual(ev0["duration_sec"], 32.0, places=2)
+        finally:
+            sched.shutdown()
+
+        # 3. Warp OFF (Tape mode) with Repeat ON and original_bpm != target_bpm:
+        #    Target BPM must NOT change playback_rate (only transpose/cents/stretch_factor apply)
+        tape_model = AudioNodeModel(
+            node_id=12,
+            node_name="TapeMode",
+            node_type="sample",
+            filepath=str(wav),
+            repeat=True,
+            warp=False,
+            original_bpm=90.0,
+            target_bpm=140.0,
+            bpm=140.0,
+            transpose=12.0,  # +1 octave => 2.0x tape speed
+        )
+        tape_sys = System(bpm=140.0, sample_rate=8000, render_mode="preview", allow_async_cook=True)
+        tape_plan = pack_audio_node_model(tape_model, tape_sys)
+        self.assertEqual(len(tape_sys.pending_tiled_cooks), 0)
+        self.assertIsNone(tape_plan.sources[0].pcm)
+        sample_bus = next(b for b in tape_plan.buses if b.node_key == "12")
+        self.assertAlmostEqual(sample_bus.playback_rate, 2.0, places=3)
+
 
 if __name__ == "__main__":
     unittest.main()

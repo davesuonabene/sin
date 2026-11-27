@@ -898,7 +898,10 @@ struct SinEngine {
                                     bool served_from_tile = false;
                                     if (clip.layered_tiles) {
                                         uint32_t tile_gen = 0;
-                                        const double tile_pos = src_pos * clip.tile_sr_scale;
+                                        const double tile_rate_div = (clip.desc.flags & SIN_CLIP_TILE_TIME_STRETCHED)
+                                            ? std::max(1e-4, base_rate * bus_rate)
+                                            : 1.0;
+                                        const double tile_pos = src_pos * (clip.tile_sr_scale / tile_rate_div);
                                         if (clip.layered_tiles->read_sample(tile_pos, s_l, s_r, tile_gen)) {
                                             served_from_tile = true;
                                             if (!clip.was_using_tile || (clip.last_tile_gen != 0 && tile_gen != 0 && clip.last_tile_gen != tile_gen)) {

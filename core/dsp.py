@@ -28,12 +28,15 @@ def process_sample_transform(
     fast_preview: bool = False,
     key_match_mode: str = "off",
     key_match_algorithm: str = "nearest",
+    warp: Optional[bool] = None,
 ) -> np.ndarray:
     """
     Applies pitch transposition and time-stretching transformations to audio array.
 
     - transpose: pitch shift in semitones (e.g. -24.0 to +24.0)
     - cents: fine tune pitch shift in cents (-100.0 to +100.0)
+    - warp: explicit orthogonal flag (True = Rubber Band time-stretch & BPM sync;
+      False = tape/varispeed repitch with NO BPM sync; None = legacy stretch_mode/sample_type semantics)
     - stretch_mode: 'time_stretch' (independent pitch/tempo), 'pitch_shift'/'varispeed'
       (locked pitch/tempo repitching via resampling), or 'off'
     - stretch_factor: speed/duration multiplier (e.g. 0.5 = half speed / double duration, 2.0 = 2x speed)
@@ -48,16 +51,28 @@ def process_sample_transform(
         trace_runtime("DSP transform bypassed: empty audio")
         return audio_data.astype(np.float32)
 
-    mode = str(stretch_mode or "time_stretch").lower()
+    if warp is False:
+        mode = "pitch_shift"
+    elif warp is True:
+        mode = "time_stretch"
+    else:
+        mode = str(stretch_mode or "time_stretch").lower()
     algorithm = normalize_stretch_algorithm(stretch_algorithm)
     total_semitones = float(transpose or 0.0) + (float(cents or 0.0) / 100.0)
     factor = float(stretch_factor or 1.0)
     if factor <= 0:
         factor = 1.0
 
-    # Determine base time-stretch rate from BPM ratio if loop mode and not off
+    # Determine base time-stretch rate from BPM ratio:
+    # - warp=True: BPM sync is always active whenever original_bpm & target_bpm are valid (even if Repeat is OFF)
+    # - warp=False: Target BPM is inactive in Tape mode (bpm_rate = 1.0)
+    # - warp=None (legacy): active when sample_type != one_shot and mode != 'off'
     bpm_rate = 1.0
-    if sample_type not in ("one_shot", "oneshot") and mode != "off" and original_bpm is not None and target_bpm is not None:
+    allow_bpm_sync = (
+        True if warp is True
+        else (False if warp is False else (sample_type not in ("one_shot", "oneshot") and mode != "off"))
+    )
+    if allow_bpm_sync and original_bpm is not None and target_bpm is not None:
         orig = float(original_bpm)
         tgt = float(target_bpm)
         if orig > 0 and tgt > 0 and orig != tgt:

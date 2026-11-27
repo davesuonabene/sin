@@ -1,7 +1,9 @@
-export type FieldType = 'string' | 'int' | 'float' | 'global_float' | 'select' | 'radio' | 'boolean' | 'db' | 'seed' | 'filepath' | 'slider' | 'directory';
+import { type UnitFieldConfig } from './UnitConverter.ts';
+
+export type FieldType = 'string' | 'int' | 'float' | 'unit_float' | 'global_float' | 'select' | 'radio' | 'boolean' | 'db' | 'seed' | 'filepath' | 'asset_call' | 'tuple' | 'slider' | 'directory';
 
 export interface SelectOption {
-    value: string | number;
+    value: string | number | boolean;
     label: string;
 }
 
@@ -25,9 +27,15 @@ export interface FieldSchema<T = any> {
     max?: number;
     step?: number;
     unit?: string;
+    unitConfig?: UnitFieldConfig;
     options?: Array<SelectOption | string>;
     placeholder?: string;
     description?: string;
+    dynamic?: boolean;
+    commitOnChange?: boolean;
+    subFields?: string[];
     nestedFields?: string[];
     stepVisual?: StepVisualSchema;
+    getValue?: (node: any) => T;
+    setValue?: (node: any, value: T) => T;
 }

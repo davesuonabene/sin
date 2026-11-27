@@ -70,7 +70,7 @@ VOICE_STRUCTURAL_KEYS = frozenset({"backend", "reverb_sensitivity"})
 def classify_stage_tier(node_type: str, params: Dict[str, Any]) -> int:
     """Strict DSP vs. ML tier split."""
     nt = str(node_type or "").strip().lower()
-    if nt == "preamp_denoise":
+    if nt in ("preamp_denoise", "rubberband_stretch"):
         return TIER_FAST_DSP
     if nt == "voice_isolator":
         backend = str((params or {}).get("backend") or "fast_onnx").strip().lower()
@@ -145,19 +145,26 @@ class TiledStageSpec:
                 "backend": str(p.get("backend") or "fast_onnx").strip().lower(),
                 "reverb_sensitivity": round(float(p.get("reverb_sensitivity", 0.5)), 3),
             }
+        if self.node_type == "rubberband_stretch":
+            return {
+                "tempo_rate": round(float(p.get("tempo_rate", 1.0)), 6),
+                "semitones": round(float(p.get("semitones", 0.0)), 4),
+                "algorithm": str(p.get("algorithm") or "rubberband").strip().lower(),
+                "fast_engine": bool(p.get("fast_engine", True)),
+            }
         return {}
 
 
 @dataclass
 class TiledTrackSessionSpec:
-    """Declarative session descriptor emitted by `plan_packer` for long tiled RX chains."""
+    """Declarative session descriptor emitted by `plan_packer` for long tiled RX / Rubber Band chains."""
 
     source_id: int
     base_filepath: str
     sample_rate: int
     file_sample_rate: int
-    total_frames: int  # full file frames at `sample_rate`
-    duration_sec: float  # full file duration in seconds
+    total_frames: int  # total tile-space frames at `sample_rate` (stretched output frames when tile_time_stretched=True)
+    duration_sec: float  # full RAW file duration in seconds
     tile_sec: float
     tile_frames: int
     num_tiles: int
@@ -165,8 +172,21 @@ class TiledTrackSessionSpec:
     crop_start: float = 0.0  # normalized [0..1]
     crop_end: float = 1.0  # normalized [0..1]
     playback_rate: float = 1.0
-    timeline_duration_sec: float = 0.0  # active timeline span (<= 0 => cropped file duration)
+    timeline_duration_sec: float = 0.0  # active timeline span (<= 0 => cropped file duration / playback_rate)
     bus_node_ids: List[str] = field(default_factory=list)
+    tile_time_stretched: bool = False  # True when tiles store already time-stretched audio at unity rate
+    stretch_tempo_rate: float = 1.0    # Rubber Band tempo rate R when tile_time_stretched=True
+
+    @property
+    def tile_time_scale(self) -> float:
+        """Multiplier mapping RAW file seconds -> tile-space seconds."""
+        if self.tile_time_stretched:
+            return 1.0 / max(0.05, float(self.stretch_tempo_rate or 1.0))
+        return 1.0
+
+    @property
+    def tile_total_duration_sec(self) -> float:
+        return self.duration_sec * self.tile_time_scale
 
     @property
     def crop_start_sec(self) -> float:
@@ -291,6 +311,7 @@ class TiledCookScheduler:
                     crop_start_sec=spec.crop_start_sec,
                     playback_rate=spec.playback_rate,
                     timeline_duration_sec=spec.active_timeline_sec,
+                    tile_time_scale=spec.tile_time_scale,
                 )
                 self._overlay.mark_all_stale()
             else:
@@ -302,6 +323,7 @@ class TiledCookScheduler:
                     crop_start_sec=spec.crop_start_sec,
                     playback_rate=spec.playback_rate,
                     file_duration_sec=spec.duration_sec,
+                    tile_time_scale=spec.tile_time_scale,
                 )
 
             if not same_track:
@@ -488,6 +510,8 @@ class TiledCookScheduler:
                                 "type": "tile_update",
                                 "clear_all": True,
                                 "duration_sec": round(self._session.active_timeline_sec, 4),
+                                "bus_node_ids": list(self._session.bus_node_ids),
+                                "stage_node_ids": [s.node_id for s in self._session.stages],
                             })
                         except Exception:
                             pass
@@ -575,20 +599,25 @@ class TiledCookScheduler:
     def _active_tile_bounds_locked(self) -> Tuple[int, int]:
         if self._session is None or self._session.tile_sec <= 0:
             return 0, 0
-        s_src = self._session.crop_start_sec
-        e_src = min(self._session.duration_sec, s_src + self._session.active_timeline_sec * max(0.05, self._session.playback_rate))
-        min_t = max(0, min(self._session.num_tiles - 1, int(math.floor(s_src / self._session.tile_sec))))
-        max_t = max(min_t, min(self._session.num_tiles - 1, int(math.floor(max(s_src, e_src - 1e-4) / self._session.tile_sec))))
+        scale = self._session.tile_time_scale
+        s_tile = self._session.crop_start_sec * scale
+        e_tile = min(
+            self._session.tile_total_duration_sec,
+            s_tile + self._session.active_timeline_sec * max(0.05, self._session.playback_rate) * scale,
+        )
+        min_t = max(0, min(self._session.num_tiles - 1, int(math.floor(s_tile / self._session.tile_sec))))
+        max_t = max(min_t, min(self._session.num_tiles - 1, int(math.floor(max(s_tile, e_tile - 1e-4) / self._session.tile_sec))))
         return min_t, max_t
 
     def _time_to_tile_locked(self, timeline_sec: float) -> int:
-        """Convert TIMELINE playhead seconds -> FILE tile index (honoring crop_start & playback_rate!)."""
+        """Convert TIMELINE playhead seconds -> tile index (honoring crop_start, playback_rate & tile_time_scale)."""
         if self._session is None or self._session.tile_sec <= 0:
             return 0
+        scale = self._session.tile_time_scale
         rate = max(0.05, float(self._session.playback_rate or 1.0))
-        src_sec = self._session.crop_start_sec + max(0.0, float(timeline_sec)) * rate
+        tile_sec_pos = (self._session.crop_start_sec + max(0.0, float(timeline_sec)) * rate) * scale
         min_t, max_t = self._active_tile_bounds_locked()
-        idx = int(math.floor(max(0.0, src_sec) / self._session.tile_sec))
+        idx = int(math.floor(max(0.0, tile_sec_pos) / self._session.tile_sec))
         return max(min_t, min(max_t, idx))
 
     def _is_stage_active_locked(self, st: TiledStageSpec) -> bool:
@@ -643,6 +672,8 @@ class TiledCookScheduler:
             "stale_all": True,
             "duration_sec": self._session.active_timeline_sec,
             "coverage": self._overlay.coverage_summary(),
+            "bus_node_ids": list(self._session.bus_node_ids),
+            "stage_node_ids": [s.node_id for s in self._session.stages],
         }
         try:
             self._on_tile_visual(msg)
@@ -833,11 +864,22 @@ class TiledCookScheduler:
             self._commit_tile_result(sess, tidx, cached_pcm.pcm, cached_pcm.peaks, effective_tier, chain_synth_fp, gen, stages_snap)
             return
 
-        # 2. Read ONLY `[s0 - halo, s1 + halo)` directly from disk (with tiny 8-tile RAM cache for instant live fader drag)
-        halo_frames = int(round(self.HALO_SEC * sr))
-        h0 = max(0, s0 - halo_frames)
-        h1 = min(sess.total_frames, s1 + halo_frames)
-        trim_left = s0 - h0
+        # 2. Read ONLY `[src_s0 - halo, src_s1 + halo)` directly from disk (with tiny 8-tile RAM cache)
+        rb_stage = next((s for s in stages_snap if s.node_type == "rubberband_stretch"), None)
+        if sess.tile_time_stretched and rb_stage is not None:
+            tempo_rate = max(0.05, float(rb_stage.processor_params.get("tempo_rate", sess.stretch_tempo_rate or 1.0)))
+            raw_total_frames_sr = max(1, int(round(sess.duration_sec * sr)))
+            src_s0 = int(round(float(s0) * tempo_rate))
+            src_s1 = int(round(float(s1) * tempo_rate))
+            src_halo = int(round(self.HALO_SEC * max(1.0, tempo_rate) * sr))
+            h0 = max(0, src_s0 - src_halo)
+            h1 = min(raw_total_frames_sr, src_s1 + src_halo)
+            trim_left = max(0, int(round(float(src_s0 - h0) / tempo_rate)))
+        else:
+            halo_frames = int(round(self.HALO_SEC * sr))
+            h0 = max(0, s0 - halo_frames)
+            h1 = min(sess.total_frames, s1 + halo_frames)
+            trim_left = s0 - h0
 
         raw_key = (file_sig, tidx)
         audio: Optional[np.ndarray] = None
@@ -854,7 +896,7 @@ class TiledCookScheduler:
         if cancel_ev.is_set():
             return
 
-        upstream_fp = _fp_hash({"sig": file_sig, "sr": sr, "tile_frames": sess.tile_frames})
+        upstream_fp = _fp_hash({"sig": file_sig, "sr": sr, "tile_frames": sess.tile_frames, "h0": h0, "h1": h1})
         highest_applied_tier = TIER_RAW
         stage_extras: Dict[str, Dict[str, Any]] = {}
 
@@ -878,7 +920,47 @@ class TiledCookScheduler:
                 "struct": st.structural_dict(),
             })
 
-            if st.node_type == "preamp_denoise":
+            if st.node_type == "rubberband_stretch":
+                from core.stretching import (
+                    RubberBandUnavailableError,
+                    StretchAlgorithm,
+                    normalize_stretch_algorithm,
+                    stretch_with_rubberband,
+                )
+                p = st.processor_params
+                r_tempo = max(0.05, float(p.get("tempo_rate", 1.0)))
+                r_semis = float(p.get("semitones", 0.0))
+                r_algo = normalize_stretch_algorithm(p.get("algorithm") or "rubberband")
+                r_fast = bool(p.get("fast_engine", True))
+                if abs(r_tempo - 1.0) > 1e-4 or abs(r_semis) > 1e-4:
+                    if r_algo is not StretchAlgorithm.LIBROSA:
+                        try:
+                            audio = stretch_with_rubberband(
+                                audio,
+                                sr,
+                                algorithm=r_algo,
+                                tempo_rate=r_tempo,
+                                semitones=r_semis,
+                                fast_engine=r_fast,
+                            )
+                        except RubberBandUnavailableError:
+                            import librosa
+                            if abs(r_semis) > 1e-4:
+                                audio = librosa.effects.pitch_shift(y=audio, sr=sr, n_steps=r_semis)
+                            if abs(r_tempo - 1.0) > 1e-4:
+                                audio = librosa.effects.time_stretch(y=audio, rate=r_tempo)
+                    else:
+                        import librosa
+                        if abs(r_semis) > 1e-4:
+                            audio = librosa.effects.pitch_shift(y=audio, sr=sr, n_steps=r_semis)
+                        if abs(r_tempo - 1.0) > 1e-4:
+                            audio = librosa.effects.time_stretch(y=audio, rate=r_tempo)
+                audio = ensure_stereo_f32(audio)
+                if cancel_ev.is_set():
+                    return
+                highest_applied_tier = max(highest_applied_tier, TIER_FAST_DSP)
+
+            elif st.node_type == "preamp_denoise":
                 art = self._tile_cache.get_analysis(cook_fp, tidx)
                 if art is None:
                     baseline = self._get_or_scan_preamp_baseline(sess, st, file_sig)
@@ -1002,15 +1084,17 @@ class TiledCookScheduler:
         if self._on_tile_visual is not None and tl_span is not None:
             t_start, t_end = tl_span
             # Trim tile_peaks if the tile straddles crop_start or timeline_end so waveform edges align cleanly
-            file_s0 = float(tidx) * sess.tile_sec
-            file_s1 = min(sess.duration_sec, float(tidx + 1) * sess.tile_sec)
-            file_span = max(1e-4, file_s1 - file_s0)
-            rate = max(0.05, float(sess.playback_rate or 1.0))
-            vis_file_s0 = sess.crop_start_sec + t_start * rate
-            vis_file_s1 = sess.crop_start_sec + t_end * rate
+            scale = sess.tile_time_scale
+            tile_s0 = float(tidx) * sess.tile_sec
+            tile_s1 = min(sess.tile_total_duration_sec, float(tidx + 1) * sess.tile_sec)
+            tile_span = max(1e-4, tile_s1 - tile_s0)
+            rate_t = max(1e-4, float(sess.playback_rate or 1.0) * scale)
+            crop_t = sess.crop_start_sec * scale
+            vis_tile_s0 = crop_t + t_start * rate_t
+            vis_tile_s1 = crop_t + t_end * rate_t
             n_pairs = int(tile_peaks.size // 2)
-            p0 = max(0, min(n_pairs - 1, int(math.floor(((vis_file_s0 - file_s0) / file_span) * n_pairs))))
-            p1 = max(p0 + 1, min(n_pairs, int(math.ceil(((vis_file_s1 - file_s0) / file_span) * n_pairs))))
+            p0 = max(0, min(n_pairs - 1, int(math.floor(((vis_tile_s0 - tile_s0) / tile_span) * n_pairs))))
+            p1 = max(p0 + 1, min(n_pairs, int(math.ceil(((vis_tile_s1 - tile_s0) / tile_span) * n_pairs))))
             vis_peaks = tile_peaks[p0 * 2 : p1 * 2]
             try:
                 self._on_tile_visual({
@@ -1024,6 +1108,8 @@ class TiledCookScheduler:
                     "stale": False,
                     "peaks": np.round(vis_peaks, 4).tolist(),
                     "coverage": cov,
+                    "bus_node_ids": list(sess.bus_node_ids),
+                    "stage_node_ids": [s.node_id for s in sess.stages],
                 })
             except Exception:
                 pass

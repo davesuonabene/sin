@@ -23,6 +23,7 @@ from core.render_plan import (
     SIN_CLIP_LIVE_CROP_BOUND,
     SIN_CLIP_LIVE_RATE_BOUND,
     SIN_CLIP_LOOP_SOURCE,
+    SIN_CLIP_TILE_TIME_STRETCHED,
     SIN_DEFAULT_SAMPLE_RATE,
     SIN_PROC_NONE,
     BusSpec,
@@ -184,31 +185,95 @@ def _is_auto_bars(value: Any) -> bool:
         return True
 
 
-def _needs_offline_stretch(props: Dict[str, Any], target_bpm: float) -> bool:
-    mode = str(props.get("stretch_mode") or "off").lower()
-    if mode in ("off", "pitch_shift", "repitch", "varispeed"):
-        return False
-    transpose = float(props.get("transpose") or 0.0)
-    cents = float(props.get("cents") or 0.0)
-    if abs(transpose + cents / 100.0) > 1e-4:
-        return True
+SINGLE_PASS_STRETCH_MAX_SEC = 16.0
+MAX_OFFLINE_STRETCH_SEC = 60.0  # retained alias for compatibility
+
+
+def _is_repeat_enabled(props: Dict[str, Any]) -> bool:
+    raw_repeat = props.get("repeat")
+    if raw_repeat is not None:
+        return bool(raw_repeat)
+    return str(props.get("sample_type") or props.get("sample_mode") or "one_shot").lower() == "loop"
+
+
+def _effective_stretch_params(props: Dict[str, Any], target_bpm: float) -> Tuple[bool, float, float, str]:
+    """Compute `(is_warp, tempo_rate, semitones, algorithm)` matching `core.dsp.process_sample_transform`."""
+    raw_warp = props.get("warp")
+    mode = str(props.get("stretch_mode") or "time_stretch").lower()
+    if raw_warp is False:
+        is_warp = False
+    elif raw_warp is True:
+        is_warp = True
+    else:
+        is_warp = mode not in ("off", "pitch_shift", "repitch", "varispeed")
+
+    semis = float(props.get("transpose") or 0.0) + float(props.get("cents") or 0.0) / 100.0
     factor = float(props.get("stretch_factor") or 1.0)
-    if abs(factor - 1.0) > 1e-4:
-        return True
+    if factor <= 0.0:
+        factor = 1.0
+    algorithm = str(props.get("stretch_algorithm") or "rubberband")
+
     sample_type = str(props.get("sample_type") or props.get("sample_mode") or "one_shot").lower()
+    allow_bpm_sync = (
+        True if raw_warp is True
+        else (False if raw_warp is False else (sample_type not in ("one_shot", "oneshot") and mode != "off"))
+    )
+    bpm_rate = 1.0
     orig_bpm = props.get("original_bpm")
-    if sample_type not in ("one_shot", "oneshot") and orig_bpm is not None:
+    if allow_bpm_sync and orig_bpm is not None:
         try:
-            if float(orig_bpm) > 0 and target_bpm > 0 and abs(float(orig_bpm) - float(target_bpm)) > 1e-4:
-                return True
+            orig = float(orig_bpm)
+            tgt = float(target_bpm)
+            if orig > 0.0 and tgt > 0.0 and abs(orig - tgt) > 1e-4:
+                direct_rate = tgt / orig
+                match_mode = str(props.get("key_match_mode") or "off").lower().strip()
+                km_algo = str(props.get("key_match_algorithm") or "nearest").lower().strip()
+                if match_mode not in ("follow", "lead") or km_algo in ("off", "direct") or abs(math.log2(direct_rate)) < 0.35:
+                    bpm_rate = direct_rate
+                else:
+                    cands = [r for r in (direct_rate, direct_rate * 2.0, direct_rate * 0.5) if r > 0.0]
+                    if km_algo in ("higher", "up"):
+                        up = [r for r in cands if r >= 1.0]
+                        bpm_rate = min(up, key=lambda r: abs(math.log2(r))) if up else max(cands)
+                    elif km_algo in ("lower", "down"):
+                        dn = [r for r in cands if r <= 1.0]
+                        bpm_rate = min(dn, key=lambda r: abs(math.log2(r))) if dn else min(cands)
+                    else:
+                        bpm_rate = min(cands, key=lambda r: abs(math.log2(r)))
         except (TypeError, ValueError):
             pass
-    return False
+
+    tempo_rate = max(0.05, float(bpm_rate * factor))
+    return is_warp, tempo_rate, semis, algorithm
+
+
+def _needs_offline_stretch(props: Dict[str, Any], target_bpm: float) -> bool:
+    is_warp, tempo_rate, semis, _algo = _effective_stretch_params(props, target_bpm)
+    if not is_warp:
+        return False
+    return abs(semis) > 1e-4 or abs(tempo_rate - 1.0) > 1e-4
+
+
+def _needs_offline_stretch_for_file(
+    resolved_fp: Optional[str],
+    props: Dict[str, Any],
+    target_bpm: float,
+    *,
+    crop_start: float = 0.0,
+    crop_end: float = 1.0,
+) -> bool:
+    """True when Rubber Band stretching is required (crop-aware or tiled)."""
+    if not _needs_offline_stretch(props, target_bpm):
+        return False
+    return True
 
 
 def _varispeed_rate(props: Dict[str, Any], target_bpm: float) -> float:
+    raw_warp = props.get("warp")
     mode = str(props.get("stretch_mode") or "off").lower()
-    if mode not in ("pitch_shift", "repitch", "varispeed"):
+    if raw_warp is True:
+        return 1.0
+    if raw_warp is None and mode not in ("pitch_shift", "repitch", "varispeed"):
         return 1.0
     semis = float(props.get("transpose") or 0.0) + float(props.get("cents") or 0.0) / 100.0
     pitch_rate = 2.0 ** (semis / 12.0)
@@ -216,33 +281,217 @@ def _varispeed_rate(props: Dict[str, Any], target_bpm: float) -> float:
     if factor <= 0:
         factor = 1.0
     bpm_rate = 1.0
-    sample_type = str(props.get("sample_type") or props.get("sample_mode") or "one_shot").lower()
-    orig_bpm = props.get("original_bpm")
-    if sample_type not in ("one_shot", "oneshot") and orig_bpm is not None:
-        try:
-            if float(orig_bpm) > 0 and target_bpm > 0:
-                bpm_rate = float(target_bpm) / float(orig_bpm)
-        except (TypeError, ValueError):
-            pass
+    if raw_warp is None:
+        sample_type = str(props.get("sample_type") or props.get("sample_mode") or "one_shot").lower()
+        orig_bpm = props.get("original_bpm")
+        if sample_type not in ("one_shot", "oneshot") and orig_bpm is not None:
+            try:
+                if float(orig_bpm) > 0 and target_bpm > 0:
+                    bpm_rate = float(target_bpm) / float(orig_bpm)
+            except (TypeError, ValueError):
+                pass
     return max(0.05, float(pitch_rate * factor * bpm_rate))
 
 
-def _cook_stretched_sample(filepath: str, props: Dict[str, Any], target_bpm: float, sr: int) -> Tuple[np.ndarray, int]:
-    """Tier-2 lazy Python cooker for Rubber Band / librosa time-stretch, cached in DagNodeCache."""
+def _read_cropped_disk_slice(filepath: str, sr: int, crop_start: float, crop_end: float) -> np.ndarray:
+    """Seek and decode ONLY `[crop_start .. crop_end]` from disk resampled to `sr` (zero full-file RAM)."""
+    cs = max(0.0, min(1.0, float(crop_start)))
+    ce = max(cs, min(1.0, float(crop_end)))
+    if ce <= cs:
+        return np.zeros((2, 0), dtype=np.float32)
+    try:
+        import soundfile as sf
+        from scipy import signal as scipy_signal
+        with sf.SoundFile(filepath, mode="r") as f:
+            file_sr = int(f.samplerate or sr)
+            total = int(len(f))
+            if total <= 0 or file_sr <= 0:
+                return np.zeros((2, 0), dtype=np.float32)
+            s0 = max(0, min(total, int(math.floor(cs * total))))
+            s1 = max(s0, min(total, int(math.ceil(ce * total))))
+            if s1 <= s0:
+                return np.zeros((2, 0), dtype=np.float32)
+            f.seek(s0)
+            raw = f.read(s1 - s0, dtype="float32", always_2d=True)
+            if raw.size == 0:
+                return np.zeros((2, 0), dtype=np.float32)
+            audio = np.ascontiguousarray(raw.T, dtype=np.float32)
+            if audio.shape[0] == 1:
+                audio = np.repeat(audio, 2, axis=0)
+            elif audio.shape[0] > 2:
+                audio = audio[:2]
+            if file_sr != int(sr):
+                g = math.gcd(int(sr), file_sr)
+                audio = scipy_signal.resample_poly(audio, int(sr) // g, file_sr // g, axis=-1).astype(np.float32, copy=False)
+            return np.ascontiguousarray(audio, dtype=np.float32)
+    except Exception:
+        audio, _ = load_sample(filepath, target_sr=sr)
+        if audio.ndim == 1:
+            audio = np.stack([audio, audio], axis=0)
+        total = int(audio.shape[-1])
+        s0 = max(0, min(total, int(math.floor(cs * total))))
+        s1 = max(s0, min(total, int(math.ceil(ce * total))))
+        return np.ascontiguousarray(audio[:, s0:s1], dtype=np.float32)
+
+
+def _cook_stretched_sample_chunked(
+    filepath: str,
+    props: Dict[str, Any],
+    target_bpm: float,
+    sr: int,
+    *,
+    crop_start: float = 0.0,
+    crop_end: float = 1.0,
+    fast_preview: bool = False,
+) -> np.ndarray:
+    """Chunked OLA Rubber Band cooker for long active slices (>16s) without full-file RAM spikes."""
+    from core.stretching import (
+        RubberBandUnavailableError,
+        StretchAlgorithm,
+        normalize_stretch_algorithm,
+        stretch_with_rubberband,
+    )
+    import soundfile as sf
+    from scipy import signal as scipy_signal
+
+    _is_warp, tempo_rate, semis, algo_str = _effective_stretch_params(props, target_bpm)
+    algo = normalize_stretch_algorithm(algo_str)
+    finfo = _probe_file_info(filepath)
+    if finfo is None:
+        audio = _read_cropped_disk_slice(filepath, sr, crop_start, crop_end)
+        return process_sample_transform(
+            audio_data=audio,
+            sr=sr,
+            original_bpm=props.get("original_bpm"),
+            target_bpm=target_bpm,
+            transpose=float(props.get("transpose") or 0.0),
+            cents=float(props.get("cents") or 0.0),
+            stretch_mode=str(props.get("stretch_mode") or "time_stretch"),
+            stretch_factor=float(props.get("stretch_factor") or 1.0),
+            stretch_algorithm=algo_str,
+            sample_type=str(props.get("sample_type") or "loop"),
+            fast_preview=fast_preview,
+            key_match_mode=str(props.get("key_match_mode") or "off"),
+            key_match_algorithm=str(props.get("key_match_algorithm") or "nearest"),
+            warp=props.get("warp"),
+        )
+
+    file_sr, file_frames, file_dur = finfo
+    raw_total_sr = max(1, int(round(file_dur * sr)))
+    cs = max(0.0, min(1.0, float(crop_start)))
+    ce = max(cs, min(1.0, float(crop_end)))
+    crop_src_s0 = int(math.floor(cs * raw_total_sr))
+    crop_src_s1 = int(math.ceil(ce * raw_total_sr))
+    crop_src_len = max(0, crop_src_s1 - crop_src_s0)
+    if crop_src_len <= 0:
+        return np.zeros((2, 0), dtype=np.float32)
+
+    out_total = max(1, int(round(float(crop_src_len) / tempo_rate)))
+    chunk_out_frames = int(round(SINGLE_PASS_STRETCH_MAX_SEC * sr))
+    halo_src = int(round(0.75 * max(1.0, tempo_rate) * sr))
+    pieces: List[np.ndarray] = []
+
+    with sf.SoundFile(filepath, mode="r") as f:
+        ratio = float(file_sr) / float(sr)
+        for o0 in range(0, out_total, chunk_out_frames):
+            o1 = min(out_total, o0 + chunk_out_frames)
+            core_len = o1 - o0
+            src_s0 = crop_src_s0 + int(round(float(o0) * tempo_rate))
+            src_s1 = crop_src_s0 + int(round(float(o1) * tempo_rate))
+            h0 = max(0, src_s0 - halo_src)
+            h1 = min(raw_total_sr, src_s1 + halo_src)
+            trim_left = max(0, int(round(float(src_s0 - h0) / tempo_rate)))
+
+            f_s0 = max(0, min(file_frames, int(math.floor(h0 * ratio))))
+            f_s1 = max(f_s0, min(file_frames, int(math.ceil(h1 * ratio)) + 16))
+            f.seek(f_s0)
+            raw = f.read(f_s1 - f_s0, dtype="float32", always_2d=True)
+            chunk = np.ascontiguousarray(raw.T, dtype=np.float32) if raw.size > 0 else np.zeros((2, 0), dtype=np.float32)
+            if chunk.shape[0] == 1:
+                chunk = np.repeat(chunk, 2, axis=0)
+            elif chunk.shape[0] > 2:
+                chunk = chunk[:2]
+            if file_sr != sr and chunk.shape[-1] > 0:
+                g = math.gcd(int(sr), file_sr)
+                chunk = scipy_signal.resample_poly(chunk, int(sr) // g, file_sr // g, axis=-1).astype(np.float32, copy=False)
+            needed_in = max(1, h1 - h0)
+            if chunk.shape[-1] < needed_in:
+                chunk = np.concatenate([chunk, np.zeros((2, needed_in - chunk.shape[-1]), dtype=np.float32)], axis=-1)
+            else:
+                chunk = chunk[:, :needed_in]
+
+            if algo is not StretchAlgorithm.LIBROSA:
+                try:
+                    st_chunk = stretch_with_rubberband(
+                        chunk,
+                        sr,
+                        algorithm=algo,
+                        tempo_rate=tempo_rate,
+                        semitones=semis,
+                        fast_engine=fast_preview,
+                    )
+                except RubberBandUnavailableError:
+                    import librosa
+                    st_chunk = chunk
+                    if abs(semis) > 1e-4:
+                        st_chunk = librosa.effects.pitch_shift(y=st_chunk, sr=sr, n_steps=semis)
+                    if abs(tempo_rate - 1.0) > 1e-4:
+                        st_chunk = librosa.effects.time_stretch(y=st_chunk, rate=tempo_rate)
+            else:
+                import librosa
+                st_chunk = chunk
+                if abs(semis) > 1e-4:
+                    st_chunk = librosa.effects.pitch_shift(y=st_chunk, sr=sr, n_steps=semis)
+                if abs(tempo_rate - 1.0) > 1e-4:
+                    st_chunk = librosa.effects.time_stretch(y=st_chunk, rate=tempo_rate)
+
+            if st_chunk.ndim == 1:
+                st_chunk = np.stack([st_chunk, st_chunk], axis=0)
+            core = np.ascontiguousarray(st_chunk[:, trim_left : trim_left + core_len], dtype=np.float32)
+            if core.shape[-1] < core_len:
+                core = np.concatenate([core, np.zeros((2, core_len - core.shape[-1]), dtype=np.float32)], axis=-1)
+            pieces.append(core)
+
+    return np.concatenate(pieces, axis=-1) if pieces else np.zeros((2, 0), dtype=np.float32)
+
+
+def _cook_stretched_sample(
+    filepath: str,
+    props: Dict[str, Any],
+    target_bpm: float,
+    sr: int,
+    *,
+    crop_start: float = 0.0,
+    crop_end: float = 1.0,
+    fast_preview: bool = False,
+) -> Tuple[np.ndarray, int]:
+    """Tier-2 lazy Python cooker for crop-aware Rubber Band / librosa time-stretch, cached in DagNodeCache."""
+    try:
+        st = os.stat(filepath)
+        file_sig = f"{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        file_sig = ""
+    cs = max(0.0, min(1.0, float(crop_start)))
+    ce = max(cs, min(1.0, float(crop_end)))
     cook_key = {
-        "op": "tier2_cook",
+        "op": "tier2_cook_crop",
         "path": filepath,
+        "sig": file_sig,
         "sr": sr,
+        "crop_start": round(cs, 6),
+        "crop_end": round(ce, 6),
         "target_bpm": round(float(target_bpm), 4),
         "original_bpm": props.get("original_bpm"),
         "transpose": float(props.get("transpose") or 0.0),
         "cents": float(props.get("cents") or 0.0),
+        "warp": props.get("warp"),
         "stretch_mode": str(props.get("stretch_mode") or "time_stretch"),
         "stretch_factor": float(props.get("stretch_factor") or 1.0),
         "stretch_algorithm": str(props.get("stretch_algorithm") or "rubberband"),
         "sample_type": str(props.get("sample_type") or "loop"),
         "key_match_mode": str(props.get("key_match_mode") or "off"),
         "key_match_algorithm": str(props.get("key_match_algorithm") or "nearest"),
+        "fast_preview": bool(fast_preview),
     }
     fp_hash = GLOBAL_DAG_CACHE.compute_fingerprint(cook_key)
     cache_node_id = f"cook:{fp_hash}"
@@ -250,21 +499,36 @@ def _cook_stretched_sample(filepath: str, props: Dict[str, Any], target_bpm: flo
     if cached is not None:
         return cached, int(fp_hash[:12], 16)
 
-    audio, _ = load_sample(filepath, target_sr=sr)
-    cooked = process_sample_transform(
-        audio_data=audio,
-        sr=sr,
-        original_bpm=props.get("original_bpm"),
-        target_bpm=target_bpm,
-        transpose=float(props.get("transpose") or 0.0),
-        cents=float(props.get("cents") or 0.0),
-        stretch_mode=str(props.get("stretch_mode") or "time_stretch"),
-        stretch_factor=float(props.get("stretch_factor") or 1.0),
-        stretch_algorithm=str(props.get("stretch_algorithm") or "rubberband"),
-        sample_type=str(props.get("sample_type") or "loop"),
-        key_match_mode=str(props.get("key_match_mode") or "off"),
-        key_match_algorithm=str(props.get("key_match_algorithm") or "nearest"),
-    )
+    finfo = _probe_file_info(filepath)
+    active_span_sec = ((ce - cs) * finfo[2]) if finfo is not None else 0.0
+    if finfo is not None and active_span_sec > SINGLE_PASS_STRETCH_MAX_SEC:
+        cooked = _cook_stretched_sample_chunked(
+            filepath,
+            props,
+            target_bpm,
+            sr,
+            crop_start=cs,
+            crop_end=ce,
+            fast_preview=fast_preview,
+        )
+    else:
+        audio = _read_cropped_disk_slice(filepath, sr, cs, ce)
+        cooked = process_sample_transform(
+            audio_data=audio,
+            sr=sr,
+            original_bpm=props.get("original_bpm"),
+            target_bpm=target_bpm,
+            transpose=float(props.get("transpose") or 0.0),
+            cents=float(props.get("cents") or 0.0),
+            stretch_mode=str(props.get("stretch_mode") or "time_stretch"),
+            stretch_factor=float(props.get("stretch_factor") or 1.0),
+            stretch_algorithm=str(props.get("stretch_algorithm") or "rubberband"),
+            sample_type=str(props.get("sample_type") or "loop"),
+            fast_preview=fast_preview,
+            key_match_mode=str(props.get("key_match_mode") or "off"),
+            key_match_algorithm=str(props.get("key_match_algorithm") or "nearest"),
+            warp=props.get("warp"),
+        )
     GLOBAL_DAG_CACHE.store(cache_node_id, fp_hash, cooked)
     return cooked, int(fp_hash[:12], 16)
 
@@ -494,7 +758,7 @@ def pack_canonical_graph(
 
         crop_start = max(0.0, min(1.0, float(props.get("crop_start") or 0.0)))
         crop_end = max(crop_start, min(1.0, float(props.get("crop_end") if props.get("crop_end") is not None else 1.0)))
-        sample_type = str(props.get("sample_type") or props.get("sample_mode") or "one_shot").lower()
+        is_repeat = _is_repeat_enabled(props)
 
         # Bind crop bounds onto channel bus so live CROP_START / CROP_END updates take effect in <3ms
         if target_bid in bus_by_id:
@@ -502,7 +766,15 @@ def pack_canonical_graph(
             bus_by_id[target_bid].crop_end = crop_end
 
         if _needs_offline_stretch(props, bpm):
-            cooked_audio, cooked_hash = _cook_stretched_sample(resolved_fp, props, bpm, plan.sample_rate)
+            cooked_audio, cooked_hash = _cook_stretched_sample(
+                resolved_fp,
+                props,
+                bpm,
+                plan.sample_rate,
+                crop_start=crop_start,
+                crop_end=crop_end,
+                fast_preview=False,
+            )
             plan.sources.append(SourceSpec(
                 source_id=src_id,
                 pcm=cooked_audio,
@@ -511,6 +783,8 @@ def pack_canonical_graph(
                 num_frames=int(cooked_audio.shape[-1]),
             ))
             rate = 1.0
+            clip_s0, clip_s1 = 0.0, 1.0
+            flags = SIN_CLIP_LOOP_SOURCE if is_repeat else 0
         else:
             plan.sources.append(SourceSpec(
                 source_id=src_id,
@@ -518,15 +792,15 @@ def pack_canonical_graph(
                 force_ram=False,  # auto: RAM < 30s, lock-free disk stream >= 30s (8GB safe!)
             ))
             rate = _varispeed_rate(props, bpm)
-
-        flags = SIN_CLIP_LIVE_CROP_BOUND | SIN_CLIP_LIVE_RATE_BOUND
-        if sample_type == "loop":
-            flags |= SIN_CLIP_LOOP_SOURCE
+            clip_s0, clip_s1 = crop_start, crop_end
+            flags = SIN_CLIP_LIVE_CROP_BOUND | SIN_CLIP_LIVE_RATE_BOUND
+            if is_repeat:
+                flags |= SIN_CLIP_LOOP_SOURCE
 
         start_beat = float(props.get("start_beat") or 0.0)
         start_frame = int(round(start_beat * (60.0 / bpm) * plan.sample_rate))
         clip_len_frames = 0
-        if sample_type == "loop" and plan.explicit_duration_sec > 0.0:
+        if is_repeat and plan.explicit_duration_sec > 0.0:
             clip_len_frames = max(0, int(round(plan.explicit_duration_sec * plan.sample_rate)) - start_frame)
 
         plan.clips.append(ClipSpec(
@@ -535,8 +809,8 @@ def pack_canonical_graph(
             target_bus_id=target_bid,
             timeline_start_frame=start_frame,
             timeline_length_frames=clip_len_frames,
-            source_start_ratio=crop_start,
-            source_end_ratio=crop_end,
+            source_start_ratio=clip_s0,
+            source_end_ratio=clip_s1,
             gain=float(clip_gain),
             playback_rate=float(rate),
             flags=flags,
@@ -593,8 +867,13 @@ def _probe_file_info(filepath: str) -> Optional[Tuple[int, int, float]]:
     return None
 
 
-def _resolve_sample_leaf_filepath(obj: Any, bpm: float) -> Optional[Tuple[str, Dict[str, Any], float, float, float]]:
-    """Return `(resolved_fp, props_like, crop_start, crop_end, varispeed_rate)` if `obj` is a direct disk Sample leaf."""
+def _resolve_sample_leaf_filepath(
+    obj: Any,
+    bpm: float,
+    *,
+    allow_warped: bool = False,
+) -> Optional[Tuple[str, Dict[str, Any], float, float, float]]:
+    """Return `(resolved_fp, props_like, crop_start, crop_end, eff_playback_rate)` if `obj` is a direct disk Sample leaf."""
     if str(getattr(obj, "node_type", "") or "").lower() != "sample":
         return None
     if getattr(obj, "children", None) or getattr(obj, "audio_data", None) is not None:
@@ -636,19 +915,31 @@ def _resolve_sample_leaf_filepath(obj: Any, bpm: float) -> Optional[Tuple[str, D
     resolved_fp = _resolve_relative_filepath(fp, None)
     if not resolved_fp or not os.path.isfile(resolved_fp):
         return None
+    eff_target_bpm = float(getattr(obj, "target_bpm", None) or bpm)
     props_like = {
+        "repeat": slot_cfg.get("repeat") if slot_cfg.get("repeat") is not None else getattr(obj, "repeat", None),
+        "warp": slot_cfg.get("warp") if slot_cfg.get("warp") is not None else getattr(obj, "warp", None),
         "stretch_mode": getattr(obj, "stretch_mode", "time_stretch"),
         "stretch_factor": slot_cfg.get("time_stretch") if slot_cfg.get("time_stretch") is not None else getattr(obj, "stretch_factor", 1.0),
+        "stretch_algorithm": getattr(obj, "stretch_algorithm", "rubberband"),
         "transpose": slot_cfg.get("pitch_shift") if slot_cfg.get("pitch_shift") is not None else getattr(obj, "transpose", 0.0),
         "cents": getattr(obj, "cents", 0.0),
         "original_bpm": slot_cfg.get("original_bpm") if slot_cfg.get("original_bpm") is not None else getattr(obj, "original_bpm", None),
+        "target_bpm": eff_target_bpm,
         "sample_type": getattr(obj, "sample_type", "loop"),
+        "key_match_mode": getattr(obj, "key_match_mode", "off"),
+        "key_match_algorithm": getattr(obj, "key_match_algorithm", "nearest"),
     }
-    if _needs_offline_stretch(props_like, bpm):
+    needs_stretch = _needs_offline_stretch(props_like, eff_target_bpm)
+    if needs_stretch and not allow_warped:
         return None
     cs = max(0.0, min(1.0, float(slot_cfg.get("crop_start") if slot_cfg.get("crop_start") is not None else getattr(obj, "crop_start", 0.0))))
     ce = max(cs, min(1.0, float(slot_cfg.get("crop_end") if slot_cfg.get("crop_end") is not None else getattr(obj, "crop_end", 1.0))))
-    rate = _varispeed_rate(props_like, bpm)
+    if needs_stretch:
+        _is_w, tempo_rate, _semis, _algo = _effective_stretch_params(props_like, eff_target_bpm)
+        rate = tempo_rate
+    else:
+        rate = _varispeed_rate(props_like, eff_target_bpm)
     return resolved_fp, props_like, cs, ce, rate
 
 
@@ -682,7 +973,7 @@ def _extract_tiled_processor_chain(obj: Any, bpm: float) -> Optional[Tuple[List[
                 return None
             cur = children[0][1]
         elif ntype == "sample":
-            leaf_meta = _resolve_sample_leaf_filepath(cur, bpm)
+            leaf_meta = _resolve_sample_leaf_filepath(cur, bpm, allow_warped=True)
             if leaf_meta is None:
                 return None
             proc_chain_rev.reverse()
@@ -705,7 +996,7 @@ def _resolve_longest_finite_source_sec(root_obj: Any, bpm: float) -> float:
         visited.add(id(node))
         ntype = str(getattr(node, "node_type", "") or "").lower()
         if ntype == "sample":
-            meta = _resolve_sample_leaf_filepath(node, bpm)
+            meta = _resolve_sample_leaf_filepath(node, bpm, allow_warped=True)
             if meta is not None:
                 resolved_fp, _props, cs, ce, rate = meta
                 info = _probe_file_info(resolved_fp)
@@ -779,8 +1070,8 @@ def pack_audio_object(root_obj: Any, system: System) -> SinRenderPlan:
             crop_start=float(getattr(obj, "crop_start", 0.0) or 0.0),
             crop_end=float(getattr(obj, "crop_end", 1.0) if getattr(obj, "crop_end", None) is not None else 1.0),
             playback_rate=1.0,
-            muted=muted,
-            solo=False,
+            muted=bool(muted or getattr(obj, "muted", False)),
+            solo=bool(getattr(obj, "solo", False)),
         )
         plan.buses.append(bs)
         plan.bus_id_map[node_key] = bid
@@ -875,7 +1166,7 @@ def pack_audio_object(root_obj: Any, system: System) -> SinRenderPlan:
                 return int(round(float(eff_bars) * 4.0 * (60.0 / bpm) * sr))
             return max(0, max_end_frame - start_frame_offset)
 
-        # Direct unstretched Sample leaf fast path (ZERO Python audio decoding/mixing!)
+        # Direct / Crop-Aware / Tiled-RubberBand Sample leaf fast paths (ZERO full-file RAM cliff!)
         if ntype == "sample" and not children and getattr(obj, "audio_data", None) is None:
             from ermes.py.slot_language import is_field_operator_expression, resolve_pool_item_by_query
             slots = getattr(obj, "slots", None) or []
@@ -899,73 +1190,230 @@ def pack_audio_object(root_obj: Any, system: System) -> SinRenderPlan:
                 )
                 if chosen:
                     fp = chosen.get("absolute_path") or chosen.get("filepath") or fp
+            eff_target_bpm = float(getattr(obj, "target_bpm", None) or bpm)
             props_like = {
+                "repeat": slot_cfg.get("repeat") if slot_cfg.get("repeat") is not None else getattr(obj, "repeat", None),
+                "warp": slot_cfg.get("warp") if slot_cfg.get("warp") is not None else getattr(obj, "warp", None),
                 "stretch_mode": getattr(obj, "stretch_mode", "time_stretch"),
                 "stretch_factor": slot_cfg.get("time_stretch") if slot_cfg.get("time_stretch") is not None else getattr(obj, "stretch_factor", 1.0),
+                "stretch_algorithm": getattr(obj, "stretch_algorithm", "rubberband"),
                 "transpose": slot_cfg.get("pitch_shift") if slot_cfg.get("pitch_shift") is not None else getattr(obj, "transpose", 0.0),
                 "cents": getattr(obj, "cents", 0.0),
                 "original_bpm": slot_cfg.get("original_bpm") if slot_cfg.get("original_bpm") is not None else getattr(obj, "original_bpm", None),
+                "target_bpm": eff_target_bpm,
                 "sample_type": getattr(obj, "sample_type", "loop"),
+                "key_match_mode": getattr(obj, "key_match_mode", "off"),
+                "key_match_algorithm": getattr(obj, "key_match_algorithm", "nearest"),
             }
             resolved_fp = _resolve_relative_filepath(fp, None) if fp else None
-            if resolved_fp and os.path.isfile(resolved_fp) and not has_dynamic_ops and not _needs_offline_stretch(props_like, bpm):
+            if resolved_fp and os.path.isfile(resolved_fp) and not has_dynamic_ops:
                 from core.runtime_trace import trace_runtime
-                trace_runtime(f"Native libsin_dsp source registered: {Path(resolved_fp).name}")
-                src_id = state["src_id"]
-                state["src_id"] += 1
-                plan.sources.append(SourceSpec(source_id=src_id, filepath=resolved_fp, force_ram=False))
-
                 cs = max(0.0, min(1.0, float(slot_cfg.get("crop_start") if slot_cfg.get("crop_start") is not None else getattr(obj, "crop_start", 0.0))))
                 ce = max(cs, min(1.0, float(slot_cfg.get("crop_end") if slot_cfg.get("crop_end") is not None else getattr(obj, "crop_end", 1.0))))
-                rate = _varispeed_rate(props_like, bpm)
-                bs.crop_start = cs
-                bs.crop_end = ce
-                bs.playback_rate = rate
-
-                sample_type = str(getattr(obj, "sample_type", "loop") or "loop").lower()
+                is_repeat = _is_repeat_enabled(props_like)
+                is_standalone_root = obj is root_obj
                 own_bars = getattr(obj, "total_bars", None)
                 eff_bars = own_bars if (own_bars is not None and float(own_bars) > 0.0) else parent_bars
-                clip_len = 0
-                flags = SIN_CLIP_LIVE_CROP_BOUND | SIN_CLIP_LIVE_RATE_BOUND
-                if sample_type == "loop":
-                    if eff_bars is not None and float(eff_bars) > 0.0:
-                        flags |= SIN_CLIP_LOOP_SOURCE
-                        clip_len = int(round(float(eff_bars) * sec_per_bar * sr))
-                    elif is_free_mode:
-                        # In Free (-1) mode, loops tile to match the longest finite source (or 4 bars if none)
-                        info = _probe_file_info(resolved_fp)
-                        own_dur = (max(0.0, (ce - cs) * info[2]) / max(1e-4, rate)) if info else 0.0
-                        if free_target_frames > 0 and own_dur + 0.05 < free_target_sec:
-                            flags |= SIN_CLIP_LOOP_SOURCE
-                            clip_len = max(0, free_target_frames - start_frame_offset)
-                        elif free_target_frames <= 0:
-                            flags |= SIN_CLIP_LOOP_SOURCE
-                            clip_len = int(round(4.0 * sec_per_bar * sr))
+                is_warp, tempo_rate, semis, stretch_algo = _effective_stretch_params(props_like, eff_target_bpm)
+                needs_stretch = is_warp and (abs(tempo_rate - 1.0) > 1e-4 or abs(semis) > 1e-4)
+                finfo = _probe_file_info(resolved_fp)
+                tile_sec = float(get_env_config().tile_sec)
+                active_span_sec = ((ce - cs) * finfo[2]) if finfo is not None else 0.0
 
+                def _resolve_repeat_clip_len(own_dur_sec: float) -> Tuple[int, bool]:
+                    if not is_repeat or is_standalone_root:
+                        return 0, False
+                    if eff_bars is not None and float(eff_bars) > 0.0:
+                        return int(round(float(eff_bars) * sec_per_bar * sr)), True
+                    if is_free_mode:
+                        if free_target_frames > 0 and own_dur_sec + 0.05 < free_target_sec:
+                            return max(0, free_target_frames - start_frame_offset), True
+                        if free_target_frames <= 0:
+                            return int(round(4.0 * sec_per_bar * sr)), True
+                    return 0, False
+
+                if not needs_stretch:
+                    # Case A: Unstretched or Tape/Varispeed -> zero-RAM C++ direct file/stream source
+                    trace_runtime(f"Native libsin_dsp source registered: {Path(resolved_fp).name}")
+                    src_id = state["src_id"]
+                    state["src_id"] += 1
+                    plan.sources.append(SourceSpec(source_id=src_id, filepath=resolved_fp, force_ram=False))
+
+                    rate = _varispeed_rate(props_like, eff_target_bpm)
+                    bs.crop_start = cs
+                    bs.crop_end = ce
+                    bs.playback_rate = rate
+
+                    own_dur = (active_span_sec / max(1e-4, rate)) if finfo else 0.0
+                    clip_len, should_loop = _resolve_repeat_clip_len(own_dur)
+                    flags = SIN_CLIP_LIVE_CROP_BOUND | SIN_CLIP_LIVE_RATE_BOUND
+                    if should_loop:
+                        flags |= SIN_CLIP_LOOP_SOURCE
+
+                    clip_id = state["clip_id"]
+                    state["clip_id"] += 1
+                    plan.clips.append(ClipSpec(
+                        clip_id=clip_id,
+                        source_id=src_id,
+                        target_bus_id=bs.bus_id,
+                        timeline_start_frame=start_frame_offset,
+                        timeline_length_frames=clip_len,
+                        source_start_ratio=cs,
+                        source_end_ratio=ce,
+                        gain=1.0,
+                        playback_rate=1.0,  # scaled live by bs.playback_rate via SIN_CLIP_LIVE_RATE_BOUND
+                        flags=flags,
+                    ))
+                    if getattr(obj, "node_id", None) is not None:
+                        system.record_node_event(obj.node_id, {
+                            "time": round(float(start_frame_offset) / float(sr), 4),
+                            "duration": round(float(clip_len) / float(sr), 4) if clip_len > 0 else round(own_dur, 4),
+                            "filepath": resolved_fp,
+                            "slot": active_slot,
+                        })
+                    return clip_len if clip_len > 0 else int(round(own_dur * sr))
+
+                if (
+                    finfo is not None
+                    and active_span_sec > max(SINGLE_PASS_STRETCH_MAX_SEC, tile_sec * 2.0)
+                    and system.render_mode == "preview"
+                    and getattr(system, "allow_async_cook", False)
+                ):
+                    # Case B: Long warped slice (>16s) in preview -> zero-RAM Tiled Rubber Band over LayeredTileStore!
+                    file_sr, _file_frames, file_dur_sec = finfo
+                    out_dur_sec = file_dur_sec / max(0.05, tempo_rate)
+                    total_out_frames = max(1, int(math.ceil(out_dur_sec * sr)))
+                    tile_frames = max(4096, int(round(tile_sec * sr)))
+                    num_tiles = max(1, int(math.ceil(float(total_out_frames) / float(tile_frames))))
+
+                    src_id = state["src_id"]
+                    state["src_id"] += 1
+                    plan.sources.append(SourceSpec(
+                        source_id=src_id,
+                        filepath=resolved_fp,
+                        force_ram=False,
+                        sample_rate=sr,
+                        num_frames=total_out_frames,
+                        layered_tile_frames=tile_frames,
+                        layered_num_tiles=num_tiles,
+                        layered_total_frames=total_out_frames,
+                        layered_node_key=bs.node_key,
+                    ))
+
+                    bs.crop_start = cs
+                    bs.crop_end = ce
+                    bs.playback_rate = tempo_rate
+
+                    cropped_out_sec = active_span_sec / max(0.05, tempo_rate)
+                    clip_len, should_loop = _resolve_repeat_clip_len(cropped_out_sec)
+                    eff_tl_dur_sec = (float(clip_len) / float(sr)) if clip_len > 0 else cropped_out_sec
+                    flags = SIN_CLIP_LIVE_CROP_BOUND | SIN_CLIP_LIVE_RATE_BOUND | SIN_CLIP_TILE_TIME_STRETCHED
+                    if should_loop:
+                        flags |= SIN_CLIP_LOOP_SOURCE
+
+                    clip_id = state["clip_id"]
+                    state["clip_id"] += 1
+                    plan.clips.append(ClipSpec(
+                        clip_id=clip_id,
+                        source_id=src_id,
+                        target_bus_id=bs.bus_id,
+                        timeline_start_frame=start_frame_offset,
+                        timeline_length_frames=clip_len,
+                        source_start_ratio=cs,
+                        source_end_ratio=ce,
+                        gain=1.0,
+                        playback_rate=1.0,
+                        flags=flags,
+                    ))
+                    system.pending_tiled_cooks.append(TiledTrackSessionSpec(
+                        source_id=src_id,
+                        base_filepath=resolved_fp,
+                        sample_rate=sr,
+                        file_sample_rate=file_sr,
+                        total_frames=total_out_frames,
+                        duration_sec=file_dur_sec,
+                        tile_sec=tile_sec,
+                        tile_frames=tile_frames,
+                        num_tiles=num_tiles,
+                        stages=[TiledStageSpec(
+                            node_id=bs.node_key,
+                            node_type="rubberband_stretch",
+                            node_name=bs.node_name,
+                            processor_params={
+                                "tempo_rate": float(tempo_rate),
+                                "semitones": float(semis),
+                                "algorithm": stretch_algo,
+                                "fast_engine": True,
+                            },
+                        )],
+                        crop_start=cs,
+                        crop_end=ce,
+                        playback_rate=float(tempo_rate),
+                        timeline_duration_sec=eff_tl_dur_sec,
+                        bus_node_ids=[bs.node_key],
+                        tile_time_stretched=True,
+                        stretch_tempo_rate=float(tempo_rate),
+                    ))
+                    if getattr(obj, "node_id", None) is not None:
+                        system.record_node_event(obj.node_id, {
+                            "time": round(float(start_frame_offset) / float(sr), 4),
+                            "duration": round(eff_tl_dur_sec, 4),
+                            "filepath": resolved_fp,
+                            "slot": active_slot,
+                        })
+                    return clip_len if clip_len > 0 else int(round(cropped_out_sec * sr))
+
+                # Case C: Short/cropped warped slice (<=16s, even on a 1h file!) OR offline warped export
+                cooked_pcm, cooked_hash = _cook_stretched_sample(
+                    resolved_fp,
+                    props_like,
+                    eff_target_bpm,
+                    sr,
+                    crop_start=cs,
+                    crop_end=ce,
+                    fast_preview=(system.render_mode == "preview"),
+                )
+                if cooked_pcm is None or cooked_pcm.size == 0:
+                    return 0
+                pcm_f32 = np.asarray(cooked_pcm, dtype=np.float32)
+                cooked_frames = int(pcm_f32.shape[-1])
+                own_dur = float(cooked_frames) / float(sr)
+                clip_len, should_loop = _resolve_repeat_clip_len(own_dur)
+
+                src_id = state["src_id"]
+                state["src_id"] += 1
+                plan.sources.append(SourceSpec(
+                    source_id=src_id,
+                    pcm=pcm_f32,
+                    sample_rate=sr,
+                    content_hash=cooked_hash,
+                    num_frames=cooked_frames,
+                ))
                 clip_id = state["clip_id"]
                 state["clip_id"] += 1
+                clip_len_out = clip_len if (should_loop and clip_len > 0) else cooked_frames
                 plan.clips.append(ClipSpec(
                     clip_id=clip_id,
                     source_id=src_id,
                     target_bus_id=bs.bus_id,
                     timeline_start_frame=start_frame_offset,
-                    timeline_length_frames=clip_len,
-                    source_start_ratio=cs,
-                    source_end_ratio=ce,
+                    timeline_length_frames=clip_len_out,
+                    source_start_ratio=0.0,
+                    source_end_ratio=1.0,
                     gain=1.0,
-                    playback_rate=1.0,  # scaled live by bs.playback_rate via SIN_CLIP_LIVE_RATE_BOUND
-                    flags=flags,
+                    playback_rate=1.0,
+                    flags=(SIN_CLIP_LOOP_SOURCE if (should_loop and clip_len_out > cooked_frames) else 0),
                 ))
                 if getattr(obj, "node_id", None) is not None:
                     system.record_node_event(obj.node_id, {
                         "time": round(float(start_frame_offset) / float(sr), 4),
-                        "duration": round(float(clip_len) / float(sr), 4) if clip_len > 0 else 0.0,
+                        "duration": round(float(clip_len_out) / float(sr), 4),
                         "filepath": resolved_fp,
                         "slot": active_slot,
                     })
-                return clip_len
+                return clip_len_out
 
-        # Long-track zero-RAM tiled RX processor chain fast path (live preview mode)
+        # Long-track zero-RAM tiled RX processor chain fast path (live preview mode, composable with warped Sample!)
         if (
             ntype in ("preamp_denoise", "voice_isolator")
             and system.render_mode == "preview"
@@ -974,13 +1422,24 @@ def pack_audio_object(root_obj: Any, system: System) -> SinRenderPlan:
             tiled_chain = _extract_tiled_processor_chain(obj, bpm)
             if tiled_chain is not None:
                 proc_objs, leaf_sample, leaf_meta = tiled_chain
-                resolved_fp, _props_like, cs, ce, rate = leaf_meta
+                resolved_fp, leaf_props_like, cs, ce, rate = leaf_meta
                 finfo = _probe_file_info(resolved_fp)
                 tile_sec = float(get_env_config().tile_sec)
                 # Engage zero-RAM tiled layered streamer for clips >= 2 tiles (default >= 16s)
                 if finfo is not None and finfo[2] >= max(16.0, tile_sec * 2.0):
                     file_sr, _file_frames, file_dur_sec = finfo
-                    total_frames_sr = max(1, int(round(file_dur_sec * sr)))
+                    leaf_target_bpm = float(leaf_props_like.get("target_bpm") or bpm)
+                    leaf_is_warp, leaf_tempo_rate, leaf_semis, leaf_algo = _effective_stretch_params(leaf_props_like, leaf_target_bpm)
+                    leaf_needs_stretch = leaf_is_warp and (abs(leaf_tempo_rate - 1.0) > 1e-4 or abs(leaf_semis) > 1e-4)
+
+                    if leaf_needs_stretch:
+                        out_dur_sec = file_dur_sec / max(0.05, leaf_tempo_rate)
+                        total_frames_sr = max(1, int(math.ceil(out_dur_sec * sr)))
+                        eff_rate = float(leaf_tempo_rate)
+                    else:
+                        total_frames_sr = max(1, int(round(file_dur_sec * sr)))
+                        eff_rate = float(rate)
+
                     tile_frames = max(4096, int(round(tile_sec * sr)))
                     num_tiles = max(1, int(math.ceil(float(total_frames_sr) / float(tile_frames))))
 
@@ -1016,14 +1475,16 @@ def pack_audio_object(root_obj: Any, system: System) -> SinRenderPlan:
 
                     bs.crop_start = cs
                     bs.crop_end = ce
-                    bs.playback_rate = rate
+                    bs.playback_rate = eff_rate
 
                     own_bars = getattr(obj, "total_bars", None)
                     eff_bars = own_bars if (own_bars is not None and float(own_bars) > 0.0) else parent_bars
                     clip_len = int(round(float(eff_bars) * sec_per_bar * sr)) if (eff_bars is not None and float(eff_bars) > 0.0) else 0
-                    cropped_dur_sec = max(0.0, (ce - cs) * file_dur_sec) / max(0.05, rate)
+                    cropped_dur_sec = max(0.0, (ce - cs) * file_dur_sec) / max(0.05, eff_rate)
                     eff_tl_dur_sec = (float(clip_len) / float(sr)) if clip_len > 0 else cropped_dur_sec
                     flags = SIN_CLIP_LIVE_CROP_BOUND | SIN_CLIP_LIVE_RATE_BOUND
+                    if leaf_needs_stretch:
+                        flags |= SIN_CLIP_TILE_TIME_STRETCHED
 
                     clip_id = state["clip_id"]
                     state["clip_id"] += 1
@@ -1040,7 +1501,20 @@ def pack_audio_object(root_obj: Any, system: System) -> SinRenderPlan:
                         flags=flags,
                     ))
 
-                    stage_specs = [
+                    stage_specs: List[TiledStageSpec] = []
+                    if leaf_needs_stretch:
+                        stage_specs.append(TiledStageSpec(
+                            node_id=f"{leaf_nid if leaf_nid is not None else bs.node_key}:stretch",
+                            node_type="rubberband_stretch",
+                            node_name=str(getattr(leaf_sample, "name", "Sample")),
+                            processor_params={
+                                "tempo_rate": float(leaf_tempo_rate),
+                                "semitones": float(leaf_semis),
+                                "algorithm": leaf_algo,
+                                "fast_engine": True,
+                            },
+                        ))
+                    stage_specs.extend(
                         TiledStageSpec(
                             node_id=str(getattr(p_obj, "node_id", None) if getattr(p_obj, "node_id", None) is not None else p_obj.name),
                             node_type=str(getattr(p_obj, "node_type", "preamp_denoise")).lower(),
@@ -1048,7 +1522,7 @@ def pack_audio_object(root_obj: Any, system: System) -> SinRenderPlan:
                             processor_params=dict(getattr(p_obj, "processor_params", None) or {}),
                         )
                         for p_obj in proc_objs
-                    ]
+                    )
                     system.pending_tiled_cooks.append(TiledTrackSessionSpec(
                         source_id=src_id,
                         base_filepath=resolved_fp,
@@ -1062,9 +1536,11 @@ def pack_audio_object(root_obj: Any, system: System) -> SinRenderPlan:
                         stages=stage_specs,
                         crop_start=cs,
                         crop_end=ce,
-                        playback_rate=rate,
+                        playback_rate=eff_rate,
                         timeline_duration_sec=eff_tl_dur_sec,
                         bus_node_ids=chain_bus_ids,
+                        tile_time_stretched=leaf_needs_stretch,
+                        stretch_tempo_rate=float(leaf_tempo_rate) if leaf_needs_stretch else 1.0,
                     ))
                     return clip_len if clip_len > 0 else int(round(cropped_dur_sec * sr))
 

@@ -338,11 +338,11 @@ class SinEditorEngine(EditorEngine):
         items: list[models.Item] = []
         for item_id in item_ids:
             item = crud.get_item(db, item_id)
-            if item and item.type in AUDIO_TYPES:
+            if item and (item.type in AUDIO_TYPES or isinstance(item, models.MultitrackItem)):
                 items.append(item)
 
         if not items:
-            items = _project_audio_items(db, project)
+            items = [*_project_multitrack_items(db, project), *_project_audio_items(db, project)]
         if not items:
             return self.default_session_data(db, project)
 
@@ -354,6 +354,135 @@ class SinEditorEngine(EditorEngine):
             entry = entry_by_item_id.get(item.id)
             if not entry:
                 continue
+
+            if entry.get("normalize"):
+                graph.setdefault("settings", {})["output"] = {
+                    "normalize": True,
+                    "target_peak_db": float(entry.get("target_peak_db", -1.0)),
+                }
+
+            if isinstance(item, models.MultitrackItem):
+                stems = media_editor._multitrack_layers(item)
+                if not stems:
+                    continue
+
+                stem_meta: list[tuple[models.Item, int | None, float | None, int]] = []
+                for stem in stems:
+                    s_frames, s_sec = _item_total_frames_and_duration(stem)
+                    s_sr = int(round(s_frames / s_sec)) if (s_frames and s_sec and s_sec > 0) else 44100
+                    stem_meta.append((stem, s_frames, s_sec, s_sr))
+
+                common_sr = stem_meta[0][3] if stem_meta else 44100
+                valid_secs = [s_sec for _, _, s_sec, _ in stem_meta if s_sec and s_sec > 0]
+                common_sec = min(valid_secs) if valid_secs else None
+
+                main_start_sec = entry.get("main_start_sec")
+                if main_start_sec is None and entry.get("main_start_frame") is not None and common_sr > 0:
+                    main_start_sec = float(entry["main_start_frame"]) / float(common_sr)
+                main_end_sec = entry.get("main_end_sec")
+                if main_end_sec is None and entry.get("main_end_frame") is not None and common_sr > 0:
+                    main_end_sec = float(entry["main_end_frame"]) / float(common_sr)
+
+                raw_layers = entry.get("layers") if isinstance(entry.get("layers"), list) else []
+                layer_by_id: dict[int, dict[str, Any]] = {
+                    int(l["item_id"]): l
+                    for l in raw_layers
+                    if isinstance(l, dict) and l.get("item_id") is not None
+                }
+                any_solo = any(bool(l.get("solo")) for l in layer_by_id.values())
+                default_muted_ids = graph_builder._default_muted_ids_for_multitrack(stems)
+
+                global_pre_db = float(entry.get("pre_gain_db") or 0.0)
+                global_vol = max(0.0, min(1.0, float(entry.get("volume", 1.0) if entry.get("volume") is not None else 1.0)))
+                grp_node = node_by_id.get(f"grp-{item.id}")
+
+                for stem, s_frames, s_sec, _s_sr in stem_meta:
+                    start_ratio = 0.0
+                    end_ratio = 1.0
+                    ref_sec = s_sec or common_sec
+                    if ref_sec and ref_sec > 0:
+                        if main_start_sec is not None:
+                            start_ratio = max(0.0, min(1.0, float(main_start_sec) / ref_sec))
+                        if main_end_sec is not None:
+                            end_ratio = max(start_ratio, min(1.0, float(main_end_sec) / ref_sec))
+
+                    src_node = node_by_id.get(f"src-{stem.id}")
+                    if src_node:
+                        src_props = src_node.setdefault("properties", {})
+                        src_props["crop_start"] = round(start_ratio, 6)
+                        src_props["crop_end"] = round(end_ratio, 6)
+
+                    l_cfg = layer_by_id.get(stem.id)
+                    l_pre_db = float(l_cfg.get("pre_gain_db") or 0.0) if l_cfg else 0.0
+                    l_vol = max(
+                        0.0,
+                        min(1.0, float(l_cfg.get("volume", 1.0) if (l_cfg and l_cfg.get("volume") is not None) else 1.0)),
+                    )
+                    if any_solo:
+                        l_muted = not bool(l_cfg and l_cfg.get("solo"))
+                    elif l_cfg is not None and "muted" in l_cfg:
+                        l_muted = bool(l_cfg["muted"])
+                    else:
+                        l_muted = stem.id in default_muted_ids
+
+                    if grp_node is None:
+                        l_pre_db += global_pre_db
+                        l_vol *= global_vol
+
+                    ch_node = node_by_id.get(f"ch-{stem.id}")
+                    if ch_node:
+                        ch_node.setdefault("properties", {})["chain"] = graph_builder.default_channel_chain(
+                            volume=l_vol,
+                            pre_gain=10.0 ** (l_pre_db / 20.0),
+                            muted=l_muted,
+                        )
+
+                if grp_node is not None and (abs(global_pre_db) > 1e-4 or abs(global_vol - 1.0) > 1e-4):
+                    grp_node.setdefault("properties", {})["chain"] = graph_builder.default_channel_chain(
+                        volume=global_vol,
+                        pre_gain=10.0 ** (global_pre_db / 20.0),
+                        muted=False,
+                    )
+
+                cuts = entry.get("cuts") if isinstance(entry.get("cuts"), list) else entry.get("segments")
+                if isinstance(cuts, list):
+                    for idx, cut in enumerate(cuts, start=1):
+                        if not isinstance(cut, dict):
+                            continue
+                        c_start_sec = cut.get("start_sec")
+                        if c_start_sec is None and cut.get("start_frame") is not None and common_sr > 0:
+                            c_start_sec = float(cut["start_frame"]) / float(common_sr)
+                        c_end_sec = cut.get("end_sec")
+                        if c_end_sec is None and cut.get("end_frame") is not None and common_sr > 0:
+                            c_end_sec = float(cut["end_frame"]) / float(common_sr)
+
+                        overrides: dict[str, dict[str, float]] = {}
+                        for stem, _s_frames, s_sec, _s_sr in stem_meta:
+                            ref_sec = s_sec or common_sec
+                            c_s0 = 0.0
+                            c_s1 = 1.0
+                            if ref_sec and ref_sec > 0:
+                                if c_start_sec is not None:
+                                    c_s0 = max(0.0, min(1.0, float(c_start_sec) / ref_sec))
+                                if c_end_sec is not None:
+                                    c_s1 = max(c_s0, min(1.0, float(c_end_sec) / ref_sec))
+                            overrides[f"src-{stem.id}"] = {
+                                "crop_start": round(c_s0, 6),
+                                "crop_end": round(c_s1, 6),
+                            }
+
+                        cut_id = str(cut.get("id") or f"cut-{idx}-{uuid.uuid4().hex[:6]}")
+                        snapshots.append({
+                            "format": SNAPSHOT_FORMAT,
+                            "version": 1,
+                            "id": cut_id,
+                            "label": str(cut.get("label") or f"Cut {idx}"),
+                            "root": "master",
+                            "overrides": overrides,
+                            "meta": {"source_engine": "simple_media"},
+                        })
+                continue
+
             total_frames, total_sec = _item_total_frames_and_duration(item)
 
             start_ratio = 0.0

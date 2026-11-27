@@ -1,0 +1,345 @@
+{
+  "version": 2,
+  "savedAt": "2026-11-27T12:19:01.118Z",
+  "frozen": false,
+  "graph": {
+    "last_node_id": 3,
+    "last_link_id": 1,
+    "nodes": [
+      {
+        "id": 2,
+        "type": "Audio/AssetFilter",
+        "pos": {
+          "0": 271,
+          "1": 352,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          44,
+          44
+        ],
+        "flags": {
+          "hidden": true,
+          "collapsed": false
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [],
+        "title": "Asset Pool 1",
+        "properties": {
+          "node_name": "Asset Pool 1",
+          "node_type": "asset_filter",
+          "modifier_kind": "asset_filter",
+          "output_type": "asset_path",
+          "selected_items": [
+            {
+              "id": 7342
+            }
+          ],
+          "playbackMode": "Random",
+          "refresh_mode": "global",
+          "seed": 42,
+          "seed_refresh": true,
+          "color": "#7e22ce",
+          "icon": "search",
+          "parentId": 1,
+          "target_bpm": "global",
+          "is_main_preview": false,
+          "accepted_asset_type": "audio",
+          "fixed_item": null
+        },
+        "color": "#7e22ce",
+        "bgcolor": "#7e22ce",
+        "boxcolor": "#6b21a8",
+        "shape": 1
+      },
+      {
+        "id": 3,
+        "type": "Audio/Track",
+        "pos": {
+          "0": 671,
+          "1": 242,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          95
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": 1
+          },
+          {
+            "name": "Input",
+            "type": "audio",
+            "link": null
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": null
+          }
+        ],
+        "title": "Master Track",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_d9vnrf",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            },
+            {
+              "id": "post_gain_1qsrk5",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1,
+                "gain_db": 0
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "Master Track",
+          "mix_mode": "sum",
+          "bpm": "global",
+          "target_bpm": 120,
+          "total_bars": "global",
+          "visualization_type": "loop",
+          "color": "#0f172a",
+          "icon": "mixer",
+          "visual_width": 220,
+          "visual_height": 95,
+          "filepath": "",
+          "original_bpm": 120,
+          "key": "",
+          "is_main_preview": true,
+          "muted": false
+        },
+        "color": "#0f172a",
+        "bgcolor": "#0f172a",
+        "boxcolor": "#f59e0b",
+        "shape": 1
+      },
+      {
+        "id": 1,
+        "type": "Audio/Sample",
+        "pos": {
+          "0": 183,
+          "1": 244,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 0,
+          "9": 0
+        },
+        "size": [
+          220,
+          76
+        ],
+        "flags": {
+          "collapsed": false,
+          "hidden": false
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Audio",
+            "type": "audio",
+            "links": [
+              1
+            ],
+            "slot_index": 0
+          }
+        ],
+        "title": "LIVE Rec xeuda.wav",
+        "properties": {
+          "visualization_enabled": true,
+          "freeze_refresh": true,
+          "render_enabled": true,
+          "chain": [
+            {
+              "id": "pre_gain_5qzckf",
+              "type": "gain",
+              "name": "Pre Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 0.5011872336272722,
+                "gain_db": -6
+              }
+            },
+            {
+              "id": "post_gain_6pgmoy",
+              "type": "gain",
+              "name": "Post Gain",
+              "enabled": true,
+              "fixed": true,
+              "params": {
+                "gain": 1
+              }
+            }
+          ],
+          "export_directory": "exports",
+          "export_root": "exports",
+          "export_subfolder": "",
+          "export_pattern": "{project}_{name}_{idx}",
+          "export_overwrite_mode": "incremental",
+          "node_name": "LIVE Rec xeuda.wav",
+          "sample_type": "one_shot",
+          "start_beat": 4.223,
+          "target_bpm": "global",
+          "bpm": "global",
+          "key_match_mode": "off",
+          "key_match_algorithm": "nearest",
+          "key_match_transpose": 0,
+          "crop_start": 0,
+          "crop_end": 1,
+          "transpose": 0,
+          "cents": 0,
+          "stretch_mode": "time_stretch",
+          "stretch_factor": 1,
+          "stretch_algorithm": "rubberband",
+          "scope_mode": "full",
+          "scope_window": 0,
+          "scope_gain": 1,
+          "color": "#10b981",
+          "icon": "sample",
+          "visual_width": 220,
+          "visual_height": 76,
+          "mix_mode": "sum",
+          "slots": [
+            {
+              "slot": 0,
+              "index": 0,
+              "pool_query": "LIVE Rec xeuda.wav",
+              "filepath": "C:\\web-projects\\sin\\assets\\vaults\\live-recording\\xeuda\\LIVE Rec xeuda.wav",
+              "library_item_id": 7342,
+              "is_external": false,
+              "duration_seconds": 2360.2426984126982,
+              "sample_type": "one_shot",
+              "start_beat": 4.223,
+              "original_bpm": 0,
+              "target_bpm": "global",
+              "key": "Fmin",
+              "key_match_mode": "off",
+              "key_match_algorithm": "nearest",
+              "transpose": 0,
+              "pitch_shift": 0,
+              "cents": 0,
+              "stretch_mode": "time_stretch",
+              "stretch_algorithm": "rubberband",
+              "stretch_factor": 1,
+              "time_stretch": 1,
+              "crop_start": 0,
+              "crop_end": 1,
+              "sample_start": 0,
+              "sample_end": 1,
+              "field_operators": {},
+              "source": "gaia"
+            }
+          ],
+          "active_slot": 0,
+          "is_main_preview": false,
+          "asset_modifier_id": 2,
+          "selected_items": [
+            {
+              "id": 7342,
+              "filepath": "C:\\web-projects\\sin\\assets\\vaults\\live-recording\\xeuda\\LIVE Rec xeuda.wav",
+              "absolute_path": "C:\\web-projects\\sin\\assets\\vaults\\live-recording\\xeuda\\LIVE Rec xeuda.wav",
+              "name": "LIVE Rec xeuda.wav",
+              "type": "audio",
+              "is_external": false,
+              "source": "gaia",
+              "bpm": 0,
+              "key": "Fmin",
+              "duration_seconds": null,
+              "original_bpm": 0,
+              "vault_id": 5,
+              "collection_id": 7351
+            }
+          ],
+          "pool_query": "LIVE Rec xeuda.wav",
+          "is_external": false,
+          "field_operators": {},
+          "key_match_target": ""
+        },
+        "color": "#10b981",
+        "bgcolor": "#10b981",
+        "boxcolor": "#059669",
+        "shape": 1
+      }
+    ],
+    "links": [
+      [
+        1,
+        1,
+        0,
+        3,
+        0,
+        "audio"
+      ]
+    ],
+    "groups": [],
+    "config": {},
+    "extra": {
+      "global_parameters": {
+        "bpm": 120,
+        "total_bars": -1,
+        "key": "C"
+      },
+      "main_preview": {
+        "node_id": 3,
+        "mode": "auto"
+      },
+      "global_freeze": false,
+      "global_seed": 0,
+      "global_seed_locked": false
+    },
+    "version": 0.4
+  }
+}
